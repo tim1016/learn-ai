@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     RefusalClass,
     classify_admission_refusal,
 )
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -41,9 +42,10 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     trace_root,
 )
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import (
+    BarSessionPhase,
     ContinuityPolicy,
+    DecisionSession,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
@@ -52,9 +54,11 @@ from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
+from app.services.decision_clock import decision_session_close_ms
 from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
+from app.services.session_authority import session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
@@ -196,11 +200,13 @@ class _RetainedSourceBarFeed:
         *,
         run_id: str,
         continuity: ContinuityPolicy | None = None,
+        extended_window: ExtendedHoursWindow | None = None,
     ) -> None:
         self._source = source
         self._ledger = ledger
         self._run_id = run_id
         self._continuity = continuity
+        self._extended_window = extended_window
         self.feed_id = source.feed_id
 
     @property
@@ -240,7 +246,7 @@ class _RetainedSourceBarFeed:
         async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
             await admit_on_delivery(self._continuity, bar)
             self._ledger.append(bar, run_id=self._run_id)
-            if _includes_session_phase(bar, use_rth=use_rth):
+            if _includes_decision_bar(bar, use_rth=use_rth, extended_window=self._extended_window):
                 yield bar
             else:
                 # The session only consumes (and pops) a captured evaluation
@@ -283,26 +289,41 @@ class _RetainedSourceBarFeed:
                     continuity_event_ref=row.continuity_event_ref,
                 )
                 for row in retained
-                if _includes_session_phase(row, use_rth=use_rth)
+                if _includes_decision_bar(row, use_rth=use_rth, extended_window=self._extended_window)
             ]
         bars = await self._source.recent_closed_bars(
             symbol, use_rth=False, lookback_days=lookback_days
         )
         for bar in bars:
             self._ledger.append_history(bar, run_id=self._run_id)
-        return [bar for bar in bars if _includes_session_phase(bar, use_rth=use_rth)]
+        return [
+            bar
+            for bar in bars
+            if _includes_decision_bar(bar, use_rth=use_rth, extended_window=self._extended_window)
+        ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)
 
 
-def _includes_session_phase(
-    bar: MarketDataBar | RetainedSourceBar,
-    *,
-    use_rth: bool,
+_EXTENDED_DECISION_PHASES: frozenset[BarSessionPhase] = frozenset({"PRE", "RTH", "POST"})
+
+
+def _includes_decision_bar(
+    bar: MarketDataBar | RetainedSourceBar, *, use_rth: bool, extended_window: ExtendedHoursWindow | None
 ) -> bool:
-    """Apply the sealed RTH policy after the source observation is durable."""
-    return not use_rth or bar.session_phase == "RTH"
+    """Apply the sealed session policy after the source observation is durable.
+
+    Regular-hours bindings keep trusting the feed's label. An extended binding
+    decides on the bars whose open lies inside the broker's declared window
+    (ADR 0059 D5.2); with no window it decides on nothing — Start admission
+    refuses such a run before it streams (Task 6).
+    """
+    if use_rth:
+        return bar.session_phase == "RTH"
+    if extended_window is None:
+        return False
+    return session_state_at_ms(now_ms=bar.start_ms, extended_window=extended_window).phase in _EXTENDED_DECISION_PHASES
 
 
 def _liveness_blocks_entry(
@@ -466,8 +487,16 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
     captured_decisions: Mapping[str, str] | None,
     quarantine_receipts: QuarantineReceiptSink | None,
+    *,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
+    decision_session: DecisionSession = "rth" if binding.use_rth else "extended"
+    # An extended binding with no known window has no calendar-provable close
+    # to force-flush at yet (Start admission refuses such a run before it
+    # streams -- Task 6); the force-flush below is simply skipped rather than
+    # raising.
+    session_close_known = decision_session == "rth" or extended_window is not None
     runtime = _build_signal_strategy(
         binding.strategy_key, binding.symbol, binding.strategy_params, quarantine_receipts
     )
@@ -497,12 +526,14 @@ async def _signal_strategy_evaluations(
         if evaluation is not None:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
-        # bucket lazily, when a *later* bar arrives. RTH streaming stops
-        # at the session close, so the final 15:45-16:00 bucket would
-        # otherwise sit unflushed until the next session's bars start
-        # arriving -- stranding that decision overnight. Force the flush
-        # at the exact session-close boundary instead.
-        if market_bar.end_ms == session_close_ms_utc(ny_datetime(market_bar.end_ms).date()):
+        # bucket lazily, when a *later* bar arrives. Streaming stops at the
+        # decision session's close, so the final bucket would otherwise sit
+        # unflushed until the next session's bars start arriving -- stranding
+        # that decision overnight. Force the flush at the exact
+        # decision-session-close boundary instead.
+        if session_close_known and market_bar.end_ms == decision_session_close_ms(
+            ny_datetime(market_bar.end_ms).date(), decision_session=decision_session, window=extended_window
+        ):
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
@@ -591,6 +622,7 @@ async def strategy_evaluations(
     *,
     captured_decisions: Mapping[str, str] | None = None,
     quarantine_receipts: QuarantineReceiptSink | None = None,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -608,11 +640,15 @@ async def strategy_evaluations(
     counted but unreceipted, which is correct for the read-only replay and
     qualification callers -- they re-drive bars a live run already judged,
     so a receipt from them would be a second, spurious record of one event.
+
+    ``extended_window`` is the executing broker's declared extended-hours
+    window (ADR 0059 D5.2); it is consulted only for an extended-session
+    binding (``binding.use_rth`` is ``False``) and ignored otherwise.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     async for evaluation in _signal_strategy_evaluations(
-        binding, feed, captured_decisions, quarantine_receipts
+        binding, feed, captured_decisions, quarantine_receipts, extended_window=extended_window
     ):
         yield evaluation
 
@@ -704,6 +740,9 @@ async def run_trade_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    # TODO(Task 5): read this through the clerk protocol once it declares the
+    # attribute; ``getattr`` is this task's stopgap only (plan ruling P1).
+    extended_window = getattr(clerk, "extended_hours_window", None)
     run_feed = (
         feed
         if source_bars is None
@@ -711,7 +750,8 @@ async def run_trade_bot(
             feed,
             source_bars,
             run_id=binding.run_id,
-            continuity=continuity_policy_for(binding, source_bars),
+            continuity=continuity_policy_for(binding, source_bars, extended_window=extended_window),
+            extended_window=extended_window,
         )
     )
     async for evaluation in strategy_evaluations(
@@ -719,6 +759,7 @@ async def run_trade_bot(
         run_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
         quarantine_receipts=decision_receipts,
+        extended_window=extended_window,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -989,17 +1030,22 @@ async def run_dry_run_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    # TODO(Task 5): read this through the clerk protocol once it declares the
+    # attribute; ``getattr`` is this task's stopgap only (plan ruling P1).
+    extended_window = getattr(clerk, "extended_hours_window", None)
     retained_feed = _RetainedSourceBarFeed(
         feed,
         source_bars,
         run_id=binding.run_id,
-        continuity=continuity_policy_for(binding, source_bars),
+        continuity=continuity_policy_for(binding, source_bars, extended_window=extended_window),
+        extended_window=extended_window,
     )
     async for evaluation in strategy_evaluations(
         binding,
         retained_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
         quarantine_receipts=decision_receipts,
+        extended_window=extended_window,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")

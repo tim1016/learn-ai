@@ -10,18 +10,29 @@ before #1921 rather than being handed a clock it cannot honor.
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedContinuityEvent, SubstitutionRefusal
 from app.services import feed_continuity_policy as module
 from app.services.feed_continuity_policy import continuity_policy_for
 from app.services.source_bar_ledger import SourceBarLedger
+from app.utils.timestamps import to_ms_utc
 from tests.services.test_signal_program_admission import _sealed_binding as _sealed_rth_binding
 
 # 15:00 ET on 2026-09-02, the close of a 15-minute decision bucket.
 _BUCKET_CLOSE_MS = 1_788_375_600_000
+
+_ET = ZoneInfo("America/New_York")
+_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+
+
+def _et(d: date, hour: int, minute: int) -> int:
+    return to_ms_utc(datetime(d.year, d.month, d.day, hour, minute, tzinfo=_ET))
 
 
 def test_continuity_policy_for_unsealed_binding_gets_no_policy(tmp_path: Path) -> None:
@@ -33,14 +44,9 @@ def test_continuity_policy_for_unsealed_binding_gets_no_policy(tmp_path: Path) -
         ledger.close()
 
 
-def test_continuity_policy_for_all_session_binding_gets_no_policy(
+def test_continuity_policy_for_extended_binding_without_a_window_gets_no_policy(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Ruling R1: only the calendar-proven regular session has a trigger set.
-
-    An extended-hours binding is refused a policy rather than given an RTH
-    clock that would call its overnight minutes undecidable.
-    """
     binding = _sealed_rth_binding().model_copy(update={"use_rth": False})
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
@@ -48,9 +54,22 @@ def test_continuity_policy_for_all_session_binding_gets_no_policy(
             assert continuity_policy_for(binding, ledger) is None
     finally:
         ledger.close()
+    declined = [r for r in caplog.records if getattr(r, "action", None) == "feed_continuity_not_offered"]
+    assert [r.reason for r in declined] == ["extended_window_unknown"]
 
-    declined = [record for record in caplog.records if getattr(record, "action", None) == "feed_continuity_not_offered"]
-    assert [record.reason for record in declined] == ["all_session_not_supported"]
+
+def test_continuity_policy_for_extended_binding_with_a_window_schedules_the_extended_clock(tmp_path: Path) -> None:
+    binding = _sealed_rth_binding().model_copy(update={"use_rth": False})
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        policy = continuity_policy_for(binding, ledger, extended_window=_WINDOW)
+    finally:
+        ledger.close()
+    assert policy is not None and policy.decision_session == "extended"
+    # The sealed binding declares a 15-minute decision clock (see
+    # ``test_continuity_policy_for_sealed_rth_binding_...`` below): the
+    # bucket [17:00,17:15) force-flushes on the 17:16 source minute.
+    assert policy.is_trigger_ms(_et(date(2026, 9, 2), 17, 16)) is True
 
 
 def test_continuity_policy_for_binding_without_a_decision_timeframe_gets_no_policy(

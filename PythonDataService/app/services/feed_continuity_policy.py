@@ -14,9 +14,8 @@ Two properties are deliberate and fail closed:
   that *were* printed, not about inventing the ones that were not.
 * **A binding this module cannot describe truthfully gets no policy.** An
   unsealed binding has no attested decision clock, and an extended-hours
-  binding has no calendar-proven trigger set (ruling R1). Either way the run
-  keeps the pre-#1921 behavior -- no recovery, no continuity evidence -- which
-  is honest, instead of being scheduled against a guessed clock.
+  binding gets a policy only when the executing broker declares an extended
+  window -- otherwise it streams without one (honest, not guessed).
 """
 
 from __future__ import annotations
@@ -24,9 +23,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
+    DecisionSession,
     FeedContinuityEvent,
     MarketDataBar,
     MarketDataFeedError,
@@ -36,7 +37,7 @@ from app.marketdata.feed import (
 )
 from app.services.decision_clock import (
     decision_timeframe_ms_for_binding,
-    rth_next_trigger_function,
+    next_trigger_function,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -112,18 +113,22 @@ def _refuse_every_substitution(
 
 
 def continuity_policy_for(
-    binding: BrokerBotBinding, ledger: SourceBarLedger
+    binding: BrokerBotBinding, ledger: SourceBarLedger, *, extended_window: ExtendedHoursWindow | None = None
 ) -> ContinuityPolicy | None:
     """Return the continuity contract for this run, or ``None`` when there is none.
 
     ``ledger`` is the run's own source-bar ledger; continuity events are
     journalled into it under ``binding.run_id``, so a receipt can order them
-    against the bars the same run retained.
+    against the bars the same run retained. ``extended_window`` is the
+    executing broker's declared extended-hours window (ADR 0059 D5.2); it is
+    consulted only for an extended-session binding (``binding.use_rth`` is
+    ``False``) and ignored otherwise.
     """
     if binding.sealed_program is None:
         return _not_offered(binding, reason="unsealed_binding")
-    if not binding.use_rth:
-        return _not_offered(binding, reason="all_session_not_supported")
+    decision_session: DecisionSession = "rth" if binding.use_rth else "extended"
+    if decision_session == "extended" and extended_window is None:
+        return _not_offered(binding, reason="extended_window_unknown")
     timeframe_ms = decision_timeframe_ms_for_binding(binding)
     if timeframe_ms is None:
         return _not_offered(binding, reason="no_decision_timeframe")
@@ -134,8 +139,8 @@ def continuity_policy_for(
         return ledger.append_event(event, run_id=run_id)
 
     return ContinuityPolicy(
-        decision_session="rth",
-        next_trigger_ms=rth_next_trigger_function(timeframe_ms),
+        decision_session=decision_session,
+        next_trigger_ms=next_trigger_function(timeframe_ms, decision_session=decision_session, window=extended_window),
         substitution_grant=_refuse_every_substitution,
         record_event=_sink,
     )

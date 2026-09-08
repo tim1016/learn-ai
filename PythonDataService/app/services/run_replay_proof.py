@@ -39,7 +39,7 @@ from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
-from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
+from app.services.bot_trade_strategy import _includes_decision_bar, strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
 from app.services.source_bar_ledger import (
@@ -465,7 +465,7 @@ class _RunReplayFeed:
     ) -> AsyncIterator[MarketDataBar]:
         del continuity  # a retained-bar replay has no live connection to lose
         for bar in self._live_bars:
-            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth):
+            if bar.symbol == symbol and _includes_decision_bar(bar, use_rth=use_rth, extended_window=None):
                 yield bar
 
     async def recent_closed_bars(
@@ -475,7 +475,7 @@ class _RunReplayFeed:
         return [
             bar
             for bar in self._warmup_bars
-            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth)
+            if bar.symbol == symbol and _includes_decision_bar(bar, use_rth=use_rth, extended_window=None)
         ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
@@ -1020,7 +1020,9 @@ class RunReplayProofService:
                 first_decision_close_ms=first_decision_close_ms,
                 decision_timeframe_ms=decision_timeframe_ms,
             )
-            decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
+            decided = [
+                bar for bar in bars if _includes_decision_bar(bar, use_rth=binding.use_rth, extended_window=None)
+            ]
             parity = engine_parity_over_bars(
                 binding.strategy_key,
                 binding.symbol,

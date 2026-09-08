@@ -161,8 +161,10 @@ ContinuityEventKind = Literal["interruption", "recovered", "gap", "substituted",
 InterruptionCause = Literal["socket_down", "soft_loss_1100", "stall", "generation_changed"]
 """Why delivery stopped, in the vocabulary the broker boundary can prove."""
 
-DecisionSession = Literal["rth", "all"]
-"""Which minutes the consumer's decision clock treats as decidable."""
+DecisionSession = Literal["rth", "extended"]
+"""Which minutes the consumer's decision clock treats as decidable: the
+calendar's regular session, or the executing broker's declared extended
+session around it (ADR 0059 D5.2)."""
 
 
 class FeedContinuityEvent(BaseModel):
@@ -255,18 +257,6 @@ class ContinuityPolicy:
     substitution_grant: Callable[[int, int], SubstitutionGrant | SubstitutionRefusal]
     record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
     delivery_allowance_ms: int = 20_000
-
-    def __post_init__(self) -> None:
-        # ``DecisionSession`` reserves "all" (spec §12) but no calendar-proven
-        # trigger set exists for it yet (ruling R1). Refusing it here, where the
-        # policy is authored, is the only place the consumer can be told; left
-        # to the stream, ``inside_decision_session`` would quietly fail open
-        # while ``next_trigger_ms`` raised ``NotImplementedError`` mid-run.
-        if self.decision_session != "rth":
-            raise ValueError(
-                f"decision_session {self.decision_session!r} has no calendar-proven "
-                "trigger set yet; only 'rth' can be scheduled against."
-            )
 
     def deadline_ms(self, last_delivered_end_ms: int) -> int:
         """Wall-clock by which the next decision bar must have been delivered."""
