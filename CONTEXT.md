@@ -475,7 +475,15 @@ so they survive a broker change.
   live switch
 - **Shadow gate** — the per-instance requirement that a bounded number of
   shadow sessions complete and reconcile against the instance's paper twin
-  before the instance may arm. _Avoid_: warm-up, trial period, soak
+  before the instance may arm. A session counts only when the day's sweep was
+  clean from before the instance's decision session opened until after it
+  closed, one run spanned that whole session, and the twin comparison found no
+  divergence in a decision. _Avoid_: warm-up, trial period, soak
+- **Paper twin** — the sealed instance on the paper account that shares a
+  shadow instance's configured signal, action plan, size and carryover
+  policy and runs over the same sessions. Its identity is the configured
+  signal, never the instance id or the account. _Avoid_: control run,
+  baseline bot, mirror bot
 - **Shadow receipt** — the durable, sealed per-instance proof that the shadow
   gate passed, naming the sessions and the reconciliation.
 - **Arming** — the supervised ceremony that permits real-money submission for
