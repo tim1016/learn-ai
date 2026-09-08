@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, Decimal
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from app.broker.contract.models import OrderSide
 
@@ -45,6 +45,14 @@ _COMPONENTS: tuple[FeeComponent, ...] = ("sec", "taf", "cat")
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0")
 
+
+class TafRate(NamedTuple):
+    """FINRA TAF's two coupled numbers: they take effect on the same date."""
+
+    per_share: Decimal
+    cap_per_trade: Decimal
+
+
 # Each table is ascending by effective date; the latest row on or before the
 # trade date is in force. A trade date before a table's first row has NO pinned
 # rate for that component. Row sources: docs/references/alpaca-regulatory-fees.md.
@@ -53,12 +61,12 @@ _SEC_PER_DOLLAR: tuple[tuple[date, Decimal], ...] = (
     (date(2025, 5, 14), Decimal("0")),  # $0.00 per $1M — SEC advisory 2025-2
     (date(2026, 4, 4), Decimal("0.0000206")),  # $20.60 per $1M — SEC advisory 2026-2
 )
-_TAF_PER_SHARE_AND_CAP: tuple[tuple[date, Decimal, Decimal], ...] = (
-    (date(2024, 1, 1), Decimal("0.000166"), Decimal("8.30")),
-    (date(2026, 1, 1), Decimal("0.000195"), Decimal("9.79")),
-    (date(2027, 1, 1), Decimal("0.000232"), Decimal("11.61")),
-    (date(2028, 1, 1), Decimal("0.000240"), Decimal("12.05")),
-    (date(2029, 1, 1), Decimal("0.000249"), Decimal("12.50")),
+_TAF_PER_SHARE_AND_CAP: tuple[tuple[date, TafRate], ...] = (
+    (date(2024, 1, 1), TafRate(Decimal("0.000166"), Decimal("8.30"))),
+    (date(2026, 1, 1), TafRate(Decimal("0.000195"), Decimal("9.79"))),
+    (date(2027, 1, 1), TafRate(Decimal("0.000232"), Decimal("11.61"))),
+    (date(2028, 1, 1), TafRate(Decimal("0.000240"), Decimal("12.05"))),
+    (date(2029, 1, 1), TafRate(Decimal("0.000249"), Decimal("12.50"))),
 )
 _CAT_PER_SHARE: tuple[tuple[date, Decimal], ...] = (
     (date(2026, 9, 1), Decimal("0.000003")),  # Alpaca fee schedule, retrieved 2026-09-07
@@ -77,7 +85,6 @@ class RateNotPinnedError(ValueError):
 class RegulatoryRates:
     """Rates in force on one trade date; ``None`` means not pinned for that date."""
 
-    trade_date: date
     sec_per_dollar: Decimal | None
     taf_per_share: Decimal | None
     taf_cap_per_trade: Decimal | None
@@ -104,33 +111,29 @@ class SessionFees:
     sec: Decimal
     taf: Decimal
     cat: Decimal
-    fill_count: int
 
     @property
     def total(self) -> Decimal:
         return self.sec + self.taf + self.cat
 
 
-def _pinned_row(table: Sequence[tuple], trade_date: date) -> tuple | None:
-    """Latest row whose effective date is on or before ``trade_date``, else ``None``."""
-    row = None
-    for candidate in table:
-        if candidate[0] <= trade_date:
-            row = candidate
-    return row
+def _in_force[R](table: Sequence[tuple[date, R]], trade_date: date) -> R | None:
+    """Value of the latest row effective on or before ``trade_date``, else ``None``."""
+    latest: R | None = None
+    for effective_from, value in table:
+        if effective_from <= trade_date:
+            latest = value
+    return latest
 
 
 def rates_for(trade_date: date) -> RegulatoryRates:
     """Resolve the three pass-through rates in force on ``trade_date``."""
-    sec = _pinned_row(_SEC_PER_DOLLAR, trade_date)
-    taf = _pinned_row(_TAF_PER_SHARE_AND_CAP, trade_date)
-    cat = _pinned_row(_CAT_PER_SHARE, trade_date)
+    taf = _in_force(_TAF_PER_SHARE_AND_CAP, trade_date)
     return RegulatoryRates(
-        trade_date=trade_date,
-        sec_per_dollar=None if sec is None else sec[1],
-        taf_per_share=None if taf is None else taf[1],
-        taf_cap_per_trade=None if taf is None else taf[2],
-        cat_per_share=None if cat is None else cat[1],
+        sec_per_dollar=_in_force(_SEC_PER_DOLLAR, trade_date),
+        taf_per_share=None if taf is None else taf.per_share,
+        taf_cap_per_trade=None if taf is None else taf.cap_per_trade,
+        cat_per_share=_in_force(_CAT_PER_SHARE, trade_date),
     )
 
 
@@ -167,12 +170,13 @@ def settle_session(fills: Sequence[FillFees]) -> SessionFees:
     Raises ``RateNotPinnedError`` if any fill has an unpinned component: a
     session containing an unknown cannot settle to a number.
     """
-    unpinned = sorted({name for fill in fills for name in fill.unpinned})
+    unpinned = tuple(
+        name for name in _COMPONENTS if any(name in fill.unpinned for fill in fills)
+    )
     if unpinned:
         raise RateNotPinnedError(unpinned)
     return SessionFees(
         sec=_ceil_cents(sum((fill.sec for fill in fills), _ZERO)),
         taf=_ceil_cents(sum((fill.taf for fill in fills), _ZERO)),
         cat=_ceil_cents(sum((fill.cat for fill in fills), _ZERO)),
-        fill_count=len(fills),
     )

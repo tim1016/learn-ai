@@ -6,7 +6,7 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from app.broker.alpaca.regulatory_fees import fees_for_fill, settle_session
+from app.broker.alpaca.regulatory_fees import FillFees, fees_for_fill, settle_session
 from app.broker.contract.models import OrderSide
 from app.utils.session_anchors import et_date_at_ms
 
@@ -23,7 +23,7 @@ def _decimal_or_none(value: str | None) -> Decimal | None:
     return None if value is None else Decimal(value)
 
 
-def _price(case: dict):
+def _price(case: dict) -> FillFees:
     return fees_for_fill(
         trade_date=et_date_at_ms(case["trade_date_ms"]),
         side=OrderSide(case["side"]),

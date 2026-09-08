@@ -123,6 +123,12 @@ def test_non_positive_quantity_is_refused(quantity: Decimal) -> None:
         fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=quantity, fill_price=D("1"))
 
 
+@pytest.mark.parametrize("fill_price", [D("0"), D("-1")])
+def test_non_positive_fill_price_is_refused(fill_price: Decimal) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("1"), fill_price=fill_price)
+
+
 def test_settle_session_rounds_each_component_up_to_the_cent() -> None:
     fills = [
         fees_for_fill(trade_date=TRADE_DATE_2026, side=OrderSide.SELL, quantity=D("100"), fill_price=D("250.00")),
@@ -140,7 +146,6 @@ def test_settle_session_rounds_each_component_up_to_the_cent() -> None:
     # cat: 0.0003·2 + 0.18 + 0.150615 + 0.150618 + 0.0000015 = 0.4818345 → 0.49
     assert (settled.sec, settled.taf, settled.cat) == (D("14.95"), D("29.39"), D("0.49"))
     assert settled.total == D("44.83")
-    assert settled.fill_count == 6
 
 
 def test_settle_session_does_not_bump_an_exact_cent() -> None:
@@ -153,7 +158,6 @@ def test_settle_session_of_nothing_is_zero() -> None:
     settled = settle_session([])
 
     assert settled.total == D("0.00")
-    assert settled.fill_count == 0
 
 
 def test_settle_session_refuses_an_unpinned_component() -> None:
@@ -163,3 +167,13 @@ def test_settle_session_refuses_an_unpinned_component() -> None:
         settle_session(fills)
 
     assert excinfo.value.components == ("cat",)
+
+
+def test_unpinned_components_are_reported_in_canonical_order() -> None:
+    """sec, taf, cat — the schedule's order, not the alphabet's."""
+    fills = [fees_for_fill(trade_date=date(2024, 3, 1), side=OrderSide.SELL, quantity=D("1"), fill_price=D("1"))]
+
+    with pytest.raises(RateNotPinnedError) as excinfo:
+        settle_session(fills)
+
+    assert excinfo.value.components == ("sec", "cat")
