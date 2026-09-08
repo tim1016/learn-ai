@@ -5381,6 +5381,11 @@
             ],
             "title": "Expired At Ms"
           },
+          "extended_hours": {
+            "default": false,
+            "title": "Extended Hours",
+            "type": "boolean"
+          },
           "fill_latency_seconds": {
             "anyOf": [
               {
@@ -5635,6 +5640,11 @@
         "additionalProperties": false,
         "description": "One equity leg of an order request (broker-neutral).\n\nS2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a\n``limit_price`` and rests until filled or canceled. ``time_in_force`` selects\nhow long a resting order stays working (``DAY``/``GTC``). All additions are\nadditive \u2014 a bare S1 market leg (no ``limit_price``, default ``DAY``) still\nvalidates. The quantity is a positive share count; the *sign* is ``side``.",
         "properties": {
+          "extended_hours": {
+            "default": false,
+            "title": "Extended Hours",
+            "type": "boolean"
+          },
           "limit_price": {
             "anyOf": [
               {

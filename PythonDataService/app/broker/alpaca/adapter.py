@@ -308,7 +308,9 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     vendor. Vendor field names (``qty``, ``type``, ``time_in_force``,
     ``limit_price``) stay inside this layer. S2 sends EQUITY MARKET or LIMIT with
     the operator's chosen ``time_in_force``; a limit leg adds ``limit_price`` and
-    a market leg omits it (the contract validator guarantees this pairing).
+    a market leg omits it (the contract validator guarantees this pairing). S3
+    always forwards ``extended_hours`` explicitly (never omitted) so the vendor
+    default cannot silently diverge from the leg's declared session.
     ``client_order_id`` is the Clerk-minted ``order_ref`` — Alpaca echoes it back
     so ownership is recoverable from a read.
     """
@@ -319,6 +321,7 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
         "side": str(leg.side),
         "type": str(leg.order_type),
         "time_in_force": str(leg.time_in_force),
+        "extended_hours": leg.extended_hours,
         "client_order_id": client_order_id,
     }
     if leg.limit_price is not None:
@@ -348,6 +351,7 @@ def from_alpaca_order(
         filled_quantity=to_float(payload.get("filled_qty") or 0),
         limit_price=opt_float(payload.get("limit_price")),
         stop_price=opt_float(payload.get("stop_price")),
+        extended_hours=bool(payload.get("extended_hours") or False),
         filled_avg_price=opt_float(payload.get("filled_avg_price")),
         status=str(payload["status"]),
         submitted_at_ms=submitted_at_ms,

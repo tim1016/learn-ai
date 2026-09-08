@@ -14,10 +14,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.broker.alpaca.broker import (
+    ALPACA_EXTENDED_HOURS_WINDOW,
     ALPACA_LIVE_CAPABILITIES,
     ALPACA_PAPER_CAPABILITIES,
     AlpacaBroker,
 )
+from app.broker.alpaca.clerk.synthetic_broker import SYNTHETIC_CAPABILITIES
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.contract.models import BrokerOrderLeg, OrderType
 
@@ -69,3 +71,15 @@ def test_capabilities_select_by_settings_mode(
     monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", lambda: settings)
 
     assert AlpacaBroker(client=MagicMock()).capabilities() is expected
+
+
+@pytest.mark.parametrize("capabilities", [*_DESCRIPTORS, SYNTHETIC_CAPABILITIES])
+def test_every_descriptor_declares_the_alpaca_extended_window(capabilities) -> None:
+    assert capabilities.supports_extended_hours is True
+    assert capabilities.extended_hours_window == ALPACA_EXTENDED_HOURS_WINDOW
+
+
+def test_the_declared_window_is_alpacas_documented_session() -> None:
+    # 04:00–20:00 ET, Alpaca "Orders at Alpaca" § Extended Hours Trading (see docs/references/alpaca-extended-hours.md).
+    assert ALPACA_EXTENDED_HOURS_WINDOW.open_minute_et == 4 * 60
+    assert ALPACA_EXTENDED_HOURS_WINDOW.close_minute_et == 20 * 60

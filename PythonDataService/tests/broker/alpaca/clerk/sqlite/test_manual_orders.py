@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,15 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CustodySubjectRegisteredFacts,
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
+    ManualOrderAcceptedFacts,
     ManualOrderCancelResultFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
     UncertaintyRaisedFacts,
+    leg_instruction_payload,
+    validate_manual_order_accepted_facts,
 )
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelOwnershipError,
@@ -32,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     submit_manual_ticket_cancellation,
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ACTION_SUBMIT_MANUAL_ORDER,
     ManualPreviewRevision,
     ManualTicketContinuationError,
     ManualTicketLeg,
@@ -194,6 +200,31 @@ def filled_order(order_ref: str) -> BrokerOrder:
 
 def market_sell(quantity: float = 1) -> BrokerOrderLeg:
     return BrokerOrderLeg(symbol="SPY", side="sell", quantity=quantity)
+
+
+def test_accepted_facts_with_an_extended_hours_leg_is_rejected() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25, extended_hours=True
+    )
+    subject_id = manual_operator_subject_id(OPERATOR_ID)
+    facts = ManualOrderAcceptedFacts(
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        subject_id=subject_id,
+        operator_id=OPERATOR_ID,
+        instruction_hash=hashlib.sha256(canonicalize(leg_instruction_payload(leg)).encode("utf-8")).hexdigest(),
+        idempotency_key="idempotency-key",
+        payload_hash="payload-hash",
+        kind="manual_order",
+        action=ACTION_SUBMIT_MANUAL_ORDER,
+        intended_end_state=None,
+        effect_idempotency_key="effect-key",
+        effect_kind="MANUAL_ORDER",
+        leg=leg.model_dump(mode="json"),
+    )
+
+    with pytest.raises(ValueError, match="regular-session"):
+        validate_manual_order_accepted_facts(facts)
 
 
 @pytest.mark.asyncio

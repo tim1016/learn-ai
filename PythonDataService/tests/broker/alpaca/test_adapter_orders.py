@@ -95,6 +95,7 @@ def test_to_alpaca_order_request_maps_equity_market_leg() -> None:
         "side": "buy",
         "type": "market",
         "time_in_force": "day",
+        "extended_hours": False,
         "client_order_id": "manual/inkant/v1:abc123",
     }
     # A market leg never carries a limit_price on the wire.
@@ -119,6 +120,7 @@ def test_to_alpaca_order_request_maps_limit_leg_with_price_and_tif() -> None:
         "side": "sell",
         "type": "limit",
         "time_in_force": "gtc",
+        "extended_hours": False,
         "limit_price": "240.5",
         "client_order_id": "manual/inkant/v1:def456",
     }
@@ -140,3 +142,24 @@ def test_to_alpaca_order_request_never_uses_scientific_quantity_notation(
     body = to_alpaca_order_request(leg, client_order_id="manual/inkant/v1:decimal")
 
     assert body["qty"] == expected
+
+
+def test_to_alpaca_order_request_forwards_extended_hours_on_a_limit_leg() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY", side="buy", quantity=2, order_type="limit", limit_price=100.25, extended_hours=True
+    )
+
+    body = to_alpaca_order_request(leg, client_order_id="learn-ai/spy/v1:xh1")
+
+    assert body["extended_hours"] is True
+    assert body["type"] == "limit"
+    assert body["time_in_force"] == "day"
+
+
+def test_from_alpaca_order_reads_extended_hours_and_defaults_it_false(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = load_alpaca_fixture("orders", "orders.json")[0]
+
+    assert from_alpaca_order(payload, observed_at_ms=_OBSERVED).extended_hours is False
+    assert from_alpaca_order({**payload, "extended_hours": True}, observed_at_ms=_OBSERVED).extended_hours is True

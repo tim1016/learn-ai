@@ -31,12 +31,15 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
+
+if TYPE_CHECKING:
+    from app.broker.contract.models import BrokerOrderLeg
 
 FACTS_SCHEMA_VERSION = 1
 
@@ -810,6 +813,19 @@ def validate_custody_subject_registered_facts(facts: CustodySubjectRegisteredFac
     ).validate()
 
 
+def leg_instruction_payload(leg: BrokerOrderLeg) -> dict[str, object]:
+    """The canonical leg payload a manual instruction hash is computed over.
+
+    ``extended_hours`` is omitted when ``False`` so every ticket accepted
+    before the field existed keeps validating against its stored hash
+    (the hash-chained schema-evolution rule).
+    """
+    payload = leg.model_dump(mode="json")
+    if not leg.extended_hours:
+        payload.pop("extended_hours", None)
+    return payload
+
+
 def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> None:
     """Validate the immutable ticket envelope before any manual leg exists."""
     from app.broker.contract.models import BrokerOrderLeg
@@ -836,7 +852,7 @@ def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> N
             continue
         normalized = BrokerOrderLeg.model_validate(leg.instruction)
         expected_hash = hashlib.sha256(
-            canonicalize(normalized.model_dump(mode="json")).encode("utf-8")
+            canonicalize(leg_instruction_payload(normalized)).encode("utf-8")
         ).hexdigest()
         if leg.instruction_hash != expected_hash:
             raise ValueError("manual ticket leg instruction hash does not match its normalized instruction")
@@ -877,13 +893,15 @@ def validate_manual_order_accepted_facts(facts: ManualOrderAcceptedFacts) -> Non
     if facts.effect_kind != "MANUAL_ORDER":
         raise ValueError("manual order acceptance has an unsupported effect kind")
     leg = BrokerOrderLeg.model_validate(facts.leg)
-    if leg.side not in {OrderSide.BUY, OrderSide.SELL} or leg.order_type not in {
-        OrderType.MARKET,
-        OrderType.LIMIT,
-    } or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
-        raise ValueError("manual tickets accept only BUY or SELL market/limit DAY/GTC equity legs")
+    if (
+        leg.side not in {OrderSide.BUY, OrderSide.SELL}
+        or leg.order_type not in {OrderType.MARKET, OrderType.LIMIT}
+        or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}
+        or leg.extended_hours
+    ):
+        raise ValueError("manual tickets accept only regular-session BUY or SELL market/limit DAY/GTC equity legs")
     expected_instruction_hash = hashlib.sha256(
-        canonicalize(leg.model_dump(mode="json")).encode("utf-8")
+        canonicalize(leg_instruction_payload(leg)).encode("utf-8")
     ).hexdigest()
     if facts.instruction_hash != expected_instruction_hash:
         raise ValueError("manual order acceptance instruction hash does not match its leg")

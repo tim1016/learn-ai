@@ -23,6 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import BrokerCapabilities
@@ -48,6 +49,7 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     paper_only=True,
     supports_fractional=True,
     supports_extended_hours=True,
+    extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     supported_order_types=("market", "limit"),
     data_feed="retained_source_bars",
     bars_may_gap=False,

@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderAcceptedFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
+    leg_instruction_payload,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
@@ -94,7 +95,7 @@ class ManualOrderSubmission:
 
 def manual_instruction_hash(leg: BrokerOrderLeg) -> str:
     """Hash the complete normalized broker instruction, never display input."""
-    return hashlib.sha256(canonicalize(leg.model_dump(mode="json")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonicalize(leg_instruction_payload(leg)).encode("utf-8")).hexdigest()
 
 
 def _ticket_instruction_hash(
