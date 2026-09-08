@@ -562,7 +562,9 @@ def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
     be read back. The event row must not survive its journal row failing."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+        # The journal writer moved to ``source_bar_store_schema``; patch the
+        # name the ledger module imported, which is what its appends call.
+        monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
 
         with pytest.raises(RuntimeError, match="journal unavailable"):
             ledger.append_event(_event(cause="socket_down"), run_id="run-a")
@@ -580,7 +582,9 @@ def test_append_rolls_back_the_bar_when_its_journal_row_fails(
     position could never be ordered against the run's continuity events."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+        # The journal writer moved to ``source_bar_store_schema``; patch the
+        # name the ledger module imported, which is what its appends call.
+        monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
 
         with pytest.raises(RuntimeError, match="journal unavailable"):
             ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
