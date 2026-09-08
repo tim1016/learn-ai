@@ -27,9 +27,11 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 })
 export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
-  // Backend-authored reason Paper is unreachable for the selected strategy
-  // (#1702) — `null` when Paper is admissible or no strategy is selected.
-  readonly paperUnavailableReason = input<string | null>(null);
+  // Backend-authored reason this account's broker-contacting mode — Paper on
+  // a paper account, Shadow on a live one (ADR 0059 D2) — is unreachable for
+  // the selected strategy (#1702). `null` when it is admissible or no
+  // strategy is selected. Only one of the two is ever on offer at a time.
+  readonly brokerModeUnavailableReason = input<string | null>(null);
   // Backend-authored reason Dry Run is unreachable for the selected strategy
   // (#1703) — `null` unless the strategy has no registered runtime at all;
   // every other row stays Dry-Run-admissible regardless of validation state.
@@ -74,7 +76,7 @@ export class DeployExecutionSectionComponent {
   }
 
   private strategyUnavailableReason(mode: DeployExecutionMode): string | null {
-    if (mode.mode === 'paper') return this.paperUnavailableReason();
+    if (mode.mode === 'paper' || mode.mode === 'shadow') return this.brokerModeUnavailableReason();
     if (mode.mode === 'dry_run') return this.dryRunUnavailableReason();
     return null;
   }

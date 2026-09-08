@@ -31,7 +31,7 @@
                 (accessChanged)="paperAccessChanged()"
               />
 
-              @if (ticket().executionMode === 'paper') {
+              @if (brokerModeSelected()) {
                 <app-deploy-evidence-override
                   [strategy]="strategy"
                   [acknowledged]="ticket().overrideAcknowledged"
@@ -46,7 +46,7 @@
 
             <app-deploy-execution-section
               [executionModes]="view.execution_modes"
-              [paperUnavailableReason]="paperUnavailableReason()"
+              [brokerModeUnavailableReason]="brokerModeUnavailableReason()"
               [dryRunUnavailableReason]="dryRunUnavailableReason()"
               [selectedMode]="ticket().executionMode"
               [actionPlanExplanation]="view.action_plan_explanation"

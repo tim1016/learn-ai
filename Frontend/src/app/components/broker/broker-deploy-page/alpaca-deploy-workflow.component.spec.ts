@@ -16,6 +16,7 @@ import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.componen
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
+  SHADOW_DEPLOY_VIEW,
   SMA_OVERRIDE_STRATEGY,
   VALIDATION_STRATEGY,
 } from './alpaca-deploy-workflow.fixtures';
@@ -578,6 +579,64 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href'))
       .toBe(RECEIPT.panel_path);
     expect(screen.queryByRole('tab')).toBeNull();
+  });
+
+  it('on a shadow view the Shadow mode is offered, selected by default, and submitted', async () => {
+    // ADR 0059 D2: a live account's broker-facing mode is Shadow, not Paper.
+    // The form has no paper broker to offer, so the default the ticket opens
+    // on — and the noun on the submit button — follow the view's own modes.
+    const service = mockService(RECEIPT, SHADOW_DEPLOY_VIEW);
+    await renderWorkflow(service);
+
+    expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
+    const shadowRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Shadow/ });
+    expect(shadowRadio.checked).toBe(true);
+    expect(screen.getByRole('button', { name: 'Deploy shadow bot' })).toBeTruthy();
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-shadow-01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy shadow bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    expect((service.deployBot.mock.calls[0][2] as DeployBotBody).execution_mode)
+      .toBe('shadow');
+  });
+
+  it('still requires the durable override for an evidence-only Shadow deploy', async () => {
+    // Shadow holds the same custody as Paper, so the backend's broker-deploy
+    // gate (`_require_broker_deploy_request`) demands the identical override.
+    // A form that dropped it on a shadow account would 409 on submit.
+    const service = mockService(RECEIPT, SHADOW_DEPLOY_VIEW);
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'sma-shadow-01' },
+    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'sma_crossover' },
+    });
+
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy shadow bot' });
+    expect(deployButton.disabled).toBe(true);
+
+    fireEvent.click(
+      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
+    );
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'Shadow ceremony run; evidence-only risk accepted.' },
+    });
+    expect(deployButton.disabled).toBe(false);
+
+    fireEvent.click(deployButton);
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.execution_mode).toBe('shadow');
+    expect(body.evidence_override).toEqual({
+      acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
+      reason: 'Shadow ceremony run; evidence-only risk accepted.',
+    });
   });
 
   it('submits a first-class Dry Run mode that cannot opt into carryover', async () => {

@@ -136,3 +136,36 @@ export const DEPLOY_VIEW: DeployBotView = {
   allowed_actions: ['deploy'],
 };
 
+/**
+ * The same account seen through the Shadow Account Authority (ADR 0059 D2):
+ * a live account whose broker-facing mode is `shadow`, not `paper`. Paper is
+ * absent from `execution_modes` entirely — a live account has no paper
+ * broker to deploy against — so the form's broker-mode option is Shadow.
+ */
+export const SHADOW_DEPLOY_VIEW: DeployBotView = {
+  ...DEPLOY_VIEW,
+  account_mode: 'live',
+  account_label: 'Alpaca shadow · 9LIVE0001',
+  strategies: DEPLOY_VIEW.strategies.map((strategy) => ({
+    ...strategy,
+    admissible_modes: strategy.admissible_modes.map((mode) =>
+      mode === 'paper' ? 'shadow' : mode,
+    ),
+  })),
+  execution_modes: [
+    DEPLOY_VIEW.execution_modes[0],
+    {
+      mode: 'shadow',
+      label: 'Shadow',
+      availability: 'available',
+      explanation: 'Synthesized fills against the live account; nothing is submitted.',
+    },
+    {
+      mode: 'live',
+      label: 'Live',
+      availability: 'planned',
+      explanation: 'Requires a shadow receipt and arming.',
+    },
+  ],
+};
+
