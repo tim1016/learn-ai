@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from app.broker.alpaca.clerk.active_authority import primary_custody_world
+from app.broker.alpaca.clerk.active_authority import (
+    custody_world_or_paper,
+    primary_custody_world,
+)
+from app.schemas.account_authority import world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -63,8 +67,8 @@ async def get_alpaca_paper_deploy_view(
             f"Account '{account_id}' is not the account for broker '{broker}'.",
             detail=f"The broker's account is '{account.account_id}'.",
         )
-    custody_world = primary_custody_world()
-    if account.account_mode != "paper" and custody_world != "shadow":
+    custody_world = custody_world_or_paper(primary_custody_world())
+    if not world_admits_account_mode(custody_world, account.account_mode):
         raise PanelUnavailableError(
             "Alpaca live-account deployment is refused.",
             detail=(
@@ -97,7 +101,7 @@ async def get_alpaca_paper_deploy_view(
         clerk,
         validation_entries,
         symbol=symbol,
-        custody_world=custody_world or "real_paper",
+        custody_world=custody_world,
     )
 
 

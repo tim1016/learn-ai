@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.schemas.account_authority import AuthorityKind
+from app.schemas.account_authority import AuthorityKind, CustodyWorld
 
 # The clerk-side name for the one canonical account-world kind (ADR 0059 D1).
 AccountAuthorityKind = AuthorityKind
@@ -94,6 +94,21 @@ def synthetic_account_id_for_strategy(strategy_instance_id: str) -> str:
 def shadow_account_id_for_live_account(live_account_id: str) -> str:
     """Return the one shadow authority that reads ``live_account_id``."""
     return f"{SHADOW_ACCOUNT_PREFIX}{require_real_account_id(live_account_id)}"
+
+
+def custody_account_id_for(world: CustodyWorld, observed_account_id: str) -> str:
+    """The custody id a ``world`` authority holds while observing ``observed_account_id``.
+
+    A broker read answers the account it is pointed at; the projection
+    answers the account the authority custodies. Those are the same id in
+    the real-paper world and deliberately different under shadow, where
+    custody is ``shadow:<live_account_id>``. Any identity comparison between
+    the two must go through this function or it reads a correct shadow boot
+    as a misconfiguration.
+    """
+    if world == "shadow":
+        return shadow_account_id_for_live_account(observed_account_id)
+    return observed_account_id
 
 
 PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
@@ -238,6 +253,7 @@ __all__ = [
     "bind_real_alpaca_ports",
     "bind_shadow_ports",
     "bind_synthetic_ports",
+    "custody_account_id_for",
     "evidence_account_id_for",
     "is_shadow_account_id",
     "is_shadow_evidence_account_id",

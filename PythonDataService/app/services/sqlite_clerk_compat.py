@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
+from app.broker.alpaca.clerk.account_authority import custody_account_id_for
 from app.broker.alpaca.clerk.active_authority import (
+    custody_world_or_paper,
     get_active_clerk_runtime,
     primary_custody_world,
 )
@@ -194,6 +196,10 @@ def sqlite_clerk_status(
     never attributed to this projection's account (2026-08-20 review): the
     posture reports an explicit ``alpaca_account_identity_mismatch``
     condition instead of silently blending two accounts' evidence.
+    "Different account" is asked of the *custody* id the world implies, not
+    of the broker's own answer: a shadow authority observing ``9LIVE0001``
+    legitimately custodies ``shadow:9LIVE0001`` (ADR 0059 D2), and comparing
+    the two raw ids reads every correct shadow boot as a misconfiguration.
     """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
@@ -208,7 +214,13 @@ def sqlite_clerk_status(
     else:
         verdict = "clean"
     channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
-    identity_mismatch = account is not None and account.account_id != projection.account_id
+    # Read once and reused for both the identity expectation and the posture
+    # context, so the two can never disagree about which world this is.
+    custody_world = custody_world_or_paper(primary_custody_world())
+    identity_mismatch = (
+        account is not None
+        and custody_account_id_for(custody_world, account.account_id) != projection.account_id
+    )
     if identity_mismatch:
         logger.warning(
             "Clerk status account read named a different account than the "
@@ -216,6 +228,7 @@ def sqlite_clerk_status(
             extra={
                 "projection_account_id": projection.account_id,
                 "observed_account_id": account.account_id if account is not None else None,
+                "custody_world": custody_world,
             },
         )
     account_usable = account is not None and not identity_mismatch
@@ -234,7 +247,7 @@ def sqlite_clerk_status(
             trading_blocked=account.trading_blocked if account_usable else None,
             account_blocked=account.account_blocked if account_usable else None,
             account_identity_mismatch=identity_mismatch,
-            custody_world=primary_custody_world() or "real_paper",
+            custody_world=custody_world,
             outstanding_intents=unresolved,
             channels_ready=channel_evaluation.ready,
             channels_detail=_channel_evaluation_detail(channel_evaluation),

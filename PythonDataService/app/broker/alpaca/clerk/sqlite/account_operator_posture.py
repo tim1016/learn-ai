@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectionGuidance,
     RecoveryCapability,
 )
-from app.schemas.account_authority import CustodyWorld
+from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
     AccountOperatorPosture,
@@ -123,6 +123,11 @@ class AccountOperatorPostureContext:
     outstanding_intents: int
     channels_ready: bool
     channels_detail: str | None
+    # The world the primary authority custodies in; a shadow authority reads
+    # a live account by design, so `account_mode == "live"` is not the wrong
+    # mode there. Required, not defaulted: a default here silently relaxes a
+    # blocking safety condition toward the wrong world (thermo MAJOR 3).
+    custody_world: CustodyWorld
     # True when a same-request account read succeeded but named a different
     # account than the projection this posture is being authored for (e.g.
     # Alpaca credentials point at account B while the active SQLite Clerk
@@ -130,10 +135,6 @@ class AccountOperatorPostureContext:
     # account_* fields above None in this case — a mismatched account's
     # facts must never be attributed to this projection's account.
     account_identity_mismatch: bool = False
-    # The world the primary authority custodies in; a shadow authority reads
-    # a live account by design, so `account_mode == "live"` is not the wrong
-    # mode there.
-    custody_world: CustodyWorld = "real_paper"
 
     def __post_init__(self) -> None:
         account_fields = (
@@ -325,7 +326,7 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             ),
             evidence={"account_evidence_unavailable": True},
         )
-    if ctx.account_mode != "paper" and ctx.custody_world != "shadow":
+    if not world_admits_account_mode(ctx.custody_world, ctx.account_mode):
         return _eligibility_posture(
             condition_id="alpaca_account_wrong_execution_mode",
             severity="blocking",

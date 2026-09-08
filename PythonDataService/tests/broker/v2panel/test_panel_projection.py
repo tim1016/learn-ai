@@ -220,6 +220,27 @@ def test_simulated_shadow_row_still_requires_its_own_authority_kind() -> None:
         )
 
 
+def test_a_simulated_row_is_refused_when_its_namespace_names_the_other_world() -> None:
+    """The reverse of the pairing above: a ``sim:`` id is never the shadow world.
+
+    Both directions now resolve through the one canonical namespace/kind
+    validator in ``schemas.account_authority``, so the panel model cannot
+    drift from the wire boundary that owns the table.
+    """
+    with pytest.raises(ValidationError, match="synthetic or shadow authority metadata"):
+        RecentFillView(
+            order_ref="r",
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            price=1.0,
+            filled_at_ms=1,
+            simulated=True,
+            authority_account_id="sim:ema-1",
+            authority_kind="shadow",
+        )
+
+
 def test_sqlite_fill_adapter_stamps_a_shadow_authority_row_as_simulated() -> None:
     """A fill read from a shadow authority reaches the panel typed shadow."""
     row = _recent_fill_view(

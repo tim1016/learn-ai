@@ -452,6 +452,23 @@ def primary_custody_world() -> CustodyWorld | None:
     return kind if kind in ("real_paper", "shadow") else None
 
 
+def custody_world_or_paper(world: CustodyWorld | None) -> CustodyWorld:
+    """Label a world that may be absent, falling back to the paper world.
+
+    ``None`` from :func:`primary_custody_world` means no authority is
+    installed, so there is no world to name; the label falls back to the
+    paper world because no other world is constructible without one (the
+    synthetic world is never primary, and ``real_live`` is unconstructible
+    until ADR 0059 slice 7). Takes the already-read world rather than
+    re-reading it, so one surface's answer cannot change mid-request — and
+    so the coercion is written here once instead of at each caller.
+
+    Labelling only. A caller that would have to *guess where evidence goes*
+    must refuse on ``None`` instead (``bot_binding_authority.primary_custody_kind``).
+    """
+    return world or "real_paper"
+
+
 def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
     global _runtime
     _runtime = runtime
@@ -530,6 +547,7 @@ __all__ = [
     "activate_synthetic_clerk_authority",
     "active_program_leg_policy",
     "close_synthetic_clerk_runtimes",
+    "custody_world_or_paper",
     "get_active_clerk_runtime",
     "get_alpaca_clerk",
     "get_clerk_runtime",

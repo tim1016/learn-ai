@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
-from app.schemas.account_authority import CustodyWorld
+from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
     AlpacaPaperDeployReadinessCheck,
@@ -334,7 +334,7 @@ def _strategy_views(
     entries: list[StrategyValidationEntry],
     *,
     account_id: str,
-    custody_world: CustodyWorld = "real_paper",
+    custody_world: CustodyWorld,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -416,7 +416,7 @@ def _readiness_checks(
     account_ready = (
         # The shadow world reads a live account by design (ADR 0059 D2), so
         # a live mode is only wrong outside it.
-        (account.account_mode == "paper" or custody_world == "shadow")
+        world_admits_account_mode(custody_world, account.account_mode)
         and account.account_status.upper() == "ACTIVE"
         and not account.trading_blocked
         and not account.account_blocked

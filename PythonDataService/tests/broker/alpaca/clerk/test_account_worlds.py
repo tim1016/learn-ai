@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
     authority_kind_for_account,
     bind_shadow_ports,
+    custody_account_id_for,
     evidence_account_id_for,
     is_shadow_account_id,
     is_shadow_evidence_account_id,
@@ -70,6 +71,21 @@ def test_shadow_account_id_derives_from_the_live_account() -> None:
     assert shadow_account_id_for_live_account("9LIVE0001") == "shadow:9LIVE0001"
     with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
         shadow_account_id_for_live_account("sim:ema-1")
+
+
+def test_the_custody_id_a_world_holds_while_observing_a_real_account() -> None:
+    """What an identity check must compare against, per world (ADR 0059 D2).
+
+    The broker read answers the account it is pointed at; the projection
+    answers the account the authority custodies. Under shadow those are
+    deliberately different ids, and comparing the raw pair reads a correct
+    shadow boot as a misconfiguration.
+    """
+    assert custody_account_id_for("real_paper", "PA0SANITIZED00001") == "PA0SANITIZED00001"
+    assert custody_account_id_for("shadow", "9LIVE0001") == "shadow:9LIVE0001"
+    assert custody_account_id_for("shadow", "9LIVE0001") != "9LIVE0001"
+    with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
+        custody_account_id_for("shadow", "shadow:9LIVE0001")
 
 
 def test_shadow_evidence_namespace_is_instance_scoped_and_not_a_custody_namespace() -> None:

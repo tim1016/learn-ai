@@ -77,7 +77,7 @@ def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot(
     entry = _accepted_deploy_entry()
     changed = entry.model_copy(update={"qc_cloud_backtest_id": "a-different-qc-backtest-id"})
 
-    rows = _strategy_views([changed], account_id=ACCT)
+    rows = _strategy_views([changed], account_id=ACCT, custody_world="real_paper")
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -102,7 +102,7 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash(monkeypatch: pytest.Monk
         }
     )
 
-    rows = _strategy_views([changed], account_id=ACCT)
+    rows = _strategy_views([changed], account_id=ACCT, custody_world="real_paper")
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -132,7 +132,7 @@ def test_strategy_views_admissible_modes_track_selectable(monkeypatch: pytest.Mo
     # flagged it.
     awaiting_approval = _synthetic_validated_entry("rsi_mean_reversion")
 
-    rows = _strategy_views([accepted, stale_proof_blocked, awaiting_approval], account_id=ACCT)
+    rows = _strategy_views([accepted, stale_proof_blocked, awaiting_approval], account_id=ACCT, custody_world="real_paper")
 
     rows_by_key = {row.strategy_key: row for row in rows}
     accepted_row = rows_by_key[accepted.strategy_key]
@@ -176,7 +176,7 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(
         if entry.strategy_key == "sma_crossover"
     ]
 
-    rows = _strategy_views([entry], account_id=ACCT)
+    rows = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")
 
     assert len(rows) == 1
     row = rows[0]
@@ -212,7 +212,7 @@ def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
         if entry.strategy_key == "sma_crossover"
     ]
 
-    rows = _strategy_views([entry], account_id=ACCT)
+    rows = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")
 
     assert len(rows) == 1
     row = rows[0]
@@ -239,7 +239,7 @@ def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytes
     )
     changed = entry.model_copy(update={"current_flag_event": changed_event})
 
-    rows = _strategy_views([changed], account_id=ACCT)
+    rows = _strategy_views([changed], account_id=ACCT, custody_world="real_paper")
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]

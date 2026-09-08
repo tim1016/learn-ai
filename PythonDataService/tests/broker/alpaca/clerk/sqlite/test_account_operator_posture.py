@@ -76,6 +76,10 @@ def _context(**overrides: Any) -> AccountOperatorPostureContext:
         "outstanding_intents": 0,
         "channels_ready": True,
         "channels_detail": None,
+        # Required on the context (thermo MAJOR 3): a defaulted world would
+        # silently relax the blocking eligibility gate, so every construction
+        # names its world -- including this test's.
+        "custody_world": "real_paper",
     }
     values.update(overrides)
     return AccountOperatorPostureContext(**values)
