@@ -879,7 +879,7 @@ def test_next_trigger_function_binds_the_session() -> None:
     at_1700 = _et(_REGULAR, 17, 0)
 
     assert rth(at_1700) == _et(date(2026, 9, 3), 9, 46)
-    assert extended(at_1700) == _et(_REGULAR, 17, 16)
+    assert extended(at_1700) == _et(_REGULAR, 17, 1)  # the 16:45–17:00 bucket fires on the 17:01 source minute
 
 
 def test_decision_session_close() -> None:
