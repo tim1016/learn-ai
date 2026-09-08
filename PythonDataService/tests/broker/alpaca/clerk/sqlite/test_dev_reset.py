@@ -312,9 +312,12 @@ def test_reset_refuses_non_paper_account_without_moving_authority(tmp_path: Path
 def test_reset_refuses_the_shadow_namespace_by_name(tmp_path: Path) -> None:
     """ADR 0059 D10: a shadow authority is never a developer-reset target.
 
-    ``account_mode`` for a shadow facade answers ``"paper"``, so the paper-only
-    gate alone would let the reset through -- the namespace must be refused on
-    its own, before any fence is taken.
+    A shadow facade's own ``account_mode`` answers ``"live"`` -- it reads a real
+    account -- but this CLI never asks it: ``scripts/manage_alpaca_sqlite_clerk``
+    passes the *configured* mode, which on a developer host is ``"paper"`` while
+    the operator names a ``shadow:`` id. The paper-only gate would therefore let
+    the reset through, so the namespace must be refused on its own, before any
+    fence is taken.
     """
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
