@@ -6,10 +6,11 @@ appends its activation proof -- the one write no startup path performs.
 against its paper twin. ``receipt`` does the same and, when the gate is
 satisfied, seals the result into the receipt store.
 
-Exit codes: ``0`` the command answered; ``2`` the gate is not satisfied or the
-named twin is not this instance's twin; ``1`` the command cannot be run as
-asked (a reserved identity, a binding or database that is not there, a
-required count nobody stated).
+Exit codes: ``0`` the command answered; ``2`` the gate is not satisfied, the
+named twin is not this instance's twin, or the invocation itself was refused
+(argparse: an absent flag, or one outside its bound); ``1`` the command cannot
+be run as asked (a reserved identity, a binding or database that is not there,
+a required count nobody stated, a receipt the sealer will not accept).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.alpaca.clerk.shadow_authority import activate_shadow_clerk_authority
 from app.broker.alpaca.clerk.shadow_receipt import (
     ShadowReceipt,
+    ShadowReceiptInvalid,
     ShadowReceiptSession,
     ShadowReceiptStore,
 )
@@ -51,6 +53,7 @@ from app.services.alpaca_shadow_reconciliation import (
     evaluate_shadow_gate,
 )
 from app.services.bot_binding_repository import live_state_binding_repository
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 ShadowGateEvaluator = Callable[..., ShadowGateEvaluation]
@@ -58,6 +61,28 @@ ShadowGateEvaluator = Callable[..., ShadowGateEvaluation]
 
 class ShadowOperatorRefusal(ValueError):
     """This command cannot be run as asked -- named evidence or a required value is absent."""
+
+
+def _required_session_count(raw: str) -> int:
+    """A gate of zero sessions is satisfied by no evidence, so it is not a gate.
+
+    ``AlpacaSettings.live_shadow_sessions`` is bounded ``ge=1``; this is the
+    same bound on the flag that overrides it.
+    """
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1 session, not {value}")
+    return value
+
+
+def _timestamp_ms(raw: str) -> int:
+    """One instant, ``int64 ms UTC``, inside the domain's admissible range."""
+    value = int(raw)
+    if not 0 <= value <= MAX_TIMESTAMP_MS:
+        raise argparse.ArgumentTypeError(
+            f"must be between 0 and {MAX_TIMESTAMP_MS} milliseconds since epoch UTC, not {value}"
+        )
+    return value
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,8 +107,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         gate.add_argument("--twin-account-id", required=True)
         gate.add_argument("--twin-strategy-instance-id", required=True)
         gate.add_argument("--twin-artifacts-root", type=Path)
-        gate.add_argument("--required-sessions", type=int)
-        gate.add_argument("--now-ms", type=int)
+        gate.add_argument("--required-sessions", type=_required_session_count)
+        gate.add_argument("--now-ms", type=_timestamp_ms)
     return parser.parse_args(argv)
 
 
@@ -135,12 +160,27 @@ def _required_sessions(explicit: int | None) -> int:
     return configured
 
 
+# Everything one day's comparison says about itself except the two order books,
+# whose content ``report_sha256`` already names. An allowlist rather than a
+# denylist so that a field added to ``TwinDayReconciliation`` is a decision
+# here -- the dataclass gained one mid-slice already -- and never a leak.
+_REPORTED_RECONCILIATION_FIELDS = (
+    "session_open_ms",
+    "strategy_instance_id",
+    "twin_strategy_instance_id",
+    "divergences",
+    "max_fill_price_drift",
+    "max_fill_time_drift_ms",
+    "fill_price_atol",
+)
+
+
 def _reconciliation_payload(reconciliation: TwinDayReconciliation) -> dict[str, Any]:
     """The comparison named by the digest the receipt pins, not by its two order books."""
     payload = asdict(reconciliation)
-    del payload["shadow_fills"], payload["twin_fills"]
-    payload["report_sha256"] = reconciliation.report_sha256()
-    return payload
+    reported: dict[str, Any] = {name: payload[name] for name in _REPORTED_RECONCILIATION_FIELDS}
+    reported["report_sha256"] = reconciliation.report_sha256()
+    return reported
 
 
 def _session_payload(verdict: ShadowSessionVerdict) -> dict[str, Any]:
@@ -151,8 +191,15 @@ def _session_payload(verdict: ShadowSessionVerdict) -> dict[str, Any]:
     return payload
 
 
-def _summary(evaluation: ShadowGateEvaluation) -> dict[str, Any]:
+def _summary(evaluation: ShadowGateEvaluation, *, now_ms: int) -> dict[str, Any]:
+    """The judged report, naming the clock it was judged against.
+
+    ``now_ms`` bounds the whole judged day range and is the receipt's
+    ``written_at_ms``, so a report that omitted it could not be reproduced
+    from its own output.
+    """
     return {
+        "now_ms": now_ms,
         "live_account_id": evaluation.live_account_id,
         "strategy_instance_id": evaluation.strategy_instance_id,
         "twin_account_id": evaluation.twin_account_id,
@@ -242,7 +289,7 @@ def _judge(
             args.twin_artifacts_root or artifacts_root, args.twin_account_id, DB_FILENAME
         ),
     )
-    summary = _summary(evaluation)
+    summary = _summary(evaluation, now_ms=now_ms)
     if args.operation == "receipt" and evaluation.satisfied:
         summary["receipt_sha256"] = _seal(
             evaluation, artifacts_root=artifacts_root, written_at_ms=now_ms
@@ -274,6 +321,10 @@ def main(argv: list[str] | None = None, *, evaluate: ShadowGateEvaluator = _defa
         AccountAuthorityIdentityError,
         ShadowOperatorRefusal,
         EconomicProjectionUnavailable,
+        # The sealer is the last word on the receipt's own shape. Bounded flags
+        # make its refusal unreachable from operator input; it is caught anyway
+        # so a shape nobody anticipated is still a sentence, not a traceback.
+        ShadowReceiptInvalid,
     ) as exc:
         _write({"error": str(exc)})
         return 1

@@ -107,6 +107,9 @@ def _digest_default(value: object) -> str:
     raise TypeError(f"{type(value).__name__} has no digest representation")
 
 
+# A field added here must also be admitted by the operator report's allowlist
+# in ``scripts/manage_alpaca_shadow.py::_reconciliation_payload``, or it is not
+# reported.
 @dataclass(frozen=True)
 class TwinDayReconciliation:
     session_open_ms: int
