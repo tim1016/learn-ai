@@ -1,8 +1,10 @@
 """Boot-time selection and process registry for the SQLite Alpaca Clerk.
 
-The broker account is resolved before any writer is constructed. A valid
-activation record selects SQLite; every other activation state selects no
-custody authority.
+The broker account is resolved before any writer is constructed. A paper
+account with a valid activation record selects SQLite; a live account selects
+the Shadow Account Authority behind its own activation fence (ADR 0059 D2),
+which reads the live account but submits nothing. Every other activation state
+selects no custody authority.
 """
 
 from __future__ import annotations

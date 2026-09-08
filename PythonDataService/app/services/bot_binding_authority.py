@@ -1,7 +1,8 @@
 """One authority-selection module for Alpaca bot bindings.
 
-The runner asks this module which custody authority owns a binding.  Real
-Paper and Dry Run differ only behind this seam: callers receive the same
+The runner asks this module which custody authority owns a binding.  Dry Run
+and the process's primary account authority -- real paper, or the shadow of a
+live account -- differ only behind this seam: callers receive the same
 admission guard, lifecycle projector, source-evidence store, recovery view,
 and runtime-release lifecycle without branching on ``binding.mode``.
 """
