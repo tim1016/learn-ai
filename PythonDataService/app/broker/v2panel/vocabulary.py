@@ -49,10 +49,20 @@ DUTY_OUTCOME_KINDS: Final[frozenset[str]] = frozenset(
 # cause this build cannot name. Without the latter, the only way to describe
 # an unrecognised code was ``NO_HOLD`` — denying a live account-wide freeze.
 HoldReason = Literal[
-    "NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"
+    "NO_HOLD",
+    "UNEXPLAINED_ORDER_HOLD",
+    "STREAM_HEALTH_HOLD",
+    "LIVE_ENVELOPE_LOSS_HOLD",
+    "UNKNOWN_HOLD",
 ]
 HOLD_REASONS: Final[frozenset[str]] = frozenset(
-    {"NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"}
+    {
+        "NO_HOLD",
+        "UNEXPLAINED_ORDER_HOLD",
+        "STREAM_HEALTH_HOLD",
+        "LIVE_ENVELOPE_LOSS_HOLD",
+        "UNKNOWN_HOLD",
+    }
 )
 
 # Every stored clerk hold code that names a cause, and the wire code it means.
@@ -70,6 +80,12 @@ HOLD_REASONS: Final[frozenset[str]] = frozenset(
 HOLD_REASON_BY_STORED_CODE: Final[dict[str, HoldReason]] = {
     "UNEXPLAINED_ORDER_HOLD": "UNEXPLAINED_ORDER_HOLD",
     "STREAM_HEALTH_HOLD": "STREAM_HEALTH_HOLD",
+    # ADR 0059 D4. The clerk's ``HOLD_REASON_CODES`` is the authority on which
+    # causes can be stored; this module stays a leaf and does not import it, so
+    # the two are kept in lockstep by a contract test (see
+    # ``test_every_registered_clerk_hold_cause_has_a_stored_code_row``) rather
+    # than by an import — the same arrangement ``ReconciliationVerdict`` uses.
+    "LIVE_ENVELOPE_LOSS_HOLD": "LIVE_ENVELOPE_LOSS_HOLD",
 }
 
 # ── Reconciliation verdicts (§7.3) ───────────────────────────────────────────
@@ -215,6 +231,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Stream-health hold",
         "A market-data or execution channel is unhealthy. "
         "New submits are paused account-wide.",
+    ),
+    "LIVE_ENVELOPE_LOSS_HOLD": OperatorCopy(
+        "Loss hold",
+        "Today's loss reached the account's limit. New entries are refused "
+        "account-wide until an operator clears the hold; exits still run.",
     ),
     "UNKNOWN_HOLD": OperatorCopy(
         "Hold active; cause unrecognised",

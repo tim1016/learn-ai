@@ -7303,6 +7303,7 @@
               "NO_HOLD",
               "UNEXPLAINED_ORDER_HOLD",
               "STREAM_HEALTH_HOLD",
+              "LIVE_ENVELOPE_LOSS_HOLD",
               "UNKNOWN_HOLD"
             ],
             "title": "Hold Reason",

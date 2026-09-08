@@ -14,6 +14,7 @@ from typing import get_args
 import pytest
 
 from app.broker.alpaca.clerk.models import ReconciliationVerdict as ClerkVerdict
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import HOLD_REASON_CODES
 from app.broker.v2panel.vocabulary import (
     ACTION_IDS,
     ALL_VOCABULARY_CODES,
@@ -242,6 +243,24 @@ def test_every_nameable_hold_reason_is_reachable_from_a_stored_code() -> None:
         "unreachable hold cause(s) — add the stored code(s) the clerk writes "
         f"to HOLD_REASON_BY_STORED_CODE: {sorted(causes - reachable)}; "
         f"mapped to a code outside HoldReason: {sorted(reachable - causes)}"
+    )
+
+
+def test_every_registered_clerk_hold_cause_has_a_stored_code_row() -> None:
+    """The clerk's registry decides which causes exist; this table must follow.
+
+    ``vocabulary.py`` is a leaf and imports nothing from the clerk, so the
+    lockstep lives here — the same arrangement
+    ``test_reconciliation_verdicts_match_clerk_model`` uses. A cause
+    registered in ``HOLD_REASON_CODES`` with no row here is not merely
+    undocumented: every hold carrying it renders as ``UNKNOWN_HOLD`` on the
+    operator's only view of an account-wide entry fence.
+    """
+    unnameable = sorted(HOLD_REASON_CODES - set(HOLD_REASON_BY_STORED_CODE))
+
+    assert not unnameable, (
+        "clerk hold cause(s) the panel cannot name — add a row to "
+        f"HOLD_REASON_BY_STORED_CODE (plus its HoldReason member and copy): {unnameable}"
     )
 
 

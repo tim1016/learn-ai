@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UnexplainedOrderCause,
     UnknownOrderIdentity,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
 
 logger = logging.getLogger(__name__)
 
@@ -67,17 +68,32 @@ def account_hold_envelope(
     the two are peers, not a chain, and neither layer imports the other.
 
     The two v12 causes derive their whole cause payload from
-    ``evidence_refs``. The ADR 0059 D4 loss hold cannot: the breach it was
-    raised on is numbers, not evidence lines, so its caller supplies
-    ``cause_facts`` and this function refuses to describe the hold without
-    them. What every hold shares is that ``blocks_new_exposure`` and
-    ``allows_reduction`` are the registered policy's to declare, not this
-    envelope's — see ``uncertainty.raise_account_hold``.
+    ``evidence_refs``, and passing ``cause_facts`` for either is refused
+    rather than ignored — a caller that believed it had stamped a cause which
+    was never stored is the failure this module exists to prevent. The ADR
+    0059 D4 loss hold is the opposite case: the breach it was raised on is
+    numbers, not evidence lines, so its caller supplies ``cause_facts`` and
+    this function refuses to describe the hold without them.
+
+    ``blocks_new_exposure`` and ``allows_reduction`` are read from the
+    registered policy, which is the authority on what an episode permits
+    (ADR 0048 Decision 1). They are not this envelope's to invent: the one
+    caller that stores them verbatim, :func:`insert_account_hold_episode`,
+    would otherwise be free to write a row contradicting the policy the
+    admission path reads.
 
     Raises ``KeyError`` for any other reason code: a hold cause reaching here
     unregistered would otherwise be described as a generic uncertainty and
     lose the account-wide fence it exists to hold.
     """
+    if cause_facts is not None and reason_code in (
+        UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+        STREAM_HEALTH_HOLD_REASON_CODE,
+    ):
+        raise ValueError(
+            f"{reason_code!r} derives its whole cause from its evidence lines; "
+            "cause_facts would be silently dropped"
+        )
     cause: dict[str, Any]
     if reason_code == UNEXPLAINED_ORDER_HOLD_REASON_CODE:
         cause = UnexplainedOrderCause(broker_order_ids=tuple(evidence_refs)).to_mapping()
@@ -118,10 +134,11 @@ def account_hold_envelope(
         )
     else:
         raise KeyError(f"{reason_code!r} is not a registered account-hold cause")
+    policy = _REASON_POLICIES[reason_code]
     return UncertaintyRaisedFacts(
         severity="error",
-        blocks_new_exposure=True,
-        allows_reduction=False,
+        blocks_new_exposure=policy.blocks_new_exposure,
+        allows_reduction=policy.allows_reduction,
         reason_code=reason_code,
         headline=headline,
         explanation=explanation,

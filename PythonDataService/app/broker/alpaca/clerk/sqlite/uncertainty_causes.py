@@ -24,6 +24,9 @@ EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
 # for the old ``UNEXPLAINED_ORDER`` spelling retires with the migration.
 UNEXPLAINED_ORDER_HOLD_REASON_CODE = "UNEXPLAINED_ORDER_HOLD"
 STREAM_HEALTH_HOLD_REASON_CODE = "STREAM_HEALTH_HOLD"
+# The third hold, added after v12 by ADR 0059 D4 rather than migrated into it:
+# the day-P&L breach that fences the account against entries while leaving
+# every program free to exit.
 LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE = "LIVE_ENVELOPE_LOSS_HOLD"
 
 # The reason codes whose episodes project as ``holds`` rather than

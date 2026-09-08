@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     classify_admission_refusal,
     decide_capability,
     raise_account_hold,
+    raise_uncertainty,
     resolve_account_hold,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -32,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     STREAM_HEALTH_HOLD_REASON_CODE,
     LossHoldCause,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _make_held_position
 
 ACCOUNT_ID = "PA-LOSS"
@@ -76,6 +78,18 @@ def test_the_cause_round_trips_and_refuses_partial_or_non_finite_facts() -> None
         )
 
 
+def test_the_cause_refuses_an_unrecognised_extra_field() -> None:
+    """Fail closed on a field this build does not understand.
+
+    This is the one hold whose policy authorizes reductions, so a cause
+    carrying an unknown key would authorize a reduction against a breach we
+    cannot fully read. Rejecting it is what makes the extra field a decoding
+    failure rather than a silent widening.
+    """
+    with pytest.raises(ValueError, match="cause keys"):
+        LossHoldCause.from_mapping({**CAUSE.to_mapping(), "extra": 1})
+
+
 def test_the_loss_hold_is_a_hold_cause_and_every_envelope_refusal_is_transient() -> None:
     assert LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE in HOLD_REASON_CODES
     for code in ENVELOPE_ADMISSION_REASON_CODES:
@@ -106,6 +120,53 @@ async def test_a_raised_loss_hold_blocks_new_exposure_and_admits_every_reduction
         reduction_intent=intent,
     )
     assert reduce.allowed
+
+
+async def test_a_stored_cause_this_build_cannot_decode_refuses_both_capabilities(
+    repo: ClerkSqliteRepository, registered_long: tuple[str, ReductionIntent]
+) -> None:
+    """The reduction the loss hold authorizes is authorized by its *cause*.
+
+    A newer build could store a loss hold whose cause carries a field this one
+    does not know, exactly as
+    ``test_reduction_fails_closed_for_future_or_action_mismatched_drift_facts``
+    pins for ``POSITION_DRIFT``. The episode is raised here through
+    ``raise_uncertainty`` — the seam under ``raise_account_hold``, which is the
+    only way an undecodable cause reaches the table, since the envelope decodes
+    what it is handed. The blanket ``allows_reduction=True`` must not survive
+    that: an unreadable cause refuses REDUCE as well as NEW_EXPOSURE.
+    """
+    strategy_instance_id, intent = registered_long
+    envelope = account_hold_envelope(
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        evidence_refs=[f"day-pnl:{CAUSE.day_start_ms}"],
+        cause_facts=CAUSE.to_mapping(),
+    )
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=envelope.reason_code,
+        headline=envelope.headline,
+        explanation=envelope.explanation,
+        operator_impact=envelope.operator_impact,
+        next_step=envelope.next_step,
+        evidence_refs=tuple(envelope.evidence_refs),
+        cause_facts={**envelope.cause_facts, "future_authorization": True},
+        severity=envelope.severity,
+    )
+
+    reduce = decide_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=strategy_instance_id,
+        reduction_intent=intent,
+    )
+    assert not reduce.allowed and reduce.reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
+
+    entry = decide_capability(
+        repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id=strategy_instance_id
+    )
+    assert not entry.allowed and entry.reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 
 
 def test_a_hold_that_forbids_reduction_still_refuses_it(repo: ClerkSqliteRepository) -> None:
