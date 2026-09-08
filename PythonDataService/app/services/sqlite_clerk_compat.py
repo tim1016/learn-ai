@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import (
+    get_active_clerk_runtime,
+    primary_custody_world,
+)
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
     AccountOperatorPostureContext,
@@ -231,6 +234,7 @@ def sqlite_clerk_status(
             trading_blocked=account.trading_blocked if account_usable else None,
             account_blocked=account.account_blocked if account_usable else None,
             account_identity_mismatch=identity_mismatch,
+            custody_world=primary_custody_world() or "real_paper",
             outstanding_intents=unresolved,
             channels_ready=channel_evaluation.ready,
             channels_detail=_channel_evaluation_detail(channel_evaluation),

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -22,8 +23,8 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_synthetic_clerk_authority,
-    get_active_clerk_runtime,
     get_clerk_runtime,
+    primary_custody_world,
     register_clerk_runtime,
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
@@ -76,11 +77,16 @@ class BindingAuthority:
         return ()
 
 
-def primary_custody_kind() -> AccountAuthorityKind:
-    """The world the primary authority custodies in; refuses to guess when none is installed."""
-    runtime = get_active_clerk_runtime()
-    kind = None if runtime is None else runtime.selected_account_authority_kind
-    if kind is None:
+def primary_custody_kind() -> Literal["real_paper", "shadow"]:
+    """The world the primary authority custodies in; refuses to guess when none is installed.
+
+    ``primary_custody_world`` is the single reader of that selection. It
+    answers ``None`` for every world a binding's evidence cannot be filed in
+    — no authority installed, and the isolated synthetic world a primary boot
+    never selects — and this caller must refuse rather than guess.
+    """
+    world = primary_custody_world()
+    if world is None:
         raise StartAdmissionUnavailable(
             "The account Clerk is not installed.",
             detail=(
@@ -88,7 +94,7 @@ def primary_custody_kind() -> AccountAuthorityKind:
                 "decides where evidence is retained."
             ),
         )
-    return kind
+    return world
 
 
 @dataclass(frozen=True)

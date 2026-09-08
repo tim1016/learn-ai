@@ -17,7 +17,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -439,6 +439,18 @@ def active_program_leg_policy() -> ProgramLegPolicy:
     return runtime.clerk.program_leg_policy
 
 
+def primary_custody_world() -> Literal["real_paper", "shadow"] | None:
+    """The world the primary authority custodies in, or ``None`` while none is installed.
+
+    Gates that relabel or relax on the shadow world read this; a caller that
+    would have to *guess* where evidence goes must refuse on ``None`` instead
+    (``bot_binding_authority.primary_custody_kind``).
+    """
+    runtime = get_active_clerk_runtime()
+    kind = None if runtime is None else runtime.selected_account_authority_kind
+    return kind if kind in ("real_paper", "shadow") else None
+
+
 def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
     global _runtime
     _runtime = runtime
@@ -520,6 +532,7 @@ __all__ = [
     "get_active_clerk_runtime",
     "get_alpaca_clerk",
     "get_clerk_runtime",
+    "primary_custody_world",
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",
     "select_active_clerk_runtime",

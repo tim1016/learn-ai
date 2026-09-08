@@ -1146,6 +1146,20 @@ def test_uncovered_corpus_is_refused_on_a_live_account() -> None:
     assert decision.next_step == CORPUS_UNCOVERED_NEXT_STEP
 
 
+def test_uncovered_corpus_is_refused_under_a_shadow_authority() -> None:
+    """ADR 0059 D11: the shadow world does not relax the ADR 0054 corpus gate.
+
+    A shadow Clerk custodies a live account, so its snapshot reports
+    ``account_mode="live"`` — exactly the reading this gate blocks. Pinned
+    here because the shadow world relaxes the account-mode refusal elsewhere
+    (deploy view, account posture) and must not be assumed to relax it here.
+    """
+    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+
+
 def test_covered_corpus_never_consults_the_account_environment() -> None:
     """The environment only matters once coverage is actually missing."""
     bot = _bot(mode="dry_run").model_copy(

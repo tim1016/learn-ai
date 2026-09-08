@@ -83,6 +83,7 @@ from app.services.broker_v2_panel.panel_projection_service import (
     select_primary_action_by_lens,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    _recent_fill_view,
     adapt_sqlite_panel,
     build_sqlite_catalog,
 )
@@ -166,7 +167,7 @@ _MARKET_PULSE = MarketPulseView(
 def test_simulated_panel_rows_require_synthetic_authority_metadata(
     row_factory: Callable[[], RecentDecisionView | RecentFillView],
 ) -> None:
-    with pytest.raises(ValidationError, match="synthetic authority metadata"):
+    with pytest.raises(ValidationError, match="synthetic or shadow authority metadata"):
         row_factory()
 
 
@@ -184,6 +185,61 @@ def test_simulated_panel_rows_accept_nonempty_synthetic_authority_metadata() -> 
     )
 
     assert row.authority_account_id == "sim:ema-1"
+
+
+def test_simulated_panel_rows_accept_the_shadow_authority_namespace() -> None:
+    """ADR 0059 D2: the shadow world synthesizes fills, so its rows are simulated."""
+    row = RecentFillView(
+        order_ref="r",
+        symbol="SPY",
+        side="buy",
+        quantity=1.0,
+        price=1.0,
+        filled_at_ms=1,
+        simulated=True,
+        authority_account_id="shadow:9LIVE0001",
+        authority_kind="shadow",
+    )
+
+    assert row.authority_kind == "shadow"
+
+
+def test_simulated_shadow_row_still_requires_its_own_authority_kind() -> None:
+    """The namespace and the kind stay inseparable: shadow: is never synthetic."""
+    with pytest.raises(ValidationError, match="synthetic or shadow authority metadata"):
+        RecentFillView(
+            order_ref="r",
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            price=1.0,
+            filled_at_ms=1,
+            simulated=True,
+            authority_account_id="shadow:9LIVE0001",
+            authority_kind="synthetic",
+        )
+
+
+def test_sqlite_fill_adapter_stamps_a_shadow_authority_row_as_simulated() -> None:
+    """A fill read from a shadow authority reaches the panel typed shadow."""
+    row = _recent_fill_view(
+        FillRecord(
+            account_id="shadow:9LIVE0001",
+            sid=SID,
+            intent_id="spy-enter",
+            order_ref="order:spy",
+            event_key="exec-spy-1",
+            symbol="SPY",
+            side=OrderSide.BUY,
+            quantity=1.0,
+            fill_price=500.0,
+            filled_at_ms=_NOW - 100,
+            fee=None,
+        ),
+        authority_account_id="shadow:9LIVE0001",
+    )
+
+    assert (row.simulated, row.authority_kind) == (True, "shadow")
 
 
 def _status(

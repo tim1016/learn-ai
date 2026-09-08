@@ -126,8 +126,13 @@ def test_primary_custody_kind_on_the_shadow_authority_is_shadow() -> None:
         reset_alpaca_clerk_for_testing()
 
 
-def test_primary_custody_kind_on_a_synthetic_runtime_is_synthetic() -> None:
-    """Pinned, not asserted from the caller's needs: no primary boot selects synthetic today."""
+def test_primary_custody_kind_on_a_synthetic_runtime_refuses_to_guess() -> None:
+    """No primary boot selects synthetic, so it is not a world to file evidence in.
+
+    ``primary_custody_world`` answers ``None`` for every kind outside the two
+    real custody worlds, and this caller refuses rather than filing a
+    binding's evidence in an isolated Dry Run namespace.
+    """
     set_active_clerk_runtime(
         ActiveClerkRuntime(
             authority_kind="synthetic",
@@ -136,6 +141,7 @@ def test_primary_custody_kind_on_a_synthetic_runtime_is_synthetic() -> None:
         )
     )
     try:
-        assert primary_custody_kind() == "synthetic"
+        with pytest.raises(StartAdmissionUnavailable):
+            primary_custody_kind()
     finally:
         reset_alpaca_clerk_for_testing()

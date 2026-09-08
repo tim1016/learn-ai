@@ -129,6 +129,10 @@ class AccountOperatorPostureContext:
     # account_* fields above None in this case — a mismatched account's
     # facts must never be attributed to this projection's account.
     account_identity_mismatch: bool = False
+    # The world the primary authority custodies in; a shadow authority reads
+    # a live account by design, so `account_mode == "live"` is not the wrong
+    # mode there.
+    custody_world: Literal["real_paper", "shadow"] = "real_paper"
 
     def __post_init__(self) -> None:
         account_fields = (
@@ -320,7 +324,7 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             ),
             evidence={"account_evidence_unavailable": True},
         )
-    if ctx.account_mode != "paper":
+    if ctx.account_mode != "paper" and ctx.custody_world != "shadow":
         return _eligibility_posture(
             condition_id="alpaca_account_wrong_execution_mode",
             severity="blocking",

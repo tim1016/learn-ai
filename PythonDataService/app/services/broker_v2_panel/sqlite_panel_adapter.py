@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -21,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
+from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -595,6 +597,7 @@ def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentF
     authority at all while its sibling decision row carries one — the exact
     asymmetry the single-authority guard exists to make impossible.
     """
+    kind = authority_kind_for_account(authority_account_id)
     return RecentFillView(
         order_ref=fill.order_ref,
         symbol=fill.symbol,
@@ -602,11 +605,9 @@ def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentF
         quantity=fill.quantity,
         price=fill.fill_price,
         filled_at_ms=fill.filled_at_ms,
-        simulated=authority_account_id.startswith("sim:"),
+        simulated=kind in SIMULATED_AUTHORITY_KINDS,
         authority_account_id=authority_account_id,
-        authority_kind=(
-            "synthetic" if authority_account_id.startswith("sim:") else "real_paper"
-        ),
+        authority_kind=kind,
     )
 
 

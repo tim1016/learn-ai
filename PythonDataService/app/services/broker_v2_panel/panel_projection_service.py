@@ -25,7 +25,7 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
-from app.schemas.account_authority import AuthorityKind
+from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -343,6 +343,7 @@ def _recent_fill_views(
     entries: list[OrderJournalEntry],
     *,
     limit: int = 8,
+    simulated: bool = False,
     authority_account_id: str | None = None,
     authority_kind: AuthorityKind | None = None,
 ) -> list[RecentFillView]:
@@ -355,6 +356,7 @@ def _recent_fill_views(
             quantity=fill.quantity,
             price=fill.fill_price,
             filled_at_ms=fill.filled_at_ms,
+            simulated=simulated,
             authority_account_id=authority_account_id,
             authority_kind=authority_kind,
         )
@@ -539,15 +541,22 @@ def _recent_activity_views(
                 _dry_run_fill_views(dry_run_activity),
             )
     else:
+        # A shadow authority's fills are synthesized too (ADR 0059 D2), so
+        # "not Dry Run" no longer implies "real": the row's own authority
+        # kind decides, and the two worlds that synthesize are named once in
+        # ``SIMULATED_AUTHORITY_KINDS``.
+        simulated = authority_kind in SIMULATED_AUTHORITY_KINDS
         decision_views, fill_views = (
             _recent_decision_views(
                 decision_receipts,
+                simulated=simulated,
                 authority_account_id=authority_account_id,
                 authority_kind=authority_kind,
             ),
             _recent_fill_views(
                 status.strategy_instance_id,
                 entries,
+                simulated=simulated,
                 authority_account_id=authority_account_id,
                 authority_kind=authority_kind,
             ),

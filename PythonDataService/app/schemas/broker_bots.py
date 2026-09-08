@@ -151,7 +151,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     strategy_key: str = Field(min_length=1, max_length=128)
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
-    execution_mode: Literal["paper", "dry_run"] = "paper"
+    execution_mode: Literal["paper", "dry_run", "shadow"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     # Every tunable the strategy author exposed (EMA gap, RSI range, ADX
@@ -243,7 +243,7 @@ class AlpacaPaperDeployStrategy(BaseModel):
     # parsing backend-authored blocker prose.
     paper_access_state: Literal["not_required", "blocked", "available", "enabled"]
     selectable: bool
-    admissible_modes: tuple[Literal["dry_run", "paper"], ...]
+    admissible_modes: tuple[Literal["dry_run", "paper", "shadow"], ...]
     override_explanation: str | None = None
     blocked_explanation: str | None = None
     # This strategy's registered tunables as JSON schema — the same schema
@@ -286,10 +286,17 @@ class AlpacaPaperDeployStrategy(BaseModel):
         # admits neither mode: Dry Run itself requires a registered runtime
         # (see `_dry_run_eligibility`'s runtime check). This relaxation only
         # widens what a *non-selectable* row may look like; a selectable
-        # row's guarantee (always both modes) is unchanged from #1702.
+        # row's guarantee (always both modes) is unchanged from #1702 —
+        # except that the account's custody world names which single
+        # broker-contacting mode the second one is: `paper` in the real-paper
+        # world, `shadow` when a shadow authority reads a live account
+        # (ADR 0059 D2). Never both: one account has exactly one such mode.
         if self.selectable:
-            if self.admissible_modes != ("dry_run", "paper"):
-                raise ValueError("A selectable strategy row must admit exactly dry_run and paper.")
+            if self.admissible_modes not in (("dry_run", "paper"), ("dry_run", "shadow")):
+                raise ValueError(
+                    "A selectable strategy row must admit exactly dry_run and its "
+                    "account's one broker-contacting mode (paper or shadow)."
+                )
             return self
         if self.admissible_modes not in ((), ("dry_run",)):
             raise ValueError("A non-selectable strategy row may admit only dry_run, or neither mode.")
@@ -318,7 +325,7 @@ class AlpacaPaperExecutionMode(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode: Literal["paper", "dry_run", "live"]
+    mode: Literal["paper", "dry_run", "shadow", "live"]
     label: str
     availability: Literal["available", "planned"]
     explanation: str
@@ -344,7 +351,7 @@ class AlpacaPaperDeployView(BaseModel):
 
     broker: Literal["alpaca"]
     account_id: str
-    account_mode: Literal["paper"]
+    account_mode: Literal["paper", "live"]
     account_label: str
     evaluated_at_ms: int = Field(ge=0)
     # Paper eligibility (name kept as-is: renaming would ripple across the
@@ -493,7 +500,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     next_action: str
     panel_path: str
     account_id: str
-    execution_mode: Literal["paper", "dry_run"] = "paper"
+    execution_mode: Literal["paper", "dry_run", "shadow"] = "paper"
     sizing: AlpacaPaperSizingSelection
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None = None

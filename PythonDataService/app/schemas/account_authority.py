@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 AuthorityKind = Literal["real_paper", "real_live", "shadow", "synthetic"]
 
+# The two worlds whose fills are synthesized; every panel row they author is
+# `simulated`.
+SIMULATED_AUTHORITY_KINDS: frozenset[AuthorityKind] = frozenset({"synthetic", "shadow"})
+
 
 def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) -> None:
     """Keep account namespace and authority kind inseparable at the wire boundary."""
@@ -61,4 +65,9 @@ class SingleAuthorityAggregate(BaseModel):
         return self
 
 
-__all__ = ["AuthorityKind", "AuthorityScopedRow", "SingleAuthorityAggregate"]
+__all__ = [
+    "SIMULATED_AUTHORITY_KINDS",
+    "AuthorityKind",
+    "AuthorityScopedRow",
+    "SingleAuthorityAggregate",
+]

@@ -34,6 +34,11 @@ from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCo
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.schemas.signal_program_seal import SealedBotProgram
 
+_SIMULATED_NAMESPACES: tuple[tuple[str, AuthorityKind], ...] = (
+    ("sim:", "synthetic"),
+    ("shadow:", "shadow"),
+)
+
 
 def _validate_simulated_authority_metadata(
     *,
@@ -41,14 +46,17 @@ def _validate_simulated_authority_metadata(
     authority_account_id: str | None,
     authority_kind: AuthorityKind | None,
 ) -> None:
-    """Require simulated panel evidence to name its isolated synthetic authority."""
-    if simulated and (
-        not authority_account_id
-        or not authority_account_id.startswith("sim:")
-        or authority_kind != "synthetic"
+    """Require simulated panel evidence to name its isolated synthesized authority."""
+    if not simulated:
+        return
+    if not any(
+        authority_account_id is not None
+        and authority_account_id.startswith(prefix)
+        and authority_kind == kind
+        for prefix, kind in _SIMULATED_NAMESPACES
     ):
         raise ValueError(
-            "simulated panel rows require nonempty synthetic authority metadata"
+            "simulated panel rows require nonempty synthetic or shadow authority metadata"
         )
 
 
