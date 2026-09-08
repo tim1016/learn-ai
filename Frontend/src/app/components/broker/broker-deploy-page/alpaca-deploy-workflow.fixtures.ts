@@ -54,6 +54,18 @@ export const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
   blocked_explanation: null,
 };
 
+/**
+ * Dry Run is the one card every custody world offers, so both views name this
+ * const rather than indexing into the other's array — a reorder of the paper
+ * fixture must not silently change what the shadow fixture offers.
+ */
+export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = {
+  mode: 'dry_run',
+  label: 'Dry Run',
+  availability: 'available',
+  explanation: 'Real market data with simulated decisions and fills only.',
+};
+
 export const DEPLOY_VIEW: DeployBotView = {
   broker: 'alpaca',
   account_id: 'PA9',
@@ -76,12 +88,7 @@ export const DEPLOY_VIEW: DeployBotView = {
   },
   strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
   execution_modes: [
-    {
-      mode: 'dry_run',
-      label: 'Dry Run',
-      availability: 'available',
-      explanation: 'Real market data with simulated decisions and fills only.',
-    },
+    DRY_RUN_EXECUTION_MODE,
     { mode: 'paper', label: 'Paper', availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
     { mode: 'live', label: 'Live', availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
@@ -144,8 +151,24 @@ export const DEPLOY_VIEW: DeployBotView = {
  */
 export const SHADOW_DEPLOY_VIEW: DeployBotView = {
   ...DEPLOY_VIEW,
+  account_id: '9LIVE0001',
   account_mode: 'live',
   account_label: 'Alpaca shadow · 9LIVE0001',
+  // Verbatim from the backend's own shadow-world copy table
+  // (`paper_deploy_service._deploy_view_copy`). Spreading DEPLOY_VIEW alone
+  // left three paper-worded sentences here, which is exactly the leak the
+  // shadow specs exist to catch. `reason_code` and `next_action` stay
+  // world-neutral in the backend too: they are wire tokens, not prose.
+  eligibility: {
+    eligible: true,
+    reason_code: 'ALPACA_PAPER_DEPLOY_READY',
+    headline: 'This Alpaca account is eligible for a Clerk-governed shadow deployment.',
+    explanation:
+      'The operator may choose Clerk-governed shadow execution — every fill synthesized '
+      + "against this live account's real reads, nothing submitted — or a zero-broker-write "
+      + 'Dry Run before launch.',
+    next_action: 'Complete the deployment ticket, review the summary, then deploy the bot.',
+  },
   strategies: DEPLOY_VIEW.strategies.map((strategy) => ({
     ...strategy,
     admissible_modes: strategy.admissible_modes.map((mode) =>
@@ -153,7 +176,7 @@ export const SHADOW_DEPLOY_VIEW: DeployBotView = {
     ),
   })),
   execution_modes: [
-    DEPLOY_VIEW.execution_modes[0],
+    DRY_RUN_EXECUTION_MODE,
     {
       mode: 'shadow',
       label: 'Shadow',

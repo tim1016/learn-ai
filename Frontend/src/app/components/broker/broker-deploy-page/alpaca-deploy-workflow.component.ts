@@ -260,6 +260,11 @@ export class AlpacaDeployWorkflowComponent {
     ) ? 'shadow' : 'paper',
   );
 
+  /** The account's one broker world, as the access-grant copy words it. */
+  protected readonly brokerModeLabel = computed<'Paper' | 'Shadow'>(
+    () => (this.brokerMode() === 'shadow' ? 'Shadow' : 'Paper'),
+  );
+
   /**
    * True when the ticket's mode contacts the broker. Dry Run is the only
    * mode that holds no custody, so Paper and Shadow share every gate the
@@ -386,7 +391,8 @@ export class AlpacaDeployWorkflowComponent {
     }
     // Mode-aware, not strategy-wide (#1702): a blocked strategy is still
     // Dry-Run-admissible, so admissibility is checked against the ticket's
-    // chosen mode, not `selectable` (which means "Paper-admissible" only).
+    // chosen mode, not `selectable` — which means admissible in this
+    // account's one broker world, Paper or Shadow.
     if (!selectedStrategy.admissible_modes.includes(this.ticket().executionMode)) {
       const reason = this.ticket().executionMode === 'dry_run'
         ? this.dryRunUnavailableReason()
@@ -442,7 +448,9 @@ export class AlpacaDeployWorkflowComponent {
       // has. Seeding here rather than at construction keeps the default a
       // consequence of the view, and stays idempotent: once the mode is one
       // the view offers, the guard below makes every later pass a no-op.
-      if (view !== null && this.brokerMode() === 'shadow') {
+      // `brokerMode()` answers 'paper' whenever no view is loaded, so a
+      // 'shadow' answer already implies one.
+      if (this.brokerMode() === 'shadow') {
         this.ticket.update((ticket) =>
           ticket.executionMode === 'paper'
             ? { ...ticket, executionMode: 'shadow' }
@@ -689,7 +697,7 @@ export class AlpacaDeployWorkflowComponent {
     // 2026-08-24, restoring what #1702 re-pointed at Live). Only an
     // evidence-only strategy carries it — the backend rejects an override on
     // an accepted strategy as superfluous.
-    if (strategy.evidence_status === 'evidence_only' && ticket.executionMode !== 'dry_run') {
+    if (strategy.evidence_status === 'evidence_only' && this.brokerModeSelected()) {
       body.evidence_override = {
         acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
         reason: ticket.overrideReason.trim(),

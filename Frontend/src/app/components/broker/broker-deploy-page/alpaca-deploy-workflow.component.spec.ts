@@ -592,6 +592,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const shadowRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Shadow/ });
     expect(shadowRadio.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy shadow bot' })).toBeTruthy();
+    // The whole point of the slice: no surface on a real-money account's
+    // deploy form may call its custody world "paper". The fixture carries the
+    // backend's own shadow-worded eligibility copy so this can bite.
+    expect(document.body.textContent).not.toMatch(/paper/i);
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-shadow-01' },

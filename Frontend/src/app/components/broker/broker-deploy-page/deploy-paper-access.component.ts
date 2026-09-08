@@ -45,6 +45,14 @@ type PaperAccessFlow =
 export class DeployPaperAccessComponent {
   readonly accountId = input.required<string>();
   readonly strategy = input.required<DeployBotStrategy>();
+  /**
+   * The broker world this account's grant is worded for: `Paper` on a paper
+   * account, `Shadow` on a live one held by the Shadow Account Authority
+   * (ADR 0059 D2). The backend enum stays `paper_access_state` — that is the
+   * grant's identity, not prose — but the prose must not call a real-money
+   * account's grant "Paper".
+   */
+  readonly modeLabel = input.required<"Paper" | "Shadow">();
   readonly accessChanged = output();
 
   private readonly panelService = inject(BrokerV2PanelService);
@@ -54,6 +62,18 @@ export class DeployPaperAccessComponent {
   private lastIdentity = "";
 
   protected readonly flow = signal<PaperAccessFlow>({ kind: "idle" });
+
+  // Assembled here rather than in the template: every control keeps an
+  // accessible name, and one author decides how the world word reads.
+  protected readonly reviewLabel = computed(
+    () => `Review & enable ${this.modeLabel()}`,
+  );
+  protected readonly reviewRegionLabel = computed(
+    () => `Review ${this.modeLabel()} access`,
+  );
+  protected readonly enableLabel = computed(
+    () => `Enable ${this.modeLabel()} access`,
+  );
 
   constructor() {
     effect(() => {

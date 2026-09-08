@@ -12,7 +12,7 @@
     <!-- The workflow no longer carries its own <h1>: this is the single title. -->
     <div class="deploy-drawer-header">
       <div>
-        <span>Deploy · {{ resolvedAccountId() || 'Alpaca' }} · paper</span>
+        <span>{{ headerLabel() }}</span>
         <h2>Deploy a bot</h2>
         <p>Bind a validated strategy to this account and put it on duty.</p>
       </div>
@@ -28,11 +28,11 @@
     } @else if (accountUnavailable()) {
       <section class="deploy-context-error" role="alert">
         <strong>Alpaca account context is unavailable.</strong>
-        <span>Restore the paper account connection, then reopen Deploy.</span>
+        <span>Restore the {{ accountNoun() }} connection, then reopen Deploy.</span>
       </section>
     } @else {
       <section class="deploy-context-loading" role="status" aria-label="Loading Alpaca deploy context">
-        Resolving Alpaca paper account…
+        Resolving the {{ accountNoun() }}…
       </section>
     }
   }
