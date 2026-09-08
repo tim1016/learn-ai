@@ -205,15 +205,30 @@ class _Source:
         return self._runs
 
 
-def _run(started_ms: int, stopped_ms: int | None) -> RunResource:
+def _run(
+    started_ms: int,
+    stopped_ms: int | None,
+    *,
+    sid: str = SID,
+    run_id: str = "run-1",
+) -> RunResource:
     return RunResource(
-        run_id="run-1",
-        strategy_instance_id=SID,
+        run_id=run_id,
+        strategy_instance_id=sid,
         lifecycle_run_id="l-1",
         state="ACTIVE" if stopped_ms is None else "STOPPED",
         started_at_ms=started_ms,
         stopped_at_ms=stopped_ms,
     )
+
+
+def _twin_run(started_ms: int, stopped_ms: int | None) -> RunResource:
+    """A run of the paper twin — a different instance, and a different run id.
+
+    Named apart from the shadow run so a verdict's ``shadow_run_id`` cannot
+    accidentally read as satisfied by the twin's run.
+    """
+    return _run(started_ms, stopped_ms, sid=TWIN, run_id="twin-run-1")
 
 
 def _binding(sid: str, sealed: str, *, use_rth: bool = True) -> BrokerBotBinding:
@@ -261,9 +276,15 @@ def _shadow_source(
 
 
 def _twin_source(
-    fills: Sequence[TwinFill] = (), *, unreadable: Sequence[date] = ()
+    fills: Sequence[TwinFill] = (),
+    runs: Sequence[RunResource] = (),
+    *,
+    unreadable: Sequence[date] = (),
 ) -> _Source:
-    return _Source("paper twin", TWIN, fills, unreadable=unreadable)
+    return _Source("paper twin", TWIN, fills, runs, unreadable=unreadable)
+
+
+COVERING_TWIN_RUN = (_twin_run(OPEN - 1, None),)
 
 
 def _evaluate(
@@ -295,7 +316,7 @@ def test_a_clean_covered_reconciled_day_counts(tmp_path: Path) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger)
     shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
-    twin = _twin_source([_fill(600, ref="p")])
+    twin = _twin_source([_fill(600, ref="p")], COVERING_TWIN_RUN)
 
     evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
 
@@ -303,6 +324,40 @@ def test_a_clean_covered_reconciled_day_counts(tmp_path: Path) -> None:
     assert (verdict.state, verdict.shadow_run_id) == ("counted", "run-1")
     assert verdict.reconciliation is not None and verdict.reconciliation.passed
     assert evaluation.satisfied is True and evaluation.counted == (verdict,)
+
+
+@pytest.mark.parametrize(
+    "twin_runs",
+    [
+        pytest.param((), id="the-twin-never-ran"),
+        pytest.param((_twin_run(OPEN + 1, None),), id="the-twin-started-after-the-open"),
+        pytest.param((_twin_run(OPEN - 1, CLOSE - 1),), id="the-twin-stopped-before-the-close"),
+    ],
+)
+def test_a_day_the_twin_was_not_running_does_not_count(
+    tmp_path: Path, twin_runs: tuple[RunResource, ...]
+) -> None:
+    """A twin that did not run the day proves nothing, so the day cannot count.
+
+    Both sides are silent, so ``reconcile_twin_day`` passes vacuously: two
+    empty fill sets pair into zero divergences. Only the twin's own run
+    coverage separates "the twins agreed to do nothing" from "the twin was
+    switched off", and the receipt this day feeds later qualifies real-money
+    arming (ADR 0059 D2/D4).
+    """
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source(runs=[_run(OPEN - 1, None)])
+    twin = _twin_source(runs=twin_runs)
+
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
+
+    [verdict] = evaluation.sessions
+    assert verdict.state == "run_not_covering"
+    assert verdict.detail == "no run of the paper twin spanned the whole decision session"
+    # The shadow side *did* cover the day, and the verdict still names its run.
+    assert verdict.shadow_run_id == "run-1"
+    assert evaluation.satisfied is False
 
 
 @pytest.mark.parametrize(
@@ -324,7 +379,9 @@ def test_days_that_do_not_count_say_why(
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger, opened_minute=opened_minute)
     shadow = _shadow_source([_fill(600)], [run])
-    twin = _twin_source(twin_fills)
+    # The twin covers every one of these days, so each row's named state is
+    # the only reason the day did not count.
+    twin = _twin_source(twin_fills, COVERING_TWIN_RUN)
 
     evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
 
@@ -344,6 +401,7 @@ def test_an_unreadable_twin_day_is_not_evaluable_and_leaves_the_other_days_judge
     )
     twin = _twin_source(
         [_fill(600, day=PRIOR_DAY, ref="p"), _fill(600, ref="p")],
+        [_twin_run(session_open_ms_utc(PRIOR_DAY) - 1, None)],
         unreadable=[PRIOR_DAY],
     )
 
@@ -373,7 +431,7 @@ def test_an_unreadable_shadow_day_is_not_evaluable_before_the_twin_is_asked(
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger)
     shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)], unreadable=[DAY])
-    twin = _twin_source([_fill(600, ref="p")])
+    twin = _twin_source([_fill(600, ref="p")], COVERING_TWIN_RUN)
 
     evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
 
@@ -397,7 +455,9 @@ def test_an_extended_run_is_judged_against_its_declared_open_not_the_calendar_op
     shadow = _shadow_source(
         [_fill(600)], [_run(et_minute_of_day_ms(DAY, DECLARED_OPEN_MINUTE) - 1, None)]
     )
-    twin = _twin_source([_fill(600, ref="p")])
+    twin = _twin_source(
+        [_fill(600, ref="p")], [_twin_run(et_minute_of_day_ms(DAY, DECLARED_OPEN_MINUTE) - 1, None)]
+    )
 
     under_rth = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
     extended = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin, use_rth=False)

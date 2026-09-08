@@ -1,7 +1,8 @@
 """Shadow-vs-paper-twin reconciliation and the shadow gate (ADR 0059 D2).
 
 A shadow session counts only when (a) the sweep reconciled cleanly for the
-whole day, (b) the instance's run covered its whole decision session, and
+whole day, (b) a run on *each* side — the shadow instance and its paper twin —
+covered the whole decision session, and
 (c) the instance's synthesized trades reconcile against its paper twin — the
 same configured signal, plan and size sealed to the paper account, run over
 the same day. Shadow proves the live plumbing; it does not prove execution
@@ -462,6 +463,10 @@ def evaluate_shadow_gate(
     if twin_account_id != twin_binding.sealed_program.sealed_account_id:
         raise ShadowTwinMismatch("the twin is not sealed to the named twin account")
     runs = shadow_source.runs_for_strategy(shadow_binding.strategy_instance_id)
+    # Read beside the shadow's, from the twin's own authority: a day the twin
+    # was not running yields no twin fills, and a silent shadow day would then
+    # reconcile against that silence and count vacuously.
+    twin_runs = twin_source.runs_for_strategy(twin_binding.strategy_instance_id)
     session = RunDecisionSession.resolve(use_rth=shadow_binding.use_rth, window=window)
     verdicts: list[ShadowSessionVerdict] = []
     if runs and session is not None:
@@ -476,6 +481,7 @@ def evaluate_shadow_gate(
                     open_ms=open_ms,
                     close_ms=close_ms,
                     runs=runs,
+                    twin_runs=twin_runs,
                     session_ledger=session_ledger,
                     shadow_source=shadow_source,
                     twin_source=twin_source,
@@ -518,6 +524,7 @@ def _judge_day(
     open_ms: int,
     close_ms: int,
     runs: Sequence[RunResource],
+    twin_runs: Sequence[RunResource],
     session_ledger: ShadowSessionLedger,
     shadow_source: FillSource,
     twin_source: FillSource,
@@ -551,7 +558,18 @@ def _judge_day(
     run = _covering_run(runs, open_ms=open_ms, close_ms=close_ms)
     if run is None:
         return verdict(
-            "run_not_covering", "no run of this instance spanned the whole decision session"
+            "run_not_covering", "no run of the shadow instance spanned the whole decision session"
+        )
+    # The twin side is proven the same way, and per day: ``_assert_coverage``
+    # vouches only that the twin authority can *account* for the instance's
+    # executions over its lifetime, which a twin that was switched off all day
+    # satisfies. Its silence would otherwise reconcile against a silent shadow
+    # day and count toward a receipt that later qualifies live arming.
+    if _covering_run(twin_runs, open_ms=open_ms, close_ms=close_ms) is None:
+        return verdict(
+            "run_not_covering",
+            "no run of the paper twin spanned the whole decision session",
+            run_id=run.run_id,
         )
     try:
         shadow_fills = read_twin_fills(

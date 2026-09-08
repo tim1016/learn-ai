@@ -235,7 +235,10 @@ minutes would otherwise fail closed as a misleading twin divergence.
 
 **A session counts** (ruling R10) when the journal shows the day opened at or
 before the instance's decision session opened, closed clean after it closed, with no
-non-clean pass; one run of the instance spanned the whole decision session; and
+non-clean pass; one run **on each side** — the shadow instance and its paper
+twin — spanned the whole decision session, because a day the twin was not
+running yields no twin fills and would otherwise reconcile against a silent
+shadow day and count vacuously; and
 the twin reconciliation has no gating divergence. The other five outcomes —
 `sweep_not_clean`, `sweep_opened_late`, `run_not_covering`, `twin_diverged`,
 `not_evaluable` — are named states, not silence.
