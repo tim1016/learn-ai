@@ -40,10 +40,13 @@ rate history is not pinned — pin it from the CAT fee filings when backtest par
 Alpaca's schedule states fees accrue intraday and are charged at end of day with the
 total rounded up to $0.01. Its support page (https://alpaca.markets/support/regulatory-fees)
 reads as if SEC and TAF are each rounded up per trade. The canonical model implements
-**end-of-day, per-component round-up**. The reconciliation tolerance
-`$0.01 × (3 + 2 × sell_fills)` admits the per-trade reading (at most one extra cent per
-sell for SEC and one for TAF) so a live session can decide which reading is true; tighten
-it to `$0.03` once observed sessions agree with one reading.
+**end-of-day, per-component round-up**. The reconciliation band is therefore
+**asymmetric**: `-$0.03 ≤ observed − predicted ≤ $0.01 × (3 + 2 × sell_fills)`. Per-trade
+rounding can only push the observed charge *up* (`Σ ceil(aᵢ) ≥ ceil(Σ aᵢ)`), so the upper
+bound admits the per-trade reading (at most one extra cent per sell for SEC and one for
+TAF) while only the three end-of-day component ceilings can explain an observation below
+the model. A live session decides which reading is true; tighten the upper bound to
+`$0.03` once observed sessions agree with one reading.
 
 ## Reconciliation
 
@@ -53,9 +56,22 @@ calendar's session open of a trading day, ET-anchored `int64 ms UTC`) prices eve
 for that date, and returns a verdict: `within_tolerance`, `drift`, `pending` (no `FEE`
 posted yet, within 24 h after the day ends), `unobserved` (fills but no `FEE` after the
 grace period, or a `FEE` row without `net_amount`), `no_fills`, `rate_unpinned`, or
-`unavailable` (no active SQLite Clerk). Implementation:
-`PythonDataService/app/services/alpaca_fee_reconciliation.py`. The activity read is
-bounded (the broker port follows at most three newest-first pages of 100).
+`unavailable` (no active SQLite Clerk, or a broker other than Alpaca). Implementation:
+`PythonDataService/app/services/alpaca_fee_reconciliation.py`.
+
+**Completeness is a precondition for comparing.** The activity read is bounded — the
+broker port follows at most three newest-first pages of 100 — so for an older trade date
+the day's `FEE` rows may be partly or wholly past the end of that read. `within_tolerance`
+and `drift` are therefore reachable only when the read *demonstrably reached past the
+window start*: some returned activity (of any type) is dated before this ET day. Without
+that proof the verdict is `unobserved`, never a confident comparison of a partial sum. A
+young account with no earlier activity lands there too. The fills read is not bounded this
+way: `SqliteEconomicProjectionReader.account_fill_window` is an economic-time window over
+every custody owner — bot, manual and S2 alike — that refuses truncation rather than
+silently dropping rows.
+
+The observed side is compared against the model through the asymmetric band above:
+`-$0.03 ≤ observed − predicted ≤ $0.01 × (3 + 2 × sell_fills)`.
 
 ## Validation
 
@@ -75,4 +91,6 @@ bounded (the broker port follows at most three newest-first pages of 100).
   signature carries both.
 - Per-component observed reconciliation once `activity_sub_type` is mapped onto
   `BrokerActivity` (today only the day's total is compared).
+- Port-level activity-read coverage signal (`covered_from_ms`) so the completeness check
+  stops depending on an older activity existing.
 - CAT rate history before 2026-09-01.
