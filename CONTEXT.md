@@ -509,6 +509,10 @@ so they survive a broker change.
   in the direction of the trade, as a day limit flagged for extended hours.
   Inside the regular session a program leg stays a market order. _Avoid_:
   slippage limit, aggressive limit, extended-hours price
+- **Decision session** — the phases a sealed instance decides in: the
+  regular session, or the broker's declared extended session around it
+  (pre-market, regular, after-hours). The window is broker capability data;
+  the regular session is the calendar's. _Avoid_: all-hours, 24/5, use_rth
 
 ## Instance console mechanics (sharpened 2026-05-30)
 
