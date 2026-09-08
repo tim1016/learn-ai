@@ -48,13 +48,7 @@ def marketable_limit_price(*, side: OrderSide, close: Decimal, allowance_bps: De
         raw = close * (1 - fraction)
         rounding = ROUND_FLOOR
     tick = _DOLLAR_TICK if raw >= 1 else _SUB_DOLLAR_TICK
-    result = raw.quantize(tick, rounding=rounding)
-    # When price crosses bands (close in one band, result in another), re-quantize
-    # with opposite rounding to stay within the target band boundary.
-    if close < 1 and result >= 1:
-        opposite_rounding = ROUND_FLOOR if rounding is ROUND_CEILING else ROUND_CEILING
-        result = raw.quantize(_DOLLAR_TICK, rounding=opposite_rounding)
-    return result
+    return raw.quantize(tick, rounding=rounding)
 
 
 @dataclass(frozen=True)

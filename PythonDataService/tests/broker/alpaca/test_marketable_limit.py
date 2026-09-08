@@ -25,8 +25,8 @@ from app.broker.contract.models import OrderSide
         (OrderSide.SELL, Decimal("0.5000"), Decimal("10"), Decimal("0.4995")),
         # A zero allowance anchors exactly at the close.
         (OrderSide.BUY, Decimal("55.55"), Decimal("0"), Decimal("55.55")),
-        # A buy that crosses the $1 band rounds on the band it lands in.
-        (OrderSide.BUY, Decimal("0.9999"), Decimal("5"), Decimal("1.00")),
+        # A buy that crosses the $1 band rounds up on the band it lands in: 1.00039995 → 1.01.
+        (OrderSide.BUY, Decimal("0.9999"), Decimal("5"), Decimal("1.01")),
     ],
 )
 def test_marketable_limit_price(side: OrderSide, close: Decimal, bps: Decimal, expected: Decimal) -> None:
