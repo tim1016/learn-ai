@@ -160,28 +160,49 @@ UNREADABLE = "SQLite account fill evidence is incomplete for this window: a fill
 
 
 class _Source:
+    """One world's fill reader, which carries exactly one instance.
+
+    Two of these, never one double serving both sides. A single shared
+    double answers identically whichever authority ``_judge_day`` asks, so a
+    seam that read the twin's fills from the shadow authority would still
+    pass every test here. In production the shadow custody database does not
+    carry the paper twin's instance at all, so the same mistake fails closed
+    on ``not_evaluable``; ``label``/``instance_id`` reproduce that, and
+    ``consulted`` records who was actually asked.
+    """
+
     def __init__(
         self,
-        fills: dict[str, list[TwinFill]],
-        runs: dict[str, list[RunResource]],
+        label: str,
+        instance_id: str,
+        fills: Sequence[TwinFill] = (),
+        runs: Sequence[RunResource] = (),
         *,
         unreadable: Sequence[date] = (),
     ) -> None:
-        self._fills, self._runs = fills, runs
+        self.label = label
+        self.consulted: list[str] = []
+        self._instance_id = instance_id
+        self._fills, self._runs = tuple(fills), tuple(runs)
         self._unreadable = frozenset(et_midnight_ms(day) for day in unreadable)
 
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
     ) -> tuple[TwinFill, ...]:
+        self.consulted.append(strategy_instance_id)
+        if strategy_instance_id != self._instance_id:
+            raise EconomicProjectionUnavailable(
+                f"the {self.label} authority does not carry '{strategy_instance_id}'"
+            )
         if from_ms in self._unreadable:
             raise EconomicProjectionUnavailable(UNREADABLE)
         # Half-open, exactly as the protocol and the SQLite projection define it.
-        return tuple(
-            f for f in self._fills.get(strategy_instance_id, ()) if from_ms <= f.filled_at_ms < to_ms
-        )
+        return tuple(f for f in self._fills if from_ms <= f.filled_at_ms < to_ms)
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
-        return tuple(self._runs.get(strategy_instance_id, ()))
+        if strategy_instance_id != self._instance_id:
+            return ()
+        return self._runs
 
 
 def _run(started_ms: int, stopped_ms: int | None) -> RunResource:
@@ -230,11 +251,27 @@ def _clean_day(ledger: ShadowSessionLedger, *, day: date = DAY, opened_minute: i
     )
 
 
+def _shadow_source(
+    fills: Sequence[TwinFill] = (),
+    runs: Sequence[RunResource] = (),
+    *,
+    unreadable: Sequence[date] = (),
+) -> _Source:
+    return _Source("shadow", SID, fills, runs, unreadable=unreadable)
+
+
+def _twin_source(
+    fills: Sequence[TwinFill] = (), *, unreadable: Sequence[date] = ()
+) -> _Source:
+    return _Source("paper twin", TWIN, fills, unreadable=unreadable)
+
+
 def _evaluate(
     tmp_path: Path,
     *,
     ledger: ShadowSessionLedger,
-    source: _Source,
+    shadow: _Source,
+    twin: _Source,
     required: int = 1,
     now_ms: int | None = None,
     use_rth: bool = True,
@@ -247,8 +284,8 @@ def _evaluate(
         twin_account_id="PA-TEST",
         required_sessions=required,
         session_ledger=ledger,
-        shadow_source=source,
-        twin_source=source,
+        shadow_source=shadow,
+        twin_source=twin,
         window=window,
         now_ms=et_minute_of_day_ms(date(2026, 9, 9), 60) if now_ms is None else now_ms,
     )
@@ -257,9 +294,10 @@ def _evaluate(
 def test_a_clean_covered_reconciled_day_counts(tmp_path: Path) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger)
-    source = _Source({SID: [_fill(600)], TWIN: [_fill(600, ref="p")]}, {SID: [_run(OPEN - 1, None)]})
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    twin = _twin_source([_fill(600, ref="p")])
 
-    evaluation = _evaluate(tmp_path, ledger=ledger, source=source)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
 
     [verdict] = evaluation.sessions
     assert (verdict.state, verdict.shadow_run_id) == ("counted", "run-1")
@@ -285,9 +323,10 @@ def test_days_that_do_not_count_say_why(
 ) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger, opened_minute=opened_minute)
-    source = _Source({SID: [_fill(600)], TWIN: twin_fills}, {SID: [run]})
+    shadow = _shadow_source([_fill(600)], [run])
+    twin = _twin_source(twin_fills)
 
-    evaluation = _evaluate(tmp_path, ledger=ledger, source=source)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
 
     assert [v.state for v in evaluation.sessions] == [state]
     assert evaluation.satisfied is False
@@ -299,22 +338,50 @@ def test_an_unreadable_twin_day_is_not_evaluable_and_leaves_the_other_days_judge
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger, day=PRIOR_DAY)
     _clean_day(ledger)
-    source = _Source(
-        {
-            SID: [_fill(600, day=PRIOR_DAY), _fill(600)],
-            TWIN: [_fill(600, day=PRIOR_DAY, ref="p"), _fill(600, ref="p")],
-        },
-        {SID: [_run(session_open_ms_utc(PRIOR_DAY) - 1, None)]},
+    shadow = _shadow_source(
+        [_fill(600, day=PRIOR_DAY), _fill(600)],
+        [_run(session_open_ms_utc(PRIOR_DAY) - 1, None)],
+    )
+    twin = _twin_source(
+        [_fill(600, day=PRIOR_DAY, ref="p"), _fill(600, ref="p")],
         unreadable=[PRIOR_DAY],
     )
 
-    evaluation = _evaluate(tmp_path, ledger=ledger, source=source, now_ms=CLOSE + 1)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin, now_ms=CLOSE + 1)
 
     unreadable, readable = evaluation.sessions
     assert (unreadable.state, unreadable.detail) == ("not_evaluable", UNREADABLE)
     assert unreadable.reconciliation is None and unreadable.shadow_run_id == "run-1"
     assert readable.state == "counted"
     assert evaluation.counted == (readable,)
+    # Only the twin side is unreadable, and the shadow side was still asked:
+    # the two worlds are separate readers, so one refusing cannot be mistaken
+    # for both refusing.
+    assert shadow.consulted == [SID, SID]
+    assert twin.consulted == [TWIN, TWIN]
+
+
+def test_an_unreadable_shadow_day_is_not_evaluable_before_the_twin_is_asked(
+    tmp_path: Path,
+) -> None:
+    """The mirror of the case above, which one shared double could not express.
+
+    The shadow authority refuses the window and the paper twin is perfectly
+    readable; the day must still be ``not_evaluable``, and the twin must not
+    be consulted for a day the shadow side already could not vouch for.
+    """
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)], unreadable=[DAY])
+    twin = _twin_source([_fill(600, ref="p")])
+
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
+
+    [verdict] = evaluation.sessions
+    assert (verdict.state, verdict.detail) == ("not_evaluable", UNREADABLE)
+    assert evaluation.satisfied is False
+    assert shadow.consulted == [SID]
+    assert twin.consulted == []
 
 
 DECLARED_OPEN_MINUTE = ALPACA_EXTENDED_HOURS_WINDOW.open_minute_et  # 04:00 ET
@@ -327,13 +394,13 @@ def test_an_extended_run_is_judged_against_its_declared_open_not_the_calendar_op
     # open, so only the decision-span comparison can catch this sweep as late.
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger, opened_minute=300)
-    source = _Source(
-        {SID: [_fill(600)], TWIN: [_fill(600, ref="p")]},
-        {SID: [_run(et_minute_of_day_ms(DAY, DECLARED_OPEN_MINUTE) - 1, None)]},
+    shadow = _shadow_source(
+        [_fill(600)], [_run(et_minute_of_day_ms(DAY, DECLARED_OPEN_MINUTE) - 1, None)]
     )
+    twin = _twin_source([_fill(600, ref="p")])
 
-    under_rth = _evaluate(tmp_path, ledger=ledger, source=source)
-    extended = _evaluate(tmp_path, ledger=ledger, source=source, use_rth=False)
+    under_rth = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
+    extended = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin, use_rth=False)
 
     assert [v.state for v in under_rth.sessions] == ["counted"]
     [late] = extended.sessions
@@ -344,9 +411,12 @@ def test_an_extended_run_is_judged_against_its_declared_open_not_the_calendar_op
 def test_an_extended_binding_with_no_declared_window_is_not_evaluable(tmp_path: Path) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
     _clean_day(ledger)
-    source = _Source({SID: [_fill(600)], TWIN: [_fill(600, ref="p")]}, {SID: [_run(OPEN - 1, None)]})
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    twin = _twin_source([_fill(600, ref="p")])
 
-    evaluation = _evaluate(tmp_path, ledger=ledger, source=source, use_rth=False, window=None)
+    evaluation = _evaluate(
+        tmp_path, ledger=ledger, shadow=shadow, twin=twin, use_rth=False, window=None
+    )
 
     [verdict] = evaluation.sessions
     assert verdict.state == "not_evaluable"
@@ -373,9 +443,9 @@ def test_every_incomplete_sweep_says_which_half_is_missing(
             observed_at_ms=et_minute_of_day_ms(DAY, 180),
             verdict="clean",
         )
-    source = _Source({}, {SID: [_run(OPEN - 1, None)]})
+    shadow = _shadow_source(runs=[_run(OPEN - 1, None)])
 
-    [verdict] = _evaluate(tmp_path, ledger=ledger, source=source).sessions
+    [verdict] = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=_twin_source()).sessions
 
     assert (verdict.state, verdict.detail) == ("sweep_not_clean", detail)
 
@@ -391,7 +461,7 @@ def test_a_twin_that_is_not_this_instances_twin_is_refused(
     tmp_path: Path, update: dict[str, object], match: str
 ) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
-    source = _Source({}, {})
+    shadow, twin = _shadow_source(), _twin_source()
 
     with pytest.raises(ShadowTwinMismatch, match=match):
         evaluate_shadow_gate(
@@ -401,8 +471,8 @@ def test_a_twin_that_is_not_this_instances_twin_is_refused(
             twin_account_id="PA-TEST",
             required_sessions=1,
             session_ledger=ledger,
-            shadow_source=source,
-            twin_source=source,
+            shadow_source=shadow,
+            twin_source=twin,
             window=ALPACA_EXTENDED_HOURS_WINDOW,
             now_ms=CLOSE + 1,
         )
@@ -410,7 +480,7 @@ def test_a_twin_that_is_not_this_instances_twin_is_refused(
 
 def test_a_binding_with_no_sealed_program_is_refused(tmp_path: Path) -> None:
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
-    source = _Source({}, {})
+    shadow, twin = _shadow_source(), _twin_source()
 
     with pytest.raises(ShadowTwinMismatch, match="sealed program"):
         evaluate_shadow_gate(
@@ -422,8 +492,8 @@ def test_a_binding_with_no_sealed_program_is_refused(tmp_path: Path) -> None:
             twin_account_id="PA-TEST",
             required_sessions=1,
             session_ledger=ledger,
-            shadow_source=source,
-            twin_source=source,
+            shadow_source=shadow,
+            twin_source=twin,
             window=ALPACA_EXTENDED_HOURS_WINDOW,
             now_ms=CLOSE + 1,
         )
@@ -443,10 +513,12 @@ def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:
         observed_at_ms=et_minute_of_day_ms(DAY, 180),
         verdict="stale",
     )
-    source = _Source({}, {SID: [_run(OPEN - 1, None)]})
-    assert [v.state for v in _evaluate(tmp_path, ledger=ledger, source=source).sessions] == [
-        "sweep_not_clean"
-    ]
+    shadow = _shadow_source(runs=[_run(OPEN - 1, None)])
+    twin = _twin_source()
+    assert [
+        v.state
+        for v in _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin).sessions
+    ] == ["sweep_not_clean"]
 
     with pytest.raises(ShadowTwinMismatch, match="configured signal"):
         evaluate_shadow_gate(
@@ -458,8 +530,8 @@ def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:
             twin_account_id="PA-TEST",
             required_sessions=1,
             session_ledger=ledger,
-            shadow_source=source,
-            twin_source=source,
+            shadow_source=shadow,
+            twin_source=twin,
             window=ALPACA_EXTENDED_HOURS_WINDOW,
             now_ms=CLOSE + 1,
         )
