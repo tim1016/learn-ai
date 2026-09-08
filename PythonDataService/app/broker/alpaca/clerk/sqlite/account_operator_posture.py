@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectionGuidance,
     RecoveryCapability,
 )
+from app.schemas.account_authority import CustodyWorld
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
     AccountOperatorPosture,
@@ -132,7 +133,7 @@ class AccountOperatorPostureContext:
     # The world the primary authority custodies in; a shadow authority reads
     # a live account by design, so `account_mode == "live"` is not the wrong
     # mode there.
-    custody_world: Literal["real_paper", "shadow"] = "real_paper"
+    custody_world: CustodyWorld = "real_paper"
 
     def __post_init__(self) -> None:
         account_fields = (

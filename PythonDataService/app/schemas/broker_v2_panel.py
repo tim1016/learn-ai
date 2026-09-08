@@ -408,7 +408,7 @@ class RecentDecisionView(BaseModel):
     authority_kind: AuthorityKind | None = None
 
     @model_validator(mode="after")
-    def simulated_row_has_synthetic_authority(self) -> RecentDecisionView:
+    def simulated_row_names_its_synthesized_authority(self) -> RecentDecisionView:
         _validate_simulated_authority_metadata(
             simulated=self.simulated,
             authority_account_id=self.authority_account_id,
@@ -433,7 +433,7 @@ class RecentFillView(BaseModel):
     authority_kind: AuthorityKind | None = None
 
     @model_validator(mode="after")
-    def simulated_row_has_synthetic_authority(self) -> RecentFillView:
+    def simulated_row_names_its_synthesized_authority(self) -> RecentFillView:
         _validate_simulated_authority_metadata(
             simulated=self.simulated,
             authority_account_id=self.authority_account_id,

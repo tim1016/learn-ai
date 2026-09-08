@@ -12,6 +12,13 @@ AuthorityKind = Literal["real_paper", "real_live", "shadow", "synthetic"]
 # `simulated`.
 SIMULATED_AUTHORITY_KINDS: frozenset[AuthorityKind] = frozenset({"synthetic", "shadow"})
 
+# The worlds a *primary* authority can custody in — the subset of
+# `AuthorityKind` a boot can select for the account a binding files its
+# evidence against. Narrower than `AuthorityKind` on both ends: the isolated
+# `synthetic` world is never a primary selection, and `real_live` is not a
+# custody world until the arming ceremony lands (ADR 0059 slice 7).
+CustodyWorld = Literal["real_paper", "shadow"]
+
 
 def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) -> None:
     """Keep account namespace and authority kind inseparable at the wire boundary."""
@@ -69,5 +76,6 @@ __all__ = [
     "SIMULATED_AUTHORITY_KINDS",
     "AuthorityKind",
     "AuthorityScopedRow",
+    "CustodyWorld",
     "SingleAuthorityAggregate",
 ]

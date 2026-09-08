@@ -13,7 +13,6 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -32,6 +31,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
+from app.schemas.account_authority import CustodyWorld
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjector,
@@ -77,7 +77,7 @@ class BindingAuthority:
         return ()
 
 
-def primary_custody_kind() -> Literal["real_paper", "shadow"]:
+def primary_custody_kind() -> CustodyWorld:
     """The world the primary authority custodies in; refuses to guess when none is installed.
 
     ``primary_custody_world`` is the single reader of that selection. It

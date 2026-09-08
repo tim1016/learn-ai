@@ -307,7 +307,7 @@ def _require_broker_deploy_request(
         )
     if strategy.evidence_status == "evidence_only" and request.evidence_override is None:
         raise PanelRunnerError(
-            "This evidence-only strategy requires the durable evidence override for Paper deployment.",
+            "This evidence-only strategy requires the durable evidence override for Paper / Shadow deployment.",
             detail=(
                 "Its behavioral evidence has not been reconciled to the reference implementation. "
                 "Record the paper-mode evidence override (acknowledgement + reason) to accept that risk."
@@ -317,7 +317,7 @@ def _require_broker_deploy_request(
         )
     if strategy.evidence_status != "evidence_only" and request.evidence_override is not None:
         raise PanelRunnerError(
-            "An evidence override is not valid for Paper deployment.",
+            "An evidence override is not valid for Paper / Shadow deployment.",
             detail=(
                 "This strategy's validation proof is fully accepted; the evidence-only override "
                 "applies only to strategies whose behavioral evidence is not accepted."

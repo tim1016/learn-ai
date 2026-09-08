@@ -17,7 +17,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -66,6 +66,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.schemas.account_authority import CustodyWorld
 
 logger = logging.getLogger(__name__)
 
@@ -439,7 +440,7 @@ def active_program_leg_policy() -> ProgramLegPolicy:
     return runtime.clerk.program_leg_policy
 
 
-def primary_custody_world() -> Literal["real_paper", "shadow"] | None:
+def primary_custody_world() -> CustodyWorld | None:
     """The world the primary authority custodies in, or ``None`` while none is installed.
 
     Gates that relabel or relax on the shadow world read this; a caller that
