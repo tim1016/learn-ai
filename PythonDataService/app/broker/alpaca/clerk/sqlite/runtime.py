@@ -137,6 +137,13 @@ _ENCODED_DECISION_PREFIX = "encoded-"
 # The authorities whose fills are synthesized from evidence, so every effect
 # must carry the exact retained decision bar it was priced from.
 _BAR_BOUND_AUTHORITIES: Final = frozenset({"synthetic", "shadow"})
+# The authorities that *are*, or stand in for, the live Clerk: their ENTER is
+# rechecked against the live market clock. The shadow authority is here
+# because it must reproduce every refusal the live Clerk would make, or the
+# paper twin stops reconciling trade-for-trade (ADR 0059 D2). Deliberately
+# not `_BAR_BOUND_AUTHORITIES` -- that set is {synthetic, shadow} and means
+# the opposite thing (fills synthesized from evidence).
+_LIVE_MARKET_CLOCK_AUTHORITIES: Final = frozenset({"sqlite", "shadow"})
 # An EXIT reduces the program's own position, so its leg is the opposite side.
 _REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
 logger = logging.getLogger(__name__)
@@ -777,7 +784,7 @@ class SqliteAlpacaClerkFacade:
                 # reach the broker — the same shared predicate
                 # bot_trade_strategy.py's own gate uses, so the two can
                 # never silently diverge.
-                if self.authority_kind == "sqlite":
+                if self.authority_kind in _LIVE_MARKET_CLOCK_AUTHORITIES:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
                     if liveness_blocks_entry(
                         liveness,
