@@ -4,7 +4,8 @@ Extends ADR 0011's verdict principles to the Alpaca path: computed in the
 data plane from settings and the clerk selection outcome, reactive on every
 read, never composed by the Frontend, never a guess. Slice 1 renders the
 verdict; arming, shadow and the envelope (slices 4-6) fill the fields that
-this slice fixes at their empty values.
+this slice fixes at their empty values. Slice 4 fills ``shadow_state`` from
+the durable shadow evidence and widens ``clerk_authority`` to ``"shadow"``.
 """
 
 from __future__ import annotations

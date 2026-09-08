@@ -81,7 +81,7 @@ class IsolatedActivationRecord:
             "db_identity_token": db_identity_token,
             "activated_at_ms": activated_at_ms,
         }
-        return cls(**payload, activation_sha256=_digest(payload))
+        return cls(**payload, activation_sha256=canonical_sha256(payload))
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> Self:
@@ -112,7 +112,7 @@ class IsolatedActivationRecord:
             raise cls.invalid_error(f"{cls.label} record has an unsupported generation")
         if not record.db_identity_token:
             raise cls.invalid_error(f"{cls.label} record has invalid identity facts")
-        if record.activation_sha256 != _digest(_unsigned_payload(record)):
+        if record.activation_sha256 != canonical_sha256(_unsigned_payload(record)):
             raise cls.invalid_error(f"{cls.label} record digest does not verify")
         return record
 
@@ -223,7 +223,9 @@ def _unsigned_payload(record: IsolatedActivationRecord) -> dict[str, Any]:
     }
 
 
-def _digest(payload: dict[str, Any]) -> str:
+def canonical_sha256(payload: dict[str, Any]) -> str:
+    """sha256 over the canonical JSON of ``payload`` -- the one sealing function
+    every isolated-authority record uses."""
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()
@@ -239,4 +241,5 @@ __all__ = [
     "SyntheticActivationInvalid",
     "SyntheticActivationRecord",
     "SyntheticActivationStore",
+    "canonical_sha256",
 ]

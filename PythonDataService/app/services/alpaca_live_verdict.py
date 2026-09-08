@@ -1,18 +1,26 @@
 """Compose the Alpaca live verdict from settings and clerk selection (ADR 0059 D8).
 
-Pure: no broker I/O, no clock of its own. The router supplies ``now_ms``.
+Pure: no broker I/O, no clock of its own. The router supplies ``now_ms`` and,
+for a live boot, the ``shadow_state`` that ``observe_shadow_state`` read from
+the durable shadow evidence — the one function here that touches the disk, and
+it only reads.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
+from app.broker.alpaca.clerk.account_authority import SHADOW_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
+from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
+from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     ClerkAuthority,
     ModeAgreement,
+    ShadowState,
 )
 
 _DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
@@ -42,13 +50,38 @@ def _mode_agreement(
     return "agreed"
 
 
+def observe_shadow_state(runtime: ActiveClerkRuntime | None, artifacts_root: Path) -> ShadowState:
+    """What the durable shadow evidence says for the installed shadow authority (read-only).
+
+    Only the receipt store and the session journal are consulted: no database
+    is opened and the broker is never contacted. A store that refuses its own
+    rows raises rather than answering ``"none"`` — a corrupt proof is not the
+    absence of one.
+    """
+    if runtime is None or runtime.authority_kind != "shadow" or runtime.selected_account_id is None:
+        return "none"
+    live_account_id = runtime.selected_account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
+    if ShadowReceiptStore(artifacts_root).any_for_account(live_account_id):
+        return "complete"
+    if ShadowSessionLedger(artifacts_root=artifacts_root, account_id=runtime.selected_account_id).has_rows():
+        return "in_progress"
+    return "none"
+
+
 def alpaca_live_verdict(
     *,
     settings: AlpacaSettings | None,
     runtime: ActiveClerkRuntime | None,
     now_ms: int,
+    shadow_state: ShadowState | None = None,
 ) -> AlpacaLiveVerdict:
-    """Return the verdict for the current process state."""
+    """Return the verdict for the current process state.
+
+    ``shadow_state`` is the caller's observation of the durable shadow
+    evidence. It is reported only where shadow can exist — an agreed live
+    account; paper stays ``not_applicable`` and an unknown verdict keeps the
+    empty state it already published.
+    """
     if settings is None:
         return AlpacaLiveVerdict(
             configured_mode="unconfigured",
@@ -115,6 +148,8 @@ def alpaca_live_verdict(
         )
 
     # Slice 1: no arming exists, so an agreed live account is always unarmed.
+    observed_shadow: ShadowState = shadow_state if shadow_state is not None else "none"
+    shadow_active = authority == "shadow"
     return AlpacaLiveVerdict(
         configured_mode="live",
         observed_account_id=account_id,
@@ -123,11 +158,19 @@ def alpaca_live_verdict(
         clerk_refusal_reason_code=refusal,
         armed_instance_count=0,
         envelope_state="configured_unsealed",
-        shadow_state="none",
+        shadow_state=observed_shadow,
         final_verdict="live-unarmed",
-        headline=f"LIVE account {account_id} — real money, no instance armed",
+        headline=(
+            f"LIVE account {account_id} — shadow authority active, no instance armed"
+            if shadow_active
+            else f"LIVE account {account_id} — real money, no instance armed"
+        ),
         detail=(
-            "This is a real-money Alpaca account. No sealed instance is armed, so "
+            "This is a real-money Alpaca account. Its shadow authority reads it and "
+            "synthesizes every fill; nothing is submitted. Arming requires a completed "
+            "shadow receipt and the supervised ceremony (ADR 0059)."
+            if shadow_active
+            else "This is a real-money Alpaca account. No sealed instance is armed, so "
             "every order path refuses. Arming requires a completed shadow receipt "
             "and the supervised ceremony (ADR 0059)."
         ),

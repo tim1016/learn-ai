@@ -136,6 +136,28 @@ def test_clean_paper_selection_is_the_normal_path() -> None:
     assert "PA0SANITIZED00001" in verdict.headline
 
 
+def _shadow_runtime() -> ActiveClerkRuntime:
+    return ActiveClerkRuntime(authority_kind="shadow", account_id="shadow:9LIVE0001", account_authority_kind="shadow")
+
+
+@pytest.mark.parametrize("shadow_state", ["none", "in_progress", "complete"])
+def test_live_shadow_authority_reports_the_observed_shadow_state(shadow_state: str) -> None:
+    verdict = alpaca_live_verdict(settings=_live(), runtime=_shadow_runtime(), now_ms=_NOW, shadow_state=shadow_state)  # type: ignore[arg-type]
+
+    assert verdict.clerk_authority == "shadow"
+    assert verdict.observed_account_id == "shadow:9LIVE0001"
+    assert verdict.mode_agreement == "agreed"
+    assert verdict.final_verdict == "live-unarmed"
+    assert verdict.shadow_state == shadow_state
+    assert "shadow authority" in verdict.headline
+
+
+def test_shadow_state_is_not_applicable_on_paper_even_if_supplied() -> None:
+    verdict = alpaca_live_verdict(settings=_paper(), runtime=None, now_ms=_NOW, shadow_state="complete")
+
+    assert verdict.shadow_state == "not_applicable"
+
+
 def test_clerk_authority_literal_tracks_the_runtime_kind() -> None:
     from typing import get_args
 

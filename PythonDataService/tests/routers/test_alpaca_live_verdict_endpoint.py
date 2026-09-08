@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import NoReturn
 
 import pytest
@@ -11,6 +12,11 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
     set_active_clerk_runtime,
+)
+from app.broker.alpaca.clerk.shadow_receipt import (
+    ShadowReceipt,
+    ShadowReceiptSession,
+    ShadowReceiptStore,
 )
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.errors import BrokerAccountModeDisagreement
@@ -88,6 +94,46 @@ async def test_live_settings_with_refused_clerk_serve_live_unarmed(
     assert body["final_verdict"] == "live-unarmed"
     assert body["observed_account_id"] == "9LIVE0001"
     assert body["armed_instance_count"] == 0
+
+
+async def test_shadow_authority_with_a_receipt_serves_shadow_complete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name, value in {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s", "ALPACA_MODE": "live",
+        "ALPACA_CLERK_DIR": str(tmp_path),
+        "ALPACA_LIVE_LOSS_FRACTION": "0.02", "ALPACA_LIVE_LOSS_USD": "500",
+        "ALPACA_LIVE_SHADOW_SESSIONS": "5", "ALPACA_LIVE_ARMING_MAX_SESSIONS": "20",
+        "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
+    }.items():
+        monkeypatch.setenv(name, value)
+    ShadowReceiptStore(tmp_path).append(
+        ShadowReceipt.create(
+            live_account_id="9LIVE0001",
+            strategy_instance_id="ema-shadow-1",
+            configured_signal_hash="a" * 64,
+            twin_account_id="PA-TEST",
+            twin_strategy_instance_id="ema-paper-1",
+            required_sessions=1,
+            sessions=(
+                ShadowReceiptSession(session_open_ms=1_000, shadow_run_id="run-1", reconciliation_sha256="b" * 64),
+            ),
+            written_at_ms=1_700_000_000_000,
+        )
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="shadow", account_id="shadow:9LIVE0001", account_authority_kind="shadow"
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/live-verdict", headers=_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clerk_authority"] == "shadow"
+    assert body["shadow_state"] == "complete"
 
 
 async def test_invalid_settings_serve_unknown_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
