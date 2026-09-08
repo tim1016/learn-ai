@@ -36,8 +36,12 @@
 
 Start and Resume each carry an `ExtendedHoursAdmissionFact` (`app/schemas/run_admission.py`) whose state is one of `NOT_REQUESTED | READY | UNSUPPORTED | ALLOWANCE_UNSET`:
 
-- `UNSUPPORTED` — the active broker authority declares no extended window — refuses in **every** mode with `EXTENDED_HOURS_UNSUPPORTED` (`app/services/run_admission.py`).
-- `ALLOWANCE_UNSET` — `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS` are not both set — refuses **trade mode only** with `EXTENDED_HOURS_ALLOWANCE_UNSET`; dry-run and log-only proceed, since neither prices a real leg against the missing allowance.
+Both failing states refuse in **every** mode — trade, dry-run and log-only alike — and there is no mode carve-out:
+
+- `UNSUPPORTED` — the active broker authority declares no extended window — refuses with `EXTENDED_HOURS_UNSUPPORTED`.
+- `ALLOWANCE_UNSET` — `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS` are not both set — refuses with `EXTENDED_HOURS_ALLOWANCE_UNSET`. A Dry Run runs on the synthetic authority built with the same `ProgramLegPolicy` and routes every intent through `shape_program_leg`, which refuses the same condition per decision; admitting such a run would start a bot that then rejects every extended decision it makes.
+
+`app/services/run_admission.py` maps `ExtendedHoursAdmissionFact.state` to the named `LegRefusal` values exported by `app/broker/alpaca/clerk/program_leg.py`, so the wording an operator reads at the gate is the wording on the receipt.
 
 ## Leg refusals
 

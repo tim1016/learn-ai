@@ -706,18 +706,21 @@ def test_dry_run_admitted_despite_unresolved_clerk_work_trade_still_denied() -> 
     assert trade.reason_code == "CLERK_WORK_REMAINS"
 
 
-def test_dry_run_admitted_despite_unset_extended_allowance_trade_still_denied() -> None:
-    dry_run = evaluate_run_admission(
-        _bot(mode="dry_run", extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
-    )
-    trade = evaluate_run_admission(
-        _bot(mode="trade", extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
+@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
+def test_unset_extended_allowance_denies_every_mode(mode: str) -> None:
+    """Plan R8 as amended (thermo MAJOR 3): no mode carve-out.
+
+    A Dry Run runs on the synthetic authority built with the same
+    ``ProgramLegPolicy`` and routes every intent through ``shape_program_leg``,
+    which refuses ``EXTENDED_HOURS_ALLOWANCE_UNSET`` regardless of mode — so
+    admitting it started a run that then rejected every extended decision.
+    """
+    decision = evaluate_run_admission(
+        _bot(mode=mode, extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
     )
 
-    assert dry_run.allowed is True
-    assert dry_run.reason_code == "START_ADMITTED"
-    assert trade.allowed is False
-    assert trade.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_dry_run_resume_admitted_despite_unapproved_carryover_exposure() -> None:

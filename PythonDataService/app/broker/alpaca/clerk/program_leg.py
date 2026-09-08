@@ -67,14 +67,68 @@ REGULAR_SESSION_SHAPE: Final = LegShape(
 )
 
 
+@dataclass(frozen=True)
+class LegRefusal:
+    """One named reason a decision cannot become a program leg.
+
+    Named values rather than a string literal at each raise site: Start and
+    Resume admission refuse two of these conditions *before* a run streams,
+    and this module refuses them again per decision. Both refusals used to be
+    written out twice, with hand-varied wording, so an operator could read one
+    explanation at the gate and a different one on the receipt.
+    """
+
+    reason_code: str
+    explanation: str
+    next_step: str
+
+
+EXTENDED_HOURS_UNSUPPORTED = LegRefusal(
+    reason_code="EXTENDED_HOURS_UNSUPPORTED",
+    explanation=(
+        "The active broker authority declares no extended session, so a run outside "
+        "regular hours has no decision clock."
+    ),
+    next_step=(
+        "Deploy with regular hours, or activate an authority whose capabilities "
+        "declare an extended window."
+    ),
+)
+
+EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
+    reason_code="EXTENDED_HOURS_ALLOWANCE_UNSET",
+    explanation=(
+        "ALPACA_LIVE_XH_ENTRY_BPS and ALPACA_LIVE_XH_EXIT_BPS are not both set, so no "
+        "extended-session program leg can be priced."
+    ),
+    next_step="Set both allowances in the environment file and restart the data plane.",
+)
+
+EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
+    reason_code="EXTENDED_ANCHOR_UNAVAILABLE",
+    explanation="No exact retained decision bar exists to anchor an extended-session leg.",
+    next_step="Retain the decision bar (replay or ingest it), then let the program decide again.",
+)
+
+
+def session_closed_at_decision(phase: str) -> LegRefusal:
+    """The decision instant is in no session that accepts a program leg."""
+    return LegRefusal(
+        reason_code="SESSION_CLOSED_AT_DECISION",
+        explanation=f"The decision instant is {phase}; no session accepts a program leg now.",
+        next_step="No action: the program decides again on the next bar inside a session.",
+    )
+
+
 class ProgramLegRefused(Exception):
     """This decision cannot become a program leg; the Clerk records why."""
 
-    def __init__(self, *, reason_code: str, explanation: str, next_step: str) -> None:
-        super().__init__(f"{reason_code}: {explanation}")
-        self.reason_code = reason_code
-        self.explanation = explanation
-        self.next_step = next_step
+    def __init__(self, refusal: LegRefusal) -> None:
+        super().__init__(f"{refusal.reason_code}: {refusal.explanation}")
+        self.refusal = refusal
+        self.reason_code = refusal.reason_code
+        self.explanation = refusal.explanation
+        self.next_step = refusal.next_step
 
 
 def shape_program_leg(
@@ -95,40 +149,18 @@ def shape_program_leg(
     """
     session = RunDecisionSession.resolve(use_rth=use_rth, window=policy.window)
     if session is None:
-        raise ProgramLegRefused(
-            reason_code="EXTENDED_HOURS_UNSUPPORTED",
-            explanation="The active broker authority declares no extended session.",
-            next_step=(
-                "Deploy with regular hours, or activate an authority whose "
-                "capabilities declare an extended window."
-            ),
-        )
+        raise ProgramLegRefused(EXTENDED_HOURS_UNSUPPORTED)
     if session.kind == "rth":
         return REGULAR_SESSION_SHAPE
     if decision_bar is None:
-        raise ProgramLegRefused(
-            reason_code="EXTENDED_ANCHOR_UNAVAILABLE",
-            explanation="No exact retained decision bar exists to anchor an extended-session leg.",
-            next_step="Retain the decision bar (replay or ingest it), then let the program decide again.",
-        )
+        raise ProgramLegRefused(EXTENDED_ANCHOR_UNAVAILABLE)
     phase = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=session.window).phase
     if phase == "RTH":
         return REGULAR_SESSION_SHAPE
     if phase not in TRADEABLE_EXTENDED_PHASES:
-        raise ProgramLegRefused(
-            reason_code="SESSION_CLOSED_AT_DECISION",
-            explanation=f"The decision instant is {phase}; no session accepts a program leg now.",
-            next_step="No action: the program decides again on the next bar inside a session.",
-        )
+        raise ProgramLegRefused(session_closed_at_decision(phase))
     if policy.allowances is None:
-        raise ProgramLegRefused(
-            reason_code="EXTENDED_HOURS_ALLOWANCE_UNSET",
-            explanation=(
-                "ALPACA_LIVE_XH_ENTRY_BPS and ALPACA_LIVE_XH_EXIT_BPS are not both "
-                "set; no extended-session leg can be priced."
-            ),
-            next_step="Set both allowances in the environment file and restart the data plane.",
-        )
+        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
     price = marketable_limit_price(side=side, close=decision_bar.close, allowance_bps=allowance)
     return LegShape(
@@ -141,9 +173,14 @@ def shape_program_leg(
 
 
 __all__ = [
+    "EXTENDED_ANCHOR_UNAVAILABLE",
+    "EXTENDED_HOURS_ALLOWANCE_UNSET",
+    "EXTENDED_HOURS_UNSUPPORTED",
     "REGULAR_SESSION_SHAPE",
+    "LegRefusal",
     "LegShape",
     "ProgramLegPolicy",
     "ProgramLegRefused",
+    "session_closed_at_decision",
     "shape_program_leg",
 ]
