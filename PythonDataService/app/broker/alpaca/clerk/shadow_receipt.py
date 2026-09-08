@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sealed_ledger import (
 )
 from app.broker.alpaca.paths import resolve_contained_path
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SHADOW_RECEIPTS_FILENAME = "shadow_receipts.jsonl"
 _SHA256_LENGTH = 64
@@ -88,9 +89,14 @@ class ShadowReceipt:
         try:
             sessions = tuple(ShadowReceiptSession(**session) for session in payload["sessions"])
             record = cls(**{**payload, "sessions": sessions})
+            # Inside the guard: ``_validate`` compares fields this row has not
+            # been type-checked for, and a type-confused row must still leave
+            # by this module's own error, not as a bare ``TypeError``.
+            _validate(record)
+        except ShadowReceiptInvalid:
+            raise
         except (KeyError, TypeError, ValueError) as exc:
             raise ShadowReceiptInvalid("shadow receipt has an invalid shape") from exc
-        _validate(record)
         if record.receipt_sha256 != canonical_sha256(_unsigned(record)):
             raise ShadowReceiptInvalid("shadow receipt digest does not verify")
         return record
@@ -108,13 +114,25 @@ def _validate(record: ShadowReceipt) -> None:
         require_real_account_id(record.twin_account_id)
     except ValueError as exc:
         raise ShadowReceiptInvalid("shadow receipt names a shadow: account or a sim: one as real") from exc
-    if record.schema_version != 1 or record.required_sessions < 1 or record.written_at_ms < 0:
+    if (
+        record.schema_version != 1
+        or record.required_sessions < 1
+        or not 0 <= record.written_at_ms <= MAX_TIMESTAMP_MS
+    ):
         raise ShadowReceiptInvalid("shadow receipt has invalid integer facts")
     if len(record.configured_signal_hash) != _SHA256_LENGTH or any(
-        len(session.reconciliation_sha256) != _SHA256_LENGTH or session.session_open_ms < 0 or not session.shadow_run_id
+        len(session.reconciliation_sha256) != _SHA256_LENGTH
+        or not 0 <= session.session_open_ms <= MAX_TIMESTAMP_MS
+        or not session.shadow_run_id
         for session in record.sessions
     ):
         raise ShadowReceiptInvalid("shadow receipt has invalid session facts")
+    # The gate's meaning is N *distinct* trading sessions (ADR 0059 D2), and the
+    # receipt — not its writer — is what slice 6 trusts, so it proves its own count.
+    if len({session.session_open_ms for session in record.sessions}) != len(record.sessions):
+        raise ShadowReceiptInvalid("shadow receipt repeats a session")
+    if len(record.sessions) < record.required_sessions:
+        raise ShadowReceiptInvalid("shadow receipt lists fewer sessions than it requires")
 
 
 class ShadowReceiptStore:
@@ -136,6 +154,13 @@ class ShadowReceiptStore:
         return tuple(r for r in self._read_all() if r.strategy_instance_id == strategy_instance_id)
 
     def latest(self, strategy_instance_id: str) -> ShadowReceipt | None:
+        """This instance's last appended receipt, in file order.
+
+        File order needs no monotonicity guard like the activation fence's: a
+        receipt carries no generation to replay, and ``current()`` re-checks the
+        seal and the session count on every read, so a re-appended older row can
+        only answer for a caller it still satisfies.
+        """
         receipts = self.all_for(strategy_instance_id)
         return receipts[-1] if receipts else None
 
