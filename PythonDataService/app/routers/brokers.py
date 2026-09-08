@@ -342,8 +342,10 @@ async def get_session_fee_reconciliation(
             status_code=422,
             detail="session_open_ms must be the calendar's session open (ET) of a trading day",
         )
-    port = _resolve_port(broker)
-    return await session_fee_reconciliation(broker=broker, port=port, session_open_ms=session_open_ms)
+    return await _run(
+        broker,
+        lambda port: session_fee_reconciliation(broker=broker, port=port, session_open_ms=session_open_ms),
+    )
 
 
 @router.get("/{broker}/assets", response_model=list[BrokerAsset])

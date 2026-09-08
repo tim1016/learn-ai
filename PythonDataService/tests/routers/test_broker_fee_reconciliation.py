@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+from app.broker.contract.errors import BrokerRateLimited
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.routers import brokers as brokers_router
 from app.utils.session_anchors import et_midnight_ms
@@ -67,3 +68,27 @@ async def test_reports_unavailable_without_an_active_sqlite_clerk(monkeypatch: p
     assert body["verdict"] == "unavailable"
     assert body["session_open_ms"] == SESSION_OPEN_MS
     assert body["predicted"] is None
+
+
+async def test_translates_a_broker_contract_error_through_the_shared_run_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint routes through ``_run`` so a ``BrokerError`` gets the shared what/why."""
+
+    async def _raise_rate_limited(*, broker: str, port: object, session_open_ms: int) -> None:
+        raise BrokerRateLimited(
+            "Alpaca throttled this read.",
+            broker=broker,
+            detail="cooldown before retry",
+            retry_after_ms=2_500,
+        )
+
+    monkeypatch.setattr(brokers_router, "session_fee_reconciliation", _raise_rate_limited)
+    monkeypatch.setattr(brokers_router, "_resolve_port", lambda broker: _Port())
+
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(PATH, params={"session_open_ms": SESSION_OPEN_MS})
+
+    assert response.status_code == BrokerRateLimited.http_status
+    assert response.headers["Retry-After"] == "3"
+    assert response.json()["detail"]["broker"] == "alpaca"
