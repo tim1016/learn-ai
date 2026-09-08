@@ -38,7 +38,10 @@ from typing import Literal, Protocol
 from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
 from app.broker.alpaca.clerk.shadow_sessions import ShadowDayState, ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
-from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    EconomicProjectionUnavailable,
+    SqliteEconomicProjectionReader,
+)
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import (
@@ -455,20 +458,37 @@ def _judge_day(
             None,
             None,
         )
+    try:
+        shadow_fills = read_twin_fills(
+            shadow_source,
+            strategy_instance_id=strategy_instance_id,
+            session_open_ms=calendar_open_ms,
+        )
+        twin_fills = read_twin_fills(
+            twin_source,
+            strategy_instance_id=twin_strategy_instance_id,
+            session_open_ms=calendar_open_ms,
+        )
+    except EconomicProjectionUnavailable as exc:
+        # Not a swallowed error: a window an authority will not vouch for is a
+        # day that cannot be judged, so it becomes a typed state carrying the
+        # reader's own sentence, and it does not count. One such day must not
+        # destroy every other day's verdict — a fail-closed account-wide read
+        # (an external fill, an unresolved coverage conflict) makes *every* day
+        # unreadable, and the gate has to say so honestly rather than raise.
+        return ShadowSessionVerdict(
+            session_open_ms=calendar_open_ms,
+            state="not_evaluable",
+            detail=str(exc),
+            shadow_run_id=run.run_id,
+            reconciliation=None,
+        )
     reconciliation = reconcile_twin_day(
         session_open_ms=calendar_open_ms,
         strategy_instance_id=strategy_instance_id,
         twin_strategy_instance_id=twin_strategy_instance_id,
-        shadow_fills=read_twin_fills(
-            shadow_source,
-            strategy_instance_id=strategy_instance_id,
-            session_open_ms=calendar_open_ms,
-        ),
-        twin_fills=read_twin_fills(
-            twin_source,
-            strategy_instance_id=twin_strategy_instance_id,
-            session_open_ms=calendar_open_ms,
-        ),
+        shadow_fills=shadow_fills,
+        twin_fills=twin_fills,
     )
     if not reconciliation.passed:
         detail = "; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating)

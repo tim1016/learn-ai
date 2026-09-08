@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.research.parity.qc_reconciler import DivergenceCategory
@@ -24,22 +26,30 @@ from app.services.alpaca_shadow_reconciliation import (
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.session_authority import et_minute_of_day_ms
+from app.utils.session_anchors import et_midnight_ms
 
 DAY = date(2026, 9, 8)
+PRIOR_DAY = date(2026, 9, 4)  # the trading day before DAY (2026-09-07 is Labor Day)
 OPEN = session_open_ms_utc(DAY)
 CLOSE = session_close_ms_utc(DAY)
 SID, TWIN = "ema-shadow-1", "ema-paper-1"
 
 
 def _fill(
-    minute: int, *, side: str = "buy", qty: str = "1", price: str = "100.00", ref: str = "a"
+    minute: int,
+    *,
+    day: date = DAY,
+    side: str = "buy",
+    qty: str = "1",
+    price: str = "100.00",
+    ref: str = "a",
 ) -> TwinFill:
     return TwinFill(
         symbol="SPY",
         side=side,
         quantity=Decimal(qty),
         fill_price=Decimal(price),
-        filled_at_ms=et_minute_of_day_ms(DAY, minute),
+        filled_at_ms=et_minute_of_day_ms(day, minute),
         order_ref=f"learn-ai/x/v1:{ref}",
     )
 
@@ -115,13 +125,25 @@ def test_twins_agree_on_the_configured_signal_and_plan_only() -> None:
     assert twins_agree(_seal(), _seal()) is not None  # the shadow side must be shadow-sealed
 
 
+UNREADABLE = "SQLite account fill evidence is incomplete for this window: a filled external order"
+
+
 class _Source:
-    def __init__(self, fills: dict[str, list[TwinFill]], runs: dict[str, list[RunResource]]) -> None:
+    def __init__(
+        self,
+        fills: dict[str, list[TwinFill]],
+        runs: dict[str, list[RunResource]],
+        *,
+        unreadable: Sequence[date] = (),
+    ) -> None:
         self._fills, self._runs = fills, runs
+        self._unreadable = frozenset(et_midnight_ms(day) for day in unreadable)
 
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
     ) -> tuple[TwinFill, ...]:
+        if from_ms in self._unreadable:
+            raise EconomicProjectionUnavailable(UNREADABLE)
         # Half-open, exactly as the protocol and the SQLite projection define it.
         return tuple(
             f for f in self._fills.get(strategy_instance_id, ()) if from_ms <= f.filled_at_ms < to_ms
@@ -162,22 +184,29 @@ def _binding(sid: str, sealed: str) -> BrokerBotBinding:
     )
 
 
-def _clean_day(ledger: ShadowSessionLedger, *, opened_minute: int = 180) -> None:
+def _clean_day(ledger: ShadowSessionLedger, *, day: date = DAY, opened_minute: int = 180) -> None:
     ledger.append(
         kind="day_opened",
-        session_open_ms=OPEN,
-        observed_at_ms=et_minute_of_day_ms(DAY, opened_minute),
+        session_open_ms=session_open_ms_utc(day),
+        observed_at_ms=et_minute_of_day_ms(day, opened_minute),
         verdict="clean",
     )
     ledger.append(
         kind="session_closed_clean",
-        session_open_ms=OPEN,
-        observed_at_ms=et_minute_of_day_ms(DAY, 1200),
+        session_open_ms=session_open_ms_utc(day),
+        observed_at_ms=et_minute_of_day_ms(day, 1200),
         verdict="clean",
     )
 
 
-def _evaluate(tmp_path: Path, *, ledger: ShadowSessionLedger, source: _Source, required: int = 1):
+def _evaluate(
+    tmp_path: Path,
+    *,
+    ledger: ShadowSessionLedger,
+    source: _Source,
+    required: int = 1,
+    now_ms: int | None = None,
+):
     return evaluate_shadow_gate(
         live_account_id="9LIVE0001",
         shadow_binding=_binding(SID, "shadow:9LIVE0001"),
@@ -188,7 +217,7 @@ def _evaluate(tmp_path: Path, *, ledger: ShadowSessionLedger, source: _Source, r
         shadow_source=source,
         twin_source=source,
         window=ALPACA_EXTENDED_HOURS_WINDOW,
-        now_ms=et_minute_of_day_ms(date(2026, 9, 9), 60),
+        now_ms=et_minute_of_day_ms(date(2026, 9, 9), 60) if now_ms is None else now_ms,
     )
 
 
@@ -229,6 +258,30 @@ def test_days_that_do_not_count_say_why(
 
     assert [v.state for v in evaluation.sessions] == [state]
     assert evaluation.satisfied is False
+
+
+def test_an_unreadable_twin_day_is_not_evaluable_and_leaves_the_other_days_judged(
+    tmp_path: Path,
+) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger, day=PRIOR_DAY)
+    _clean_day(ledger)
+    source = _Source(
+        {
+            SID: [_fill(600, day=PRIOR_DAY), _fill(600)],
+            TWIN: [_fill(600, day=PRIOR_DAY, ref="p"), _fill(600, ref="p")],
+        },
+        {SID: [_run(session_open_ms_utc(PRIOR_DAY) - 1, None)]},
+        unreadable=[PRIOR_DAY],
+    )
+
+    evaluation = _evaluate(tmp_path, ledger=ledger, source=source, now_ms=CLOSE + 1)
+
+    unreadable, readable = evaluation.sessions
+    assert (unreadable.state, unreadable.detail) == ("not_evaluable", UNREADABLE)
+    assert unreadable.reconciliation is None and unreadable.shadow_run_id == "run-1"
+    assert readable.state == "counted"
+    assert evaluation.counted == (readable,)
 
 
 def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:
