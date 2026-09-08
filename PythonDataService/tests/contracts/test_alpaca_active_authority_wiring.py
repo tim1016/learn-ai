@@ -29,6 +29,25 @@ RETIRED_LEGACY_CUSTODY_PATHS = (
     "services/broker_v2_panel/account_projection_owner.py",
 )
 
+# The authority selector is three modules since the shadow world joined
+# (ADR 0059 D2), in one-way import order: the selection-free composition
+# layer, the shadow world's boot story, then the selector and registry.
+# Every source-text guard below reads their concatenation, so a construction
+# moved between them is still counted and the relative order still holds.
+AUTHORITY_SELECTOR_PATHS = (
+    "broker/alpaca/clerk/active_runtime.py",
+    "broker/alpaca/clerk/shadow_authority.py",
+    "broker/alpaca/clerk/active_authority.py",
+)
+
+
+def _authority_selector_source() -> str:
+    return "\n".join(
+        (APPLICATION_ROOT / relative_path).read_text(encoding="utf-8")
+        for relative_path in AUTHORITY_SELECTOR_PATHS
+    )
+
+
 RETIRED_FRONTEND_PATHS = (
     "components/brokers/alpaca-desk/alpaca-order-results.component.html",
     "components/brokers/alpaca-desk/alpaca-order-results.component.ts",
@@ -61,9 +80,7 @@ def test_legacy_custody_modules_and_selector_are_absent() -> None:
     for relative_path in RETIRED_LEGACY_CUSTODY_PATHS:
         assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
-    selector = (APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py").read_text(
-        encoding="utf-8"
-    )
+    selector = _authority_selector_source()
     main = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
     assert "legacy_factory" not in selector
     assert 'authority_kind="legacy"' not in selector
@@ -231,9 +248,7 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     Structural because the failure is silent: every unit test still passes and
     the degradation only shows in production.
     """
-    source = (
-        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
-    ).read_text(encoding="utf-8")
+    source = _authority_selector_source()
 
     constructions = source.count("ReconciliationSweep(")
     # The sweep-attributed seam on purpose (#1808): it publishes the verdict
@@ -289,9 +304,7 @@ def test_the_stream_health_hold_sync_is_started_by_the_real_authority() -> None:
     Structural for the same reason as the sweep guard above: the failure is
     a missing call, and it is silent.
     """
-    source = (
-        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
-    ).read_text(encoding="utf-8")
+    source = _authority_selector_source()
     main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
     constructions = source.count("StreamHealthHoldSync(")
@@ -322,9 +335,7 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     Structural because the bug is an ordering one: both call sites exist
     and both are correct in isolation.
     """
-    source = (
-        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
-    ).read_text(encoding="utf-8")
+    source = _authority_selector_source()
     main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
     assert source.count("hold_sync.start()") == 1, (
