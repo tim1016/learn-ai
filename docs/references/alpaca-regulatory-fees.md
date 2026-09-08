@@ -60,10 +60,13 @@ for that date, and returns a verdict: `within_tolerance`, `drift`, `pending` (no
 posted yet, within 24 h after the day ends), `unobserved` (fills but no `FEE` after the
 grace period, a `FEE` row without `net_amount`, or an incomplete activity read), `no_fills`,
 `rate_unpinned`, or `unavailable` (no active SQLite Clerk, or the SQLite Clerk refused the
-fill-window read — a row-count guard or a malformed row). A broker other than Alpaca is not
-`unavailable`: the endpoint refuses it before any verdict is computed, with HTTP 404 and
-reason `fee_reconciliation_unsupported_broker`. Implementation:
-`PythonDataService/app/services/alpaca_fee_reconciliation.py`.
+fill-window read — a row-count guard or a malformed row). `unavailable` also covers
+incomplete Clerk fill evidence: `account_fill_window` refuses rather than return a fill
+set it cannot vouch for when the window contains cumulative-recovery rows, an unresolved
+execution-coverage conflict is open anywhere on the account, or a filled external order
+exists. A broker other than Alpaca is not `unavailable`: the endpoint refuses it before any
+verdict is computed, with HTTP 404 and reason `fee_reconciliation_unsupported_broker`.
+Implementation: `PythonDataService/app/services/alpaca_fee_reconciliation.py`.
 
 **Completeness is a precondition for comparing.** The activity read is bounded — the
 broker port follows at most three newest-first pages of 100 — so for an older trade date
@@ -99,7 +102,4 @@ The observed side is compared against the model through the asymmetric band abov
   `BrokerActivity` (today only the day's total is compared).
 - Port-level activity-read coverage signal (`covered_from_ms`) so the completeness check
   stops depending on an older activity existing.
-- Fills placed outside the Clerk (external orders) are not priced and would also show as
-  drift; consult the window's external-fill existence flag (`external_fill_exists` in the
-  economic projection) and downgrade the comparison when set.
 - CAT rate history before 2026-09-01.

@@ -115,7 +115,7 @@ def test_observed_drift_beyond_tolerance() -> None:
 
     assert result.verdict == "drift"
     assert result.delta_usd == 0.27
-    assert "external orders" in result.why
+    assert result.why == "observed charge differs from the model by more than the tolerance"
 
 
 def test_when_the_tolerance_band_swallows_the_charge_the_why_says_so() -> None:

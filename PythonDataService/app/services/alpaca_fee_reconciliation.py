@@ -273,11 +273,6 @@ def reconcile_session_fees(
                 f"charge (${settled.total:.2f}), so agreement here proves little; validate "
                 "on low-sell-count sessions"
             )
-        if not within:
-            why = (
-                f"{why}; fills placed outside the Clerk (external orders) are not priced "
-                "and would also show as drift"
-            )
         return frame.verdict(
             "within_tolerance" if within else "drift",
             why,
