@@ -270,6 +270,11 @@ def test_a_flag_outside_its_bound_is_a_usage_error(
             "--required-sessions",
             id="bad-type-value",
         ),
+        pytest.param(
+            ["--live-account-id", LIVE_ACCOUNT, "activate", "--nope"],
+            "unrecognized arguments",
+            id="unknown-flag",
+        ),
     ],
 )
 def test_every_usage_refusal_is_one_json_object_at_exit_one(
@@ -279,6 +284,13 @@ def test_every_usage_refusal_is_one_json_object_at_exit_one(
 
     A script reading only the exit code could not otherwise tell a typo from a
     real-money arming precondition that has not been met.
+
+    The two argparse paths a reviewer reads as escaping ``exit_on_error=False``
+    -- a missing required argument, and a leftover unrecognized one -- are both
+    pinned here rather than argued about: on this runtime's Python they raise
+    ``ArgumentError`` for ``main`` to translate, and the day that stops being
+    true these rows fail instead of the CLI silently exiting ``2`` with no
+    JSON at all.
     """
     assert main(argv, evaluate=_never_called) == 1
 
