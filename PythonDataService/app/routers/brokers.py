@@ -90,7 +90,7 @@ from app.security.data_plane_control import (
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
-from app.services.alpaca_live_verdict import alpaca_live_verdict
+from app.services.alpaca_live_verdict import alpaca_live_verdict, observe_shadow_state
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
@@ -689,7 +689,11 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
 
 @router.get("/{broker}/live-verdict", response_model=AlpacaLiveVerdict)
 async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
-    """The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker."""
+    """The server-derived live verdict (ADR 0059 D8).
+
+    Never contacts the broker: settings, the clerk selection outcome, and a
+    read of the durable shadow evidence are the only inputs.
+    """
     if broker != "alpaca":
         raise HTTPException(
             status_code=404,
@@ -700,10 +704,14 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
     except ValidationError:
         # Invalid settings are a verdict input ("unconfigured"), not a 500.
         alpaca_settings = None
+    runtime = get_active_clerk_runtime()
     return alpaca_live_verdict(
         settings=alpaca_settings,
-        runtime=get_active_clerk_runtime(),
+        runtime=runtime,
         now_ms=now_ms_utc(),
+        shadow_state=(
+            None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
+        ),
     )
 
 

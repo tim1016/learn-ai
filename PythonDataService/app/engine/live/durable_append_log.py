@@ -22,7 +22,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from app.engine.live.live_state_sidecar import _fsync_parent_dir
+from app.engine.live.live_state_sidecar import fsync_parent_dir
 
 
 def append_jsonl_record(
@@ -82,7 +82,7 @@ def _append_on_service_owned_filesystem(
         file_handle.write(serialized_record + "\n")
         file_handle.flush()
         os.fsync(file_handle.fileno())
-    _fsync_parent_dir(path)
+    fsync_parent_dir(path)
 
 
 def rewrite_jsonl_records(
@@ -163,7 +163,7 @@ def _rewrite_on_service_owned_filesystem(
             raise ValueError(f"durable append log path {candidate} escapes root {root_real}")
         path = Path(candidate)
         os.replace(temporary_path, path)
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
@@ -295,7 +295,7 @@ def _create_exclusive_on_service_owned_filesystem(
         # A partial exclusive file remains a durable claim.  Deleting it could
         # permit a retry to repeat an effect that escaped before the crash.
         raise
-    _fsync_parent_dir(path)
+    fsync_parent_dir(path)
 
 
 def _create_atomic_exclusive_on_service_owned_filesystem(
@@ -331,7 +331,7 @@ def _create_atomic_exclusive_on_service_owned_filesystem(
             file_handle.flush()
             os.fsync(file_handle.fileno())
         os.link(temporary_path, path)
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)
     finally:
         with suppress(FileNotFoundError):
             temporary_path.unlink()

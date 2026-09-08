@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import dev_reset as dev_reset_module
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.dev_reset import (
     DeveloperCleanSlateResetRefused,
     DevResetReceipt,
@@ -306,6 +307,41 @@ def test_reset_refuses_non_paper_account_without_moving_authority(tmp_path: Path
         _reset(clerk_root=clerk_root, runner_root=runner_root, account_mode="live")
 
     assert journal.is_file()
+
+
+def test_reset_refuses_the_shadow_namespace_by_name(tmp_path: Path) -> None:
+    """ADR 0059 D10: a shadow authority is never a developer-reset target.
+
+    A shadow facade's own ``account_mode`` answers ``"live"`` -- it reads a real
+    account -- but this CLI never asks it: ``scripts/manage_alpaca_sqlite_clerk``
+    passes the *configured* mode, which on a developer host is ``"paper"`` while
+    the operator names a ``shadow:`` id. The paper-only gate would therefore let
+    the reset through, so the namespace must be refused on its own, before any
+    fence is taken.
+    """
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    shadow_account_id = "shadow:9LIVE0001"
+    account_dir = clerk_root / "accounts" / "alpaca" / shadow_account_id
+    account_dir.mkdir(parents=True)
+    journal = account_dir / "order_journal.jsonl"
+    journal.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(DeveloperCleanSlateResetRefused, match="shadow authority"):
+        developer_clean_slate_reset(
+            account_id=shadow_account_id,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            account_mode="paper",
+            clock=_clock,
+        )
+
+    assert journal.is_file()
+    # The fence's lock directory is created the moment `exclusive_recovery_fence`
+    # resolves any lock path, so its absence is the ordering proof: the refusal
+    # ran before the fence was taken, not merely before the authority moved.
+    lock_root = clerk_root / "accounts" / "alpaca" / repository_lifecycle._RECOVERY_LOCK_DIRECTORY
+    assert not lock_root.exists()
 
 
 def test_reset_refuses_live_execution_lease_without_moving_authority(tmp_path: Path) -> None:

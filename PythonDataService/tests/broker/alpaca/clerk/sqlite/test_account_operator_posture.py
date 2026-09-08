@@ -76,6 +76,10 @@ def _context(**overrides: Any) -> AccountOperatorPostureContext:
         "outstanding_intents": 0,
         "channels_ready": True,
         "channels_detail": None,
+        # Required on the context (thermo MAJOR 3): a defaulted world would
+        # silently relax the blocking eligibility gate, so every construction
+        # names its world -- including this test's.
+        "custody_world": "real_paper",
     }
     values.update(overrides)
     return AccountOperatorPostureContext(**values)
@@ -269,6 +273,27 @@ def test_wrong_execution_mode_is_terminal_with_a_real_cure_not_an_indefinite_wai
     assert "paper mode" in posture.account_desk.headline
     assert posture.fleet_roster is not None
     assert posture.fleet_roster.disposition == "terminal"
+
+
+def test_shadow_custody_world_reads_a_live_account_without_the_wrong_mode_posture() -> None:
+    """ADR 0059 D2: the shadow authority reads a live account by design.
+
+    ``account_mode == "live"`` is only a misconfiguration in the real-paper
+    world; under a shadow authority it is the expected reading, so the
+    blocking posture must not fire. The same context in the real-paper world
+    still blocks -- the relaxation is scoped to the custody world, not to the
+    mode.
+    """
+    shadow = build_account_operator_posture(
+        _context(account_mode="live", custody_world="shadow")
+    )
+    real_paper = build_account_operator_posture(
+        _context(account_mode="live", custody_world="real_paper")
+    )
+
+    assert shadow.condition is None
+    assert real_paper.condition is not None
+    assert real_paper.condition.id == "alpaca_account_wrong_execution_mode"
 
 
 def test_account_identity_mismatch_is_terminal_and_takes_priority_over_stale_defaults() -> None:

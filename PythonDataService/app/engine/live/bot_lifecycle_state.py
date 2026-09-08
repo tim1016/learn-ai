@@ -16,7 +16,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.canary_admission import CanaryRollbackDecision
 
@@ -378,7 +378,7 @@ class BotLifecycleStateRepo:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(self._path)
+        fsync_parent_dir(self._path)
 
 
 def _next_active_run_id(

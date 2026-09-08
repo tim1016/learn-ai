@@ -242,10 +242,10 @@ class LiveStateSidecarRepo:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(safe_path)
+        fsync_parent_dir(safe_path)
 
 
-def _fsync_parent_dir(child_path: Path) -> None:
+def fsync_parent_dir(child_path: Path) -> None:
     """Fsync the parent directory entry so a fresh rename survives crash.
 
     Tempfile fsync flushes the file's own contents, but on POSIX the

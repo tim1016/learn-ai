@@ -106,7 +106,11 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
 )
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
-from app.services.sqlite_clerk_compat import active_reconciliation_sweep, active_sqlite_facade
+from app.services.sqlite_clerk_compat import (
+    active_reconciliation_sweep,
+    active_sqlite_facade,
+    custody_account_id_for_route,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -120,12 +124,20 @@ async def _panel_authority_for_binding(
     """Select the Clerk authority named by one durable bot binding.
 
     The request account remains the real operator account used for route
-    authorization. Dry Run custody is intentionally stored under a separate
-    ``sim:<strategy_instance_id>`` account and must be selected explicitly for
-    its evidence reads.
+    authorization; what this yields is the authority the binding actually
+    runs on, whose account id may differ from it. Dry Run custody is stored
+    under a separate ``sim:<strategy_instance_id>`` account; a shadow
+    authority custodies ``shadow:<live_account_id>`` while the route names
+    the live account. Under real paper the two are the same id, so yielding
+    the facade is behaviour-identical there — and under shadow it is what
+    keeps the evidence read addressed at the repository it came from and
+    every synthesized fill labelled ``simulated`` (ADR 0059 D2, ruling R8).
     """
+    # ``getattr`` for the same reason the mode read above uses it: several
+    # callers hand this a duck-typed binding that carries only what the
+    # projection needs.
     if getattr(binding, "mode", None) != "dry_run":
-        yield None
+        yield active_sqlite_facade(str(getattr(binding, "broker", "alpaca")))
         return
     projection_runtime = getattr(registry, "synthetic_runtime_for_projection", None)
     if not callable(projection_runtime):
@@ -202,7 +214,9 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await validate_account(broker, account_id)
     try:
-        sqlite_catalog = await read_sqlite_catalog(broker, resolved)
+        sqlite_catalog = await read_sqlite_catalog(
+            broker, custody_account_id_for_route(broker, resolved)
+        )
     except SqliteCatalogProjectionUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite bot roster could not be projected.",

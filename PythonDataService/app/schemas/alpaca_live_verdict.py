@@ -4,7 +4,8 @@ Extends ADR 0011's verdict principles to the Alpaca path: computed in the
 data plane from settings and the clerk selection outcome, reactive on every
 read, never composed by the Frontend, never a guess. Slice 1 renders the
 verdict; arming, shadow and the envelope (slices 4-6) fill the fields that
-this slice fixes at their empty values.
+this slice fixes at their empty values. Slice 4 fills ``shadow_state`` from
+the durable shadow evidence and widens ``clerk_authority`` to ``"shadow"``.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from app.broker.alpaca.clerk.models import EpochMs
 
 ConfiguredMode = Literal["paper", "live", "unconfigured"]
 ModeAgreement = Literal["agreed", "disagreed", "unobserved"]
-ClerkAuthority = Literal["sqlite", "synthetic", "unavailable", "not_installed"]
+ClerkAuthority = Literal["sqlite", "synthetic", "shadow", "unavailable", "not_installed"]
 EnvelopeState = Literal["not_applicable", "configured_unsealed", "sealed"]
 ShadowState = Literal["not_applicable", "none", "in_progress", "complete"]
 FinalVerdict = Literal["paper", "live-unarmed", "live-armed", "unknown"]
@@ -28,6 +29,13 @@ class AlpacaLiveVerdict(BaseModel):
 
     configured_mode: ConfiguredMode
     observed_account_id: str | None
+    """The custody account id the verdict observed.
+
+    Under a shadow authority this carries the ``shadow:`` prefix while the
+    headline names the live account (controller ruling FR1-C1): the field is
+    the identity the verdict was computed against, and that identity is the
+    shadow custody one, not the account the broker read answered.
+    """
     mode_agreement: ModeAgreement
     clerk_authority: ClerkAuthority
     clerk_refusal_reason_code: str | None

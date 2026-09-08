@@ -137,11 +137,12 @@ def _clerk(
     reconciliation_state: str = "clean",
     reconciliation_fresh: bool = True,
     observed_at_ms: int = _NOW - 500,
+    account_id: str = "paper-account",
     account_mode: str = "paper",
 ) -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
-        account_id="paper-account",
+        account_id=account_id,
         account_mode=account_mode,
         strategy_instance_id=_SID,
         clerk_generation="clerk-1",
@@ -160,7 +161,7 @@ def _clerk(
         hold=HoldState(active=False),
         freeze=AccountFreezeState(),
         reason_code=("CLERK_CUSTODY_PROVEN" if reconciliation_state == "clean" else "CLERK_CUSTODY_UNPROVABLE"),
-        evidence_refs=("clerk:paper-account:7",),
+        evidence_refs=(f"clerk:{account_id}:7",),
         observed_at_ms=observed_at_ms,
     )
 
@@ -1144,6 +1145,31 @@ def test_uncovered_corpus_is_refused_on_a_live_account() -> None:
     assert decision.allowed is False
     assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
     assert decision.next_step == CORPUS_UNCOVERED_NEXT_STEP
+
+
+def test_uncovered_corpus_is_refused_under_a_shadow_authority() -> None:
+    """ADR 0059 D11: the shadow world does not relax the ADR 0054 corpus gate.
+
+    A shadow Clerk custodies a live account, so its snapshot reports
+    ``account_mode="live"`` — exactly the reading this gate blocks. Pinned
+    here because the shadow world relaxes the account-mode refusal elsewhere
+    (deploy view, account posture) and must not be assumed to relax it here.
+
+    Both the binding and the snapshot carry the ``shadow:`` account id a
+    shadow authority actually produces, so a later relaxation keyed on the
+    *namespace* rather than the mode is caught here too — the mode alone
+    would let this test pass while proving nothing about the shadow world.
+    """
+    shadow_account_id = "shadow:9LIVE0001"
+
+    decision = evaluate_run_admission(
+        _uncovered_bot().model_copy(update={"sealed_account_id": shadow_account_id}),
+        _clerk(account_id=shadow_account_id, account_mode="live"),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
 
 
 def test_covered_corpus_never_consults_the_account_environment() -> None:

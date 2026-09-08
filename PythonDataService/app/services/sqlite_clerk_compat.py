@@ -5,7 +5,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.account_authority import (
+    authority_kind_for_account,
+    custody_account_id_for,
+)
+from app.broker.alpaca.clerk.active_authority import (
+    custody_world_or_paper,
+    get_active_clerk_runtime,
+    primary_custody_world,
+)
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
     AccountOperatorPostureContext,
@@ -52,7 +61,7 @@ def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | No
     runtime = get_active_clerk_runtime()
     if (
         runtime is None
-        or runtime.authority_kind != "sqlite"
+        or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES
         or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     ):
         return None
@@ -76,12 +85,32 @@ def active_reconciliation_sweep(broker: str = "alpaca") -> ReconciliationSweep |
     runtime = get_active_clerk_runtime()
     if (
         runtime is None
-        or runtime.authority_kind != "sqlite"
+        or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES
         or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
         or not isinstance(runtime.sweep, ReconciliationSweep)
     ):
         return None
     return runtime.sweep
+
+
+def custody_account_id_for_route(broker: str, resolved: str) -> str:
+    """The custody id a route's resolved account id names on the active authority.
+
+    Every account-scoped route resolves the *broker's* account id; the SQLite
+    readers key on the id the active authority **custodies**. Those are the
+    same id in the real-paper world and deliberately different under shadow,
+    where custody is ``shadow:<live_account_id>`` (ADR 0059 D2) -- so an
+    untranslated route id fails the readers' account guard on every correct
+    shadow boot.
+
+    Translation, never a bypass: the guard it feeds still refuses a foreign
+    account, because a foreign id translates to a foreign custody id. Only the
+    Alpaca authority has a custody world, so another broker's id is returned
+    unchanged rather than relabelled with this one's.
+    """
+    if broker != "alpaca":
+        return resolved
+    return custody_account_id_for(custody_world_or_paper(primary_custody_world()), resolved)
 
 
 def sqlite_projection(
@@ -191,6 +220,10 @@ def sqlite_clerk_status(
     never attributed to this projection's account (2026-08-20 review): the
     posture reports an explicit ``alpaca_account_identity_mismatch``
     condition instead of silently blending two accounts' evidence.
+    "Different account" is asked of the *custody* id the world implies, not
+    of the broker's own answer: a shadow authority observing ``9LIVE0001``
+    legitimately custodies ``shadow:9LIVE0001`` (ADR 0059 D2), and comparing
+    the two raw ids reads every correct shadow boot as a misconfiguration.
     """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
@@ -205,7 +238,13 @@ def sqlite_clerk_status(
     else:
         verdict = "clean"
     channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
-    identity_mismatch = account is not None and account.account_id != projection.account_id
+    # Read once and reused for both the identity expectation and the posture
+    # context, so the two can never disagree about which world this is.
+    custody_world = custody_world_or_paper(primary_custody_world())
+    identity_mismatch = (
+        account is not None
+        and custody_account_id_for(custody_world, account.account_id) != projection.account_id
+    )
     if identity_mismatch:
         logger.warning(
             "Clerk status account read named a different account than the "
@@ -213,6 +252,7 @@ def sqlite_clerk_status(
             extra={
                 "projection_account_id": projection.account_id,
                 "observed_account_id": account.account_id if account is not None else None,
+                "custody_world": custody_world,
             },
         )
     account_usable = account is not None and not identity_mismatch
@@ -231,6 +271,7 @@ def sqlite_clerk_status(
             trading_blocked=account.trading_blocked if account_usable else None,
             account_blocked=account.account_blocked if account_usable else None,
             account_identity_mismatch=identity_mismatch,
+            custody_world=custody_world,
             outstanding_intents=unresolved,
             channels_ready=channel_evaluation.ready,
             channels_detail=_channel_evaluation_detail(channel_evaluation),
@@ -255,7 +296,12 @@ def sqlite_clerk_status(
         channel_healths=(
             list(channel_healths) if channel_healths is not None else None
         ),
-        authority_kind="real_paper",
+        # Derived from the facade's own custody id, never asserted: under a
+        # shadow authority ``projection.account_id`` is ``shadow:<live id>``,
+        # and a wire saying ``real_paper`` beside it is the same misstatement
+        # ADR 0059 slice 4 exists to remove. ``real_paper`` is the only real
+        # world constructible today, so the id alone decides.
+        authority_kind=authority_kind_for_account(projection.account_id),
         operator_posture=posture,
     )
 
@@ -322,7 +368,7 @@ def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
             if not divergent
             else "Use the SQLite Clerk's typed, evidence-bound recovery actions."
         ),
-        authority_kind="real_paper",
+        authority_kind=authority_kind_for_account(projection.account_id),
         divergences=divergences,
         resolution_plan=(),
     )

@@ -15,13 +15,42 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.schemas.account_authority import AuthorityKind
+from app.schemas.account_authority import AuthorityKind, CustodyWorld
 
 # The clerk-side name for the one canonical account-world kind (ADR 0059 D1).
 AccountAuthorityKind = AuthorityKind
 SIM_ACCOUNT_PREFIX = "sim:"
 SHADOW_ACCOUNT_PREFIX = "shadow:"
-_RESERVED_PREFIXES: tuple[str, ...] = (SIM_ACCOUNT_PREFIX, SHADOW_ACCOUNT_PREFIX)
+PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
+"""Instance-scoped evidence namespace for real-paper retained source bars.
+
+Not a Clerk custody account: custody stays on the real Alpaca account. This
+namespace only scopes the ``SourceBarLedger`` file so each paper instance's
+retained-replay warmup (FR-016) sees exactly its own observations, mirroring
+Dry Run's ``sim:`` scoping.
+"""
+
+
+SHADOW_EVIDENCE_ACCOUNT_PREFIX = "shadow-evidence:"
+"""Instance-scoped evidence namespace for shadow retained source bars.
+
+Custody is the account-scoped ``shadow:<live_account_id>`` authority; every
+instance that runs on it keeps its own retained-bar ledger here, exactly as a
+real-paper instance keeps ``paper:<instance>``. The prefix is deliberately not
+``shadow:`` — an evidence namespace is never a custody identity.
+"""
+
+
+# Every namespace a real Alpaca account id may not occupy: the two reserved
+# custody worlds and the two instance-scoped evidence namespaces. All four are
+# minted by this module, so a "real" account carrying any of them is a
+# composition bug, not an operator typo.
+_RESERVED_PREFIXES: tuple[str, ...] = (
+    SIM_ACCOUNT_PREFIX,
+    SHADOW_ACCOUNT_PREFIX,
+    PAPER_EVIDENCE_ACCOUNT_PREFIX,
+    SHADOW_EVIDENCE_ACCOUNT_PREFIX,
+)
 
 
 class AccountAuthorityIdentityError(ValueError):
@@ -44,7 +73,8 @@ def require_real_account_id(account_id: str) -> str:
         raise AccountAuthorityIdentityError("real account identity must be non-empty")
     if account_id.startswith(_RESERVED_PREFIXES):
         raise AccountAuthorityIdentityError(
-            "real Alpaca ports refuse reserved sim:/shadow: account identities"
+            "real Alpaca ports refuse the reserved sim:/shadow:/paper:/shadow-evidence: "
+            "account identities"
         )
     return account_id
 
@@ -96,14 +126,19 @@ def shadow_account_id_for_live_account(live_account_id: str) -> str:
     return f"{SHADOW_ACCOUNT_PREFIX}{require_real_account_id(live_account_id)}"
 
 
-PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
-"""Instance-scoped evidence namespace for real-paper retained source bars.
+def custody_account_id_for(world: CustodyWorld, observed_account_id: str) -> str:
+    """The custody id a ``world`` authority holds while observing ``observed_account_id``.
 
-Not a Clerk custody account: custody stays on the real Alpaca account. This
-namespace only scopes the ``SourceBarLedger`` file so each paper instance's
-retained-replay warmup (FR-016) sees exactly its own observations, mirroring
-Dry Run's ``sim:`` scoping.
-"""
+    A broker read answers the account it is pointed at; the projection
+    answers the account the authority custodies. Those are the same id in
+    the real-paper world and deliberately different under shadow, where
+    custody is ``shadow:<live_account_id>``. Any identity comparison between
+    the two must go through this function or it reads a correct shadow boot
+    as a misconfiguration.
+    """
+    if world == "shadow":
+        return shadow_account_id_for_live_account(observed_account_id)
+    return observed_account_id
 
 
 def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
@@ -111,6 +146,41 @@ def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
     from app.engine.live.identity import validate_strategy_instance_id
 
     return f"{PAPER_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
+def shadow_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
+    """Return the isolated shadow source-bar namespace for one instance."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    return f"{SHADOW_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
+def is_shadow_evidence_account_id(account_id: str) -> bool:
+    """Return whether ``account_id`` is a shadow instance's evidence namespace."""
+    return account_id.startswith(SHADOW_EVIDENCE_ACCOUNT_PREFIX)
+
+
+def evidence_account_id_for(
+    *,
+    mode: str,
+    strategy_instance_id: str,
+    custody_kind: AccountAuthorityKind,
+) -> str:
+    """The evidence namespace whose ledger retains a binding's bars.
+
+    Dry Run's custody and evidence share ``sim:<instance>``. Every other
+    binding's evidence is instance-scoped under the world the primary
+    authority custodies in — ``paper:`` on the real-paper authority,
+    ``shadow-evidence:`` on the shadow authority — so two instances on one
+    symbol never share a ledger and a replay proof reads exactly what its run
+    retained. Whether a mode is replayable is the replay proof's judgement,
+    not this function's.
+    """
+    if mode == "dry_run":
+        return synthetic_account_id_for_strategy(strategy_instance_id)
+    if custody_kind == "shadow":
+        return shadow_evidence_account_id_for_strategy(strategy_instance_id)
+    return paper_evidence_account_id_for_strategy(strategy_instance_id)
 
 
 @dataclass(frozen=True)
@@ -153,22 +223,56 @@ def bind_synthetic_ports(
     )
 
 
+def bind_shadow_ports(
+    *,
+    account_id: str,
+    read: BrokerReadPort,
+    trade: BrokerTradePort,
+) -> AccountBoundBrokerPorts:
+    """Create a shadow composition only for the reserved namespace (ADR 0059 D2).
+
+    The trade port is checked, not trusted: a shadow authority binds only
+    the no-submit port, so the live port its selector still holds in scope
+    cannot be wired here by a later edit that type-checks.
+    """
+    # Local import: ``shadow_broker`` imports this module for the namespace
+    # helpers, so a module-level import would cycle.
+    from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort
+
+    if not isinstance(trade, NoSubmitAlpacaTradePort):
+        raise AccountAuthorityIdentityError(
+            "shadow authorities bind only the no-submit trade port"
+        )
+    return AccountBoundBrokerPorts(
+        account_id=require_shadow_account_id(account_id),
+        authority_kind="shadow",
+        read=read,
+        trade=trade,
+    )
+
+
 __all__ = [
     "PAPER_EVIDENCE_ACCOUNT_PREFIX",
     "SHADOW_ACCOUNT_PREFIX",
+    "SHADOW_EVIDENCE_ACCOUNT_PREFIX",
     "SIM_ACCOUNT_PREFIX",
     "AccountAuthorityIdentityError",
     "AccountAuthorityKind",
     "AccountBoundBrokerPorts",
     "authority_kind_for_account",
     "bind_real_alpaca_ports",
+    "bind_shadow_ports",
     "bind_synthetic_ports",
+    "custody_account_id_for",
+    "evidence_account_id_for",
     "is_shadow_account_id",
+    "is_shadow_evidence_account_id",
     "is_synthetic_account_id",
     "paper_evidence_account_id_for_strategy",
     "require_real_account_id",
     "require_shadow_account_id",
     "require_synthetic_account_id",
     "shadow_account_id_for_live_account",
+    "shadow_evidence_account_id_for_strategy",
     "synthetic_account_id_for_strategy",
 ]

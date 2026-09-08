@@ -8,8 +8,12 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
-from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
+from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES, ALPACA_PAPER_CAPABILITIES
+from app.broker.alpaca.clerk.active_authority import (
+    activate_shadow_clerk_authority,
+    select_active_clerk_runtime,
+)
+from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -22,8 +26,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
 )
+from app.broker.alpaca.clerk.trade_evidence import NullTradeUpdateEvidenceSink
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder
 
 
 def _account() -> BrokerAccountSnapshot:
@@ -430,3 +435,137 @@ async def test_mode_disagreement_is_named_not_folded_into_unavailable(tmp_path: 
     assert runtime.startup_failure is not None
     assert runtime.startup_failure.reason_code == "LIVE_MODE_DISAGREEMENT"
     assert "begins with 'PA'" in runtime.startup_failure.recovery
+
+
+class _LiveBroker(_Broker):
+    """The live account: mode live, an empty order history, a trade port that must never be reached."""
+
+    def __init__(self, history: list[BrokerOrder] | None = None) -> None:
+        self.history = history or []
+
+    def capabilities(self) -> BrokerCapabilities:
+        return ALPACA_LIVE_CAPABILITIES
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return _account().model_copy(update={"account_id": "9LIVE0001", "account_mode": "live"})
+
+    async def list_orders(self, **_kwargs: Any) -> list:
+        return self.history
+
+
+def _vendor_order(client_order_id: str) -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca",
+        order_id=f"vendor-{client_order_id}",
+        client_order_id=client_order_id,
+        symbol="SPY",
+        asset_class="us_equity",
+        side="buy",
+        order_type="market",
+        time_in_force="day",
+        quantity=1.0,
+        filled_quantity=1.0,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=100.0,
+        status="filled",
+        submitted_at_ms=1,
+        created_at_ms=1,
+        updated_at_ms=1,
+        filled_at_ms=1,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        observed_at_ms=1,
+    )
+
+
+async def test_live_account_without_shadow_activation_is_refused_by_name(tmp_path: Path) -> None:
+    runtime = await select_active_clerk_runtime(
+        read=_LiveBroker(), trade=_LiveBroker(), artifacts_root=tmp_path
+    )
+
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "SHADOW_ACTIVATION_REQUIRED"
+    assert runtime.startup_failure.account_id == "shadow:9LIVE0001"
+
+
+async def test_live_account_holding_clerk_minted_orders_is_poisoned(tmp_path: Path) -> None:
+    broker = _LiveBroker([_vendor_order("learn-ai/ema-1/v1:abc")])
+
+    runtime = await select_active_clerk_runtime(
+        read=broker, trade=broker, artifacts_root=tmp_path
+    )
+
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "SHADOW_NAMESPACE_POISONED"
+    assert "vendor-learn-ai/ema-1/v1:abc" in runtime.startup_failure.recovery
+
+
+async def test_a_live_boot_degrades_to_unavailable_when_the_namespace_probe_errors(
+    tmp_path: Path,
+) -> None:
+    """A raw vendor-payload error must refuse the authority, never abort startup.
+
+    ``AlpacaBroker.list_orders`` adapts each payload *outside* ``_call``, so a
+    malformed one raises a plain ``ValidationError`` rather than a
+    ``BrokerError``. Unhandled, that propagates out of the lifespan and takes
+    every unrelated surface down with it -- an exposure the paper path does
+    not have, on the real-money path.
+    """
+
+    class _MalformedLiveBroker(_LiveBroker):
+        async def list_orders(self, **_kwargs: Any) -> list:
+            raise ValueError("vendor order payload failed validation")
+
+    broker = _MalformedLiveBroker()
+
+    runtime = await select_active_clerk_runtime(
+        read=broker, trade=broker, artifacts_root=tmp_path
+    )
+
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "SHADOW_CLERK_STARTUP_FAILED"
+    assert runtime.startup_failure.account_id == "9LIVE0001"
+    assert "vendor order payload failed validation" in runtime.startup_failure.recovery
+
+
+async def test_activated_live_account_composes_the_shadow_authority(tmp_path: Path) -> None:
+    record = await activate_shadow_clerk_authority(
+        live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    assert record.account_id == "shadow:9LIVE0001"
+    assert (
+        await activate_shadow_clerk_authority(
+            live_account_id="9LIVE0001", artifacts_root=tmp_path
+        )
+    ) == record
+
+    broker = _LiveBroker()
+    runtime = await select_active_clerk_runtime(
+        read=broker, trade=broker, artifacts_root=tmp_path
+    )
+    try:
+        assert runtime.authority_kind == "shadow"
+        assert runtime.selected_account_id == "shadow:9LIVE0001"
+        assert runtime.selected_account_authority_kind == "shadow"
+        assert runtime.clerk is not None and runtime.clerk.authority_kind == "shadow"
+        # The facade keeps the learned mode privately; a shadow authority
+        # answers "live" because it reads a real-money account.
+        assert runtime.clerk._account_mode == "live"
+        # The branch's central invariant, asserted on the composed runtime and
+        # not on the class: the facade's guarded trade port wraps the
+        # no-submit port, and the sweep -- which reconciles and cancels --
+        # holds that same object, never the live broker.
+        assert isinstance(runtime.clerk._trade._inner, NoSubmitAlpacaTradePort)
+        assert runtime.sweep is not None
+        assert runtime.sweep._trade._inner is runtime.clerk._trade._inner
+        assert runtime.clerk._trade._inner is not broker
+        assert runtime.sqlite_repository is not None
+        assert isinstance(runtime.evidence_sink, NullTradeUpdateEvidenceSink)
+        # Synthesized custody, not the live account's: `_LiveBroker` has no
+        # list_positions of its own, and the book is empty at cold start.
+        assert (await runtime.clerk._read.list_positions()) == []
+    finally:
+        await runtime.close()

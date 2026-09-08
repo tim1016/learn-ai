@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
@@ -791,8 +792,11 @@ async def run_trade_bot(
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
-    if getattr(clerk, "authority_kind", None) != "sqlite":
-        raise RuntimeError("Trade-mode decisions require the active SQLite Alpaca Clerk.")
+    if getattr(clerk, "authority_kind", None) not in SQLITE_FACADE_AUTHORITIES:
+        raise RuntimeError(
+            "Trade-mode decisions require the active account Clerk "
+            "(real paper, or the shadow of a live account)."
+        )
     account_id = getattr(clerk, "account_id", None)
     if not isinstance(account_id, str) or not account_id:
         raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")

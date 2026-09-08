@@ -54,6 +54,18 @@ export const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
   blocked_explanation: null,
 };
 
+/**
+ * Dry Run is the one card every custody world offers, so both views name this
+ * const rather than indexing into the other's array — a reorder of the paper
+ * fixture must not silently change what the shadow fixture offers.
+ */
+export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = {
+  mode: 'dry_run',
+  label: 'Dry Run',
+  availability: 'available',
+  explanation: 'Real market data with simulated decisions and fills only.',
+};
+
 export const DEPLOY_VIEW: DeployBotView = {
   broker: 'alpaca',
   account_id: 'PA9',
@@ -76,12 +88,7 @@ export const DEPLOY_VIEW: DeployBotView = {
   },
   strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
   execution_modes: [
-    {
-      mode: 'dry_run',
-      label: 'Dry Run',
-      availability: 'available',
-      explanation: 'Real market data with simulated decisions and fills only.',
-    },
+    DRY_RUN_EXECUTION_MODE,
     { mode: 'paper', label: 'Paper', availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
     { mode: 'live', label: 'Live', availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
@@ -134,5 +141,54 @@ export const DEPLOY_VIEW: DeployBotView = {
   carryover_label: 'Allow Clerk-proven exposure carryover on STOP',
   carryover_explanation: 'Account policy currently forbids carried exposure.',
   allowed_actions: ['deploy'],
+};
+
+/**
+ * The same account seen through the Shadow Account Authority (ADR 0059 D2):
+ * a live account whose broker-facing mode is `shadow`, not `paper`. Paper is
+ * absent from `execution_modes` entirely — a live account has no paper
+ * broker to deploy against — so the form's broker-mode option is Shadow.
+ */
+export const SHADOW_DEPLOY_VIEW: DeployBotView = {
+  ...DEPLOY_VIEW,
+  account_id: '9LIVE0001',
+  account_mode: 'live',
+  account_label: 'Alpaca shadow · 9LIVE0001',
+  // Verbatim from the backend's own shadow-world copy table
+  // (`paper_deploy_service._deploy_view_copy`). Spreading DEPLOY_VIEW alone
+  // left three paper-worded sentences here, which is exactly the leak the
+  // shadow specs exist to catch. `reason_code` and `next_action` stay
+  // world-neutral in the backend too: they are wire tokens, not prose.
+  eligibility: {
+    eligible: true,
+    reason_code: 'ALPACA_PAPER_DEPLOY_READY',
+    headline: 'This Alpaca account is eligible for a Clerk-governed shadow deployment.',
+    explanation:
+      'The operator may choose Clerk-governed shadow execution — every fill synthesized '
+      + "against this live account's real reads, nothing submitted — or a zero-broker-write "
+      + 'Dry Run before launch.',
+    next_action: 'Complete the deployment ticket, review the summary, then deploy the bot.',
+  },
+  strategies: DEPLOY_VIEW.strategies.map((strategy) => ({
+    ...strategy,
+    admissible_modes: strategy.admissible_modes.map((mode) =>
+      mode === 'paper' ? 'shadow' : mode,
+    ),
+  })),
+  execution_modes: [
+    DRY_RUN_EXECUTION_MODE,
+    {
+      mode: 'shadow',
+      label: 'Shadow',
+      availability: 'available',
+      explanation: 'Synthesized fills against the live account; nothing is submitted.',
+    },
+    {
+      mode: 'live',
+      label: 'Live',
+      availability: 'planned',
+      explanation: 'Requires a shadow receipt and arming.',
+    },
+  ],
 };
 

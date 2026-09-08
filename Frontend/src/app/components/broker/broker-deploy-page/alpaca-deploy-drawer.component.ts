@@ -6,6 +6,20 @@ import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-d
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 
 /**
+ * The one broker world a deploy against this account can use.
+ *
+ * A paper account deploys Paper; a live account is held by the Shadow
+ * Account Authority and deploys Shadow (ADR 0059 D2). One closed map, one
+ * author: this chrome is the drawer's own copy, and the alternative — a
+ * literal `paper` above a Shadow form on a real-money account — is exactly
+ * the false safety signal slice 4 exists to remove.
+ */
+const DEPLOY_WORLD_BY_ACCOUNT_MODE: Readonly<Record<'paper' | 'live', 'paper' | 'shadow'>> = {
+  paper: 'paper',
+  live: 'shadow',
+};
+
+/**
  * Reusable right-side host for the established Alpaca deploy workflow.
  *
  * Route surfaces own visibility: the desk mirrors it in the URL while an
@@ -47,6 +61,25 @@ export class AlpacaDeployDrawerComponent {
   protected readonly accountUnavailable = computed(
     () => this.deskAccountData?.account.error() !== undefined || this.account.error() !== undefined,
   );
+
+  /** `null` while no account read has answered: the chrome then names no world. */
+  private readonly brokerWorld = computed<'paper' | 'shadow' | null>(() => {
+    const shared = this.deskAccountData?.account;
+    if (shared?.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[shared.value().account_mode];
+    if (this.account.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[this.account.value().account_mode];
+    return null;
+  });
+
+  protected readonly headerLabel = computed(() => {
+    const account = this.resolvedAccountId() || 'Alpaca';
+    const world = this.brokerWorld();
+    return world === null ? `Deploy · ${account}` : `Deploy · ${account} · ${world}`;
+  });
+
+  protected readonly accountNoun = computed(() => {
+    const world = this.brokerWorld();
+    return world === null ? 'Alpaca account' : `Alpaca ${world} account`;
+  });
 
   protected close(): void {
     this.closed.emit();

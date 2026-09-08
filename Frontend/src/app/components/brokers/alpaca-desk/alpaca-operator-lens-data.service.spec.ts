@@ -6,7 +6,7 @@ import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 
-function clerkStatus(): ClerkStatus {
+function clerkStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
   return {
     broker: 'alpaca',
     account_id: 'PA1',
@@ -16,6 +16,7 @@ function clerkStatus(): ClerkStatus {
     observed_at_ms: 1,
     authority_kind: 'real_paper',
     operator_posture: healthyAccountOperatorPostureFixture(),
+    ...overrides,
   };
 }
 
@@ -58,6 +59,27 @@ describe('AlpacaOperatorLensDataService', () => {
 
     await vi.waitFor(() => expect(getClerkStatus).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+  });
+
+  it('reads the SQLite projection for a shadow authority too', async () => {
+    const getClerkStatus = vi
+      .fn()
+      .mockResolvedValue(
+        clerkStatus({ account_id: 'shadow:9LIVE0001', authority_kind: 'shadow' }),
+      );
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(projection());
+
+    TestBed.configureTestingModule({
+      providers: [
+        AlpacaOperatorLensDataService,
+        { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
+      ],
+    });
+    const service = TestBed.inject(AlpacaOperatorLensDataService);
+
+    service.loadOnce();
+
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('shadow:9LIVE0001'));
   });
 
   it('never fetches before loadOnce is called', async () => {

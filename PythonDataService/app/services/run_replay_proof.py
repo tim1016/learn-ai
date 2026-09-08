@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
-    paper_evidence_account_id_for_strategy,
-    synthetic_account_id_for_strategy,
+    authority_kind_for_account,
+    evidence_account_id_for,
 )
 from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
@@ -839,13 +839,20 @@ def refine_split_with_first_decision(
 
 def ledger_account_id_for(binding: BrokerBotBinding) -> str:
     """Return the evidence namespace whose ledger retained this binding's bars."""
-    if binding.mode == "dry_run":
-        return synthetic_account_id_for_strategy(binding.strategy_instance_id)
-    if binding.mode == "trade":
-        return paper_evidence_account_id_for_strategy(binding.strategy_instance_id)
-    raise RunReplayUnavailableError(
-        f"Mode {binding.mode!r} retains no source-bar evidence; nothing to replay.",
-        http_status=404,
+    if binding.mode not in {"dry_run", "trade"}:
+        raise RunReplayUnavailableError(
+            f"Mode {binding.mode!r} retains no source-bar evidence; nothing to replay.",
+            http_status=404,
+        )
+    custody_kind = (
+        "real_paper"
+        if binding.sealed_account_id is None
+        else authority_kind_for_account(binding.sealed_account_id)
+    )
+    return evidence_account_id_for(
+        mode=binding.mode,
+        strategy_instance_id=binding.strategy_instance_id,
+        custody_kind=custody_kind,
     )
 
 

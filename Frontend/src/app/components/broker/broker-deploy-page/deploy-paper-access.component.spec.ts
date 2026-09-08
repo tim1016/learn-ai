@@ -59,7 +59,7 @@ describe('DeployPaperAccessComponent', () => {
   it('prepares a review and requires a separate explicit confirmation', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -105,6 +105,7 @@ describe('DeployPaperAccessComponent', () => {
       inputs: {
         accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'not_required' },
+        modeLabel: 'Paper' as const,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
@@ -119,6 +120,7 @@ describe('DeployPaperAccessComponent', () => {
       inputs: {
         accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'blocked' },
+        modeLabel: 'Paper' as const,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
@@ -137,7 +139,7 @@ describe('DeployPaperAccessComponent', () => {
       },
     });
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -154,7 +156,7 @@ describe('DeployPaperAccessComponent', () => {
   it('omits the git lineage row when the receipt predates it', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -181,7 +183,7 @@ describe('DeployPaperAccessComponent', () => {
       }),
     );
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -193,5 +195,33 @@ describe('DeployPaperAccessComponent', () => {
     expect(within(alert).getByText('Paper access could not be changed.')).toBeTruthy();
     expect(within(alert).getByText(/validation proof is no longer current/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try review again' })).toBeTruthy();
+  });
+  it('words the same grant for the shadow world on a live account', async () => {
+    const service = panelServiceMock();
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: {
+        accountId: '9LIVE0001',
+        strategy: AVAILABLE_STRATEGY,
+        modeLabel: 'Shadow' as const,
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    expect(screen.getByRole('heading', { name: 'Shadow access' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Shadow' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const review = screen.getByRole('region', { name: 'Review Shadow access' });
+    expect(within(review).getByRole('heading', { name: 'Confirm Shadow access' })).toBeTruthy();
+    expect(within(review).getByRole('button', { name: 'Enable Shadow access' })).toBeTruthy();
+
+    fireEvent.click(within(review).getByRole('button', { name: 'Enable Shadow access' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Shadow access enabled')).toBeTruthy();
+    // The one word that must not survive onto a real-money account's form.
+    expect(document.body.textContent).not.toMatch(/paper/i);
   });
 });

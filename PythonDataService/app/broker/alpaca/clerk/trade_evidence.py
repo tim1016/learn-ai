@@ -6,6 +6,7 @@ suppression. The activated SQLite Clerk is the only durable destination.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
@@ -39,6 +40,8 @@ from app.broker.contract.ports import BrokerReadPort
 UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
 TradeUpdateDisposition = Literal["order_event", "unexplained_order"]
 
+logger = logging.getLogger(__name__)
+
 
 class TradeUpdateEvidenceSink(Protocol):
     """The durable destination selected for one account at process boot."""
@@ -58,6 +61,45 @@ class TradeUpdateEvidenceSink(Protocol):
     ) -> TradeUpdateDisposition: ...
 
     async def reconcile_gap(self) -> None: ...
+
+
+class NullTradeUpdateEvidenceSink:
+    """The shadow authority's sink: the live execution stream is not shadow custody evidence.
+
+    A shadow authority submits nothing, so no trade update can ever concern
+    its custody; a real order on the live account is that account's business,
+    not the shadow journal's (ADR 0042 isolation). The consumer still runs --
+    its health is what proves the live websocket authenticates -- so this
+    sink answers every frame without folding it.
+    """
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        return read
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        client_order_id: str | None,
+        event: BrokerOrderEvent,
+        event_key: str,
+        order: BrokerOrder | None,
+        recovery_source: str | None,
+        recovery_window_limit: int | None,
+    ) -> TradeUpdateDisposition:
+        del order, recovery_source, recovery_window_limit
+        logger.info(
+            "shadow authority ignored a live trade update",
+            extra={
+                "action": "shadow_trade_update_ignored",
+                "client_order_id": client_order_id,
+                "event_type": event.event_type,
+                "event_key": event_key,
+            },
+        )
+        return "order_event"
+
+    async def reconcile_gap(self) -> None:
+        return None
 
 
 class SqliteReconciliationFacade(Protocol):
@@ -267,6 +309,7 @@ class SqliteTradeUpdateEvidenceSink:
 
 __all__ = [
     "UNEXPLAINED_TRADE_UPDATE_REASON_CODE",
+    "NullTradeUpdateEvidenceSink",
     "SqliteReconciliationFacade",
     "SqliteTradeUpdateEvidenceSink",
     "TradeUpdateEvidenceSink",

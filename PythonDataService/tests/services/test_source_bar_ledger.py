@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
+from app.broker.alpaca.clerk.synthetic_broker import (
+    SimulatedPriceUnavailableError,
+    SyntheticBarBindingError,
+    SyntheticBroker,
+)
 from app.broker.contract.models import BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
 from app.services import source_bar_ledger
@@ -22,6 +26,7 @@ from app.services.source_bar_ledger import (
     SourceBarConflictError,
     SourceBarLedger,
     SourceBarLedgerCorruptError,
+    SourceBarLedgerMissingError,
     SourceBarRetentionLimitError,
     verify_ledger_file,
 )
@@ -164,6 +169,25 @@ async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_reco
     recovered = await restarted.get_order_by_client_order_id("bot:ema:enter")
     assert recovered == order
     assert (await restarted.list_positions())[0].quantity == 2
+
+
+@pytest.mark.asyncio
+async def test_synthetic_port_refuses_a_submission_with_no_evidence_ledger_by_name(tmp_path: Path) -> None:
+    """The internal invariant leaves by this module's own error, not an ``AssertionError``.
+
+    ``submit`` guards on the order ledger, so only a broker whose evidence
+    ledger went missing behind it reaches ``_submission_bar``'s own guard —
+    which must survive ``python -O``, where an ``assert`` does not.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
+    broker._source_bars = None
+
+    with pytest.raises(SimulatedPriceUnavailableError, match="authority-scoped retained-bar ledger"):
+        await broker.submit(
+            BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+            client_order_id="bot:ema:enter",
+        )
 
 
 @pytest.mark.asyncio
@@ -538,7 +562,9 @@ def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
     be read back. The event row must not survive its journal row failing."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+        # The journal writer moved to ``source_bar_store_schema``; patch the
+        # name the ledger module imported, which is what its appends call.
+        monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
 
         with pytest.raises(RuntimeError, match="journal unavailable"):
             ledger.append_event(_event(cause="socket_down"), run_id="run-a")
@@ -556,7 +582,9 @@ def test_append_rolls_back_the_bar_when_its_journal_row_fails(
     position could never be ordered against the run's continuity events."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+        # The journal writer moved to ``source_bar_store_schema``; patch the
+        # name the ledger module imported, which is what its appends call.
+        monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
 
         with pytest.raises(RuntimeError, match="journal unavailable"):
             ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
@@ -588,3 +616,36 @@ def test_journal_refuses_a_second_position_for_one_bar(tmp_path: Path) -> None:
         assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
     finally:
         ledger.close()
+
+
+def test_a_read_only_ledger_cannot_append_and_never_checkpoints_on_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer of *another* authority's evidence must not be able to create
+    schema on it, write to it, or fold its WAL out from under its owner."""
+    writer = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        writer.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        reader = SourceBarLedger(artifacts_root=tmp_path, account_id="acct", read_only=True)
+        assert len(reader.bars(provider="polygon-minute", symbol="SPY")) == 1
+
+        with pytest.raises(sqlite3.OperationalError):
+            reader.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
+
+        checkpoints: list[str] = []
+        monkeypatch.setattr(
+            SourceBarLedger, "checkpoint_wal", lambda self: checkpoints.append(self.account_id)
+        )
+        reader.close(checkpoint=True)
+        assert checkpoints == []
+    finally:
+        writer.close()
+
+
+def test_a_read_only_ledger_refuses_a_database_that_does_not_exist(tmp_path: Path) -> None:
+    with pytest.raises(SourceBarLedgerMissingError, match="shadow-evidence:absent"):
+        SourceBarLedger(
+            artifacts_root=tmp_path, account_id="shadow-evidence:absent", read_only=True
+        )
+
+    assert not (tmp_path / "accounts" / "alpaca" / "shadow-evidence:absent").exists()

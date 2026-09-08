@@ -12,6 +12,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
+from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateReset,
     DeveloperCleanSlateResetRegistry,
@@ -105,6 +106,10 @@ def developer_clean_slate_reset(
     clock: Clock = now_ms_utc,
 ) -> DevResetReceipt:
     """Move paper authority aside without broker contact, import, or deletion."""
+    if is_shadow_account_id(account_id):
+        raise DeveloperCleanSlateResetRefused(
+            "developer clean-slate reset never touches a shadow authority (ADR 0059 D10)"
+        )
     if account_mode != "paper":
         raise DeveloperCleanSlateResetRefused(
             "developer clean-slate reset is available only for paper accounts"

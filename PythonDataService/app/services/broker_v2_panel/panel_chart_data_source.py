@@ -43,6 +43,7 @@ from app.services.live_chart_window import (
     coerce_chart_timeframe,
     resolve_chart_window,
 )
+from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
 
@@ -116,7 +117,7 @@ async def resolve_symbol_and_fills(
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
-            resolved,
+            custody_account_id_for_route(broker, resolved),
             sid,
             now_ms=now_ms,
         )
@@ -198,7 +199,7 @@ async def get_history_chart(
     try:
         evidence = await read_sqlite_chart_evidence(
             broker,
-            resolved,
+            custody_account_id_for_route(broker, resolved),
             sid,
             from_ms=from_ms,
             to_ms=to_ms,

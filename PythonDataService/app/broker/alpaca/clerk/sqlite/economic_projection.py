@@ -61,7 +61,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     MarketMark,
     SessionEconomicProjection,
 )
-from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
+from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, RunResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -224,6 +224,35 @@ class SqliteEconomicProjectionReader:
             account_id=meta.account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
+        )
+
+    @classmethod
+    def from_database_path(cls, db_path: Path) -> SqliteEconomicProjectionReader:
+        """Open one authority's database read-only by path — a foreign one's included.
+
+        The paper twin's process holds that database's execution lease; this
+        reader never takes it (``mode=ro``, ``query_only``), so the twin
+        reconciliation can read it while the twin runs.
+        """
+        probe = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            row = probe.execute(
+                "SELECT account_id, authority_generation, db_identity_token "
+                "FROM control_meta WHERE id = 1"
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise EconomicProjectionUnavailable(
+                f"{db_path} is not a readable clerk database: {exc}"
+            ) from exc
+        finally:
+            probe.close()
+        if row is None:
+            raise EconomicProjectionUnavailable(f"{db_path} has no control_meta row")
+        return cls(
+            db_path=db_path,
+            account_id=row[0],
+            authority_generation=row[1],
+            db_identity_token=row[2],
         )
 
     def close(self) -> None:
@@ -408,6 +437,18 @@ class SqliteEconomicProjectionReader:
                     key=lambda record: (record.filled_at_ms, record.ledger_sequence),
                 )
             )
+
+    def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
+        """Every run the authority recorded for one instance, oldest first."""
+        with self._read_transaction():
+            self._verify_identity()
+            rows = self._conn.execute(
+                "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
+                "stopped_at_ms FROM runs WHERE strategy_instance_id = ? "
+                "ORDER BY started_at_ms ASC, run_id ASC",
+                (strategy_instance_id,),
+            ).fetchall()
+        return tuple(RunResource(**dict(row)) for row in rows)
 
     def account_executions(
         self,

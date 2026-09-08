@@ -1,32 +1,27 @@
 """Retained-bar-backed broker port for one isolated synthetic Clerk authority.
 
-Math Provenance Contract
-------------------------
-Formula: for each symbol, the projected position is an average-cost fold of
-durable synthetic fills. Same-direction fills add signed entry notional;
-reductions retain the prior average cost for the remaining quantity; a flip
-opens only the residual at the flip fill price. A position is emitted iff
-``position_quantity_is_nonzero(quantity)``.
-Reference: average-cost broker position convention, recorded in
-``docs/references/synthetic-broker-position-projection.md``.
-Canonical implementation: ``_project_positions`` in this module.
-Validated against: ``tests/services/test_source_bar_ledger.py`` exact
-buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).
+The ``sim:`` world's whole difference from the shadow world is its fill
+model: a leg either transacts at the decision bar's close or is cancelled on
+the spot (ruling R9). Everything durable — the order WAL, the decision-bar
+binding, the position projection — is ``synthesized_orders.py``, shared with
+``shadow_broker.py``; the position projection's provenance lives there.
 """
 
 from __future__ import annotations
-
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
-
-from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+)
+from app.broker.alpaca.clerk.synthesized_orders import (
+    SynthesizedAnchor,
+    SynthesizedBarBindingError,
+    SynthesizedOrderLedger,
+    project_positions,
+)
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -39,9 +34,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
-from app.services.jsonl_wal import JsonlWal
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
-from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import now_ms_utc
 
 SYNTHETIC_BROKER_ID = "synthetic"
@@ -58,39 +51,12 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     max_concurrent_streams=0,
     rest_rate_limit_per_min=0,
 )
-_ORDER_LEDGER_FILENAME = "simulated_orders.jsonl"
-_ORDER_LOCKS: dict[str, threading.Lock] = {}
-_ORDER_LOCKS_GUARD = threading.Lock()
+# The sim world's historical name for the shared binding error.
+SyntheticBarBindingError = SynthesizedBarBindingError
 
 
 class SimulatedPriceUnavailableError(RuntimeError):
     """No retained bar exists from which a synthetic fill may be derived."""
-
-
-class SyntheticBarBindingError(RuntimeError):
-    """A proposed synthetic fill is not bound to its exact retained source bar."""
-
-
-class _SimulatedOrderRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    seq: int = Field(ge=1)
-    order: BrokerOrder
-
-
-def _corrupt_order_ledger(path: Path, detail: str) -> RuntimeError:
-    return RuntimeError(f"Synthetic order ledger corrupt at {path}: {detail}")
-
-
-def _order_lock(path: Path) -> threading.Lock:
-    """Return the process-local half of one order-ledger transaction lock."""
-    key = str(path)
-    with _ORDER_LOCKS_GUARD:
-        lock = _ORDER_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _ORDER_LOCKS[key] = lock
-        return lock
 
 
 class SyntheticBroker:
@@ -110,23 +76,12 @@ class SyntheticBroker:
 
     def __init__(self, *, account_id: str, source_bars: SourceBarLedger | None = None) -> None:
         self._account_id = require_synthetic_account_id(account_id)
-        if source_bars is not None and source_bars.account_id != self._account_id:
-            raise SyntheticBarBindingError(
-                "Synthetic broker and retained source-bar ledger must share one account authority."
-            )
         self._source_bars = source_bars
-        self._bound_bars: dict[str, RetainedSourceBar] = {}
-        self._binding_lock = threading.Lock()
-        self._orders: JsonlWal[_SimulatedOrderRecord] | None = (
+        self._ledger: SynthesizedOrderLedger | None = (
             None
             if source_bars is None
-            else JsonlWal(
-                source_bars.path.with_name(_ORDER_LEDGER_FILENAME),
-                record_model=_SimulatedOrderRecord,
-                corrupt_error=_corrupt_order_ledger,
-                seq_of=lambda row: row.seq,
-                label="simulated_order",
-                trusted_root=source_bars.path.parent,
+            else SynthesizedOrderLedger.beside_source_bars(
+                account_id=self._account_id, source_bars=source_bars, label="simulated_order"
             )
         )
 
@@ -155,27 +110,7 @@ class SyntheticBroker:
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
-        quantities = _project_positions(self._latest_orders())
-        observed_at_ms = now_ms_utc()
-        return [
-            BrokerPosition(
-                broker=self.broker_id,
-                symbol=symbol,
-                asset_id=None,
-                asset_class="us_equity",
-                quantity=quantity,
-                side="long" if quantity > 0 else "short",
-                average_entry_price=(abs(cost / quantity) if quantity else 0.0),
-                market_value=abs(cost),
-                cost_basis=abs(cost),
-                current_price=None,
-                unrealized_pl=0.0,
-                unrealized_plpc=None,
-                observed_at_ms=observed_at_ms,
-            )
-            for symbol, (quantity, cost) in quantities.items()
-            if position_quantity_is_nonzero(quantity)
-        ]
+        return synthesized_positions(self.broker_id, self._latest_orders())
 
     async def list_orders(
         self,
@@ -184,12 +119,7 @@ class SyntheticBroker:
         limit: int | None = None,
         after_ms: int | None = None,
     ) -> list[BrokerOrder]:
-        orders = self._latest_orders()
-        if status is not None:
-            orders = [order for order in orders if order.status == status]
-        if after_ms is not None:
-            orders = [order for order in orders if (order.updated_at_ms or 0) >= after_ms]
-        return list(reversed(orders))[:limit]
+        return filter_synthesized_orders(self._latest_orders(), status=status, limit=limit, after_ms=after_ms)
 
     async def list_activities(
         self,
@@ -237,17 +167,12 @@ class SyntheticBroker:
         )
 
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
-        """Bind one minted Clerk order identity to one exact retained decision bar.
-
-        The binding is consumed by that exact ``client_order_id`` on submit.
-        Rebinding the same id deterministically replaces an unconsumed binding,
-        while a later retained bar for the same symbol cannot replace it.
-        """
-        if not client_order_id:
-            raise SyntheticBarBindingError("Synthetic bar binding requires a client order id.")
-        canonical = self._verified_retained_bar(retained_bar, symbol=None)
-        with self._binding_lock:
-            self._bound_bars[client_order_id] = canonical
+        """Bind one minted Clerk order identity to one exact retained decision bar."""
+        if self._ledger is None:
+            raise SynthesizedBarBindingError(
+                "Synthetic bar binding requires an authority-scoped retained-bar ledger."
+            )
+        self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
 
     async def submit(
         self,
@@ -256,14 +181,14 @@ class SyntheticBroker:
         client_order_id: str,
         retained_bar: RetainedSourceBar | None = None,
     ) -> BrokerOrder:
-        if self._source_bars is None:
+        if self._ledger is None:
             raise SimulatedPriceUnavailableError(
                 "Synthetic execution requires an authority-scoped retained-bar ledger."
             )
-        with self._order_transaction() as records:
-            existing = self._find_order(records, client_order_id)
+        with self._ledger.transaction() as records:
+            existing = self._ledger.find_order(records, client_order_id)
             if existing is not None:
-                self._consume_bound_bar(client_order_id)
+                self._ledger.consume_bound_bar(client_order_id)
                 return existing
             bar = self._submission_bar(
                 client_order_id=client_order_id,
@@ -271,24 +196,42 @@ class SyntheticBroker:
                 retained_bar=retained_bar,
             )
             order = self._resolved_order(leg, client_order_id=client_order_id, bar=bar)
-            self._append_order_locked(order, records)
+            self._ledger.append_locked(
+                records,
+                order=order,
+                leg=leg,
+                anchor=SynthesizedAnchor(
+                    fill_model="decision_bar_close",
+                    evidence_account_id=bar.account_id,
+                    provider=bar.provider,
+                    bar_identity=bar.bar_identity,
+                    bar_ref=bar.bar_ref,
+                    decision_bar_start_ms=bar.start_ms,
+                    decision_bar_end_ms=bar.end_ms,
+                    fill_bar_ref=bar.bar_ref if order.status == "filled" else None,
+                ),
+            )
             return order
 
     async def cancel(self, order_id: str) -> None:
-        with self._order_transaction() as records:
-            for order in self._latest_orders_from_records(records):
-                if order.order_id != order_id:
-                    continue
-                if order.status == "filled":
-                    return
-                now = now_ms_utc()
-                self._append_order_locked(
-                    order.model_copy(
-                        update={"status": "canceled", "canceled_at_ms": now, "updated_at_ms": now}
-                    ),
-                    records,
-                )
+        if self._ledger is None:
+            return
+        with self._ledger.transaction() as records:
+            record = next(
+                (row for row in self._ledger.latest_records_from(records).values() if row.order.order_id == order_id),
+                None,
+            )
+            if record is None or record.order.status == "filled":
                 return
+            now = now_ms_utc()
+            self._ledger.append_locked(
+                records,
+                order=record.order.model_copy(
+                    update={"status": "canceled", "canceled_at_ms": now, "updated_at_ms": now}
+                ),
+                leg=record.leg,
+                anchor=record.anchor,
+            )
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return next(
@@ -297,45 +240,7 @@ class SyntheticBroker:
         )
 
     def _latest_orders(self) -> list[BrokerOrder]:
-        if self._orders is None:
-            return []
-        return self._latest_orders_from_records(self._orders.read_all())
-
-    @staticmethod
-    def _latest_orders_from_records(records: list[_SimulatedOrderRecord]) -> list[BrokerOrder]:
-        latest: dict[str, BrokerOrder] = {}
-        for row in records:
-            latest[row.order.client_order_id or row.order.order_id] = row.order
-        return list(latest.values())
-
-    def _append_order(self, order: BrokerOrder) -> None:
-        if self._orders is None:
-            return
-        with self._order_transaction() as records:
-            self._append_order_locked(order, records)
-
-    @contextmanager
-    def _order_transaction(self) -> Iterator[list[_SimulatedOrderRecord]]:
-        """Serialize a full order-ledger read/check/append across threads and processes."""
-        if self._orders is None:
-            yield []
-            return
-        with _order_lock(self._orders.path), advisory_file_lock(self._orders.path):
-            yield self._orders.read_all()
-
-    def _append_order_locked(
-        self,
-        order: BrokerOrder,
-        records: list[_SimulatedOrderRecord],
-    ) -> None:
-        if self._orders is None:
-            return
-        next_seq = records[-1].seq + 1 if records else 1
-        # A sibling broker instance may have appended since this instance's
-        # previous write. Refresh the WAL's sequence cache while holding the
-        # cross-process transaction lock so it cannot reuse a sequence.
-        self._orders._next_seq = next_seq
-        self._orders.append(_SimulatedOrderRecord(seq=next_seq, order=order))
+        return [] if self._ledger is None else self._ledger.latest_orders()
 
     def _submission_bar(
         self,
@@ -344,14 +249,14 @@ class SyntheticBroker:
         symbol: str,
         retained_bar: RetainedSourceBar | None,
     ) -> RetainedSourceBar:
-        bound = self._consume_bound_bar(client_order_id)
-        candidate = retained_bar if retained_bar is not None else bound
-        if candidate is not None:
-            return self._verified_retained_bar(candidate, symbol=symbol)
-        if self._source_bars is None:
+        if self._ledger is None or self._source_bars is None:
             raise SimulatedPriceUnavailableError(
                 "Synthetic execution requires an authority-scoped retained-bar ledger."
             )
+        bound = self._ledger.consume_bound_bar(client_order_id)
+        candidate = retained_bar if retained_bar is not None else bound
+        if candidate is not None:
+            return self._ledger.verified_retained_bar(candidate, symbol=symbol)
         latest = self._source_bars.latest_for_symbol(symbol)
         if latest is None:
             raise SimulatedPriceUnavailableError(
@@ -359,132 +264,133 @@ class SyntheticBroker:
             )
         return latest
 
-    def _consume_bound_bar(self, client_order_id: str) -> RetainedSourceBar | None:
-        with self._binding_lock:
-            return self._bound_bars.pop(client_order_id, None)
-
-    def _verified_retained_bar(
-        self,
-        retained_bar: RetainedSourceBar,
-        *,
-        symbol: str | None,
-    ) -> RetainedSourceBar:
-        if self._source_bars is None:
-            raise SyntheticBarBindingError(
-                "Synthetic bar binding requires an authority-scoped retained-bar ledger."
-            )
-        if retained_bar.account_id != self._account_id:
-            raise SyntheticBarBindingError(
-                "Synthetic bar binding belongs to a different account authority."
-            )
-        if symbol is not None and retained_bar.symbol != symbol:
-            raise SyntheticBarBindingError(
-                "Synthetic bar binding does not match the submitted order symbol."
-            )
-        persisted = self._source_bars.by_identity(retained_bar.bar_identity)
-        if persisted != retained_bar:
-            raise SyntheticBarBindingError(
-                "Synthetic bar binding is not the exact retained source-bar observation."
-            )
-        return persisted
-
     def _resolved_order(self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar) -> BrokerOrder:
-        """The order this leg becomes against one decision bar: filled, or cancelled unfilled.
-
-        The fill decision itself belongs to ``fill_models`` — a second copy of
-        "would this have transacted?" living here is exactly how the sim world
-        and the shadow port drift apart. This method only shapes the resulting
-        ``BrokerOrder``.
-        """
-        at_ms = bar.end_ms
-        # The sim world cannot rest an order: a non-marketable limit is
-        # cancelled on the spot, with no execution (ruling R9).
-        fill = immediate_fill_price(leg, bar.close)
-        filled = fill is not None
-        return BrokerOrder(
-            broker=self.broker_id,
-            order_id=f"sim-order:{client_order_id}",
+        """The order this leg becomes against one decision bar: filled, or cancelled unfilled (ruling R9)."""
+        return shape_immediate_order(
+            leg,
             client_order_id=client_order_id,
-            symbol=leg.symbol,
-            asset_class="us_equity",
-            side=leg.side,
-            order_type=str(leg.order_type),
-            time_in_force=str(leg.time_in_force),
-            quantity=leg.quantity,
-            limit_price=leg.limit_price,
-            stop_price=None,
-            extended_hours=leg.extended_hours,
-            submitted_at_ms=at_ms,
-            created_at_ms=at_ms,
-            updated_at_ms=at_ms,
-            expired_at_ms=None,
+            bar=bar,
+            broker_id=self.broker_id,
+            id_prefix="sim",
             observed_at_ms=now_ms_utc(),
-            filled_quantity=leg.quantity if filled else 0.0,
-            filled_avg_price=float(fill) if fill is not None else None,
-            status="filled" if filled else "canceled",
-            filled_at_ms=at_ms if filled else None,
-            canceled_at_ms=None if filled else at_ms,
-            events=(
-                [
-                    {
-                        "event_type": "fill",
-                        "occurred_at_ms": at_ms,
-                        "price": float(fill),
-                        "quantity": leg.quantity,
-                        "execution_id": f"sim-execution:{client_order_id}",
-                    }
-                ]
-                if fill is not None
-                else []
-            ),
-        )
-
-    def _find_order(
-        self,
-        records: list[_SimulatedOrderRecord],
-        client_order_id: str,
-    ) -> BrokerOrder | None:
-        return next(
-            (
-                order
-                for order in self._latest_orders_from_records(records)
-                if order.client_order_id == client_order_id
-            ),
-            None,
         )
 
 
-def _project_positions(orders: list[BrokerOrder]) -> dict[str, tuple[float, float]]:
-    """Fold fills into canonical average-cost ``(quantity, signed_notional)``.
+def shape_immediate_order(
+    leg: BrokerOrderLeg,
+    *,
+    client_order_id: str,
+    bar: RetainedSourceBar,
+    broker_id: str,
+    id_prefix: str,
+    observed_at_ms: int,
+) -> BrokerOrder:
+    """One decision bar, one answer: filled at its close, or cancelled unfilled.
 
-    The result intentionally contains signed notional: a long's notional is
-    positive and a short's is negative. That representation makes both the
-    same-direction weighted average and a side-flip's residual opening price
-    exact at the broker model's float boundary.
+    The fill decision itself belongs to ``fill_models`` — a second copy of
+    "would this have transacted?" living here is exactly how the sim world and
+    the shadow port drift apart. This function only shapes the resulting
+    ``BrokerOrder``; both no-submit worlds call it for a regular-session leg.
     """
-    positions: dict[str, tuple[float, float]] = {}
-    for order in orders:
-        if order.filled_quantity <= 0 or order.filled_avg_price is None:
-            continue
-        signed_fill = order.filled_quantity if order.side.lower() == "buy" else -order.filled_quantity
-        quantity, notional = positions.get(order.symbol, (0.0, 0.0))
-        if not position_quantity_is_nonzero(quantity) or quantity * signed_fill > 0:
-            positions[order.symbol] = (
-                quantity + signed_fill,
-                notional + signed_fill * order.filled_avg_price,
-            )
-            continue
+    at_ms = bar.end_ms
+    fill = immediate_fill_price(leg, bar.close)
+    filled = fill is not None
+    return BrokerOrder(
+        broker=broker_id,
+        order_id=f"{id_prefix}-order:{client_order_id}",
+        client_order_id=client_order_id,
+        symbol=leg.symbol,
+        asset_class="us_equity",
+        side=leg.side,
+        order_type=str(leg.order_type),
+        time_in_force=str(leg.time_in_force),
+        quantity=leg.quantity,
+        limit_price=leg.limit_price,
+        stop_price=None,
+        extended_hours=leg.extended_hours,
+        submitted_at_ms=at_ms,
+        created_at_ms=at_ms,
+        updated_at_ms=at_ms,
+        expired_at_ms=None,
+        observed_at_ms=observed_at_ms,
+        filled_quantity=leg.quantity if filled else 0.0,
+        filled_avg_price=float(fill) if fill is not None else None,
+        status="filled" if filled else "canceled",
+        filled_at_ms=at_ms if filled else None,
+        canceled_at_ms=None if filled else at_ms,
+        events=(
+            [
+                {
+                    "event_type": "fill",
+                    "occurred_at_ms": at_ms,
+                    "price": float(fill),
+                    "quantity": leg.quantity,
+                    "execution_id": f"{id_prefix}-execution:{client_order_id}",
+                }
+            ]
+            if fill is not None
+            else []
+        ),
+    )
 
-        next_quantity = quantity + signed_fill
-        if not position_quantity_is_nonzero(next_quantity):
-            positions[order.symbol] = (0.0, 0.0)
-            continue
-        if quantity * next_quantity > 0:
-            average_entry_price = abs(notional / quantity)
-            positions[order.symbol] = (next_quantity, next_quantity * average_entry_price)
-            continue
-        positions[order.symbol] = (next_quantity, next_quantity * order.filled_avg_price)
-    return positions
+
+def synthesized_positions(broker_id: str, orders: list[BrokerOrder]) -> list[BrokerPosition]:
+    """Shape the canonical projection as broker positions (shared with the shadow read port)."""
+    quantities = project_positions(orders)
+    observed_at_ms = now_ms_utc()
+    return [
+        BrokerPosition(
+            broker=broker_id,
+            symbol=symbol,
+            asset_id=None,
+            asset_class="us_equity",
+            quantity=quantity,
+            side="long" if quantity > 0 else "short",
+            average_entry_price=(abs(cost / quantity) if quantity else 0.0),
+            market_value=abs(cost),
+            cost_basis=abs(cost),
+            current_price=None,
+            unrealized_pl=0.0,
+            unrealized_plpc=None,
+            observed_at_ms=observed_at_ms,
+        )
+        for symbol, (quantity, cost) in quantities.items()
+        if position_quantity_is_nonzero(quantity)
+    ]
+
+
+def filter_synthesized_orders(
+    orders: list[BrokerOrder],
+    *,
+    status: str | None,
+    limit: int | None,
+    after_ms: int | None,
+) -> list[BrokerOrder]:
+    """The read port's order filter, newest first (shared with the shadow read port).
+
+    ``status`` is Alpaca's **query category** — ``open`` / ``closed`` / ``all``
+    — not an order status; the real port hands it straight to the vendor. The
+    sim world never noticed the difference because it cannot rest an order, so
+    every sim order is terminal and ``open`` was legitimately empty. The shadow
+    world can rest one, and the reconciliation sweep reads exactly
+    ``status="open"``: an exact-status match there would hide a working order
+    from the fold and report position drift in its place.
+    """
+    if status is not None and status != "all":
+        if status == "open":
+            orders = [order for order in orders if not _is_terminal_order(order)]
+        elif status == "closed":
+            orders = [order for order in orders if _is_terminal_order(order)]
+        else:
+            raise ValueError(f"unknown order query category {status!r}")
+    if after_ms is not None:
+        orders = [order for order in orders if (order.updated_at_ms or 0) >= after_ms]
+    return list(reversed(orders))[:limit]
+
+
+def _is_terminal_order(order: BrokerOrder) -> bool:
+    """Whether an order has reached a terminal status, in the sweep's convention."""
+    return order.status.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 
 
 __all__ = [
@@ -493,4 +399,7 @@ __all__ = [
     "SimulatedPriceUnavailableError",
     "SyntheticBarBindingError",
     "SyntheticBroker",
+    "filter_synthesized_orders",
+    "shape_immediate_order",
+    "synthesized_positions",
 ]

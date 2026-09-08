@@ -23,9 +23,11 @@ zero in the broker contract.
 
 ## Authority and proof
 
-`PythonDataService/app/broker/alpaca/clerk/synthetic_broker.py::_project_positions`
+`PythonDataService/app/broker/alpaca/clerk/synthesized_orders.py::project_positions`
 is the sole implementation. It consumes only the synthetic authority's
-append-only order ledger and exact retained-bar fill receipts.
+append-only order ledger and exact retained-bar fill receipts. Both no-submit
+worlds (`sim:` via `synthetic_broker.py`, `shadow:` via `shadow_broker.py`)
+read their positions through it.
 
 `PythonDataService/tests/services/test_source_bar_ledger.py::test_synthetic_position_projection_preserves_average_cost_through_reduce_and_flip`
 pins buy, partial reduction, add, and side-flip behavior exactly (`atol=0`,

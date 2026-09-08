@@ -29,7 +29,11 @@ from app.broker.v2panel.vocabulary import (
     StationId,
     StationState,
 )
-from app.schemas.account_authority import AuthorityKind
+from app.schemas.account_authority import (
+    SIMULATED_AUTHORITY_KINDS,
+    AuthorityKind,
+    account_authority_agrees,
+)
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -41,14 +45,19 @@ def _validate_simulated_authority_metadata(
     authority_account_id: str | None,
     authority_kind: AuthorityKind | None,
 ) -> None:
-    """Require simulated panel evidence to name its isolated synthetic authority."""
-    if simulated and (
-        not authority_account_id
-        or not authority_account_id.startswith("sim:")
-        or authority_kind != "synthetic"
+    """Require simulated panel evidence to name its isolated synthesized authority.
+
+    Which namespace belongs to which kind is the wire-boundary validator's
+    question, not this module's: ``account_authority_agrees`` answers it from
+    the one canonical table, so a fourth world is a one-line edit there.
+    """
+    if not simulated:
+        return
+    if authority_kind not in SIMULATED_AUTHORITY_KINDS or not account_authority_agrees(
+        authority_account_id, authority_kind
     ):
         raise ValueError(
-            "simulated panel rows require nonempty synthetic authority metadata"
+            "simulated panel rows require nonempty synthetic or shadow authority metadata"
         )
 
 
@@ -400,7 +409,7 @@ class RecentDecisionView(BaseModel):
     authority_kind: AuthorityKind | None = None
 
     @model_validator(mode="after")
-    def simulated_row_has_synthetic_authority(self) -> RecentDecisionView:
+    def simulated_row_names_its_synthesized_authority(self) -> RecentDecisionView:
         _validate_simulated_authority_metadata(
             simulated=self.simulated,
             authority_account_id=self.authority_account_id,
@@ -425,7 +434,7 @@ class RecentFillView(BaseModel):
     authority_kind: AuthorityKind | None = None
 
     @model_validator(mode="after")
-    def simulated_row_has_synthetic_authority(self) -> RecentFillView:
+    def simulated_row_names_its_synthesized_authority(self) -> RecentFillView:
         _validate_simulated_authority_metadata(
             simulated=self.simulated,
             authority_account_id=self.authority_account_id,

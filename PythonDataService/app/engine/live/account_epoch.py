@@ -23,7 +23,7 @@ from app.engine.live.account_artifacts import (
     account_artifact_file_path,
     append_account_event,
 )
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -527,7 +527,7 @@ class AccountEpochAuthority:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp_path, path)
-            _fsync_parent_dir(path)
+            fsync_parent_dir(path)
         finally:
             if temp_path.exists():
                 temp_path.unlink()

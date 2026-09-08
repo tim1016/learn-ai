@@ -2,7 +2,7 @@
 
 Atomic-replace writer using the same crash-safety contract as
 ``LiveStateSidecarRepo``: serialize to a sibling ``.tmp``, ``fh.flush()`` +
-``os.fsync()``, ``os.replace()``, then ``_fsync_parent_dir`` under a
+``os.fsync()``, ``os.replace()``, then ``fsync_parent_dir`` under a
 ``_file_lock``. The cold-start orchestrator (this module's sole caller)
 writes an ``in_progress`` sentinel before doing any broker work and then
 replaces it with the verdict ``passed`` / ``failed`` receipt — so a crash
@@ -16,7 +16,7 @@ import contextlib
 import os
 from pathlib import Path
 
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.schemas.live_runs import ReconciliationReceipt
 
 RECEIPT_FILENAME = "reconciliation_receipt.json"
@@ -46,7 +46,7 @@ def write_receipt(run_dir: Path, receipt: ReconciliationReceipt) -> Path:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)
     return path
 
 

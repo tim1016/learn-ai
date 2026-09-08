@@ -63,7 +63,7 @@ interface AlpacaDeployTicket {
   symbol: string;
   sizingPreset: 'safe_canary' | 'custom';
   quantity: number;
-  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper'>;
+  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper' | 'shadow'>;
   allowCarryover: boolean;
   parameters: Record<string, unknown>;
   overrideAcknowledged: boolean;
@@ -248,14 +248,41 @@ export class AlpacaDeployWorkflowComponent {
     () => this.selectedStrategy()?.params_schema ?? {},
   );
 
-  // A Paper deploy of an evidence-only strategy carries the durable human
+  /**
+   * Which single broker-contacting mode this account's view offers: Paper on
+   * a paper account, Shadow on a live one held by the Shadow Account
+   * Authority (ADR 0059 D2). Never both — an account has one broker world,
+   * and the view's own `execution_modes` is the sole authority on which.
+   */
+  protected readonly brokerMode = computed<'paper' | 'shadow'>(() =>
+    this.currentView()?.execution_modes.some(
+      (mode) => mode.mode === 'shadow' && mode.availability === 'available',
+    ) ? 'shadow' : 'paper',
+  );
+
+  /** The account's one broker world, as the access-grant copy words it. */
+  protected readonly brokerModeLabel = computed<'Paper' | 'Shadow'>(
+    () => (this.brokerMode() === 'shadow' ? 'Shadow' : 'Paper'),
+  );
+
+  /**
+   * True when the ticket's mode contacts the broker. Dry Run is the only
+   * mode that holds no custody, so Paper and Shadow share every gate the
+   * backend applies to a broker deploy (`_require_broker_deploy_request`),
+   * the evidence-only override included.
+   */
+  protected readonly brokerModeSelected = computed(
+    () => this.ticket().executionMode !== 'dry_run',
+  );
+
+  // A broker deploy of an evidence-only strategy carries the durable human
   // override (acknowledgement + reason) on the request itself — restored by
   // operator decision 2026-08-24 after #1702/#1746 re-pointed it at Live.
-  // The backend refuses an evidence-only Paper deploy without it, and
-  // rejects one submitted for a fully accepted strategy.
+  // The backend refuses an evidence-only Paper *or Shadow* deploy without
+  // it, and rejects one submitted for a fully accepted strategy.
   protected readonly overrideRequired = computed(() =>
     this.selectedStrategy()?.evidence_status === 'evidence_only'
-      && this.ticket().executionMode === 'paper',
+      && this.brokerModeSelected(),
   );
 
   protected readonly overrideReasonError = computed(() => {
@@ -279,13 +306,13 @@ export class AlpacaDeployWorkflowComponent {
     }
   });
 
-  // Backend-authored reason the Paper option is unreachable for the
-  // selected strategy (#1702). `null` whenever Paper is admissible or no
-  // strategy is selected yet — every non-Paper-admissible row is a blocked
-  // row today, so `blocked_explanation` is always present when this fires.
-  protected readonly paperUnavailableReason = computed(() => {
+  // Backend-authored reason the Paper/Shadow option is unreachable for the
+  // selected strategy (#1702). `null` whenever this account's broker mode is
+  // admissible or no strategy is selected yet — every non-admissible row is
+  // a blocked row today, so `blocked_explanation` is always present here.
+  protected readonly brokerModeUnavailableReason = computed(() => {
     const strategy = this.selectedStrategy();
-    if (strategy === null || strategy.admissible_modes.includes('paper')) return null;
+    if (strategy === null || strategy.admissible_modes.includes(this.brokerMode())) return null;
     return strategy.blocked_explanation ?? null;
   });
 
@@ -364,11 +391,12 @@ export class AlpacaDeployWorkflowComponent {
     }
     // Mode-aware, not strategy-wide (#1702): a blocked strategy is still
     // Dry-Run-admissible, so admissibility is checked against the ticket's
-    // chosen mode, not `selectable` (which means "Paper-admissible" only).
+    // chosen mode, not `selectable` — which means admissible in this
+    // account's one broker world, Paper or Shadow.
     if (!selectedStrategy.admissible_modes.includes(this.ticket().executionMode)) {
-      const reason = this.ticket().executionMode === 'paper'
-        ? this.paperUnavailableReason()
-        : this.dryRunUnavailableReason();
+      const reason = this.ticket().executionMode === 'dry_run'
+        ? this.dryRunUnavailableReason()
+        : this.brokerModeUnavailableReason();
       return {
         canSubmit: false,
         guidance: reason ?? 'This strategy is not admissible for the selected mode.',
@@ -415,6 +443,20 @@ export class AlpacaDeployWorkflowComponent {
 
     effect(() => {
       const view = this.currentView();
+      // The ticket opens on 'paper' because most accounts are paper; the
+      // loaded view is what says which broker world this account actually
+      // has. Seeding here rather than at construction keeps the default a
+      // consequence of the view, and stays idempotent: once the mode is one
+      // the view offers, the guard below makes every later pass a no-op.
+      // `brokerMode()` answers 'paper' whenever no view is loaded, so a
+      // 'shadow' answer already implies one.
+      if (this.brokerMode() === 'shadow') {
+        this.ticket.update((ticket) =>
+          ticket.executionMode === 'paper'
+            ? { ...ticket, executionMode: 'shadow' }
+            : ticket,
+        );
+      }
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
       const strategy = view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
         ?? view?.strategies.find((candidate) => candidate.selectable)
@@ -549,12 +591,12 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setExecutionMode(mode: DeployExecutionMode['mode']): void {
-    if (mode !== 'dry_run' && mode !== 'paper') return;
+    if (mode !== 'dry_run' && mode !== 'paper' && mode !== 'shadow') return;
     const option = this.currentView()?.execution_modes.find(
       (candidate) => candidate.mode === mode,
     );
     if (option?.availability !== 'available') return;
-    if (mode === 'paper' && this.paperUnavailableReason() !== null) return;
+    if (mode !== 'dry_run' && this.brokerModeUnavailableReason() !== null) return;
     if (mode === 'dry_run' && this.dryRunUnavailableReason() !== null) return;
     this.clearAdmission();
     this.ticket.update((current) => ({
@@ -650,11 +692,12 @@ export class AlpacaDeployWorkflowComponent {
       // noted in strategy-lab-runner.service.ts's own `params` construction.
       parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
-    // The durable evidence-only override rides the Paper request (operator
-    // decision 2026-08-24, restoring what #1702 re-pointed at Live). Only an
+    // The durable evidence-only override rides the broker request — Paper or
+    // Shadow alike, which hold the same custody (operator decision
+    // 2026-08-24, restoring what #1702 re-pointed at Live). Only an
     // evidence-only strategy carries it — the backend rejects an override on
     // an accepted strategy as superfluous.
-    if (strategy.evidence_status === 'evidence_only' && ticket.executionMode === 'paper') {
+    if (strategy.evidence_status === 'evidence_only' && this.brokerModeSelected()) {
       body.evidence_override = {
         acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
         reason: ticket.overrideReason.trim(),

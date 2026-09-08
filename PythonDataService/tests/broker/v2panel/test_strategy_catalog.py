@@ -44,7 +44,7 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
     entry = _accepted_deploy_entry()
     monkeypatch.setattr(strategy_catalog, "supported_alpaca_paper_strategy_keys", lambda: frozenset())
 
-    rows = _strategy_views([entry], account_id=ACCT)
+    rows = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -66,7 +66,7 @@ def test_catalog_reads_a_confirmed_durable_pairing(
         ledger_path,
     )
     entry = _accepted_deploy_entry()
-    blocked = _strategy_views([entry], account_id=ACCT)[0]
+    blocked = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")[0]
     assert blocked.paper_access_state == "available"
     assert blocked.selectable is False
 
@@ -78,7 +78,7 @@ def test_catalog_reads_a_confirmed_durable_pairing(
     )
     apply_canary_activation(plan=plan, confirmation_token=plan.confirmation_token)
 
-    admitted = _strategy_views([entry], account_id=ACCT)[0]
+    admitted = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")[0]
     assert admitted.paper_access_state == "enabled"
     assert admitted.selectable is True
     assert "paper" in admitted.admissible_modes
@@ -99,7 +99,7 @@ def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(
         ),
     )
 
-    row = _strategy_views([entry], account_id=ACCT)[0]
+    row = _strategy_views([entry], account_id=ACCT, custody_world="real_paper")[0]
 
     assert row.paper_access_state == "blocked"
 
@@ -115,7 +115,7 @@ def test_no_runtime_block_reads_differently_from_a_stale_proof_block(
     not_allowlisted_entry = _accepted_deploy_entry()
 
     monkeypatch.setattr(strategy_catalog, "supported_alpaca_paper_strategy_keys", lambda: frozenset())
-    no_runtime_rows = _strategy_views([no_runtime_entry], account_id=ACCT)
+    no_runtime_rows = _strategy_views([no_runtime_entry], account_id=ACCT, custody_world="real_paper")
     monkeypatch.undo()
 
     # ema_crossover_signal is a sealed Signal Program (#1730): without an
@@ -127,12 +127,12 @@ def test_no_runtime_block_reads_differently_from_a_stale_proof_block(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         frozenset({("ema_crossover_signal", ACCT)}),
     )
-    stale_proof_rows = _strategy_views([stale_proof_entry], account_id=ACCT)
+    stale_proof_rows = _strategy_views([stale_proof_entry], account_id=ACCT, custody_world="real_paper")
     monkeypatch.undo()
 
     # No canary admission at all: the same accepted entry now demotes to
     # the canary-not-allowlisted block instead of the accepted-proof block.
-    not_allowlisted_rows = _strategy_views([not_allowlisted_entry], account_id=ACCT)
+    not_allowlisted_rows = _strategy_views([not_allowlisted_entry], account_id=ACCT, custody_world="real_paper")
 
     no_runtime_reason = no_runtime_rows[0].blocked_explanation
     stale_proof_reason = stale_proof_rows[0].blocked_explanation
@@ -187,7 +187,7 @@ def test_selectable_rows_are_exactly_the_launchable_and_visible_rows(
     runtime_keys = supported_alpaca_paper_strategy_keys()
     account_id = "strategy-catalog-sweep-account"
 
-    unadmitted_rows = _strategy_views(validated_entries, account_id=account_id)
+    unadmitted_rows = _strategy_views(validated_entries, account_id=account_id, custody_world="real_paper")
     for row in unadmitted_rows:
         registration = _STRATEGY_REGISTRY.get(row.strategy_key)
         is_sealed_program = registration is not None and registration.signal_program_contract is not None
@@ -205,7 +205,7 @@ def test_selectable_rows_are_exactly_the_launchable_and_visible_rows(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         frozenset((entry.strategy_key, account_id) for entry in validated_entries),
     )
-    rows = _strategy_views(validated_entries, account_id=account_id)
+    rows = _strategy_views(validated_entries, account_id=account_id, custody_world="real_paper")
     rows_by_key = {row.strategy_key: row for row in rows}
 
     for row in rows:

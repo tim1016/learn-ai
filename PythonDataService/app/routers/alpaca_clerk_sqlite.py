@@ -22,6 +22,7 @@ from typing import TypeVar
 from fastapi import APIRouter, HTTPException, Query
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.commands import (
     DurableConflictError,
     InvalidIdentityError,
@@ -114,7 +115,7 @@ def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
                 "message": "The active Alpaca Clerk has not completed boot selection.",
             },
         )
-    if runtime.authority_kind != "sqlite" or not isinstance(
+    if runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES or not isinstance(
         runtime.clerk, SqliteAlpacaClerkFacade
     ):
         failure = runtime.startup_failure

@@ -1536,7 +1536,10 @@ export interface paths {
         };
         /**
          * Get Live Verdict
-         * @description The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker.
+         * @description The server-derived live verdict (ADR 0059 D8).
+         *
+         *     Never contacts the broker: settings, the clerk selection outcome, and a
+         *     read of the durable shadow evidence are the only inputs.
          */
         get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
         put?: never;
@@ -5255,7 +5258,7 @@ export interface components {
              * Clerk Authority
              * @enum {string}
              */
-            clerk_authority: "sqlite" | "synthetic" | "unavailable" | "not_installed";
+            clerk_authority: "sqlite" | "synthetic" | "shadow" | "unavailable" | "not_installed";
             /** Clerk Refusal Reason Code */
             clerk_refusal_reason_code: string | null;
             /**
@@ -5363,7 +5366,7 @@ export interface components {
              * @default paper
              * @enum {string}
              */
-            execution_mode?: "paper" | "dry_run";
+            execution_mode?: "paper" | "dry_run" | "shadow";
             /** Explanation */
             explanation: string;
             /** Message */
@@ -5413,7 +5416,7 @@ export interface components {
              * @default paper
              * @enum {string}
              */
-            execution_mode?: "paper" | "dry_run";
+            execution_mode?: "paper" | "dry_run" | "shadow";
             /** Parameters */
             parameters?: Record<string, never>;
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
@@ -5453,7 +5456,7 @@ export interface components {
          */
         AlpacaPaperDeployStrategy: {
             /** Admissible Modes */
-            admissible_modes: ("dry_run" | "paper")[];
+            admissible_modes: ("dry_run" | "paper" | "shadow")[];
             /** Blocked Explanation */
             blocked_explanation?: string | null;
             /**
@@ -5491,9 +5494,9 @@ export interface components {
             account_label: string;
             /**
              * Account Mode
-             * @constant
+             * @enum {string}
              */
-            account_mode: "paper";
+            account_mode: "paper" | "live";
             /** Action Plan Explanation */
             action_plan_explanation: string;
             /** Allowed Actions */
@@ -5553,7 +5556,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "paper" | "dry_run" | "live";
+            mode: "paper" | "dry_run" | "shadow" | "live";
         };
         /**
          * AlpacaPaperSizingOption

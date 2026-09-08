@@ -1,7 +1,8 @@
 """One authority-selection module for Alpaca bot bindings.
 
-The runner asks this module which custody authority owns a binding.  Real
-Paper and Dry Run differ only behind this seam: callers receive the same
+The runner asks this module which custody authority owns a binding.  Dry Run
+and the process's primary account authority -- real paper, or the shadow of a
+live account -- differ only behind this seam: callers receive the same
 admission guard, lifecycle projector, source-evidence store, recovery view,
 and runtime-release lifecycle without branching on ``binding.mode``.
 """
@@ -14,13 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
-    paper_evidence_account_id_for_strategy,
+    AccountAuthorityKind,
+    evidence_account_id_for,
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_synthetic_clerk_authority,
     get_clerk_runtime,
+    primary_custody_world,
     register_clerk_runtime,
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
@@ -28,6 +31,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
+from app.schemas.account_authority import CustodyWorld
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjector,
@@ -73,14 +77,35 @@ class BindingAuthority:
         return ()
 
 
+def primary_custody_kind() -> CustodyWorld:
+    """The world the primary authority custodies in; refuses to guess when none is installed.
+
+    ``primary_custody_world`` is the single reader of that selection. It
+    answers ``None`` for every world a binding's evidence cannot be filed in
+    — no authority installed, and the isolated synthetic world a primary boot
+    never selects — and this caller must refuse rather than guess.
+    """
+    world = primary_custody_world()
+    if world is None:
+        raise StartAdmissionUnavailable(
+            "The account Clerk is not installed.",
+            detail=(
+                "Restore the account Clerk before starting a bot; its world "
+                "decides where evidence is retained."
+            ),
+        )
+    return world
+
+
 @dataclass(frozen=True)
-class RealPaperBindingAuthority(BindingAuthority):
-    """The active real-paper Clerk remains the sole real custody authority."""
+class PrimaryAccountBindingAuthority(BindingAuthority):
+    """The process's primary account authority -- real paper, or the shadow of a live account -- remains the sole real custody authority."""
 
     binding: BrokerBotBinding
     projector: AlpacaLifecycleProjector
     external_start_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
     artifacts_root: Path
+    custody_kind: Callable[[], AccountAuthorityKind]
     account_id: str = "real_paper"
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
@@ -101,8 +126,10 @@ class RealPaperBindingAuthority(BindingAuthority):
     def source_bars(self) -> SourceBarLedger:
         return SourceBarLedger(
             artifacts_root=self.artifacts_root,
-            account_id=paper_evidence_account_id_for_strategy(
-                self.binding.strategy_instance_id
+            account_id=evidence_account_id_for(
+                mode=self.binding.mode,
+                strategy_instance_id=self.binding.strategy_instance_id,
+                custody_kind=self.custody_kind(),
             ),
         )
 
@@ -245,17 +272,19 @@ class BindingAuthoritySelector:
                 runtime_in_use=self.runtime_in_use,
                 brokers=self.synthetic_brokers,
             )
-        return RealPaperBindingAuthority(
+        return PrimaryAccountBindingAuthority(
             binding=binding,
             projector=self.real_projector,
             external_start_guard=self.external_start_guard,
             artifacts_root=self.artifacts_root,
+            custody_kind=primary_custody_kind,
         )
 
 
 __all__ = [
     "BindingAuthority",
     "BindingAuthoritySelector",
-    "RealPaperBindingAuthority",
+    "PrimaryAccountBindingAuthority",
     "SyntheticBindingAuthority",
+    "primary_custody_kind",
 ]

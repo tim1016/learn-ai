@@ -27,8 +27,8 @@ from uuid import UUID
 from app.config import settings
 from app.data_lake.root_identity import (
     LakeRootIdentityError,
-    inspect_root,
     init_empty_root,
+    inspect_root,
     marker_path,
     stamp_existing_root,
 )

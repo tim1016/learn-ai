@@ -34,7 +34,7 @@ def _strategies() -> tuple:
     # Dry Run is never canary-gated (#1730) -- the account id here is
     # arbitrary and does not need canary admission for these tests to
     # exercise real Dry Run eligibility.
-    return _strategy_views([entry], account_id=ACCT)
+    return _strategy_views([entry], account_id=ACCT, custody_world="real_paper")
 
 
 def _clerk_status(

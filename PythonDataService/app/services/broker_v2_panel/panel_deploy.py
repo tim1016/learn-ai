@@ -11,6 +11,11 @@ from __future__ import annotations
 
 import logging
 
+from app.broker.alpaca.clerk.active_authority import (
+    custody_world_or_paper,
+    primary_custody_world,
+)
+from app.schemas.account_authority import world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -62,11 +67,18 @@ async def get_alpaca_paper_deploy_view(
             f"Account '{account_id}' is not the account for broker '{broker}'.",
             detail=f"The broker's account is '{account.account_id}'.",
         )
-    if account.account_mode != "paper":
+    custody_world = custody_world_or_paper(primary_custody_world())
+    if not world_admits_account_mode(custody_world, account.account_mode):
         raise PanelUnavailableError(
             "Alpaca live-account deployment is refused.",
-            detail="Phase 1 permits only the broker-authored paper account.",
-            next_action="Reconnect with Alpaca paper credentials and refresh.",
+            detail=(
+                "Real-money custody is not constructible until an armed instance exists "
+                "(ADR 0059 slice 7); a live account deploys only through its shadow authority."
+            ),
+            next_action=(
+                "Activate the shadow authority for this account, or reconnect with "
+                "Alpaca paper credentials, then refresh."
+            ),
         )
     registry = get_bot_task_registry()
     if registry is None:
@@ -85,7 +97,11 @@ async def get_alpaca_paper_deploy_view(
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
     return build_alpaca_paper_deploy_view(
-        account, clerk, validation_entries, symbol=symbol
+        account,
+        clerk,
+        validation_entries,
+        symbol=symbol,
+        custody_world=custody_world,
     )
 
 
@@ -182,9 +198,13 @@ def _require_alpaca_deploy_request(
 
     The requested strategy's own identity is checked before any mode-scoped
     gate: a request naming a missing strategy must see that specific reason,
-    not a mode-eligibility headline. The remaining checks are mode-tiered
-    (#1702) — Dry Run and Paper ask for what each tier is worth, dispatched
-    to ``_require_dry_run_deploy_request`` / ``_require_paper_deploy_request``.
+    not a mode-eligibility headline. A mode this account's view does not
+    offer is then refused outright — the view's own ``execution_modes`` is
+    the authority on what an account can run, and only the modes it lists
+    reach a tier gate at all (ADR 0059 D2). The remaining checks are
+    mode-tiered (#1702) — Dry Run and Paper / Shadow ask for what each tier
+    is worth, dispatched to ``_require_dry_run_deploy_request`` /
+    ``_require_broker_deploy_request``.
 
     Returns the resolved strategy parameter set (registered defaults merged
     with the request's overrides) so callers can thread it into both the
@@ -201,10 +221,18 @@ def _require_alpaca_deploy_request(
             next_action="Review the strategy in Strategy Validation, then refresh this page.",
             http_status=409,
         )
+    offered = {mode.mode for mode in view.execution_modes if mode.availability == "available"}
+    if request.execution_mode not in offered:
+        raise PanelRunnerError(
+            "The requested execution mode is not available on this account.",
+            detail=f"'{request.execution_mode}' is not offered by the {view.account_label} deploy view.",
+            next_action="Choose an execution mode the deploy view lists as available.",
+            http_status=409,
+        )
     if request.execution_mode == "dry_run":
         _require_dry_run_deploy_request(view, strategy)
     else:
-        _require_paper_deploy_request(view, strategy, request)
+        _require_broker_deploy_request(view, strategy, request)
     try:
         return resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
     except ValueError as exc:
@@ -246,12 +274,12 @@ def _require_dry_run_deploy_request(
         )
 
 
-def _require_paper_deploy_request(
+def _require_broker_deploy_request(
     view: AlpacaPaperDeployView,
     strategy: AlpacaPaperDeployStrategy,
     request: AlpacaPaperDeployRequest,
 ) -> None:
-    """Paper asks for the human-validated flag and full Clerk custody proof.
+    """Paper / Shadow asks for the human-validated flag and full Clerk custody proof.
 
     An evidence-only proof additionally requires the durable human override
     (acknowledgement + reason) on the request itself: the override rides the
@@ -260,8 +288,12 @@ def _require_paper_deploy_request(
     restoring the contract #1702/#1746 had re-pointed at Live). An override
     submitted for a fully accepted proof is still rejected outright — it
     would record a risk acceptance that no gate asked for.
+
+    A shadow run holds shadow custody and needs the identical proof: the only
+    difference between the two worlds is which single broker-contacting mode
+    the account's own view admits.
     """
-    if "paper" not in strategy.admissible_modes:
+    if request.execution_mode not in strategy.admissible_modes:
         next_action = strategy_gate_recovery((strategy,))
         assert next_action is not None
         raise PanelRunnerError(
@@ -279,7 +311,7 @@ def _require_paper_deploy_request(
         )
     if strategy.evidence_status == "evidence_only" and request.evidence_override is None:
         raise PanelRunnerError(
-            "This evidence-only strategy requires the durable evidence override for Paper deployment.",
+            "This evidence-only strategy requires the durable evidence override for Paper / Shadow deployment.",
             detail=(
                 "Its behavioral evidence has not been reconciled to the reference implementation. "
                 "Record the paper-mode evidence override (acknowledgement + reason) to accept that risk."
@@ -289,7 +321,7 @@ def _require_paper_deploy_request(
         )
     if strategy.evidence_status != "evidence_only" and request.evidence_override is not None:
         raise PanelRunnerError(
-            "An evidence override is not valid for Paper deployment.",
+            "An evidence override is not valid for Paper / Shadow deployment.",
             detail=(
                 "This strategy's validation proof is fully accepted; the evidence-only override "
                 "applies only to strategies whose behavioral evidence is not accepted."

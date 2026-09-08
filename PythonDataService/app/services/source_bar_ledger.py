@@ -16,10 +16,8 @@ from wall-clock timestamps.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
-from collections.abc import Iterable
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -30,11 +28,15 @@ from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import ContinuityEventRef, FeedContinuityEvent, MarketDataBar
 from app.services.decision_session import RunDecisionSession
+from app.services.source_bar_store_schema import (
+    LEGACY_SOURCE_BAR_LEDGER_FILENAME,
+    initialize_store,
+    journal_row,
+)
 
 SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
 """Indexed durable authority store for retained source observations."""
 
-_LEGACY_SOURCE_BAR_LEDGER_FILENAME = "source_bars.jsonl"
 SOURCE_BAR_STREAM_CAPACITY = 200_000
 """Retained one-minute bars per provider/symbol stream before ``append`` fails closed.
 
@@ -147,6 +149,15 @@ class SourceBarCheckpointBusyError(RuntimeError):
     """A truncating WAL checkpoint could not complete because a reader still held the log."""
 
 
+class SourceBarLedgerMissingError(RuntimeError):
+    """A read-only consumer named an evidence namespace that has retained nothing.
+
+    Only a writer creates a store. A reader that materialised one would turn a
+    garbage ``evidence_account_id`` into a silent empty answer instead of a
+    loud one, and leave an empty account directory behind as a side effect.
+    """
+
+
 _BUSY_TIMEOUT_MS = 5_000
 """How long a write or truncating checkpoint waits on another connection before failing."""
 
@@ -163,22 +174,6 @@ _EVENTS_WITH_JOURNAL = """
     FROM source_stream_events e
     JOIN source_evidence_journal j ON j.kind = 'event' AND j.event_seq = e.seq
 """
-
-_UNJOURNALED_BARS = """
-    SELECT b.seq, b.fetched_at_ms
-    FROM source_bars b
-    LEFT JOIN source_evidence_journal j ON j.kind = 'bar' AND j.bar_seq = b.seq
-    WHERE j.evidence_seq IS NULL
-    ORDER BY b.seq ASC
-"""
-
-_EVIDENCE_BAR_COLUMNS = {
-    "provenance": "provenance TEXT NOT NULL DEFAULT 'realtime'",
-    "authorization_id": "authorization_id TEXT",
-    "continuity_event_ref": "continuity_event_ref TEXT",
-}
-"""Provenance columns added to ``source_bars`` by #1921, as ``ALTER TABLE`` fragments."""
-
 
 def verify_ledger_file(path: Path, *, account_id: str) -> int:
     """Integrity-check one ledger file read-only and return its retained-bar count.
@@ -230,23 +225,49 @@ class SourceBarLedger:
     stream capacity fails closed so retention requires a reviewed rollover.
     """
 
-    def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+    def __init__(
+        self, *, artifacts_root: Path, account_id: str, read_only: bool = False
+    ) -> None:
+        """Open one authority's evidence store, as its owner or as a consumer.
+
+        ``read_only=True`` is for a consumer of *another* authority's evidence
+        (the shadow book settling against an instance's retained bars). It
+        creates nothing — no directory, no file, no schema, no migration — and
+        cannot write, so it can neither invent a store for a namespace that
+        never ran nor fold the owner's WAL out from under it.
+        """
         safe_account_id = safe_path_component(account_id, "account id")
         account_dir = resolve_contained_path(
             Path(artifacts_root), "accounts", "alpaca", safe_account_id
         )
-        account_dir.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            account_dir.mkdir(parents=True, exist_ok=True)
         self.account_id = account_id
+        self.read_only = read_only
         self._path = account_dir / SOURCE_BAR_LEDGER_FILENAME
-        self._legacy_path = account_dir / _LEGACY_SOURCE_BAR_LEDGER_FILENAME
+        self._legacy_path = account_dir / LEGACY_SOURCE_BAR_LEDGER_FILENAME
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
+        if read_only:
+            if not self._path.exists():
+                raise SourceBarLedgerMissingError(
+                    "SOURCE_BAR_LEDGER_MISSING: "
+                    f"{account_id!r} has retained no evidence at {self._path}"
+                )
+            self._conn = sqlite3.connect(
+                f"{self._path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+        else:
+            self._conn = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._configure()
-        self._create_schema()
         self._refuse_foreign_account_rows()
-        self._migrate_evidence_schema_if_needed()
-        self._migrate_legacy_jsonl_if_needed()
+        if not read_only:
+            initialize_store(
+                self._conn, account_id=self.account_id, legacy_path=self._legacy_path
+            )
 
     @property
     def path(self) -> Path:
@@ -265,10 +286,12 @@ class SourceBarLedger:
 
         Read-only evidence consumers (run replay proof) pass checkpoint=False:
         they never wrote, so folding the WAL is the writer's job, and a busy
-        checkpoint must not fail a read.
+        checkpoint must not fail a read. A ``read_only=True`` handle ignores the
+        argument entirely — folding the WAL is a write it cannot perform, and
+        the owner is the only handle entitled to try.
         """
         with self._lock:
-            if checkpoint:
+            if checkpoint and not self.read_only:
                 self.checkpoint_wal()
             self._conn.close()
 
@@ -323,7 +346,8 @@ class SourceBarLedger:
                         event.contribution_count,
                     ),
                 )
-                evidence_seq = self._journal(
+                evidence_seq = journal_row(
+                    self._conn,
                     run_id=run_id,
                     kind="event",
                     row_seq=int(cursor.lastrowid),
@@ -498,6 +522,24 @@ class SourceBarLedger:
             ).fetchall()
         return [_retained_row(row) for row in rows]
 
+    def bars_after(self, *, provider: str, symbol: str, start_ms: int) -> list[RetainedSourceBar]:
+        """Return one stream's retained observations opening at or after ``start_ms``, in open order.
+
+        The shadow port settles a resting order from exactly these bars (ADR
+        0059 D5.5: eligibility begins with the first bar after the decision
+        bar), so the filter is on the bar's open, not its close.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                {_BARS_WITH_JOURNAL}
+                WHERE b.provider = ? AND b.symbol = ? AND b.start_ms >= ?
+                ORDER BY b.start_ms ASC, b.seq ASC
+                """,
+                (provider, symbol, start_ms),
+            ).fetchall()
+        return [_retained_row(row) for row in rows]
+
     def latest(self, *, provider: str, symbol: str) -> RetainedSourceBar | None:
         """Return the latest retained observation for one evidence stream."""
         with self._lock:
@@ -631,7 +673,8 @@ class SourceBarLedger:
                     ),
                 )
                 seq = int(cursor.lastrowid)
-                evidence_seq = self._journal(
+                evidence_seq = journal_row(
+                    self._conn,
                     run_id=run_id,
                     kind="bar",
                     row_seq=seq,
@@ -654,119 +697,19 @@ class SourceBarLedger:
             update={"seq": seq, "run_id": run_id, "evidence_seq": evidence_seq}
         )
 
-    def _journal(
-        self,
-        *,
-        run_id: str | None,
-        kind: Literal["bar", "event"],
-        row_seq: int,
-        observed_at_ms: int,
-    ) -> int:
-        """Append one evidence position and return it; the caller owns the transaction.
-
-        Bars and events share the journal precisely so their order is one
-        fact, so they share the insert too -- only which foreign key is
-        populated differs, and the table's CHECK enforces that pairing.
-        """
-        column = "bar_seq" if kind == "bar" else "event_seq"
-        cursor = self._conn.execute(
-            f"INSERT INTO source_evidence_journal (run_id, kind, {column}, observed_at_ms) VALUES (?, ?, ?, ?)",
-            (run_id, kind, row_seq, observed_at_ms),
-        )
-        return int(cursor.lastrowid)
-
     def _configure(self) -> None:
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        if self.read_only:
+            # Every remaining pragma states how this handle *writes*, and a
+            # read-only handle never does; ``journal_mode`` would write the
+            # database header outright.
+            return
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         # SQLite checkpoints automatically at this bound; explicit shutdown
         # checkpoints use ``checkpoint_wal`` for a compact backup artifact.
         self._conn.execute("PRAGMA wal_autocheckpoint=1000")
-
-    def _create_schema(self) -> None:
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS source_bars (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                bar_identity TEXT NOT NULL UNIQUE,
-                bar_ref TEXT NOT NULL UNIQUE,
-                start_ms INTEGER NOT NULL,
-                end_ms INTEGER NOT NULL,
-                open TEXT NOT NULL,
-                high TEXT NOT NULL,
-                low TEXT NOT NULL,
-                close TEXT NOT NULL,
-                volume INTEGER NOT NULL,
-                fetched_at_ms INTEGER NOT NULL,
-                session_phase TEXT NOT NULL,
-                provenance TEXT NOT NULL DEFAULT 'realtime',
-                authorization_id TEXT,
-                continuity_event_ref TEXT,
-                UNIQUE(provider, symbol, start_ms, end_ms),
-                CHECK(end_ms > start_ms),
-                CHECK(volume >= 0),
-                CHECK(fetched_at_ms >= 0)
-            );
-            CREATE INDEX IF NOT EXISTS source_bars_stream_clock
-                ON source_bars(provider, symbol, end_ms, seq);
-            CREATE INDEX IF NOT EXISTS source_bars_symbol_seq
-                ON source_bars(symbol, seq DESC);
-            CREATE TABLE IF NOT EXISTS source_bar_stream_state (
-                provider TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                live_started INTEGER NOT NULL CHECK(live_started IN (0, 1)),
-                PRIMARY KEY(provider, symbol)
-            );
-            CREATE TABLE IF NOT EXISTS source_stream_events (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                kind TEXT NOT NULL CHECK(kind IN ('interruption','recovered','gap','substituted','refused')),
-                feed_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                observed_at_ms INTEGER NOT NULL CHECK(observed_at_ms >= 0),
-                cause TEXT,
-                generation_from INTEGER,
-                generation_to INTEGER,
-                window_start_ms INTEGER,
-                window_end_ms INTEGER,
-                bar_identity TEXT,
-                authorization_id TEXT,
-                reason TEXT,
-                last_delivered_end_ms INTEGER,
-                deadline_ms INTEGER,
-                contribution_count INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS source_run_decision_session (
-                run_id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL CHECK(kind IN ('rth','extended')),
-                window_open_minute_et INTEGER,
-                window_close_minute_et INTEGER,
-                recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms >= 0),
-                CHECK((kind = 'extended') = (window_open_minute_et IS NOT NULL)),
-                CHECK((kind = 'extended') = (window_close_minute_et IS NOT NULL))
-            );
-            CREATE TABLE IF NOT EXISTS source_evidence_journal (
-                evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT,
-                kind TEXT NOT NULL CHECK(kind IN ('bar','event')),
-                bar_seq INTEGER REFERENCES source_bars(seq),
-                event_seq INTEGER REFERENCES source_stream_events(seq),
-                observed_at_ms INTEGER NOT NULL CHECK(observed_at_ms >= 0),
-                CHECK((kind = 'bar' AND bar_seq IS NOT NULL AND event_seq IS NULL)
-                      OR (kind = 'event' AND event_seq IS NOT NULL AND bar_seq IS NULL))
-            );
-            CREATE INDEX IF NOT EXISTS source_evidence_journal_run
-                ON source_evidence_journal(run_id, evidence_seq);
-            CREATE UNIQUE INDEX IF NOT EXISTS source_evidence_journal_bar
-                ON source_evidence_journal(kind, bar_seq);
-            CREATE UNIQUE INDEX IF NOT EXISTS source_evidence_journal_event
-                ON source_evidence_journal(kind, event_seq);
-            """
-        )
 
     def _refuse_foreign_account_rows(self) -> None:
         """Fail closed when an existing file retains another account's evidence.
@@ -774,7 +717,20 @@ class SourceBarLedger:
         The file path is account-scoped, but a restore or an operator copy can
         put any ledger there; the same rule ``verify_ledger_file`` applies to
         a backup snapshot applies to the live file on open.
+
+        Runs *before* ``initialize_store``, so a file that is not ours is
+        never created into, altered or imported into — the ordering the
+        evidence-schema migration used to state for itself. A store with no
+        ``source_bars`` table retains no evidence and therefore cannot be
+        foreign; that is the file the owner is about to create.
         """
+        if (
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_bars'"
+            ).fetchone()
+            is None
+        ):
+            return
         foreign = _foreign_account_row(self._conn, self.account_id)
         if foreign is not None:
             self._conn.close()
@@ -783,121 +739,6 @@ class SourceBarLedger:
                 f"{self._path.name} retains evidence for account {foreign!r}, not {self.account_id!r}"
             )
 
-    def _migrate_evidence_schema_if_needed(self) -> None:
-        """Give a pre-#1921 ledger the continuity channel without losing evidence.
-
-        Ledgers were already retaining bars in production when the provenance
-        columns and the evidence journal arrived, so an existing file is
-        migrated in place: the columns take their documented defaults, and
-        every bar that predates the journal is given a journal position in
-        ``seq`` order, so a run replaying an old file still reads one causal
-        order over the whole of it. Both halves commit together.
-
-        Runs after the foreign-account refusal so a file that is not ours is
-        never rewritten, and takes no write lock at all once migrated.
-        """
-        with self._lock:
-            migrated = self._bar_columns().issuperset(_EVIDENCE_BAR_COLUMNS)
-            if migrated and not self._has_unjournaled_bars():
-                return
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                # Re-read under the write lock: another handle on the same file
-                # may have migrated it while this one waited, and a repeated
-                # ADD COLUMN is an error, not a no-op.
-                columns = self._bar_columns()
-                for name, ddl in _EVIDENCE_BAR_COLUMNS.items():
-                    if name not in columns:
-                        self._conn.execute(f"ALTER TABLE source_bars ADD COLUMN {ddl}")
-                for row in self._conn.execute(_UNJOURNALED_BARS).fetchall():
-                    self._journal(
-                        run_id=None,
-                        kind="bar",
-                        row_seq=int(row["seq"]),
-                        observed_at_ms=int(row["fetched_at_ms"]),
-                    )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
-
-    def _bar_columns(self) -> set[str]:
-        """The column names ``source_bars`` currently has on disk."""
-        return {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(source_bars)")}
-
-    def _has_unjournaled_bars(self) -> bool:
-        """Whether any retained bar still lacks its journal position.
-
-        Counted, not searched. ``bar_seq``'s foreign key and the uniqueness of
-        ``source_evidence_journal_bar`` make the journal's bar rows inject into
-        ``source_bars``, so equal counts *is* "every bar has a journal row" --
-        and both counts are index-only walks. The equivalent anti-join probe
-        would scan every retained bar on a fully migrated file, at every open,
-        forever; this open-time check must stay cheap on a ledger holding
-        ``SOURCE_BAR_STREAM_CAPACITY`` bars.
-        """
-        bars = self._conn.execute("SELECT COUNT(*) AS count FROM source_bars").fetchone()
-        journaled = self._conn.execute(
-            "SELECT COUNT(*) AS count FROM source_evidence_journal WHERE kind = 'bar'"
-        ).fetchone()
-        return int(bars["count"]) != int(journaled["count"])
-
-    def _migrate_legacy_jsonl_if_needed(self) -> None:
-        """Import an old evidence WAL once without deleting the recoverable source."""
-        with self._lock:
-            existing = self._conn.execute("SELECT 1 FROM source_bars LIMIT 1").fetchone()
-            if existing is not None or not self._legacy_path.exists():
-                return
-            rows = list(_read_legacy_rows(self._legacy_path))
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                for row in rows:
-                    if row.account_id != self.account_id:
-                        raise SourceBarConflictError("SOURCE_BAR_LEGACY_ACCOUNT_MISMATCH")
-                    self._conn.execute(
-                        """
-                        INSERT INTO source_bars (
-                            seq, account_id, provider, symbol, bar_identity, bar_ref,
-                            start_ms, end_ms, open, high, low, close, volume,
-                            fetched_at_ms, session_phase
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            row.seq,
-                            row.account_id,
-                            row.provider,
-                            row.symbol,
-                            row.bar_identity,
-                            row.bar_ref,
-                            row.start_ms,
-                            row.end_ms,
-                            str(row.open),
-                            str(row.high),
-                            str(row.low),
-                            str(row.close),
-                            row.volume,
-                            row.fetched_at_ms,
-                            row.session_phase,
-                        ),
-                    )
-                    self._journal(
-                        run_id=None,
-                        kind="bar",
-                        row_seq=row.seq,
-                        observed_at_ms=row.fetched_at_ms,
-                    )
-                    self._conn.execute(
-                        """
-                        INSERT INTO source_bar_stream_state (provider, symbol, live_started)
-                        VALUES (?, ?, 1)
-                        ON CONFLICT(provider, symbol) DO UPDATE SET live_started = 1
-                        """,
-                        (row.provider, row.symbol),
-                    )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
 
 
 def _retained_row(row: sqlite3.Row) -> RetainedSourceBar:
@@ -947,21 +788,6 @@ def _same_market_payload(existing: RetainedSourceBar, candidate: RetainedSourceB
     )
 
 
-def _read_legacy_rows(path: Path) -> Iterable[RetainedSourceBar]:
-    """Decode the former JSONL ledger solely for one-time non-destructive import."""
-    with path.open(encoding="utf-8") as handle:
-        for number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                yield RetainedSourceBar.model_validate(json.loads(stripped))
-            except (json.JSONDecodeError, ValueError) as error:
-                raise SourceBarConflictError(
-                    f"SOURCE_BAR_LEGACY_CORRUPT: {path} line {number}"
-                ) from error
-
-
 __all__ = [
     "SOURCE_BAR_LEDGER_FILENAME",
     "SOURCE_BAR_STREAM_CAPACITY",
@@ -970,6 +796,7 @@ __all__ = [
     "SourceBarConflictError",
     "SourceBarLedger",
     "SourceBarLedgerCorruptError",
+    "SourceBarLedgerMissingError",
     "SourceBarRetentionLimitError",
     "verify_ledger_file",
 ]

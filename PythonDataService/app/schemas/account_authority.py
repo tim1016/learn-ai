@@ -8,6 +8,27 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 AuthorityKind = Literal["real_paper", "real_live", "shadow", "synthetic"]
 
+# The two worlds whose fills are synthesized; every panel row they author is
+# `simulated`.
+SIMULATED_AUTHORITY_KINDS: frozenset[AuthorityKind] = frozenset({"synthetic", "shadow"})
+
+# The worlds a *primary* authority can custody in — the subset of
+# `AuthorityKind` a boot can select for the account a binding files its
+# evidence against. Narrower than `AuthorityKind` on both ends: the isolated
+# `synthetic` world is never a primary selection, and `real_live` is not a
+# custody world until the arming ceremony lands (ADR 0059 slice 7).
+CustodyWorld = Literal["real_paper", "shadow"]
+
+
+def world_admits_account_mode(world: CustodyWorld, account_mode: str | None) -> bool:
+    """Whether ``world`` may custody an account the broker reports in ``account_mode``.
+
+    A real-paper authority admits only a paper account; the shadow authority
+    reads the real account it was activated for, whose mode was learned at
+    activation.
+    """
+    return world == "shadow" or account_mode == "paper"
+
 
 def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) -> None:
     """Keep account namespace and authority kind inseparable at the wire boundary."""
@@ -25,6 +46,24 @@ def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) 
         return
     if authority_kind not in ("real_paper", "real_live"):
         raise ValueError("real account ids require real_paper or real_live authority")
+
+
+def account_authority_agrees(
+    account_id: str | None, authority_kind: AuthorityKind | None
+) -> bool:
+    """Whether the id's namespace and the kind name the same world.
+
+    The predicate form of :func:`_validate_account_authority`, for callers
+    that branch on the pairing instead of refusing at a wire boundary — so
+    the namespace-to-kind table stays written exactly once.
+    """
+    if account_id is None or authority_kind is None:
+        return False
+    try:
+        _validate_account_authority(account_id, authority_kind)
+    except ValueError:
+        return False
+    return True
 
 
 class AuthorityScopedRow(BaseModel):
@@ -61,4 +100,12 @@ class SingleAuthorityAggregate(BaseModel):
         return self
 
 
-__all__ = ["AuthorityKind", "AuthorityScopedRow", "SingleAuthorityAggregate"]
+__all__ = [
+    "SIMULATED_AUTHORITY_KINDS",
+    "AuthorityKind",
+    "AuthorityScopedRow",
+    "CustodyWorld",
+    "SingleAuthorityAggregate",
+    "account_authority_agrees",
+    "world_admits_account_mode",
+]

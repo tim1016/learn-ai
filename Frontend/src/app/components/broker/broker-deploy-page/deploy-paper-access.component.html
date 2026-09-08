@@ -18,7 +18,7 @@
             id="paper-access-title"
             class="mt-0.5 mb-0 text-[length:var(--fs-lg)]"
           >
-            Paper access
+            {{ modeLabel() }} access
           </h2>
         </div>
         @if (
@@ -43,22 +43,22 @@
         strategy().paper_access_state === "enabled" || state.kind === "complete"
       ) {
         <div class="grid gap-1" role="status">
-          <strong class="text-emerald-600">Paper access enabled</strong>
+          <strong class="text-emerald-600">{{ modeLabel() }} access enabled</strong>
           <p class="m-0 leading-normal text-[var(--text-secondary)]">
-            This strategy may use Paper on this account. Deploying a bot remains
-            a separate action.
+            This strategy may use {{ modeLabel() }} on this account. Deploying a
+            bot remains a separate action.
           </p>
         </div>
       } @else {
         @switch (state.kind) {
           @case ("idle") {
             <p class="m-0 leading-normal text-[var(--text-secondary)]">
-              Paper trading is off for
+              {{ modeLabel() }} trading is off for
               <strong>{{ strategy().label }}</strong> on this account. Dry Run
               stays available.
             </p>
             <p-button
-              label="Review &amp; enable Paper"
+              [label]="reviewLabel()"
               class="justify-self-start"
               (onClick)="prepare()"
             />
@@ -72,7 +72,7 @@
             <div
               class="grid gap-3 border-t border-[var(--border-light)] pt-2"
               role="region"
-              aria-label="Review Paper access"
+              [attr.aria-label]="reviewRegionLabel()"
             >
               <div>
                 <span
@@ -81,7 +81,7 @@
                   Final confirmation
                 </span>
                 <h3 class="mt-0.5 mb-1 text-[length:var(--fs-md)]">
-                  Confirm Paper access
+                  Confirm {{ modeLabel() }} access
                 </h3>
                 <p class="m-0 leading-normal text-[var(--text-secondary)]">
                   This enables eligibility for one exact strategy and account.
@@ -204,7 +204,7 @@
 
               <div class="flex flex-wrap gap-2 max-[520px]:grid">
                 <p-button
-                  label="Enable Paper access"
+                  [label]="enableLabel()"
                   (onClick)="confirm(state.plan)"
                 />
                 <p-button
