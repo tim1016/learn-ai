@@ -531,6 +531,11 @@ async def _select_shadow_clerk_runtime(
     """
     try:
         await verify_shadow_namespace_empty(read)
+        shadow = compose_shadow_ports(
+            live_read=read,
+            live_account_id=account.account_id,
+            artifacts_root=artifacts_root,
+        )
     except (ShadowNamespacePoisoned, ShadowNamespaceUnproven) as exc:
         logger.warning(
             "live account refused for shadow: order namespace not proven empty",
@@ -543,11 +548,28 @@ async def _select_shadow_clerk_runtime(
             account_id=account.account_id,
             recovery=f"Restore the live account's order-history read: {exc}",
         )
-    shadow = compose_shadow_ports(
-        live_read=read,
-        live_account_id=account.account_id,
-        artifacts_root=artifacts_root,
-    )
+    except Exception as exc:
+        # The same fail-open-to-`unavailable` posture the paper path takes for
+        # its own account probe. Neither call above is exception-typed by the
+        # broker contract: `list_orders` adapts each vendor payload outside
+        # `AlpacaClient._call`, so a malformed one raises a raw
+        # `ValidationError`, and composition touches the filesystem. Unhandled,
+        # either aborts the whole data plane's startup -- and this is the
+        # real-money path. (`asyncio.CancelledError` is a `BaseException` and
+        # so still propagates: a cancelled boot is not a refused authority.)
+        logger.warning(
+            "Live account's shadow authority could not be composed; no authority installed",
+            extra={
+                "action": "shadow_clerk_startup_failed",
+                "account_id": account.account_id,
+            },
+            exc_info=True,
+        )
+        return _unavailable(
+            "SHADOW_CLERK_STARTUP_FAILED",
+            account_id=account.account_id,
+            recovery=f"Restore the live account's shadow composition: {exc}",
+        )
     ports = bind_shadow_ports(account_id=shadow.account_id, read=shadow.read, trade=shadow.trade)
     store = ShadowActivationStore(artifacts_root)
     try:

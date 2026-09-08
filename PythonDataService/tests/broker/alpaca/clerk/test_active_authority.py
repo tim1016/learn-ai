@@ -501,6 +501,35 @@ async def test_live_account_holding_clerk_minted_orders_is_poisoned(tmp_path: Pa
     assert "vendor-learn-ai/ema-1/v1:abc" in runtime.startup_failure.recovery
 
 
+async def test_a_live_boot_degrades_to_unavailable_when_the_namespace_probe_errors(
+    tmp_path: Path,
+) -> None:
+    """A raw vendor-payload error must refuse the authority, never abort startup.
+
+    ``AlpacaBroker.list_orders`` adapts each payload *outside* ``_call``, so a
+    malformed one raises a plain ``ValidationError`` rather than a
+    ``BrokerError``. Unhandled, that propagates out of the lifespan and takes
+    every unrelated surface down with it -- an exposure the paper path does
+    not have, on the real-money path.
+    """
+
+    class _MalformedLiveBroker(_LiveBroker):
+        async def list_orders(self, **_kwargs: Any) -> list:
+            raise ValueError("vendor order payload failed validation")
+
+    broker = _MalformedLiveBroker()
+
+    runtime = await select_active_clerk_runtime(
+        read=broker, trade=broker, artifacts_root=tmp_path
+    )
+
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "SHADOW_CLERK_STARTUP_FAILED"
+    assert runtime.startup_failure.account_id == "9LIVE0001"
+    assert "vendor order payload failed validation" in runtime.startup_failure.recovery
+
+
 async def test_activated_live_account_composes_the_shadow_authority(tmp_path: Path) -> None:
     record = await activate_shadow_clerk_authority(
         live_account_id="9LIVE0001", artifacts_root=tmp_path
