@@ -55,6 +55,15 @@ class MarketDataAdmissionFact(BaseModel):
     extended_phase_proven: bool = False
 
 
+class ExtendedHoursAdmissionFact(BaseModel):
+    """Whether the active authority can clock and price a ``use_rth=False`` run (ADR 0059 D5)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"]
+    observed_at_ms: int = Field(ge=0)
+
+
 class StartRuntimeAdmissionFact(BaseModel):
     """Runner-owned recovery and restart-intensity evidence for Start."""
 
@@ -243,6 +252,7 @@ class StartRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+    extended_hours: ExtendedHoursAdmissionFact = ExtendedHoursAdmissionFact(state="NOT_REQUESTED", observed_at_ms=0)
 
 
 class ResumeCheckpointAdmissionFact(BaseModel):
@@ -296,6 +306,7 @@ class ResumeRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+    extended_hours: ExtendedHoursAdmissionFact = ExtendedHoursAdmissionFact(state="NOT_REQUESTED", observed_at_ms=0)
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     carryover_policy: Literal["FORBID", "ALLOW"]

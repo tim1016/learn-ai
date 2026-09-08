@@ -316,6 +316,20 @@ def evaluate_run_admission(
             explanation="The required market-data feed is not proven ready for this run.",
             next_step=f"Restore fresh market data before {bot.operation.title()}.",
         )
+    if bot.extended_hours.state == "UNSUPPORTED":
+        return decide(
+            allowed=False,
+            reason_code="EXTENDED_HOURS_UNSUPPORTED",
+            explanation="The active broker authority declares no extended session, so a run outside regular hours has no decision clock.",
+            next_step="Deploy with regular hours, or activate an authority whose capabilities declare an extended window.",
+        )
+    if bot.extended_hours.state == "ALLOWANCE_UNSET" and bot.mode == "trade":
+        return decide(
+            allowed=False,
+            reason_code="EXTENDED_HOURS_ALLOWANCE_UNSET",
+            explanation="ALPACA_LIVE_XH_ENTRY_BPS and ALPACA_LIVE_XH_EXIT_BPS are not both set, so no extended-session program leg can be priced.",
+            next_step="Set both allowances in the environment file and restart the data plane.",
+        )
     # #1702: everything from here down is either an execution-channel gate or
     # a custody/evidence gate — Dry Run makes no broker contact, holds no
     # custody, and never carries exposure, so none of it applies to Dry Run.

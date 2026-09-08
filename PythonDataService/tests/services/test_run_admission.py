@@ -19,6 +19,7 @@ from app.schemas.market_liveness import (
 )
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_NEXT_STEP,
+    ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
     ResumeCheckpointAdmissionFact,
@@ -81,6 +82,7 @@ def _bot(
     scheduled_phase: str = "UNKNOWN",
     observed_at_ms: int = _NOW - 1_000,
     mode: str = "trade",
+    extended_hours_state: str = "NOT_REQUESTED",
 ) -> StartRunFacts:
     return StartRunFacts(
         strategy_instance_id=_SID,
@@ -111,6 +113,7 @@ def _bot(
             scheduled_phase=scheduled_phase,
         ),
         market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms),
+        extended_hours=ExtendedHoursAdmissionFact(state=extended_hours_state, observed_at_ms=observed_at_ms),
     )
 
 
@@ -346,6 +349,16 @@ def test_start_admission_blocks_stale_market_data() -> None:
 
     assert decision.allowed is False
     assert decision.reason_code == "MARKET_DATA_STALE"
+
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
+def test_start_admission_refuses_an_unsupported_extended_session_in_every_mode(mode: str) -> None:
+    decision = evaluate_run_admission(
+        _bot(mode=mode, extended_hours_state="UNSUPPORTED"), _clerk(), evaluated_at_ms=_NOW
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_UNSUPPORTED"
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:
@@ -691,6 +704,20 @@ def test_dry_run_admitted_despite_unresolved_clerk_work_trade_still_denied() -> 
     assert dry_run.allowed is True
     assert trade.allowed is False
     assert trade.reason_code == "CLERK_WORK_REMAINS"
+
+
+def test_dry_run_admitted_despite_unset_extended_allowance_trade_still_denied() -> None:
+    dry_run = evaluate_run_admission(
+        _bot(mode="dry_run", extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
+    )
+    trade = evaluate_run_admission(
+        _bot(mode="trade", extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
+    )
+
+    assert dry_run.allowed is True
+    assert dry_run.reason_code == "START_ADMITTED"
+    assert trade.allowed is False
+    assert trade.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_dry_run_resume_admitted_despite_unapproved_carryover_exposure() -> None:

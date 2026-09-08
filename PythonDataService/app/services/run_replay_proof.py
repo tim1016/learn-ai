@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
+from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
@@ -1121,19 +1122,18 @@ class RunReplayProofService:
         ).retained_window()
 
     async def _extended_window_for(self, binding: BrokerBotBinding) -> ExtendedHoursWindow | None:
-        """The active SQLite Clerk's declared extended-hours window, when reachable.
+        """The active authority's declared extended-hours window, when any authority is active.
 
-        Mirrors ``_receipt_rows``'s live-authority resolution -- ``get_alpaca_clerk``
-        is the only clerk this module can reach today. Dry Run's synthetic
-        authority and the ``records_for_run`` test seam have no clerk in
-        scope here, so they resolve to ``None``; a ``use_rth=False`` binding through
-        either path refuses replay in ``_compute`` rather than guessing (Task 4
-        review finding 1).
+        Resolves through ``active_program_leg_policy`` so a synthetic Dry Run
+        authority's declared window is honoured exactly like the SQLite
+        Clerk's -- Task 4's ``get_alpaca_clerk``-only resolution could see
+        only the live SQLite authority. No authority active (including the
+        ``records_for_run`` test seam) resolves to regular-only, so a
+        ``use_rth=False`` binding refuses replay in ``_compute`` rather than
+        guessing (Task 4 review finding 1).
         """
-        if binding.mode == "dry_run" or self.records_for_run is not None:
-            return None
-        clerk = get_alpaca_clerk()
-        return None if clerk is None else clerk.extended_hours_window
+        del binding  # kept for signature parity with ``_receipt_rows``; the policy isn't scoped by it.
+        return active_program_leg_policy().window
 
     def _skeleton(
         self,

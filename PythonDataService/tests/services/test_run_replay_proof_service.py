@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.services.bot_binding_repository import BotRunOutcomeRecord, BotRunRecord
 from app.services.run_replay_proof import (
     LiveRunDecisionEvidence,
@@ -103,10 +104,16 @@ async def test_generate_refuses_the_currently_live_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_refuses_an_extended_binding_with_no_declared_window(tmp_path: Path) -> None:
+async def test_generate_refuses_an_extended_binding_with_no_declared_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Task 4 review finding 1: a use_rth=False binding must refuse replay loudly
     when no extended window is resolvable, instead of silently replaying zero
     decidable bars into a receipt that looks like a proven parity result."""
+    monkeypatch.setattr(
+        "app.services.run_replay_proof.active_program_leg_policy",
+        lambda: ProgramLegPolicy.regular_only(),
+    )
     evidence = LiveRunDecisionEvidence(records=(), crash_records=(), captured_decisions={}, truncated=False)
     service = _service(tmp_path, evidence, record=_run_record(0), use_rth=False)
 
