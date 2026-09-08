@@ -135,7 +135,6 @@ def build_quotes_per_expiry(rows: list[dict]) -> dict[int, list[OptionQuote]]:
 def parametric_iv30(rows: list[dict], spot: float, rate: float, dividend: float) -> float:
     """Solve per-contract IV, take ATM (closest-to-spot) per expiry, variance-interpolate to 30d."""
     df = pd.DataFrame(rows)
-    target_dt = pd.Timestamp(GOLDEN_DATE)
     iv_by_expiry: dict[int, float] = {}
     for expiry_days, grp in df.groupby("expiry_days"):
         wide = grp.pivot_table(
