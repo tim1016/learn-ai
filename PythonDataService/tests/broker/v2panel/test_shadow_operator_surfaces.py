@@ -55,7 +55,11 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_panel_evidence,
 )
 from app.services.session_authority import et_minute_of_day_ms
-from app.services.sqlite_clerk_compat import active_reconciliation_sweep, active_sqlite_facade
+from app.services.sqlite_clerk_compat import (
+    active_reconciliation_sweep,
+    active_sqlite_facade,
+    custody_account_id_for_route,
+)
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import fill_entry
 from tests.broker.v2panel.test_panel_projection import _MARKET_PULSE
@@ -141,6 +145,18 @@ def _binding(mode: str = "trade") -> BrokerBotBinding:
         run_id="run-1",
         created_at_ms=NOW_MS - 1_000,
         sealed_program=None,
+    )
+
+
+def _register_instance(facade: object) -> None:
+    """Put one registered instance in the shadow authority's own roster."""
+    facade.repository.register_strategy_instance(  # type: ignore[attr-defined]
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+        strategy_key="ema_crossover_signal",
+        display_name="EMA crossover (shadow)",
+        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
     )
 
 
@@ -235,14 +251,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
     _app, runtime = shadow_app
     facade = active_sqlite_facade("alpaca")
     assert facade is not None
-    facade.repository.register_strategy_instance(
-        strategy_instance_id=SID,
-        symbol="SPY",
-        config_hash="config-1",
-        strategy_key="ema_crossover_signal",
-        display_name="EMA crossover (shadow)",
-        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
-    )
+    _register_instance(facade)
     binding = _binding()
 
     async with _panel_authority_for_binding(_FakeDeployRegistry(), binding) as selected:
@@ -340,3 +349,117 @@ async def test_the_running_sweep_is_reachable_for_supervised_lease_revival(
 
     assert sweep is not None
     assert sweep is runtime.sweep
+
+
+async def test_the_bots_catalog_is_reachable_over_http_on_a_shadow_authority(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+) -> None:
+    """(f) The roster read translates the route id to the custody id.
+
+    Every route resolves the *live* account id; under shadow the authority
+    custodies ``shadow:<live id>``. Handing the route id straight to
+    ``read_sqlite_catalog`` made its account guard raise a bare ``ValueError``
+    that nothing translates -- a 500 on the bots list of every shadow account.
+    """
+    app, _runtime = shadow_app
+    facade = active_sqlite_facade("alpaca")
+    assert facade is not None
+    _register_instance(facade)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/catalog"
+        )
+
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert [row["strategy_instance_id"] for row in rows] == [SID]
+    # The row names the authority that custodies it. A roster row saying
+    # ``9LIVE0001`` would present shadow bots as bots on the real-money
+    # account -- R8's prohibition, one surface over from the panel's fills.
+    assert rows[0]["account_id"] == SHADOW_ACCT
+
+
+async def test_both_chart_reads_answer_their_typed_state_on_a_shadow_authority(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+) -> None:
+    """(g) The two ``panel_chart_data_source`` readers translate the same way.
+
+    No instance is registered, so each endpoint answers the same typed state a
+    real-paper authority answers for a bot it does not carry. Before the
+    translation both raised the readers' bare ``ValueError`` -- a 500 -- from
+    the account guard, which sits above every "no such bot" branch.
+    """
+    app, _runtime = shadow_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        live = await client.get(
+            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/chart/live",
+            params={"resolution": "1m"},
+        )
+        history = await client.get(
+            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/chart/history",
+            params={"timeframe": "1d"},
+        )
+
+    assert live.status_code == 404, live.text
+    assert history.status_code == 503, history.text
+
+
+async def test_the_custody_diagnosis_reads_the_shadow_authoritys_own_identity(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+) -> None:
+    """(h) The brokers-router projection surface, which reads the facade's own id.
+
+    ``_read_sqlite_account_projection`` already passes ``facade.account_id``,
+    never the route id, so this endpoint was never part of the defect. It is
+    pinned here so a later edit that "simplifies" it to the route id is caught
+    by a test rather than by a real-money operator.
+    """
+    app, _runtime = shadow_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/brokers/alpaca/clerk/custody-diagnosis")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["account_id"] == SHADOW_ACCT
+    assert body["authority_kind"] == "shadow"
+
+
+async def test_a_foreign_route_account_is_still_refused_under_shadow(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+) -> None:
+    """(i) The translation must not launder a foreign account into the authority.
+
+    Two independent proofs: the route refuses an id that is not the broker's
+    account, and the translation itself maps a foreign id to a foreign custody
+    id -- so the readers' own guard still refuses it if a future caller reaches
+    them without the route check.
+    """
+    app, _runtime = shadow_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        foreign = await client.get(
+            "/api/brokers/alpaca/accounts/9LIVE9999/bots/catalog"
+        )
+        # The custody id is an authority key, never an addressable route id.
+        custody = await client.get(
+            f"/api/brokers/alpaca/accounts/{SHADOW_ACCT}/bots/catalog"
+        )
+
+    assert foreign.status_code == 404, foreign.text
+    assert custody.status_code == 404, custody.text
+
+    facade = active_sqlite_facade("alpaca")
+    assert facade is not None
+    assert custody_account_id_for_route("alpaca", LIVE_ACCT) == facade.account_id
+    assert custody_account_id_for_route("alpaca", "9LIVE9999") != facade.account_id

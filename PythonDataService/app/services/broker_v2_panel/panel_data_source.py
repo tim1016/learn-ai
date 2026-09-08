@@ -106,7 +106,11 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
 )
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
-from app.services.sqlite_clerk_compat import active_reconciliation_sweep, active_sqlite_facade
+from app.services.sqlite_clerk_compat import (
+    active_reconciliation_sweep,
+    active_sqlite_facade,
+    custody_account_id_for_route,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -210,7 +214,9 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await validate_account(broker, account_id)
     try:
-        sqlite_catalog = await read_sqlite_catalog(broker, resolved)
+        sqlite_catalog = await read_sqlite_catalog(
+            broker, custody_account_id_for_route(broker, resolved)
+        )
     except SqliteCatalogProjectionUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite bot roster could not be projected.",

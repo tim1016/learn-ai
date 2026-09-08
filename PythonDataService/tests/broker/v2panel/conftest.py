@@ -98,6 +98,14 @@ class _FakeDeployRegistry:
     def __init__(self) -> None:
         self.deploy_calls: list[dict] = []
 
+    def bindings_for_broker(self, _broker: str) -> list:
+        """No durable runner bindings: this double only deploys.
+
+        The catalog read asks every registry for its Dry Run bindings, so the
+        answer has to be a real (empty) list rather than an AttributeError.
+        """
+        return []
+
     def _decision(self, kwargs: dict) -> RunAdmissionDecision:
         return RunAdmissionDecision(
             operation="START",

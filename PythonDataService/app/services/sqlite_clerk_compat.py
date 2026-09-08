@@ -93,6 +93,26 @@ def active_reconciliation_sweep(broker: str = "alpaca") -> ReconciliationSweep |
     return runtime.sweep
 
 
+def custody_account_id_for_route(broker: str, resolved: str) -> str:
+    """The custody id a route's resolved account id names on the active authority.
+
+    Every account-scoped route resolves the *broker's* account id; the SQLite
+    readers key on the id the active authority **custodies**. Those are the
+    same id in the real-paper world and deliberately different under shadow,
+    where custody is ``shadow:<live_account_id>`` (ADR 0059 D2) -- so an
+    untranslated route id fails the readers' account guard on every correct
+    shadow boot.
+
+    Translation, never a bypass: the guard it feeds still refuses a foreign
+    account, because a foreign id translates to a foreign custody id. Only the
+    Alpaca authority has a custody world, so another broker's id is returned
+    unchanged rather than relabelled with this one's.
+    """
+    if broker != "alpaca":
+        return resolved
+    return custody_account_id_for(custody_world_or_paper(primary_custody_world()), resolved)
+
+
 def sqlite_projection(
     *,
     account_id: str,
