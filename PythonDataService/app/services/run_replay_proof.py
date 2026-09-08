@@ -35,15 +35,15 @@ from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASON_CODES
 from app.broker.alpaca.paths import safe_path_component
-from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
-from app.services.bot_trade_strategy import _includes_decision_bar, strategy_evaluations
+from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
+from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
     RetainedSourceBar,
@@ -434,7 +434,10 @@ class _RunReplayFeed:
 
     ``recent_closed_bars`` returns the warmup slice regardless of
     ``lookback_days`` -- the exact behavior of ``_RetainedSourceBarFeed``'s
-    retained branch, which is what the live run's own warmup consumed.
+    retained branch, which is what the live run's own warmup consumed. Both
+    streams filter through the run's ``RunDecisionSession``, resolved once by
+    ``RunReplayProofService._compute``, so a replay decides on exactly the
+    bars the live run did.
     Exposes no ``evaluation_mode_for``, so every bar replays in DECIDE mode
     (``bot_trade_strategy._evaluation_mode_for`` fallback); live OBSERVE_ONLY
     buckets are receipted ``blocked``/``PAUSED_OBSERVE_ONLY`` and classify as
@@ -448,13 +451,13 @@ class _RunReplayFeed:
         symbol: str,
         warmup_bars: Sequence[MarketDataBar],
         live_bars: Sequence[MarketDataBar],
-        extended_window: ExtendedHoursWindow | None = None,
+        session: RunDecisionSession,
     ) -> None:
         self.feed_id = provider
         self._symbol = symbol
         self._warmup_bars = list(warmup_bars)
         self._live_bars = list(live_bars)
-        self._extended_window = extended_window
+        self._session = session
 
     @property
     def capability_account_id(self) -> None:
@@ -467,22 +470,19 @@ class _RunReplayFeed:
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        del continuity  # a retained-bar replay has no live connection to lose
+        del continuity, use_rth  # the run's own session filters; see __init__
         for bar in self._live_bars:
-            if bar.symbol == symbol and _includes_decision_bar(
-                bar, use_rth=use_rth, extended_window=self._extended_window
-            ):
+            if bar.symbol == symbol and self._session.includes(bar):
                 yield bar
 
     async def recent_closed_bars(
         self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
     ) -> list[MarketDataBar]:
-        del lookback_days
+        del lookback_days, use_rth
         return [
             bar
             for bar in self._warmup_bars
-            if bar.symbol == symbol
-            and _includes_decision_bar(bar, use_rth=use_rth, extended_window=self._extended_window)
+            if bar.symbol == symbol and self._session.includes(bar)
         ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
@@ -505,8 +505,8 @@ async def run_fidelity_over_bars(
     live: Sequence[RetainedSourceBar],
     records: Sequence[LiveDecisionRecord],
     captured_decisions: Mapping[str, str],
+    session: RunDecisionSession,
     crash_records: Sequence[LiveDecisionRecord] = (),
-    extended_window: ExtendedHoursWindow | None = None,
 ) -> RunFidelityResult:
     """Replay the run's bars through the production seam, settling each stage
     with the live-recorded disposition, and classify every disagreement.
@@ -519,18 +519,18 @@ async def run_fidelity_over_bars(
     as ``crash_recovered`` and are digest-verified against their protected
     receipts rather than trusted on presence.
 
-    ``extended_window`` is the active authority's declared extended-hours
-    window; it is meaningful only for a ``use_rth=False`` binding, whose
-    caller (``RunReplayProofService._compute``) refuses replay before
-    reaching here rather than passing ``None`` for one (Task 4 review finding
-    1 -- an empty replay must never be mistaken for a proven one).
+    ``session`` is the run's decision session, resolved by the caller
+    (``RunReplayProofService._compute``), which refuses replay outright when a
+    ``use_rth=False`` binding has no declared window rather than replaying an
+    empty stream (Task 4 review finding 1 -- an empty replay must never be
+    mistaken for a proven one).
     """
     feed = _RunReplayFeed(
         provider=provider,
         symbol=binding.symbol,
         warmup_bars=[to_market_bar(bar) for bar in warmup],
         live_bars=[to_market_bar(bar) for bar in live],
-        extended_window=extended_window,
+        session=session,
     )
     records_by_eval = {record.evaluation_id: record for record in records}
     crash_by_eval = {record.evaluation_id: record for record in crash_records}
@@ -559,7 +559,7 @@ async def run_fidelity_over_bars(
         )
 
     async for evaluation in strategy_evaluations(
-        binding, feed, captured_decisions=dict(captured_decisions), extended_window=extended_window
+        binding, feed, captured_decisions=dict(captured_decisions), session=session
     ):
         eval_id = evaluation.evaluation_id
         replay_digest = trace_root([evaluation.trace])
@@ -971,19 +971,22 @@ class RunReplayProofService:
 
     async def _compute(self, binding: BrokerBotBinding, run_record: BotRunRecord) -> RunReplayReceipt:
         # An extended binding (use_rth=False) with no resolvable window has no
-        # decidable bars: _includes_decision_bar returns False for every one,
-        # which would silently replay as an empty-but-"proven" receipt instead
-        # of the honest refusal a missing window warrants (Task 4 review
-        # finding 1). Refuse here, before any of the read/compute work below.
-        extended_window: ExtendedHoursWindow | None = None
-        if not binding.use_rth:
-            extended_window = await self._extended_window_for(binding)
-            if extended_window is None:
-                raise RunReplayUnavailableError(
-                    "The active authority declares no extended window; an extended-session run "
-                    "cannot be replayed.",
-                    http_status=503,
-                )
+        # decidable bars, which would silently replay as an empty-but-"proven"
+        # receipt instead of the honest refusal a missing window warrants
+        # (Task 4 review finding 1). Resolve the run's session here, before any
+        # of the read/compute work below, and refuse if it cannot be resolved.
+        # ``active_program_leg_policy`` covers both authority kinds, so a
+        # synthetic Dry Run's declared window is honoured exactly like the
+        # SQLite Clerk's; no active authority resolves to regular-only.
+        session = RunDecisionSession.resolve(
+            use_rth=binding.use_rth, window=active_program_leg_policy().window
+        )
+        if session is None:
+            raise RunReplayUnavailableError(
+                "The active authority declares no extended window; an extended-session run "
+                "cannot be replayed.",
+                http_status=503,
+            )
         # Only small bounded reads stay on the loop; the heavy work -- the
         # up-to-200k bar materialization, the run-bounding/split list passes, and
         # both compute legs -- all runs in one worker thread so a large retained
@@ -1049,11 +1052,7 @@ class RunReplayProofService:
                 first_decision_close_ms=first_decision_close_ms,
                 decision_timeframe_ms=decision_timeframe_ms,
             )
-            decided = [
-                bar
-                for bar in bars
-                if _includes_decision_bar(bar, use_rth=binding.use_rth, extended_window=extended_window)
-            ]
+            decided = [bar for bar in bars if session.includes(bar)]
             parity = engine_parity_over_bars(
                 binding.strategy_key,
                 binding.symbol,
@@ -1069,7 +1068,7 @@ class RunReplayProofService:
                     records=evidence.records,
                     captured_decisions=evidence.captured_decisions,
                     crash_records=evidence.crash_records,
-                    extended_window=extended_window,
+                    session=session,
                 )
             )
             return provider, bars, events, evidence_end_seq, parity, fidelity
@@ -1120,20 +1119,6 @@ class RunReplayProofService:
         return SqliteDecisionReceipts(
             repository, strategy_instance_id=binding.strategy_instance_id
         ).retained_window()
-
-    async def _extended_window_for(self, binding: BrokerBotBinding) -> ExtendedHoursWindow | None:
-        """The active authority's declared extended-hours window, when any authority is active.
-
-        Resolves through ``active_program_leg_policy`` so a synthetic Dry Run
-        authority's declared window is honoured exactly like the SQLite
-        Clerk's -- Task 4's ``get_alpaca_clerk``-only resolution could see
-        only the live SQLite authority. No authority active (including the
-        ``records_for_run`` test seam) resolves to regular-only, so a
-        ``use_rth=False`` binding refuses replay in ``_compute`` rather than
-        guessing (Task 4 review finding 1).
-        """
-        del binding  # kept for signature parity with ``_receipt_rows``; the policy isn't scoped by it.
-        return active_program_leg_policy().window
 
     def _skeleton(
         self,

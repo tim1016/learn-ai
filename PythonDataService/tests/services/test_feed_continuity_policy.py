@@ -9,7 +9,6 @@ before #1921 rather than being handed a clock it cannot honor.
 
 from __future__ import annotations
 
-import logging
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,6 +18,7 @@ import pytest
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedContinuityEvent, SubstitutionRefusal
 from app.services import feed_continuity_policy as module
+from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import continuity_policy_for
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import to_ms_utc
@@ -29,6 +29,8 @@ _BUCKET_CLOSE_MS = 1_788_375_600_000
 
 _ET = ZoneInfo("America/New_York")
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+_RTH = RunDecisionSession(kind="rth", window=None)
+_EXTENDED = RunDecisionSession(kind="extended", window=_WINDOW)
 
 
 def _et(d: date, hour: int, minute: int) -> int:
@@ -39,33 +41,19 @@ def test_continuity_policy_for_unsealed_binding_gets_no_policy(tmp_path: Path) -
     binding = _sealed_rth_binding().model_copy(update={"sealed_program": None})
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        assert continuity_policy_for(binding, ledger) is None
+        assert continuity_policy_for(binding, ledger, session=_RTH) is None
     finally:
         ledger.close()
-
-
-def test_continuity_policy_for_extended_binding_without_a_window_gets_no_policy(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    binding = _sealed_rth_binding().model_copy(update={"use_rth": False})
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    try:
-        with caplog.at_level(logging.INFO, logger=module.__name__):
-            assert continuity_policy_for(binding, ledger) is None
-    finally:
-        ledger.close()
-    declined = [r for r in caplog.records if getattr(r, "action", None) == "feed_continuity_not_offered"]
-    assert [r.reason for r in declined] == ["extended_window_unknown"]
 
 
 def test_continuity_policy_for_extended_binding_with_a_window_schedules_the_extended_clock(tmp_path: Path) -> None:
     binding = _sealed_rth_binding().model_copy(update={"use_rth": False})
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        policy = continuity_policy_for(binding, ledger, extended_window=_WINDOW)
+        policy = continuity_policy_for(binding, ledger, session=_EXTENDED)
     finally:
         ledger.close()
-    assert policy is not None and policy.decision_session == "extended"
+    assert policy is not None and policy.session == _EXTENDED
     # The sealed binding declares a 15-minute decision clock (see
     # ``test_continuity_policy_for_sealed_rth_binding_...`` below): the
     # bucket [17:00,17:15) fires on the 17:16 source minute (force-flush is
@@ -87,7 +75,7 @@ def test_continuity_policy_for_binding_without_a_decision_timeframe_gets_no_poli
     monkeypatch.setattr(module, "decision_timeframe_ms_for_binding", lambda _binding: None)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        assert continuity_policy_for(binding, ledger) is None
+        assert continuity_policy_for(binding, ledger, session=_RTH) is None
     finally:
         ledger.close()
 
@@ -98,9 +86,9 @@ async def test_continuity_policy_for_sealed_rth_binding_refuses_substitution_and
     binding = _sealed_rth_binding()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        policy = continuity_policy_for(binding, ledger)
+        policy = continuity_policy_for(binding, ledger, session=_RTH)
 
-        assert policy is not None and policy.decision_session == "rth"
+        assert policy is not None and policy.session == _RTH
         assert policy.substitution_grant(0, 60_000) == SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED")
         ref = await policy.record_event(
             FeedContinuityEvent(kind="interruption", feed_id="ibkr", symbol="SPY", observed_at_ms=1)

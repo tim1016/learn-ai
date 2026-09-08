@@ -45,6 +45,7 @@ from app.services.account_custody_synthetic_scenarios import (
     SyntheticScenarioCategory,
     SyntheticScenarioId,
 )
+from app.services.decision_session import RunDecisionSession
 from tests._helpers.ui_correlation import ui_correlation_records
 
 _POLYGON_FIXTURE = Path(__file__).parents[4] / "fixtures" / "polygon_capture" / "spy_minute_2025-01-13_2025-01-17"
@@ -111,7 +112,7 @@ async def test_polygon_replay_refuses_a_continuity_policy() -> None:
         raise AssertionError(f"no continuity event may be recorded by a replay: {event.kind}")
 
     policy = ContinuityPolicy(
-        decision_session="rth",
+        session=RunDecisionSession(kind="rth", window=None),
         next_trigger_ms=lambda last_end_ms: last_end_ms + 60_000,
         substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_never_records,

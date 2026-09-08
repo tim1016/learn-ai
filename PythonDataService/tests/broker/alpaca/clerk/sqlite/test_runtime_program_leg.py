@@ -273,7 +273,7 @@ async def test_a_regular_only_authority_refuses_an_extended_decision(tmp_path: P
     ("policy", "expected_window"),
     [(_EXTENDED_POLICY, _WINDOW), (ProgramLegPolicy.regular_only(), None)],
 )
-def test_the_facade_publishes_its_leg_policy_and_window(
+def test_the_facade_publishes_its_leg_policy(
     tmp_path: Path,
     policy: ProgramLegPolicy,
     expected_window: ExtendedHoursWindow | None,
@@ -288,7 +288,7 @@ def test_the_facade_publishes_its_leg_policy_and_window(
     )
     try:
         assert facade.program_leg_policy is policy
-        assert facade.extended_hours_window == expected_window
+        assert facade.program_leg_policy.window == expected_window
     finally:
         repo.close()
 
@@ -300,7 +300,7 @@ def test_a_facade_built_without_a_policy_is_regular_only(tmp_path: Path) -> None
     )
     try:
         assert facade.program_leg_policy == ProgramLegPolicy.regular_only()
-        assert facade.extended_hours_window is None
+        assert facade.program_leg_policy.window is None
     finally:
         repo.close()
 

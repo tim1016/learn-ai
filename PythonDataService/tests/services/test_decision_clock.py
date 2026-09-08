@@ -13,7 +13,6 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.decision_clock import (
-    decision_session_close_ms,
     decision_timeframe_ms_for_binding,
     extended_trigger_instants,
     floor_to_period_ms_et,
@@ -101,29 +100,29 @@ def test_rth_trigger_instants_rejects_a_timeframe_off_the_source_bar_grid() -> N
         with pytest.raises(ValueError, match="multiple of the 60000 ms source bar"):
             rth_trigger_instants(_REGULAR, timeframe_ms=bad)
     with pytest.raises(ValueError, match="multiple of the 60000 ms source bar"):
-        next_trigger_ms(_et(_REGULAR, 15, 0), timeframe_ms=90_000, decision_session="rth")
+        next_trigger_ms(_et(_REGULAR, 15, 0), timeframe_ms=90_000)
 
 
 def test_next_trigger_after_last_delivered_minute() -> None:
     L = _et(_REGULAR, 15, 0)  # last delivered minute 14:59–15:00 -> the 14:45–15:00 decision is still pending
-    assert next_trigger_ms(L, timeframe_ms=_TF, decision_session="rth") == _et(_REGULAR, 15, 1)
+    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 1)
     L = _et(_REGULAR, 15, 1)  # the 15:00 minute delivered -> next pending is the 15:00–15:15 decision
-    assert next_trigger_ms(L, timeframe_ms=_TF, decision_session="rth") == _et(_REGULAR, 15, 16)
+    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 16)
     L = _et(_REGULAR, 15, 59)
-    assert next_trigger_ms(L, timeframe_ms=_TF, decision_session="rth") == session_close_ms_utc(_REGULAR)
+    assert next_trigger_ms(L, timeframe_ms=_TF) == session_close_ms_utc(_REGULAR)
 
 
 def test_next_trigger_rolls_to_the_next_session() -> None:
     after_close = session_close_ms_utc(_FRIDAY)
     expected = session_open_ms_utc(date(2026, 9, 8)) + _TF + 60_000
-    assert next_trigger_ms(after_close, timeframe_ms=_TF, decision_session="rth") == expected
+    assert next_trigger_ms(after_close, timeframe_ms=_TF) == expected
     pre_market = _et(_REGULAR, 5, 10)
-    assert next_trigger_ms(pre_market, timeframe_ms=_TF, decision_session="rth") == _et(_REGULAR, 9, 46)
+    assert next_trigger_ms(pre_market, timeframe_ms=_TF) == _et(_REGULAR, 9, 46)
 
 
 def test_one_minute_timeframe() -> None:
     L = _et(_REGULAR, 15, 0)
-    assert next_trigger_ms(L, timeframe_ms=60_000, decision_session="rth") == _et(_REGULAR, 15, 1)
+    assert next_trigger_ms(L, timeframe_ms=60_000) == _et(_REGULAR, 15, 1)
 
 
 def test_next_trigger_function_binds_the_timeframe() -> None:
@@ -133,8 +132,8 @@ def test_next_trigger_function_binds_the_timeframe() -> None:
     disagree (15-minute buckets fire next at 15:16, one-minute at 15:02); an
     input where they agree would pass even against an unbound timeframe.
     """
-    rth_15 = next_trigger_function(_TF, decision_session="rth")
-    rth_1 = next_trigger_function(60_000, decision_session="rth")
+    rth_15 = next_trigger_function(_TF)
+    rth_1 = next_trigger_function(60_000)
     assert rth_15(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 16)
     assert rth_1(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 2)
 
@@ -161,21 +160,16 @@ def test_extended_trigger_instants_early_close_is_unchanged() -> None:
 
 def test_extended_next_trigger_rolls_across_the_weekend() -> None:
     after_close = _et(_FRIDAY, 20, 0)
-    assert next_trigger_ms(after_close, timeframe_ms=_TF, decision_session="extended", window=_WINDOW) == _et(date(2026, 9, 8), 4, 16)
+    assert next_trigger_ms(after_close, timeframe_ms=_TF, window=_WINDOW) == _et(date(2026, 9, 8), 4, 16)
 
 
 def test_extended_next_trigger_before_the_declared_open_is_the_first_bucket() -> None:
-    assert next_trigger_ms(_et(_REGULAR, 3, 0), timeframe_ms=_TF, decision_session="extended", window=_WINDOW) == _et(_REGULAR, 4, 16)
-
-
-def test_extended_requires_a_window() -> None:
-    with pytest.raises(ValueError, match="extended window"):
-        next_trigger_ms(_et(_REGULAR, 5, 0), timeframe_ms=_TF, decision_session="extended")
+    assert next_trigger_ms(_et(_REGULAR, 3, 0), timeframe_ms=_TF, window=_WINDOW) == _et(_REGULAR, 4, 16)
 
 
 def test_next_trigger_function_binds_the_session() -> None:
-    rth = next_trigger_function(_TF, decision_session="rth")
-    extended = next_trigger_function(_TF, decision_session="extended", window=_WINDOW)
+    rth = next_trigger_function(_TF)
+    extended = next_trigger_function(_TF, window=_WINDOW)
     at_1700 = _et(_REGULAR, 17, 0)
 
     assert rth(at_1700) == _et(date(2026, 9, 3), 9, 46)
@@ -185,12 +179,6 @@ def test_next_trigger_function_binds_the_session() -> None:
     # first source minute of the next bucket, 17:01 (same pattern as
     # ``test_next_trigger_after_last_delivered_minute``'s 15:00 -> 15:01).
     assert extended(at_1700) == _et(_REGULAR, 17, 1)
-
-
-def test_decision_session_close() -> None:
-    assert decision_session_close_ms(_REGULAR, decision_session="rth") == session_close_ms_utc(_REGULAR)
-    assert decision_session_close_ms(_EARLY, decision_session="rth") == session_close_ms_utc(_EARLY)
-    assert decision_session_close_ms(_EARLY, decision_session="extended", window=_WINDOW) == _et(_EARLY, 20, 0)
 
 
 def _binding() -> BrokerBotBinding:

@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 import app.services.bot_trade_strategy as bot_trade_strategy
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -23,13 +25,17 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
 )
+from app.services.decision_session import RunDecisionSession
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
+from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID, _T0, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
 
 from ._support import _WIN_START_MS, _green_bar, _red_bar, _wait_for
+
+_RTH_SESSION = RunDecisionSession(kind="rth", window=None)
 
 
 @pytest.mark.asyncio
@@ -265,7 +271,7 @@ def test_closed_liveness_with_extended_phase_proven_does_not_block_entry(
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is False
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is False
 
 
 def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
@@ -291,7 +297,7 @@ def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: False)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is True
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is True
 
 
 def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
@@ -316,7 +322,7 @@ def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
     )
     binding = SimpleNamespace(use_rth=True, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is True
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is True
 
 
 @pytest.mark.asyncio
@@ -339,6 +345,12 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
     clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-ALPACA-EXEC"
+    # An extended run needs an authority that declares a window; without one
+    # ``run_trade_bot`` refuses before it streams (Start admission refuses the
+    # same deploy), so this gate would never be reached.
+    clerk.program_leg_policy = ProgramLegPolicy(
+        window=ALPACA_EXTENDED_HOURS_WINDOW, allowances=None
+    )
 
     def liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
         return compose_market_liveness(
@@ -385,12 +397,14 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
         run_id="run-current",
         created_at_ms=_T0,
     )
+    ledger = SourceBarLedger(artifacts_root=tmp_path / "ledger", account_id="PA-ALPACA-EXEC")
     set_alpaca_clerk(clerk)
     try:
-        await bot_trade_strategy.run_trade_bot(binding, feed)
+        await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger)
 
         assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
         assert seen_account_ids and all(acct == "IBKR-MKTDATA-ACCT" for acct in seen_account_ids)
     finally:
         set_alpaca_clerk(None)
+        ledger.close()
         repo.close()

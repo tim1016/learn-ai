@@ -27,6 +27,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -37,7 +38,10 @@ from app.marketdata.feed import (
     SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+from app.services.decision_session import RunDecisionSession
 from tests._helpers.ibkr_feed_adversarial import NeverFirstBarFeedFixture
+
+_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
 # ---------------------------------------------------------------------------
 # Helpers and fakes
@@ -781,7 +785,7 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
         return candidate if candidate > last_end else candidate + 900_000
 
     policy = ContinuityPolicy(
-        decision_session="rth",
+        session=RunDecisionSession(kind="rth", window=None),
         next_trigger_ms=_next_trigger,
         substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_sink,
@@ -800,13 +804,14 @@ def test_continuity_policy_accepts_the_extended_session() -> None:
         raise AssertionError("this test never records an event")
 
     policy = ContinuityPolicy(
-        decision_session="extended",
+        session=RunDecisionSession(kind="extended", window=_WINDOW),
         next_trigger_ms=lambda last_end: last_end + 60_000,
         substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_sink,
     )
 
-    assert policy.decision_session == "extended"
+    assert policy.session.kind == "extended"
+    assert policy.session.window == _WINDOW
 
 
 def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:

@@ -115,7 +115,6 @@ from app.services.market_data_capability_service import extended_phase_proven_at
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 
 if TYPE_CHECKING:
-    from app.broker.contract.capabilities import ExtendedHoursWindow
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -262,10 +261,6 @@ class SqliteAlpacaClerkFacade:
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
         return self._program_leg_policy
-
-    @property
-    def extended_hours_window(self) -> ExtendedHoursWindow | None:
-        return self._program_leg_policy.window
 
     def channel_health_snapshot(
         self,
@@ -713,7 +708,7 @@ class SqliteAlpacaClerkFacade:
                 shape = shape_program_leg(
                     side=leg_side,
                     purpose=purpose,
-                    decision_session="rth" if use_rth else "extended",
+                    use_rth=use_rth,
                     decision_bar=retained_source_bar,
                     policy=self._program_leg_policy,
                 )
@@ -723,12 +718,16 @@ class SqliteAlpacaClerkFacade:
                     explanation=exc.explanation,
                     next_step=exc.next_step,
                 )
-            operation_leg = shape.apply(
-                symbol=entry.instrument.underlying,
-                side=leg_side,
-                quantity=float(quantity * entry.qty_ratio),
-            )
             if purpose is EffectPurpose.ENTER:
+                # The EXIT branch threads ``shape`` into the reducing order's
+                # durable facts instead; building a leg it discards would be a
+                # second, silent leg construction one refactor away from
+                # disagreeing with the one that ships.
+                operation_leg = shape.apply(
+                    symbol=entry.instrument.underlying,
+                    side=leg_side,
+                    quantity=float(quantity * entry.qty_ratio),
+                )
                 if (
                     stream_health_refusal(
                         self._stream_health,

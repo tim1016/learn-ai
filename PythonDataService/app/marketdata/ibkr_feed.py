@@ -258,7 +258,9 @@ class IbkrMarketDataFeed:
         minute open when the socket died is finished by the new one; the
         deadline the wait is held to; and the resolution of every minute the
         merge cannot prove complete — omitted as a ``gap`` outside the decision
-        session, refused (fatally) inside it.
+        session, refused (fatally) inside it. "Inside" is the consumer's own
+        session (``policy.session``): an RTH minute for a regular-hours run,
+        any minute of the broker's declared window for an extended one.
         """
         loop = ContinuityLoop(
             client=self._client, feed_id=self.feed_id, symbol=symbol, policy=policy

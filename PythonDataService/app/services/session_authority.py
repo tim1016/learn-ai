@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -25,6 +26,18 @@ _DAY_SESSION_SEQUENCE: tuple[SessionKind, ...] = ("PRE", "RTH", "POST")
 # boundary.  Retaining it beyond a day could project yesterday's entitlement
 # onto a new session, so it cannot author an extended phase after this bound.
 CAPABILITY_MAX_AGE_MS = 24 * 60 * 60 * 1_000
+
+# The phase sets this repo asks about, named for what they mean and defined
+# once — they were four definitions with three memberships before the slice-3
+# fix wave. ``TradingSessionPhase`` is the vocabulary; these are the questions.
+# "Which phases does an extended run decide on?" is deliberately not among
+# them: that answer is the declared window's span, and
+# ``RunDecisionSession.includes`` reads the bounds rather than a phase set.
+#: Sessions outside the regular one that a *capability probe* can prove.
+EXTENDED_PHASES: frozenset[TradingSessionPhase] = frozenset({"PRE", "POST", "OVERNIGHT"})
+#: Extended sessions a program leg may actually be placed into (ADR 0059 D5.3
+#: shapes a marketable limit for these; OVERNIGHT is a separate venue, R1).
+TRADEABLE_EXTENDED_PHASES: frozenset[TradingSessionPhase] = frozenset({"PRE", "POST"})
 
 
 def et_minute_of_day_ms(day: date, minute_of_day: int) -> int:
@@ -66,6 +79,29 @@ def extended_session_bounds_ms(session_date: date, *, window: ExtendedHoursWindo
     )
 
 
+@lru_cache(maxsize=512)
+def declared_session_bounds(
+    session_date: date, window: ExtendedHoursWindow
+) -> ExtendedSessionBounds | None:
+    """The declared window on ``session_date``, or ``None`` when it is not a trading day.
+
+    One trading day's bounds are four integers that never change, but deriving
+    them builds a fresh ``pandas_market_calendars`` schedule twice
+    (``is_trading_day`` then ``session_window_for_date``) — ~3 ms. A per-bar
+    predicate asking the same day about 390 bars paid that 390 times, which is
+    what pinned the event loop on warmup and made the replay proof's two
+    200k-bar filters minutes of blocking CPU. Resolve the day once; every
+    caller after that compares integers.
+
+    ``ExtendedHoursWindow`` is a frozen Pydantic model, so it hashes; the
+    cache key is (date, window) and a differently-declared window can never
+    read another window's bounds.
+    """
+    if not is_trading_day(session_date):
+        return None
+    return extended_session_bounds_ms(session_date, window=window)
+
+
 @dataclass(frozen=True)
 class SessionAuthorityState:
     phase: TradingSessionPhase
@@ -98,16 +134,16 @@ def session_state_at_ms(
     """
     if now_ms < 0:
         raise ValueError("now_ms must be non-negative int64 ms UTC")
-    if _is_fresh_matching_capability(
+    usable = _fresh_matching_capability(
         capability,
         now_ms=now_ms,
         symbol=symbol,
         account_id=account_id,
-    ):
-        assert capability is not None
+    )
+    if usable is not None:
         state = _session_from_capability(
             now_ms=now_ms,
-            capability=capability,
+            capability=usable,
             strategy_session_policy=strategy_session_policy,
             allowed_sessions=allowed_sessions,
         )
@@ -252,9 +288,9 @@ def _session_from_declared_window(
     def _next_open(after: date) -> int:
         return extended_session_bounds_ms(next_trading_day(after), window=window).open_ms
 
-    if not is_trading_day(day):
+    bounds = declared_session_bounds(day, window)
+    if bounds is None:
         return _state_for("CLOSED", _next_open(day))
-    bounds = extended_session_bounds_ms(day, window=window)
     if now_ms < bounds.open_ms:
         return _state_for("CLOSED", bounds.open_ms)
     if now_ms < bounds.rth_open_ms:
@@ -315,24 +351,29 @@ def _next_capability_transition(
     return transitions[0] if transitions else None
 
 
-def _is_fresh_matching_capability(
+def _fresh_matching_capability(
     capability: SessionDataCapability | None,
     *,
     now_ms: int,
     symbol: str | None,
     account_id: str | None,
-) -> bool:
-    """Accept only a current, scoped, structurally valid capability snapshot."""
+) -> SessionDataCapability | None:
+    """The snapshot if it is current, scoped and structurally valid; else ``None``.
+
+    Returns the capability rather than a bool so the caller reads the proven
+    value instead of re-asserting that the one it already holds is not
+    ``None`` — the assertion the boolean form forced.
+    """
     if capability is None or symbol is None or account_id is None:
-        return False
+        return None
     if capability.symbol != symbol.upper() or capability.account_id != account_id:
-        return False
+        return None
     age_ms = now_ms - capability.probed_at_ms
     if age_ms < 0 or age_ms > CAPABILITY_MAX_AGE_MS:
-        return False
+        return None
     if not all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY):
-        return False
-    return _has_ordered_day_sessions(capability)
+        return None
+    return capability if _has_ordered_day_sessions(capability) else None
 
 
 def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bool:
@@ -378,7 +419,6 @@ SessionSubmitBlockReason = Literal[
 ]
 
 _TRADEABLE_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "RTH", "POST", "OVERNIGHT")
-_EXTENDED_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "POST", "OVERNIGHT")
 
 
 def evaluate_session_submit(
@@ -402,7 +442,7 @@ def evaluate_session_submit(
         return "strategy_session_not_permitted"
     if phase not in order_mechanism_sessions:
         return "order_mechanism_not_enabled"
-    if phase in _EXTENDED_PHASES and not extended_reference_price_ok:
+    if phase in EXTENDED_PHASES and not extended_reference_price_ok:
         return "extended_limit_price_unavailable"
     return None
 

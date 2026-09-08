@@ -6,7 +6,10 @@ bucket, which the runner force-flushes on the bar closing at the session
 close. Both sessions are supported: the canonical calendar proves RTH; the
 extended session is the executing broker's declared window (ADR 0059 D5.2),
 resolved through ``session_authority`` -- broker capability data, not a
-session literal of this module's own.
+session literal of this module's own. An absent window *is* the regular
+session here, so this module has no "extended without a window" state to
+guard; ``app/services/decision_session.py`` owns that invariant for a run,
+and the force-flush instant lives there too (``RunDecisionSession.close_ms``).
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ from app.lean_sidecar.trading_calendar import (
     session_close_ms_utc,
     session_open_ms_utc,
 )
-from app.marketdata.feed import DecisionSession
 from app.services.session_authority import extended_session_bounds_ms
 from app.utils.timestamps import ny_datetime, to_ms_utc
 
@@ -180,13 +182,16 @@ def extended_trigger_instants(session_date: date, *, timeframe_ms: int, window: 
     return _trigger_instants(open_ms=bounds.open_ms, close_ms=bounds.close_ms, timeframe_ms=timeframe_ms)
 
 
-def _schedule(
-    decision_session: DecisionSession, *, timeframe_ms: int, window: ExtendedHoursWindow | None
-) -> Callable[[date], list[int]]:
-    if decision_session == "rth":
-        return lambda day: rth_trigger_instants(day, timeframe_ms=timeframe_ms)
+def _schedule(*, timeframe_ms: int, window: ExtendedHoursWindow | None) -> Callable[[date], list[int]]:
+    """A day's trigger instants: the regular session, or the declared window.
+
+    ``window`` *is* the discriminator — an absent one means the regular
+    session, and there is therefore no "extended without a window" state to
+    guard against here. ``RunDecisionSession`` (``app/services/decision_session.py``)
+    is where that invariant is established for a run.
+    """
     if window is None:
-        raise ValueError("decision_session='extended' requires the broker's extended window")
+        return lambda day: rth_trigger_instants(day, timeframe_ms=timeframe_ms)
     return lambda day: extended_trigger_instants(day, timeframe_ms=timeframe_ms, window=window)
 
 
@@ -194,20 +199,18 @@ def next_trigger_ms(
     last_delivered_end_ms: int,
     *,
     timeframe_ms: int,
-    decision_session: DecisionSession,
     window: ExtendedHoursWindow | None = None,
 ) -> int:
     """The first decision instant strictly after ``last_delivered_end_ms``.
 
     Rolls forward across holidays and weekends until a trading day supplies a
-    later trigger. ``window`` is required for ``decision_session="extended"``.
+    later trigger. ``window`` selects the session: absent is the regular one.
 
     Formula:
         ``min{t in S(d) : t > last_delivered_end_ms}`` over trading days ``d``
         from the ET date of ``last_delivered_end_ms`` forward, where ``S(d)``
-        is ``rth_trigger_instants(d, ...)`` for ``decision_session="rth"`` or
-        ``extended_trigger_instants(d, ..., window)`` for
-        ``decision_session="extended"``.
+        is ``rth_trigger_instants(d, ...)`` when ``window`` is absent and
+        ``extended_trigger_instants(d, ..., window)`` when it is declared.
     Reference:
         As ``rth_trigger_instants``/``extended_trigger_instants`` (spec §4.4;
         ADR 0059 D5.2); trading days from the canonical calendar
@@ -217,10 +220,9 @@ def next_trigger_ms(
         ``tests/services/test_decision_clock.py::test_next_trigger_after_last_delivered_minute``,
         ``::test_next_trigger_rolls_to_the_next_session``, ``::test_one_minute_timeframe``,
         ``::test_extended_next_trigger_rolls_across_the_weekend``,
-        ``::test_extended_next_trigger_before_the_declared_open_is_the_first_bucket``,
-        ``::test_extended_requires_a_window``
+        ``::test_extended_next_trigger_before_the_declared_open_is_the_first_bucket``
     """
-    triggers_for = _schedule(decision_session, timeframe_ms=timeframe_ms, window=window)
+    triggers_for = _schedule(timeframe_ms=timeframe_ms, window=window)
     session_date = ny_datetime(last_delivered_end_ms).date()
     if not is_trading_day(session_date):
         session_date = next_trading_day(session_date)
@@ -232,21 +234,8 @@ def next_trigger_ms(
 
 
 def next_trigger_function(
-    timeframe_ms: int, *, decision_session: DecisionSession, window: ExtendedHoursWindow | None = None
+    timeframe_ms: int, *, window: ExtendedHoursWindow | None = None
 ) -> Callable[[int], int]:
     """Bind the clock's parameters into the single-argument callable the continuity loop schedules against."""
-    _schedule(decision_session, timeframe_ms=timeframe_ms, window=window)  # fail at construction, not mid-run
-    return lambda last_end: next_trigger_ms(
-        last_end, timeframe_ms=timeframe_ms, decision_session=decision_session, window=window
-    )
-
-
-def decision_session_close_ms(
-    session_date: date, *, decision_session: DecisionSession, window: ExtendedHoursWindow | None = None
-) -> int:
-    """The instant at which the run force-flushes ``session_date``'s last decision bucket."""
-    if decision_session == "rth":
-        return session_close_ms_utc(session_date)
-    if window is None:
-        raise ValueError("decision_session='extended' requires the broker's extended window")
-    return extended_session_bounds_ms(session_date, window=window).close_ms
+    _require_source_multiple(timeframe_ms)  # fail at construction, not mid-run
+    return lambda last_end: next_trigger_ms(last_end, timeframe_ms=timeframe_ms, window=window)

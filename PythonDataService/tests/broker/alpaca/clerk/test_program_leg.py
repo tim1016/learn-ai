@@ -54,7 +54,7 @@ def test_rth_binding_is_always_a_market_day_leg() -> None:
     shape = shape_program_leg(
         side=OrderSide.BUY,
         purpose=EffectPurpose.ENTER,
-        decision_session="rth",
+        use_rth=True,
         decision_bar=None,
         policy=_POLICY,
     )
@@ -73,7 +73,7 @@ def test_extended_binding_inside_the_regular_session_is_a_market_day_leg() -> No
     shape = shape_program_leg(
         side=OrderSide.BUY,
         purpose=EffectPurpose.ENTER,
-        decision_session="extended",
+        use_rth=False,
         decision_bar=_bar(10, 0),
         policy=_POLICY,
     )
@@ -99,7 +99,7 @@ def test_extended_binding_outside_the_regular_session_is_a_marketable_day_limit(
     shape = shape_program_leg(
         side=side,
         purpose=purpose,
-        decision_session="extended",
+        use_rth=False,
         decision_bar=_bar(hour, minute),
         policy=_POLICY,
     )
@@ -137,7 +137,7 @@ def test_refusals(policy: ProgramLegPolicy, bar: RetainedSourceBar | None, reaso
         shape_program_leg(
             side=OrderSide.BUY,
             purpose=EffectPurpose.ENTER,
-            decision_session="extended",
+            use_rth=False,
             decision_bar=bar,
             policy=policy,
         )
@@ -153,7 +153,7 @@ def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() 
         shape_program_leg(
             side=OrderSide.BUY,
             purpose=EffectPurpose.ENTER,
-            decision_session="extended",
+            use_rth=False,
             decision_bar=_bar(11, 0),
             policy=policy,
         )

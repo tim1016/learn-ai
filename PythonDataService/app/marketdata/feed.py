@@ -28,9 +28,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    # Type-only: ``decision_session`` sits above this port and imports from it
+    # (through ``session_authority``), so a runtime import here would close a
+    # cycle. ``from __future__ import annotations`` keeps the field annotation
+    # a string, which is all a plain dataclass needs.
+    from app.services.decision_session import RunDecisionSession
 
 
 class MarketDataFeedError(Exception):
@@ -250,9 +257,14 @@ class ContinuityPolicy:
     ``substitution_grant(window_start_ms, window_end_ms)`` either authorizes
     backfill of that window or refuses it. ``record_event`` persists a
     continuity event and returns the reference to stamp on affected bars.
+
+    ``session`` is the run's resolved :class:`~app.services.decision_session.RunDecisionSession`
+    — the same object the consumer filters its bars with, so the continuity
+    floor and the bar filter can never disagree about which minutes are
+    decidable.
     """
 
-    decision_session: DecisionSession
+    session: RunDecisionSession
     next_trigger_ms: Callable[[int], int]
     substitution_grant: Callable[[int, int], SubstitutionGrant | SubstitutionRefusal]
     record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]

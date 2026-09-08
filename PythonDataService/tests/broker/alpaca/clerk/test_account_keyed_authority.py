@@ -94,8 +94,7 @@ async def test_synthetic_facades_leg_policy_is_built_from_the_read_ports_capabil
     )
     try:
         assert runtime.clerk is not None
-        assert runtime.clerk.extended_hours_window == ALPACA_EXTENDED_HOURS_WINDOW
-        assert runtime.clerk.program_leg_policy.window is runtime.clerk.extended_hours_window
+        assert runtime.clerk.program_leg_policy.window == ALPACA_EXTENDED_HOURS_WINDOW
     finally:
         await runtime.close()
 

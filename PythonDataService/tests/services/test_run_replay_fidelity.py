@@ -9,6 +9,7 @@ import pytest
 from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
+from app.services.decision_session import RunDecisionSession
 from app.services.run_replay_proof import (
     LiveDecisionRecord,
     run_fidelity_over_bars,
@@ -16,6 +17,8 @@ from app.services.run_replay_proof import (
 from app.services.source_bar_ledger import RetainedSourceBar
 from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
+
+_RTH_SESSION = RunDecisionSession(kind="rth", window=None)
 
 
 def _retained(bars: Sequence[MarketDataBar]) -> list[RetainedSourceBar]:
@@ -69,6 +72,7 @@ async def test_run_fidelity_over_bars_full_parity_on_an_unblocked_run() -> None:
         live=_retained(bars),
         records=records,
         captured_decisions={},
+        session=_RTH_SESSION,
     )
 
     assert result.compared_count == len(records) > 0
@@ -90,6 +94,7 @@ async def test_run_fidelity_over_bars_classifies_a_blocked_enter_as_expected() -
         live=_retained(bars),
         records=records,
         captured_decisions={},
+        session=_RTH_SESSION,
     )
 
     assert result.drift_count == 0
@@ -125,6 +130,7 @@ async def test_run_fidelity_over_bars_classifies_a_tampered_record_as_drift() ->
         live=_retained(bars),
         records=records,
         captured_decisions={},
+        session=_RTH_SESSION,
     )
 
     assert result.drift_count >= 1
@@ -155,6 +161,7 @@ async def test_run_fidelity_over_bars_flags_a_content_level_digest_mismatch_as_d
         live=_retained(bars),
         records=records,
         captured_decisions={},
+        session=_RTH_SESSION,
     )
 
     assert result.drift_count >= 1
@@ -191,7 +198,7 @@ async def test_run_fidelity_digest_verifies_a_faithful_crash_window_receipt() ->
     result = await run_fidelity_over_bars(
         _binding(run_id="run-1"), provider="fake-phase",
         warmup=_retained(bars), live=[], records=[],
-        captured_decisions=captured, crash_records=[crash_record],
+        captured_decisions=captured, session=_RTH_SESSION, crash_records=[crash_record],
     )
 
     assert result.drift_count == 0
@@ -216,7 +223,7 @@ async def test_run_fidelity_treats_a_digest_less_crash_receipt_as_unverified() -
     result = await run_fidelity_over_bars(
         _binding(run_id="run-1"), provider="fake-phase",
         warmup=_retained(bars), live=[], records=[],
-        captured_decisions=captured, crash_records=[digestless],
+        captured_decisions=captured, session=_RTH_SESSION, crash_records=[digestless],
     )
 
     assert result.drift_count == 0
@@ -242,7 +249,7 @@ async def test_run_fidelity_flags_a_tampered_crash_window_receipt_as_drift() -> 
     result = await run_fidelity_over_bars(
         _binding(run_id="run-1"), provider="fake-phase",
         warmup=_retained(bars), live=[], records=[],
-        captured_decisions=captured, crash_records=[tampered],
+        captured_decisions=captured, session=_RTH_SESSION, crash_records=[tampered],
     )
 
     assert result.drift_count >= 1
@@ -273,6 +280,7 @@ async def test_run_fidelity_over_bars_refuses_a_blocked_row_with_an_unrecognized
         live=_retained(bars),
         records=records,
         captured_decisions={},
+        session=_RTH_SESSION,
     )
 
     assert result.drift_count >= 1

@@ -28,7 +28,6 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, FeedHealth, MarketDataBar
 from app.schemas.action_plan import ActionPlan
@@ -216,7 +215,6 @@ class _CustodyClerk:
     broker_id = "alpaca"
     account_id = "PA-TEST"
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
-    extended_hours_window: ExtendedHoursWindow | None = None
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
     def __init__(self, proof: InstanceCustodyProof) -> None:
@@ -435,7 +433,6 @@ class _FakeClerk:
     authority_kind = "sqlite"
     account_id = "PA-TEST"
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
-    extended_hours_window: ExtendedHoursWindow | None = None
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
     def __init__(

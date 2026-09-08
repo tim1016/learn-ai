@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
-    from app.broker.contract.capabilities import ExtendedHoursWindow
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
@@ -49,12 +48,13 @@ class ActiveAlpacaClerk(Protocol):
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
-        """How this authority may shape an extended-session leg (ADR 0059 D5.3)."""
-        ...
+        """How this authority may shape an extended-session leg (ADR 0059 D5.3).
 
-    @property
-    def extended_hours_window(self) -> ExtendedHoursWindow | None:
-        """The declared extended session, or ``None`` for a regular-only authority."""
+        ``program_leg_policy.window`` is the declared extended session
+        (``None`` for a regular-only authority); it has no second accessor of
+        its own, so a caller can never read a window the policy that prices
+        against it does not carry.
+        """
         ...
 
     async def recover(self) -> None: ...

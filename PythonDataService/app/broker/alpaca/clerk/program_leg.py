@@ -17,11 +17,9 @@ from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
-from app.marketdata.feed import DecisionSession
-from app.services.session_authority import session_state_at_ms
+from app.services.decision_session import RunDecisionSession
+from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
-
-_EXTENDED_PHASES: Final = frozenset({"PRE", "POST"})
 
 
 @dataclass(frozen=True)
@@ -83,14 +81,20 @@ def shape_program_leg(
     *,
     side: OrderSide,
     purpose: EffectPurpose,
-    decision_session: DecisionSession,
+    use_rth: bool,
     decision_bar: RetainedSourceBar | None,
     policy: ProgramLegPolicy,
 ) -> LegShape:
-    """The shape of the leg this decision submits (ADR 0059 D5.3)."""
-    if decision_session == "rth":
-        return REGULAR_SESSION_SHAPE
-    if policy.window is None:
+    """The shape of the leg this decision submits (ADR 0059 D5.3).
+
+    The decision bar is read by its **close** (``end_ms``): a bar is filtered
+    into the run by the session it opened in
+    (``RunDecisionSession.includes``), but the order it drives exists — and is
+    therefore priced and placed — at the instant the bucket closed. The two
+    instants are deliberately different.
+    """
+    session = RunDecisionSession.resolve(use_rth=use_rth, window=policy.window)
+    if session is None:
         raise ProgramLegRefused(
             reason_code="EXTENDED_HOURS_UNSUPPORTED",
             explanation="The active broker authority declares no extended session.",
@@ -99,16 +103,18 @@ def shape_program_leg(
                 "capabilities declare an extended window."
             ),
         )
+    if session.kind == "rth":
+        return REGULAR_SESSION_SHAPE
     if decision_bar is None:
         raise ProgramLegRefused(
             reason_code="EXTENDED_ANCHOR_UNAVAILABLE",
             explanation="No exact retained decision bar exists to anchor an extended-session leg.",
             next_step="Retain the decision bar (replay or ingest it), then let the program decide again.",
         )
-    phase = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=policy.window).phase
+    phase = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=session.window).phase
     if phase == "RTH":
         return REGULAR_SESSION_SHAPE
-    if phase not in _EXTENDED_PHASES:
+    if phase not in TRADEABLE_EXTENDED_PHASES:
         raise ProgramLegRefused(
             reason_code="SESSION_CLOSED_AT_DECISION",
             explanation=f"The decision instant is {phase}; no session accepts a program leg now.",

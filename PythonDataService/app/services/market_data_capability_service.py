@@ -11,7 +11,7 @@ from app.broker.ibkr.capability import probe_session_data_capability
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.schemas.broker_capability import SessionDataCapability
-from app.services.session_authority import session_state_at_ms
+from app.services.session_authority import EXTENDED_PHASES, session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +111,6 @@ def get_market_data_capability_service() -> MarketDataCapabilityService:
     return _SERVICE
 
 
-_EXTENDED_PHASES = frozenset({"PRE", "POST", "OVERNIGHT"})
-
-
 def extended_phase_proven_at_ms(
     *,
     now_ms: int,
@@ -169,4 +166,4 @@ def extended_phase_proven_at_ms(
         account_id=account_id,
         extended_window=extended_window,
     )
-    return session.extended_phase_proven and session.phase in _EXTENDED_PHASES
+    return session.extended_phase_proven and session.phase in EXTENDED_PHASES
