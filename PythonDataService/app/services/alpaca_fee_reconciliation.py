@@ -13,9 +13,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
 from decimal import Decimal
 
+from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     SqliteEconomicProjectionReader,
@@ -36,13 +36,12 @@ from app.schemas.alpaca_fee_reconciliation import (
     SessionFeeReconciliation,
 )
 from app.services.sqlite_clerk_compat import active_sqlite_facade
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 # Alpaca charges at end of day; give the FEE activity a day to post before
 # "no observation" becomes a finding rather than a wait.
 FEE_POSTING_GRACE_MS = 24 * 60 * 60 * 1000
-_ONE_DAY = timedelta(days=1)
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0")
 # Per-trade rounding can only push the observed charge UP (Σ ceil(aᵢ) ≥ ceil(Σ aᵢ)),
@@ -64,12 +63,6 @@ class SessionFill:
     side: OrderSide
     quantity: Decimal
     fill_price: Decimal
-
-
-def _et_day_window_ms(session_open_ms: int) -> tuple[int, int]:
-    """The trade date's ET calendar day as ``[ET midnight, next ET midnight)``."""
-    trade_date = et_date_at_ms(session_open_ms)
-    return et_midnight_ms(trade_date), et_midnight_ms(trade_date + _ONE_DAY)
 
 
 @dataclass(frozen=True)
@@ -126,7 +119,7 @@ def _frame(
     fee_rows: Sequence[BrokerActivity],
     now_ms: int,
 ) -> _Frame:
-    window_start_ms, window_end_ms = _et_day_window_ms(session_open_ms)
+    window_start_ms, window_end_ms = et_day_window_ms(session_open_ms)
     return _Frame(
         broker=broker,
         account_id=account_id,
@@ -340,7 +333,7 @@ async def session_fee_reconciliation(
             "unavailable",
             "no active SQLite Clerk authority; the session's fills cannot be read",
         )
-    window_start_ms, window_end_ms = _et_day_window_ms(session_open_ms)
+    window_start_ms, window_end_ms = et_day_window_ms(session_open_ms)
     try:
         fills = await asyncio.to_thread(
             _read_session_fills,
