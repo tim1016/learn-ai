@@ -102,14 +102,24 @@ def test_shape_divergences_gate(
     assert result.passed is False
 
 
-def test_price_drift_is_reported_never_gated() -> None:
+def test_price_and_time_drift_are_reported_never_gated() -> None:
     result = _reconcile([_fill(600, price="100.00")], [_fill(600, price="100.07")])
     assert [d.category for d in result.divergences] == [DivergenceCategory.FILL_PRICE_DRIFT]
     assert result.gating == () and result.passed is True
     assert result.max_fill_price_drift == Decimal("0.07")
+    assert result.max_fill_time_drift_ms == 0
     assert result.fill_price_atol == FILL_PRICE_ATOL == Decimal("0.01")
     within = _reconcile([_fill(600, price="100.00")], [_fill(600, price="100.01")])
     assert within.divergences == () and within.max_fill_price_drift == Decimal("0.01")
+
+    # Positional pairing is blind to *when* each decision was made: three
+    # minutes apart still pairs, still passes, and the distance is reported.
+    apart = _reconcile([_fill(600)], [_fill(603, ref="p")])
+    assert apart.divergences == () and apart.passed is True
+    assert apart.max_fill_time_drift_ms == et_minute_of_day_ms(DAY, 603) - et_minute_of_day_ms(
+        DAY, 600
+    )
+    assert _reconcile([_fill(600)], []).max_fill_time_drift_ms is None
 
 
 def _seal(**overrides: object) -> SealedBotProgram:

@@ -17,6 +17,13 @@ different sides, ``DIRECTION_MISMATCH``; different quantities,
 ``FILL_PRICE_DRIFT``. The gating set is ``{DECISION_MISMATCH,
 DIRECTION_MISMATCH, QUANTITY_MISMATCH}``; ``passed`` iff no gating divergence.
 ``atol = $0.01``, the taxonomy's ``fill_price_atol`` default.
+Not proven: pairing is by **sequence and shape, never by decision bar**. Two
+fills that agree on symbol, side and quantity pair index-for-index however far
+apart in the session they sit, so a day can be ``counted`` on decisions that
+were not made at the same time. ``max_fill_time_drift_ms`` measures that
+distance and reports it — a diagnostic, never a divergence category and never
+gating. Joining on the decision bar itself is a recorded follow-up (Task 11's
+reference note).
 Reference: ``.claude/rules/numerical-rigor.md`` § "Trade-level reconciliation
 taxonomy" (the ``DivergenceCategory`` enum); ADR 0059 D2 — "synthesized fills
 are optimistic by construction", so price drift is reported, never gated.
@@ -100,6 +107,9 @@ class TwinDayReconciliation:
     twin_fills: tuple[TwinFill, ...]
     divergences: tuple[TwinDivergence, ...]
     max_fill_price_drift: Decimal | None
+    # Non-gating diagnostic: how far apart in time the paired fills sat. See
+    # the module docstring's "Not proven" — positional pairing cannot see it.
+    max_fill_time_drift_ms: int | None
     fill_price_atol: Decimal
 
     @property
@@ -133,6 +143,7 @@ def reconcile_twin_day(
     shadow, twin = _ordered(shadow_fills), _ordered(twin_fills)
     divergences: list[TwinDivergence] = []
     drifts: list[Decimal] = []
+    time_drifts: list[int] = []
     for index in range(max(len(shadow), len(twin))):
         left = shadow[index] if index < len(shadow) else None
         right = twin[index] if index < len(twin) else None
@@ -175,6 +186,7 @@ def reconcile_twin_day(
             continue
         drift = abs(left.fill_price - right.fill_price)
         drifts.append(drift)
+        time_drifts.append(abs(left.filled_at_ms - right.filled_at_ms))
         if drift > fill_price_atol:
             divergences.append(
                 TwinDivergence(
@@ -191,6 +203,7 @@ def reconcile_twin_day(
         twin_fills=twin,
         divergences=tuple(divergences),
         max_fill_price_drift=max(drifts) if drifts else None,
+        max_fill_time_drift_ms=max(time_drifts) if time_drifts else None,
         fill_price_atol=fill_price_atol,
     )
 
