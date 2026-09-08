@@ -65,7 +65,7 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|
-| Alpaca equity regulatory fees (SEC §31, FINRA TAF, FINRA CAT; EOD per-component cent round-up) | `PythonDataService/app/broker/alpaca/regulatory_fees.py` | none (the IBKR tier model in `app/research/parity/ibkr_commission.py` is a different concept — broker commission, not regulatory pass-through) | Alpaca Broker Fee Schedule (retrieved 2026-09-07); SEC fee-rate advisories 2024-2/2025-2/2026-2; FINRA SR-FINRA-2024-019 — see [alpaca-regulatory-fees](references/alpaca-regulatory-fees.md) | `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py`; golden `FEE-001` in `tests/fixtures/test_alpaca_regulatory_fees_fixture.py` (hand_computed, atol=0) | canonical — 4-field provenance block present |
+| Alpaca equity regulatory fees (SEC §31, FINRA TAF, FINRA CAT; EOD per-component cent round-up) | `PythonDataService/app/broker/alpaca/regulatory_fees.py` | none (the IBKR tier model in `app/research/parity/ibkr_commission.py` is a different concept — broker commission, not regulatory pass-through) | Alpaca Broker Fee Schedule (retrieved 2026-09-07); SEC fee-rate advisories 2024-2/2025-2/2026-2; FINRA SR-FINRA-2024-019 — see [alpaca-regulatory-fees](docs/references/alpaca-regulatory-fees.md) | `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py`; golden `FEE-001` in `tests/fixtures/test_alpaca_regulatory_fees_fixture.py` (hand_computed, atol=0) | canonical — 4-field provenance block present |
 
 ### Indicators — Python-canonical, ported from LEAN
 
