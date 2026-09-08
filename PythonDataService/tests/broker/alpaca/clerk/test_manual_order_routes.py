@@ -642,3 +642,57 @@ async def test_invalid_configured_manual_operator_refuses_before_ticket_reservat
     assert repo.manual_order_ticket(TICKET_ID) is None
     assert port.asset_lookup_calls == []
     assert port.asset_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_an_extended_hours_manual_leg_is_refused_at_the_boundary(api) -> None:
+    """Manual tickets are regular-session only (ruling R6).
+
+    A ticket carries no deciding program and no decision bar, so nothing
+    anchors an extended-session leg. Before this the flag reached the fold
+    validator's bare ``ValueError``, which the router does not translate: an
+    HTTP 500, and a reserved ticket on the way there.
+    """
+    app, repo, port, _health = api
+    payload = {
+        "ticket_id": TICKET_ID,
+        "legs": [
+            {
+                "leg_id": LEG_ID,
+                "instruction": {
+                    "symbol": "SPY",
+                    "side": "buy",
+                    "quantity": 1,
+                    "order_type": "limit",
+                    "limit_price": 499.5,
+                    "time_in_force": "day",
+                    "extended_hours": True,
+                },
+            }
+        ],
+    }
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        preview = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview",
+            headers=_headers(),
+            json=payload,
+        )
+        submitted = await client.put(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}",
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": "0" * 64},
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["capability"]["available"] is False
+    assert preview.json()["capability"]["unavailable"]["code"] == "UNSUPPORTED_MANUAL_ORDER_SHAPE"
+    assert preview.json()["preview_token"] is None
+
+    assert submitted.status_code == 409
+    # The refusal names the shape, not an incidental stale token: submit
+    # re-previews when the command does not exist yet, and the preview
+    # answers with the unsupported-shape message.
+    assert "regular-session" in submitted.json()["detail"]["message"]
+    assert repo.manual_order_ticket(TICKET_ID) is None, "no ticket may be reserved"
+    assert port.submit_calls == []

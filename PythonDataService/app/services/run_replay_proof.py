@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
-from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
@@ -970,23 +969,6 @@ class RunReplayProofService:
         return receipt
 
     async def _compute(self, binding: BrokerBotBinding, run_record: BotRunRecord) -> RunReplayReceipt:
-        # An extended binding (use_rth=False) with no resolvable window has no
-        # decidable bars, which would silently replay as an empty-but-"proven"
-        # receipt instead of the honest refusal a missing window warrants
-        # (Task 4 review finding 1). Resolve the run's session here, before any
-        # of the read/compute work below, and refuse if it cannot be resolved.
-        # ``active_program_leg_policy`` covers both authority kinds, so a
-        # synthetic Dry Run's declared window is honoured exactly like the
-        # SQLite Clerk's; no active authority resolves to regular-only.
-        session = RunDecisionSession.resolve(
-            use_rth=binding.use_rth, window=active_program_leg_policy().window
-        )
-        if session is None:
-            raise RunReplayUnavailableError(
-                "The active authority declares no extended window; an extended-session run "
-                "cannot be replayed.",
-                http_status=503,
-            )
         # Only small bounded reads stay on the loop; the heavy work -- the
         # up-to-200k bar materialization, the run-bounding/split list passes, and
         # both compute legs -- all runs in one worker thread so a large retained
@@ -1019,6 +1001,28 @@ class RunReplayProofService:
                 artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
             )
             try:
+                # The window a run decided under is that run's own durable
+                # evidence, resolved before any read or compute work below.
+                # Reading the *live* authority instead failed in both
+                # directions: it refused whenever no authority happened to be
+                # active (on-demand generation, boot repair), and a window
+                # changed after the fact would have filtered the same
+                # retained bars differently -- a replay that no longer proves
+                # what the run did. An extended run with no recorded session
+                # is refused loudly rather than replayed as an
+                # empty-but-"proven" receipt for bars its
+                # ``RunDecisionSession`` could never have matched (Task 4
+                # review finding 1); an ``rth`` run needs no record, since
+                # ``use_rth=True`` carries no window to prove.
+                session = ledger.decision_session(run_id=run_record.run_id)
+                if session is None:
+                    if not binding.use_rth:
+                        raise RunReplayUnavailableError(
+                            "This run recorded no decision session, so the extended window it "
+                            "decided under cannot be proven; it cannot be replayed.",
+                            http_status=503,
+                        )
+                    session = RunDecisionSession(kind="rth", window=None)
                 provider = replay_provider_for(ledger, binding.symbol)
                 all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
                 # The Stop-time snapshot is this run's evidence cut; a run that

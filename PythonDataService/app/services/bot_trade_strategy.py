@@ -209,6 +209,14 @@ class _RetainedSourceBarFeed:
         self._session = session
         self._continuity = continuity
         self.feed_id = source.feed_id
+        # The one place every retained run records the session it decided
+        # under, beside the bars and continuity facts that session governs.
+        # The replay proof reads it back from here rather than from whatever
+        # the executing authority declares at replay time (ADR 0059 D5.2): a
+        # capability change after the fact must not reinterpret a finished
+        # run, and a replay generated on demand or during boot repair must
+        # not need an authority to be active at all.
+        ledger.record_decision_session(session, run_id=run_id, recorded_at_ms=now_ms_utc())
 
     @property
     def capability_account_id(self) -> str | None:

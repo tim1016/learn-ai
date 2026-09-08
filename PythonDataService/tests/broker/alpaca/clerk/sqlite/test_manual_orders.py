@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ACTION_SUBMIT_MANUAL_ORDER,
     ManualPreviewRevision,
+    ManualTicketConflictError,
     ManualTicketContinuationError,
     ManualTicketLeg,
     _identity,
@@ -226,6 +227,38 @@ def test_accepted_facts_with_an_extended_hours_leg_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="regular-session"):
         validate_manual_order_accepted_facts(facts)
+
+
+def test_accepting_an_extended_hours_leg_refuses_before_any_durable_write(repo) -> None:
+    """The acceptance boundary refuses the shape, typed, with nothing written.
+
+    The route the preview cannot cover: a submit whose command already
+    exists skips the preview entirely. ``ManualTicketConflictError`` is what
+    the router maps to a 409 — a bare ``ValueError`` here reached the client
+    as an HTTP 500.
+    """
+    leg = BrokerOrderLeg(
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        order_type="limit",
+        limit_price=100.25,
+        extended_hours=True,
+    )
+    before = repo.custody_transitions()
+
+    with pytest.raises(ManualTicketConflictError, match="regular-session"):
+        accept_manual_order(
+            repo,
+            account_id=ACCOUNT_ID,
+            operator_id=OPERATOR_ID,
+            ticket_id=TICKET_ID,
+            leg_id=LEG_ID,
+            leg=leg,
+        )
+
+    assert repo.manual_order_ticket(TICKET_ID) is None
+    assert repo.custody_transitions() == before
 
 
 def test_identity_payload_hash_matches_the_pre_migration_shape_for_a_regular_leg() -> None:
