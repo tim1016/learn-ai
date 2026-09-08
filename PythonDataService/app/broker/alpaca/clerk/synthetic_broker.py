@@ -259,55 +259,73 @@ class SyntheticBroker:
         return latest
 
     def _resolved_order(self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar) -> BrokerOrder:
-        """The order this leg becomes against one decision bar: filled, or cancelled unfilled.
-
-        The fill decision itself belongs to ``fill_models`` — a second copy of
-        "would this have transacted?" living here is exactly how the sim world
-        and the shadow port drift apart. This method only shapes the resulting
-        ``BrokerOrder``.
-        """
-        at_ms = bar.end_ms
-        # The sim world cannot rest an order: a non-marketable limit is
-        # cancelled on the spot, with no execution (ruling R9).
-        fill = immediate_fill_price(leg, bar.close)
-        filled = fill is not None
-        return BrokerOrder(
-            broker=self.broker_id,
-            order_id=f"sim-order:{client_order_id}",
+        """The order this leg becomes against one decision bar: filled, or cancelled unfilled (ruling R9)."""
+        return shape_immediate_order(
+            leg,
             client_order_id=client_order_id,
-            symbol=leg.symbol,
-            asset_class="us_equity",
-            side=leg.side,
-            order_type=str(leg.order_type),
-            time_in_force=str(leg.time_in_force),
-            quantity=leg.quantity,
-            limit_price=leg.limit_price,
-            stop_price=None,
-            extended_hours=leg.extended_hours,
-            submitted_at_ms=at_ms,
-            created_at_ms=at_ms,
-            updated_at_ms=at_ms,
-            expired_at_ms=None,
+            bar=bar,
+            broker_id=self.broker_id,
+            id_prefix="sim",
             observed_at_ms=now_ms_utc(),
-            filled_quantity=leg.quantity if filled else 0.0,
-            filled_avg_price=float(fill) if fill is not None else None,
-            status="filled" if filled else "canceled",
-            filled_at_ms=at_ms if filled else None,
-            canceled_at_ms=None if filled else at_ms,
-            events=(
-                [
-                    {
-                        "event_type": "fill",
-                        "occurred_at_ms": at_ms,
-                        "price": float(fill),
-                        "quantity": leg.quantity,
-                        "execution_id": f"sim-execution:{client_order_id}",
-                    }
-                ]
-                if fill is not None
-                else []
-            ),
         )
+
+
+def shape_immediate_order(
+    leg: BrokerOrderLeg,
+    *,
+    client_order_id: str,
+    bar: RetainedSourceBar,
+    broker_id: str,
+    id_prefix: str,
+    observed_at_ms: int,
+) -> BrokerOrder:
+    """One decision bar, one answer: filled at its close, or cancelled unfilled.
+
+    The fill decision itself belongs to ``fill_models`` — a second copy of
+    "would this have transacted?" living here is exactly how the sim world and
+    the shadow port drift apart. This function only shapes the resulting
+    ``BrokerOrder``; both no-submit worlds call it for a regular-session leg.
+    """
+    at_ms = bar.end_ms
+    fill = immediate_fill_price(leg, bar.close)
+    filled = fill is not None
+    return BrokerOrder(
+        broker=broker_id,
+        order_id=f"{id_prefix}-order:{client_order_id}",
+        client_order_id=client_order_id,
+        symbol=leg.symbol,
+        asset_class="us_equity",
+        side=leg.side,
+        order_type=str(leg.order_type),
+        time_in_force=str(leg.time_in_force),
+        quantity=leg.quantity,
+        limit_price=leg.limit_price,
+        stop_price=None,
+        extended_hours=leg.extended_hours,
+        submitted_at_ms=at_ms,
+        created_at_ms=at_ms,
+        updated_at_ms=at_ms,
+        expired_at_ms=None,
+        observed_at_ms=observed_at_ms,
+        filled_quantity=leg.quantity if filled else 0.0,
+        filled_avg_price=float(fill) if fill is not None else None,
+        status="filled" if filled else "canceled",
+        filled_at_ms=at_ms if filled else None,
+        canceled_at_ms=None if filled else at_ms,
+        events=(
+            [
+                {
+                    "event_type": "fill",
+                    "occurred_at_ms": at_ms,
+                    "price": float(fill),
+                    "quantity": leg.quantity,
+                    "execution_id": f"{id_prefix}-execution:{client_order_id}",
+                }
+            ]
+            if fill is not None
+            else []
+        ),
+    )
 
 
 def synthesized_positions(broker_id: str, orders: list[BrokerOrder]) -> list[BrokerPosition]:
@@ -357,5 +375,6 @@ __all__ = [
     "SyntheticBarBindingError",
     "SyntheticBroker",
     "filter_synthesized_orders",
+    "shape_immediate_order",
     "synthesized_positions",
 ]

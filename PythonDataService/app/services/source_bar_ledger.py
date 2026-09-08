@@ -498,6 +498,24 @@ class SourceBarLedger:
             ).fetchall()
         return [_retained_row(row) for row in rows]
 
+    def bars_after(self, *, provider: str, symbol: str, start_ms: int) -> list[RetainedSourceBar]:
+        """Return one stream's retained observations opening at or after ``start_ms``, in open order.
+
+        The shadow port settles a resting order from exactly these bars (ADR
+        0059 D5.5: eligibility begins with the first bar after the decision
+        bar), so the filter is on the bar's open, not its close.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                {_BARS_WITH_JOURNAL}
+                WHERE b.provider = ? AND b.symbol = ? AND b.start_ms >= ?
+                ORDER BY b.start_ms ASC, b.seq ASC
+                """,
+                (provider, symbol, start_ms),
+            ).fetchall()
+        return [_retained_row(row) for row in rows]
+
     def latest(self, *, provider: str, symbol: str) -> RetainedSourceBar | None:
         """Return the latest retained observation for one evidence stream."""
         with self._lock:

@@ -113,6 +113,51 @@ def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
     return f"{PAPER_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
 
 
+SHADOW_EVIDENCE_ACCOUNT_PREFIX = "shadow-evidence:"
+"""Instance-scoped evidence namespace for shadow retained source bars.
+
+Custody is the account-scoped ``shadow:<live_account_id>`` authority; every
+instance that runs on it keeps its own retained-bar ledger here, exactly as a
+real-paper instance keeps ``paper:<instance>``. The prefix is deliberately not
+``shadow:`` — an evidence namespace is never a custody identity.
+"""
+
+
+def shadow_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
+    """Return the isolated shadow source-bar namespace for one instance."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    return f"{SHADOW_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
+def is_shadow_evidence_account_id(account_id: str) -> bool:
+    """Return whether ``account_id`` is a shadow instance's evidence namespace."""
+    return account_id.startswith(SHADOW_EVIDENCE_ACCOUNT_PREFIX)
+
+
+def evidence_account_id_for(
+    *,
+    mode: str,
+    strategy_instance_id: str,
+    custody_kind: AccountAuthorityKind,
+) -> str:
+    """The evidence namespace whose ledger retains a binding's bars.
+
+    Dry Run's custody and evidence share ``sim:<instance>``. Every other
+    binding's evidence is instance-scoped under the world the primary
+    authority custodies in — ``paper:`` on the real-paper authority,
+    ``shadow-evidence:`` on the shadow authority — so two instances on one
+    symbol never share a ledger and a replay proof reads exactly what its run
+    retained. Whether a mode is replayable is the replay proof's judgement,
+    not this function's.
+    """
+    if mode == "dry_run":
+        return synthetic_account_id_for_strategy(strategy_instance_id)
+    if custody_kind == "shadow":
+        return shadow_evidence_account_id_for_strategy(strategy_instance_id)
+    return paper_evidence_account_id_for_strategy(strategy_instance_id)
+
+
 @dataclass(frozen=True)
 class AccountBoundBrokerPorts:
     """Ports bound to one verified account identity at composition time."""
@@ -156,6 +201,7 @@ def bind_synthetic_ports(
 __all__ = [
     "PAPER_EVIDENCE_ACCOUNT_PREFIX",
     "SHADOW_ACCOUNT_PREFIX",
+    "SHADOW_EVIDENCE_ACCOUNT_PREFIX",
     "SIM_ACCOUNT_PREFIX",
     "AccountAuthorityIdentityError",
     "AccountAuthorityKind",
@@ -163,12 +209,15 @@ __all__ = [
     "authority_kind_for_account",
     "bind_real_alpaca_ports",
     "bind_synthetic_ports",
+    "evidence_account_id_for",
     "is_shadow_account_id",
+    "is_shadow_evidence_account_id",
     "is_synthetic_account_id",
     "paper_evidence_account_id_for_strategy",
     "require_real_account_id",
     "require_shadow_account_id",
     "require_synthetic_account_id",
     "shadow_account_id_for_live_account",
+    "shadow_evidence_account_id_for_strategy",
     "synthetic_account_id_for_strategy",
 ]

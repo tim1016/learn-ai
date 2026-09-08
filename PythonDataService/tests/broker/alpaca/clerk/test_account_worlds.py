@@ -11,12 +11,16 @@ import pytest
 
 from app.broker.alpaca.clerk.account_authority import (
     SHADOW_ACCOUNT_PREFIX,
+    SHADOW_EVIDENCE_ACCOUNT_PREFIX,
     AccountAuthorityIdentityError,
     authority_kind_for_account,
+    evidence_account_id_for,
     is_shadow_account_id,
+    is_shadow_evidence_account_id,
     require_real_account_id,
     require_shadow_account_id,
     shadow_account_id_for_live_account,
+    shadow_evidence_account_id_for_strategy,
 )
 
 
@@ -60,3 +64,20 @@ def test_shadow_account_id_derives_from_the_live_account() -> None:
     assert shadow_account_id_for_live_account("9LIVE0001") == "shadow:9LIVE0001"
     with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
         shadow_account_id_for_live_account("sim:ema-1")
+
+
+def test_shadow_evidence_namespace_is_instance_scoped_and_not_a_custody_namespace() -> None:
+    account_id = shadow_evidence_account_id_for_strategy("bot-a")
+    assert account_id == f"{SHADOW_EVIDENCE_ACCOUNT_PREFIX}bot-a"
+    assert is_shadow_evidence_account_id(account_id) is True
+    assert is_shadow_account_id(account_id) is False
+    assert is_shadow_evidence_account_id("shadow:9LIVE0001") is False
+
+
+def test_evidence_account_id_follows_mode_then_custody_world() -> None:
+    assert evidence_account_id_for(mode="dry_run", strategy_instance_id="b", custody_kind="real_paper") == "sim:b"
+    assert evidence_account_id_for(mode="trade", strategy_instance_id="b", custody_kind="real_paper") == "paper:b"
+    assert evidence_account_id_for(mode="trade", strategy_instance_id="b", custody_kind="shadow") == "shadow-evidence:b"
+    # log_only retains into the world's instance namespace exactly as the
+    # primary binding authority always did; replay refuses the mode itself.
+    assert evidence_account_id_for(mode="log_only", strategy_instance_id="b", custody_kind="real_paper") == "paper:b"
