@@ -129,6 +129,9 @@ async def _panel_authority_for_binding(
     keeps the evidence read addressed at the repository it came from and
     every synthesized fill labelled ``simulated`` (ADR 0059 D2, ruling R8).
     """
+    # ``getattr`` for the same reason the mode read above uses it: several
+    # callers hand this a duck-typed binding that carries only what the
+    # projection needs.
     if getattr(binding, "mode", None) != "dry_run":
         yield active_sqlite_facade(str(getattr(binding, "broker", "alpaca")))
         return
