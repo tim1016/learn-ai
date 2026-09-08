@@ -82,8 +82,12 @@ class AlpacaSettings(BaseSettings):
     live_loss_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     live_shadow_sessions: int | None = Field(default=None, ge=1)
     live_arming_max_sessions: int | None = Field(default=None, ge=1)
-    live_xh_entry_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    live_xh_exit_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # Upper-bounded because 10 000 bps is 100 %: a sell allowance at or past it
+    # floors the marketable anchor to zero or below, which is not a price. The
+    # anchor refuses such a leg too (`EXTENDED_ANCHOR_UNPRICEABLE`); this stops
+    # the configuration from loading at all.
+    live_xh_entry_bps: float | None = Field(default=None, ge=0, lt=10_000, allow_inf_nan=False)
+    live_xh_exit_bps: float | None = Field(default=None, ge=0, lt=10_000, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:

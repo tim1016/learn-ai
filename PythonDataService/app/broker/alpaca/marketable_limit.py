@@ -13,7 +13,19 @@ Reference:
     docs/references/alpaca-extended-hours.md.
 Canonical implementation: this file.
 Validated against:
-    tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price
+    tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price,
+    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price
+
+**Why the tick rule exists twice** (CLAUDE.md guiding philosophy #5 permits a
+duplicate only for a real reason, with a parity test naming the canonical
+file). ``BrokerOrderLeg._limit_price_matches_order_type`` enforces Alpaca's
+precision rule on the *final* price, at the contract boundary, where it guards
+every leg from every producer. This module needs the same rule *before*
+quantising, to pick the tick the anchor rounds to — the band is chosen by the
+pre-quantisation ``raw``, which is what makes a sub-dollar close crossing $1
+round up to $1.01 rather than to a sub-penny tick the vendor would reject. The
+parity test above sweeps the $1 boundary and asserts every anchor this function
+returns validates as a ``BrokerOrderLeg.limit_price``.
 """
 
 from __future__ import annotations
@@ -35,7 +47,15 @@ _SUB_DOLLAR_TICK = Decimal("0.0001")
 
 
 def marketable_limit_price(*, side: OrderSide, close: Decimal, allowance_bps: Decimal) -> Decimal:
-    """The limit price a program leg carries outside the regular session."""
+    """The limit price a program leg carries outside the regular session.
+
+    Raises ``ValueError`` when the quantised result is not positive — a sell
+    allowance at or past 10 000 bps, or a sub-penny close floored to zero.
+    ``BrokerOrderLeg`` would reject such a price too, but as a pydantic
+    ``ValidationError`` raised from inside ``LegShape.apply``, outside every
+    ``except ProgramLegRefused`` its callers hold; ``shape_program_leg`` maps
+    this to a typed ``EXTENDED_ANCHOR_UNPRICEABLE`` refusal instead.
+    """
     if close <= 0:
         raise ValueError(f"close must be positive; got {close}")
     if allowance_bps < 0:
@@ -48,7 +68,13 @@ def marketable_limit_price(*, side: OrderSide, close: Decimal, allowance_bps: De
         raw = close * (1 - fraction)
         rounding = ROUND_FLOOR
     tick = _DOLLAR_TICK if raw >= 1 else _SUB_DOLLAR_TICK
-    return raw.quantize(tick, rounding=rounding)
+    price = raw.quantize(tick, rounding=rounding)
+    if price <= 0:
+        raise ValueError(
+            f"a {side.value} anchored at close {close} with {allowance_bps} bps quantises "
+            f"to {price}, which is not a submittable limit price"
+        )
+    return price
 
 
 @dataclass(frozen=True)

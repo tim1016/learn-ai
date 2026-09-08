@@ -5,10 +5,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 
 
 @pytest.mark.parametrize(
@@ -53,3 +54,67 @@ def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
     )
     assert ExtendedHoursAllowances.from_settings(neither) is None
     assert ExtendedHoursAllowances.from_settings(one) is None
+
+
+def test_an_anchor_that_quantises_to_zero_is_refused() -> None:
+    """A sell at 10 000 bps is a 100 % giveaway; the quantised anchor is 0.0000.
+
+    ``BrokerOrderLeg`` rejects such a price too, but as a pydantic
+    ``ValidationError`` raised from inside ``LegShape.apply`` — outside every
+    ``except ProgramLegRefused`` its callers hold, so it escaped and killed the
+    shielded effect task instead of writing a rejected receipt.
+    """
+    with pytest.raises(ValueError, match="not a submittable limit price"):
+        marketable_limit_price(
+            side=OrderSide.SELL, close=Decimal("100.00"), allowance_bps=Decimal("10000")
+        )
+
+
+def test_a_sub_penny_close_floored_to_zero_is_refused() -> None:
+    with pytest.raises(ValueError, match="not a submittable limit price"):
+        marketable_limit_price(
+            side=OrderSide.SELL, close=Decimal("0.00005"), allowance_bps=Decimal("10")
+        )
+
+
+@pytest.mark.parametrize("bps", ["10000", "10001", "50000"])
+def test_an_allowance_of_a_hundred_percent_or_more_will_not_load(bps: str) -> None:
+    """A 100 % allowance is not a price; the configuration refuses to load at all."""
+    with pytest.raises(ValidationError, match="live_xh_exit_bps"):
+        AlpacaSettings(api_key_id="k", api_secret_key="s", live_xh_exit_bps=float(bps))
+    with pytest.raises(ValidationError, match="live_xh_entry_bps"):
+        AlpacaSettings(api_key_id="k", api_secret_key="s", live_xh_entry_bps=float(bps))
+
+
+@pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])
+@pytest.mark.parametrize(
+    "close",
+    [
+        "0.9000", "0.9500", "0.9990", "0.9999", "0.99999",
+        "1.0000", "1.0001", "1.0100", "1.5000", "2.0000", "100.00",
+    ],
+)
+@pytest.mark.parametrize("bps", ["0", "5", "10", "50", "100"])
+def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
+    side: OrderSide, close: str, bps: str
+) -> None:
+    """Parity for the duplicated $1 tick rule (CLAUDE.md guiding philosophy #5).
+
+    ``marketable_limit.py`` picks the tick from the *pre*-quantisation ``raw``;
+    ``BrokerOrderLeg._limit_price_matches_order_type`` checks the *final*
+    price. The two can only disagree at the band boundary — a sub-dollar close
+    whose anchor lands at or above $1 — so the sweep straddles it, including
+    the 0.99999 → 1.0000 case the formula row calls out.
+    """
+    price = marketable_limit_price(side=side, close=Decimal(close), allowance_bps=Decimal(bps))
+
+    leg = BrokerOrderLeg(
+        symbol="SPY",
+        side=side,
+        quantity=1,
+        order_type=OrderType.LIMIT,
+        limit_price=float(price),
+        time_in_force=TimeInForce.DAY,
+    )
+
+    assert leg.limit_price == float(price)

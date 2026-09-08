@@ -1,4 +1,8 @@
-"""limit_touch: eligibility starts after the decision bar; a bar that reaches the limit fills at the limit."""
+"""The two synthetic fill models: the sim world's immediate fill, and limit_touch.
+
+limit_touch: eligibility starts after the decision bar; a bar that reaches the
+limit fills at the limit.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.broker.alpaca.clerk.fill_models import SyntheticFill, limit_touch_fill
+from app.broker.alpaca.clerk.fill_models import (
+    SyntheticFill,
+    immediate_fill_price,
+    limit_touch_fill,
+)
 from app.broker.contract.models import BrokerOrderLeg
 from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -58,3 +66,53 @@ def test_a_bar_closing_after_the_cancel_instant_cannot_fill() -> None:
 def test_market_legs_are_refused() -> None:
     with pytest.raises(ValueError, match="limit"):
         limit_touch_fill(BrokerOrderLeg(symbol="SPY", side="buy", quantity=1), decision_bar_end_ms=_T0, bars=[], cancel_at_ms=_T0)
+
+
+def test_a_bar_closing_exactly_at_the_cancel_instant_still_fills() -> None:
+    """The eligibility window is closed at its end: ``end_ms == cancel_at_ms`` is in.
+
+    The predicate is ``bar.end_ms > cancel_at_ms``, so the boundary is
+    inclusive — a bar that closed exactly as the vendor would have cancelled
+    was live for its whole range.
+    """
+    boundary = _bar(2, start_ms=_T0 + 60_000, low="100.00", high="100.50")
+
+    fill = limit_touch_fill(
+        _buy(100.10),
+        decision_bar_end_ms=_T0 + 60_000,
+        bars=[boundary],
+        cancel_at_ms=boundary.end_ms,
+    )
+
+    assert fill == SyntheticFill(filled_at_ms=boundary.end_ms, price=Decimal("100.10"), bar_ref="bar-2")
+
+
+@pytest.mark.parametrize(
+    ("side", "limit", "close", "expected"),
+    [
+        ("buy", 100.10, "100.10", "100.10"),  # exactly at the limit is marketable
+        ("buy", 100.10, "100.05", "100.05"),
+        ("buy", 100.10, "100.20", None),
+        ("sell", 99.80, "99.80", "99.80"),
+        ("sell", 99.80, "99.90", "99.90"),
+        ("sell", 99.80, "99.70", None),
+    ],
+)
+def test_immediate_fill_price_is_the_sim_worlds_whole_model(
+    side: str, limit: float, close: str, expected: str | None
+) -> None:
+    """R9: the sim world cannot rest an order, so a limit either transacts at
+    the decision bar's close or is cancelled unfilled on the spot."""
+    leg = BrokerOrderLeg(
+        symbol="SPY", side=side, quantity=1, order_type="limit", limit_price=limit, extended_hours=True
+    )
+
+    fill = immediate_fill_price(leg, Decimal(close))
+
+    assert fill == (None if expected is None else Decimal(expected))
+
+
+def test_immediate_fill_price_always_fills_a_market_leg() -> None:
+    market = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
+
+    assert immediate_fill_price(market, Decimal("123.45")) == Decimal("123.45")

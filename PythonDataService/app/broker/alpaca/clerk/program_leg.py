@@ -110,6 +110,18 @@ EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
     next_step="Retain the decision bar (replay or ingest it), then let the program decide again.",
 )
 
+EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
+    reason_code="EXTENDED_ANCHOR_UNPRICEABLE",
+    explanation=(
+        "The decision bar's close and the configured allowance price this leg at or "
+        "below zero, which is not a submittable limit."
+    ),
+    next_step=(
+        "Lower ALPACA_LIVE_XH_ENTRY_BPS / ALPACA_LIVE_XH_EXIT_BPS, or keep this "
+        "instrument out of extended-hours trading."
+    ),
+)
+
 
 def session_closed_at_decision(phase: str) -> LegRefusal:
     """The decision instant is in no session that accepts a program leg."""
@@ -162,7 +174,15 @@ def shape_program_leg(
     if policy.allowances is None:
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
-    price = marketable_limit_price(side=side, close=decision_bar.close, allowance_bps=allowance)
+    try:
+        price = marketable_limit_price(side=side, close=decision_bar.close, allowance_bps=allowance)
+    except ValueError as exc:
+        # A non-positive quantised anchor. `BrokerOrderLeg` would reject it too,
+        # but as a pydantic ValidationError raised from `apply()` — outside the
+        # `except ProgramLegRefused` in `runtime._execute_effect`, so it escaped
+        # and killed the shielded effect task instead of writing a rejected
+        # receipt. Refusals are this module's whole contract; make it one.
+        raise ProgramLegRefused(EXTENDED_ANCHOR_UNPRICEABLE) from exc
     return LegShape(
         order_type=OrderType.LIMIT,
         time_in_force=TimeInForce.DAY,
@@ -174,6 +194,7 @@ def shape_program_leg(
 
 __all__ = [
     "EXTENDED_ANCHOR_UNAVAILABLE",
+    "EXTENDED_ANCHOR_UNPRICEABLE",
     "EXTENDED_HOURS_ALLOWANCE_UNSET",
     "EXTENDED_HOURS_UNSUPPORTED",
     "REGULAR_SESSION_SHAPE",

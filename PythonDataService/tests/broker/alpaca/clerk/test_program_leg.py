@@ -173,3 +173,29 @@ def test_apply_rejects_a_side_the_shape_was_not_priced_for() -> None:
 
     with pytest.raises(ValueError, match="priced for the other side"):
         shape.apply(symbol="SPY", side=OrderSide.SELL, quantity=1.0)
+
+
+def test_an_unpriceable_anchor_is_a_typed_refusal_not_a_validation_error() -> None:
+    """A quantised anchor at or below zero must reach the Clerk as a refusal.
+
+    ``LegShape.apply`` would otherwise raise pydantic's ``ValidationError``
+    (``limit_price gt=0``) from *outside* the ``except ProgramLegRefused`` in
+    ``runtime._execute_effect``, killing the shielded effect task instead of
+    writing a rejected receipt.
+    """
+    policy = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("9999.99")),
+    )
+
+    with pytest.raises(ProgramLegRefused) as caught:
+        shape_program_leg(
+            side=OrderSide.SELL,
+            purpose=EffectPurpose.EXIT,
+            use_rth=False,
+            decision_bar=_bar(18, 0, close="0.0100"),
+            policy=policy,
+        )
+
+    assert caught.value.reason_code == "EXTENDED_ANCHOR_UNPRICEABLE"
+    assert caught.value.next_step

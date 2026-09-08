@@ -9,7 +9,7 @@
 - `app/services/session_authority.py` resolves PRE / RTH / POST from the calendar's regular session and the declared window (source `broker_declared_window`, `extended_phase_proven=True`).
 - `app/services/decision_clock.py::extended_trigger_instants` and `decision_session="extended"`; `continuity_policy_for` offers it to `use_rth=False` bindings.
 - `app/broker/alpaca/marketable_limit.py::marketable_limit_price` and `app/broker/alpaca/clerk/program_leg.py::shape_program_leg`; the reducing order's shape is durable in `EXIT_REDUCING_ORDER_CREATED` facts.
-- `app/broker/alpaca/clerk/fill_models.py::limit_touch_fill` (for the slice-4 shadow port); the `sim:` world reports limit legs honestly and cancels a non-marketable limit immediately.
+- `app/broker/alpaca/clerk/fill_models.py` — the two synthetic fill models: `immediate_fill_price` (what the `sim:` world can do — fill at the decision bar's close or cancel on the spot) and `limit_touch_fill` (the resting model for the slice-4 shadow port). The `sim:` world reports limit legs honestly and calls the first of those rather than deciding marketability itself.
 - `app/schemas/run_admission.py::ExtendedHoursAdmissionFact` on the Start/Resume admission surface, and the `RunReplayUnavailableError` refusal that keeps an extended run's replay proof honest when no window is declared.
 
 ## Vendor facts (pinned 2026-09-08)
@@ -26,7 +26,7 @@
 
 ## The anchor
 
-`buy: ceil_tick(close × (1 + entry_bps/10⁴))`, `sell: floor_tick(close × (1 − exit_bps/10⁴))`; tick 0.01 at or above $1, 0.0001 below. Rounding is in the marketable direction. The allowances are `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS`, required for a `use_rth=False` trade-mode run; unset → Start refuses `EXTENDED_HOURS_ALLOWANCE_UNSET`.
+`buy: ceil_tick(close × (1 + entry_bps/10⁴))`, `sell: floor_tick(close × (1 − exit_bps/10⁴))`; tick 0.01 at or above $1, 0.0001 below, chosen by the pre-quantisation value so a sub-dollar close crossing $1 rounds to $1.01 rather than to a sub-penny tick the vendor would reject. Rounding is in the marketable direction. The allowances are `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS`, required for any `use_rth=False` run; unset → Start and Resume refuse `EXTENDED_HOURS_ALLOWANCE_UNSET`. Each is bounded `0 <= bps < 10_000` — a 100 % allowance is not a price — and an anchor that still quantises to zero or below refuses the leg (`EXTENDED_ANCHOR_UNPRICEABLE`) rather than escaping as a contract-validation error.
 
 ## The clock
 
@@ -45,12 +45,13 @@ Both failing states refuse in **every** mode — trade, dry-run and log-only ali
 
 ## Leg refusals
 
-`app/broker/alpaca/clerk/program_leg.py::shape_program_leg` never guesses a leg shape; outside the regular session it raises one of four typed refusals, each a rejected receipt with no broker contact:
+`app/broker/alpaca/clerk/program_leg.py::shape_program_leg` never guesses a leg shape; outside the regular session it raises one of five typed refusals, each a rejected receipt with no broker contact:
 
 - `EXTENDED_HOURS_UNSUPPORTED` — no declared window (`policy.window is None`).
 - `EXTENDED_ANCHOR_UNAVAILABLE` — no exact retained decision bar to anchor the leg.
 - `SESSION_CLOSED_AT_DECISION` — the decision instant is neither RTH nor an extended phase.
 - `EXTENDED_HOURS_ALLOWANCE_UNSET` — the window and the bar are both present but no allowance is configured.
+- `EXTENDED_ANCHOR_UNPRICEABLE` — the bar's close and the configured allowance quantise to a non-positive limit price.
 
 Inside the regular session (`decision_session == "rth"`, or the decision bar's own phase resolves to `RTH`) the leg is always `REGULAR_SESSION_SHAPE` — market, DAY, `extended_hours=False` — so an `rth` binding is never shaped by the bar at all. A recovery-created reducing order (sweep, watchdog, safe-flatten, or a manual ticket) carries no deciding-program leg shape, so `_create_reducing_order` resolves `shape=None` to `REGULAR_SESSION_SHAPE` and stays market DAY — it is never re-anchored to an extended-session limit.
 
