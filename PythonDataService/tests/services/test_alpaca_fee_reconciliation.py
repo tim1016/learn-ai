@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import ExecutionPage, ExecutionRow
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.services.alpaca_fee_reconciliation import (
     FEE_POSTING_GRACE_MS,
     SessionFill,
     reconcile_session_fees,
+    session_fee_reconciliation,
+    session_fills,
 )
 from app.utils.session_anchors import et_midnight_ms
 
@@ -144,3 +148,100 @@ def test_rate_unpinned_session_has_no_prediction() -> None:
     assert result.predicted is None
     assert result.unpinned_components == ["cat"]
     assert result.tolerance_usd is None
+
+
+def _row(fill_id: str, filled_at_ms: int, side: OrderSide, quantity: float, price: float) -> ExecutionRow:
+    return ExecutionRow(
+        fill_id=fill_id,
+        execution_id=None,
+        order_ref=f"order-{fill_id}",
+        strategy_instance_id=None,
+        origin="strategy",
+        state="effective",
+        event_kind="fill",
+        symbol="AAPL",
+        side=side,
+        quantity=quantity,
+        price=price,
+        fee=None,
+        fee_fidelity="not_reported",
+        filled_at_ms=filled_at_ms,
+        recorded_at_ms=filled_at_ms,
+    )
+
+
+def _page(rows: tuple[ExecutionRow, ...], next_cursor: str | None) -> ExecutionPage:
+    return ExecutionPage(
+        account_id="123456789",
+        authority_generation=1,
+        control_revision=1,
+        executions=rows,
+        next_cursor=next_cursor,
+    )
+
+
+class _Pager:
+    """Newest-first pages keyed by cursor, recording every call."""
+
+    def __init__(self, pages: dict[str | None, ExecutionPage]) -> None:
+        self.pages = pages
+        self.calls: list[tuple[str | None, int, str | None]] = []
+
+    def account_executions(self, *, cursor: str | None, limit: int, state: str | None) -> ExecutionPage:
+        self.calls.append((cursor, limit, state))
+        return self.pages[cursor]
+
+
+def test_session_fills_keeps_only_the_window_and_stops_paging_before_it() -> None:
+    pager = _Pager(
+        {
+            None: _page(
+                (
+                    _row("after", DAY_END_MS, OrderSide.SELL, 1.0, 1.0),
+                    _row("late", DAY_END_MS - 1, OrderSide.SELL, 100.0, 250.0),
+                    _row("early", DAY_START_MS, OrderSide.BUY, 0.5, 400.0),
+                ),
+                "page-2",
+            ),
+            "page-2": _page((_row("before", DAY_START_MS - 1, OrderSide.SELL, 7.0, 7.0),), "page-3"),
+            "page-3": _page((), None),
+        }
+    )
+
+    fills = session_fills(pager, window_start_ms=DAY_START_MS, window_end_ms=DAY_END_MS)
+
+    assert fills == [
+        SessionFill(side=OrderSide.SELL, quantity=D("100"), fill_price=D("250")),
+        SessionFill(side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400")),
+    ]
+    assert pager.calls == [(None, 100, "effective"), ("page-2", 100, "effective")]
+
+
+def test_session_fills_stops_when_pages_run_out() -> None:
+    pager = _Pager({None: _page((_row("only", SESSION_OPEN_MS, OrderSide.SELL, 2.0, 3.0),), None)})
+
+    fills = session_fills(pager, window_start_ms=DAY_START_MS, window_end_ms=DAY_END_MS)
+
+    assert fills == [SessionFill(side=OrderSide.SELL, quantity=D("2"), fill_price=D("3"))]
+
+
+class _Port:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int | None, int]] = []
+
+    async def list_activities(self, *, after_ms: int | None = None, limit: int = 100) -> list[BrokerActivity]:
+        self.calls.append((after_ms, limit))
+        return []
+
+
+async def test_facade_is_unavailable_without_an_active_sqlite_clerk() -> None:
+    set_active_clerk_runtime(None)
+    port = _Port()
+
+    result = await session_fee_reconciliation(broker="alpaca", port=port, session_open_ms=SESSION_OPEN_MS, now_ms=DAY_END_MS)
+
+    assert result.verdict == "unavailable"
+    assert result.account_id is None
+    assert result.predicted is None
+    assert (result.fill_window_start_ms, result.fill_window_end_ms) == (DAY_START_MS, DAY_END_MS)
+    assert port.calls == []

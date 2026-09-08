@@ -24088,6 +24088,39 @@
         "title": "PortfolioHistoryRange",
         "type": "string"
       },
+      "PredictedSessionFees": {
+        "description": "The model's end-of-day charge for the session, per component.",
+        "properties": {
+          "cat_usd": {
+            "minimum": 0.0,
+            "title": "Cat Usd",
+            "type": "number"
+          },
+          "sec_usd": {
+            "minimum": 0.0,
+            "title": "Sec Usd",
+            "type": "number"
+          },
+          "taf_usd": {
+            "minimum": 0.0,
+            "title": "Taf Usd",
+            "type": "number"
+          },
+          "total_usd": {
+            "minimum": 0.0,
+            "title": "Total Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sec_usd",
+          "taf_usd",
+          "cat_usd",
+          "total_usd"
+        ],
+        "title": "PredictedSessionFees",
+        "type": "object"
+      },
       "PredictionComparison": {
         "additionalProperties": false,
         "description": "Compare a per-bar prediction value against a constant threshold.",
@@ -30673,6 +30706,156 @@
           "sessions"
         ],
         "title": "SessionDataCapability",
+        "type": "object"
+      },
+      "SessionFeeReconciliation": {
+        "description": "Predicted fees for one ET trade date against the FEE activities Alpaca posted.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "delta_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Usd"
+          },
+          "fill_count": {
+            "minimum": 0.0,
+            "title": "Fill Count",
+            "type": "integer"
+          },
+          "fill_window_end_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Fill Window End Ms",
+            "type": "integer"
+          },
+          "fill_window_start_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Fill Window Start Ms",
+            "type": "integer"
+          },
+          "observed_activity_count": {
+            "minimum": 0.0,
+            "title": "Observed Activity Count",
+            "type": "integer"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "observed_total_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Total Usd"
+          },
+          "predicted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PredictedSessionFees"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sell_fill_count": {
+            "minimum": 0.0,
+            "title": "Sell Fill Count",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "tolerance_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tolerance Usd"
+          },
+          "unpinned_components": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpinned Components",
+            "type": "array"
+          },
+          "verdict": {
+            "enum": [
+              "within_tolerance",
+              "drift",
+              "pending",
+              "unobserved",
+              "no_fills",
+              "rate_unpinned",
+              "unavailable"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "session_open_ms",
+          "fill_window_start_ms",
+          "fill_window_end_ms",
+          "fill_count",
+          "sell_fill_count",
+          "predicted",
+          "observed_total_usd",
+          "observed_activity_count",
+          "delta_usd",
+          "tolerance_usd",
+          "verdict",
+          "why",
+          "unpinned_components",
+          "observed_at_ms"
+        ],
+        "title": "SessionFeeReconciliation",
         "type": "object"
       },
       "SetHoldings": {
@@ -45809,6 +45992,76 @@
           }
         },
         "summary": "Get Clock Evidence",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/fees/session-reconciliation": {
+      "get": {
+        "description": "Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6).",
+        "operationId": "get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_open_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Session Open Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFeeReconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session Fee Reconciliation",
         "tags": [
           "brokers-v2"
         ]

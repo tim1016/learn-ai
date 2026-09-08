@@ -14,7 +14,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
+from typing import Protocol
 
+from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    MAX_FILL_PAGE_LIMIT,
+    SqliteEconomicProjectionReader,
+)
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import ExecutionPage, ExecutionState
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.regulatory_fees import (
     FillFees,
     RateNotPinnedError,
@@ -23,12 +31,14 @@ from app.broker.alpaca.regulatory_fees import (
     settle_session,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
+from app.broker.contract.ports import BrokerReadPort
 from app.schemas.alpaca_fee_reconciliation import (
     FeeReconciliationVerdict,
     PredictedSessionFees,
     SessionFeeReconciliation,
 )
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.timestamps import now_ms_utc
 
 # Alpaca charges at end of day; give the FEE activity a day to post before
 # "no observation" becomes a finding rather than a wait.
@@ -197,4 +207,101 @@ def reconcile_session_fees(
         observed_total_usd=float(observed),
         delta_usd=float(delta),
         tolerance_usd=float(tolerance),
+    )
+
+
+class ExecutionPager(Protocol):
+    """The one read this module needs from the SQLite economic projection."""
+
+    def account_executions(
+        self, *, cursor: str | None, limit: int, state: ExecutionState | None
+    ) -> ExecutionPage: ...
+
+
+def session_fills(
+    pager: ExecutionPager,
+    *,
+    window_start_ms: int,
+    window_end_ms: int,
+) -> list[SessionFill]:
+    """Effective fills with ``window_start_ms <= filled_at_ms < window_end_ms``.
+
+    Pages are newest-first, so paging stops as soon as a page ends before the
+    window; the read is bounded by the day's fill count, not the account's history.
+    """
+    fills: list[SessionFill] = []
+    cursor: str | None = None
+    while True:
+        page = pager.account_executions(cursor=cursor, limit=MAX_FILL_PAGE_LIMIT, state="effective")
+        for row in page.executions:
+            if window_start_ms <= row.filled_at_ms < window_end_ms:
+                fills.append(
+                    SessionFill(
+                        side=row.side,
+                        quantity=Decimal(str(row.quantity)),
+                        fill_price=Decimal(str(row.price)),
+                    )
+                )
+        reached_before_window = bool(page.executions) and page.executions[-1].filled_at_ms < window_start_ms
+        if page.next_cursor is None or reached_before_window:
+            return fills
+        cursor = page.next_cursor
+
+
+def _active_sqlite_clerk() -> SqliteAlpacaClerkFacade | None:
+    runtime = get_active_clerk_runtime()
+    if runtime is None or runtime.authority_kind != "sqlite":
+        return None
+    clerk = runtime.clerk
+    return clerk if isinstance(clerk, SqliteAlpacaClerkFacade) else None
+
+
+async def session_fee_reconciliation(
+    *,
+    broker: str,
+    port: BrokerReadPort,
+    session_open_ms: int,
+    now_ms: int | None = None,
+) -> SessionFeeReconciliation:
+    """Reconcile one trade date: SQLite fills priced by the model vs Alpaca's FEE rows."""
+    observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+    clerk = _active_sqlite_clerk()
+    if clerk is None:
+        frame = _frame(
+            broker=broker,
+            account_id=None,
+            session_open_ms=session_open_ms,
+            fills=(),
+            fee_rows=(),
+            now_ms=observed_at_ms,
+        )
+        return frame.verdict(
+            "unavailable",
+            "no active SQLite Clerk authority; the session's fills cannot be read",
+        )
+    frame = _frame(
+        broker=broker,
+        account_id=clerk.account_id,
+        session_open_ms=session_open_ms,
+        fills=(),
+        fee_rows=(),
+        now_ms=observed_at_ms,
+    )
+    reader = SqliteEconomicProjectionReader.from_repository(clerk.repository)
+    try:
+        fills = session_fills(
+            reader,
+            window_start_ms=frame.fill_window_start_ms,
+            window_end_ms=frame.fill_window_end_ms,
+        )
+    finally:
+        reader.close()
+    activities = await port.list_activities(after_ms=frame.fill_window_start_ms)
+    return reconcile_session_fees(
+        broker=broker,
+        account_id=clerk.account_id,
+        session_open_ms=session_open_ms,
+        fills=fills,
+        fee_activities=activities,
+        now_ms=observed_at_ms,
     )
