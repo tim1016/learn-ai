@@ -22,6 +22,23 @@ position reads are the clock. A resting order cancels only once one bucket
 (the decision bar's own length) has elapsed past the declared close (ruling
 R5), so the closing bucket has been retained before the book concludes the
 order never touched.
+
+Three consequences of settling on read, written down so the next reader does
+not rediscover them in production:
+
+* A read is a durable write — a locked WAL append — **only while a resting
+  order exists**. With nothing to settle it is a plain WAL read that takes no
+  lock and appends nothing, so a request-path gate read costs a file read.
+* The sweep's ``gather(list_orders, list_positions)`` therefore runs two
+  independent settlement passes with two clock reads. That is safe in either
+  argument order: settlement only ever moves an order forward, so whichever
+  pass runs second observes a superset of what the first did.
+* Once the slack window has elapsed, a cancel is **final**. A bar retained
+  afterwards that would have touched the limit does not revive the order, so
+  an evidence-retention stall lasting longer than one bucket past the declared
+  close converts a would-be fill into a cancel. That determinism is the point
+  of R5, and it is the residual to watch — it is the shape of the #1921
+  feed-stall family.
 """
 
 from __future__ import annotations
@@ -30,6 +47,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_evidence_account_id,
@@ -149,6 +167,34 @@ class EvidenceLedgers:
             return ledger.bars_after(provider=provider, symbol=symbol, start_ms=start_ms)
 
 
+class _Settlable(NamedTuple):
+    """One resting order's settlement inputs, narrowed once for the whole pass."""
+
+    leg: BrokerOrderLeg
+    anchor: SynthesizedAnchor
+    cancel_at_ms: int
+
+
+def _settlable(record: SynthesizedOrderRecord) -> _Settlable | None:
+    """The settlement inputs of a resting order the evidence can still decide.
+
+    ``None`` for anything a settlement pass would leave alone — a terminal
+    order, an immediate-fill anchor, or a record written before legs and
+    anchors were durable. One answer serves both callers: whether to take the
+    transaction at all, and whether to act on this record inside it.
+    """
+    anchor, leg = record.anchor, record.leg
+    if (
+        record.order.status != _RESTING
+        or anchor is None
+        or leg is None
+        or anchor.fill_model != "limit_touch"
+        or anchor.cancel_at_ms is None
+    ):
+        return None
+    return _Settlable(leg=leg, anchor=anchor, cancel_at_ms=anchor.cancel_at_ms)
+
+
 def _fill_event(client_order_id: str, *, at_ms: int, price: float, quantity: float) -> BrokerOrderEvent:
     return BrokerOrderEvent(
         event_type="fill",
@@ -231,23 +277,37 @@ class ShadowOrderBook:
                 anchor=record.anchor,
             )
 
-    def settle(self) -> None:
-        with self._ledger.transaction() as records:
-            self._settle_locked(records)
-
     def orders(self) -> list[BrokerOrder]:
-        with self._ledger.transaction() as records:
-            self._settle_locked(records)
-            return self._ledger.latest_orders_from_records(records)
+        return [record.order for record in self._settled_records().values()]
 
     def order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return next((order for order in self.orders() if order.client_order_id == client_order_id), None)
 
     def record(self, client_order_id: str) -> SynthesizedOrderRecord | None:
         """The durable record — order, leg and fill anchor — for one client order id."""
-        with self._ledger.transaction() as records:
-            self._settle_locked(records)
-            return self._ledger.find_record(records, client_order_id)
+        return next(
+            (
+                record
+                for record in self._settled_records().values()
+                if record.order.client_order_id == client_order_id
+            ),
+            None,
+        )
+
+    def _settled_records(self) -> dict[str, SynthesizedOrderRecord]:
+        """The latest record per order, settled first when anything can settle.
+
+        The read is a plain WAL read until a resting order exists; only then
+        does it take the transaction — the process lock plus the cross-process
+        advisory lock — and possibly append. A gate or a sweep reading a book
+        that holds nothing but terminal orders pays neither.
+        """
+        records = self._ledger.latest_records()
+        if not any(_settlable(record) is not None for record in records.values()):
+            return records
+        with self._ledger.transaction() as rows:
+            self._settle_locked(rows)
+            return self._ledger.latest_records_from(rows)
 
     def positions(self) -> list[BrokerPosition]:
         return synthesized_positions(SHADOW_BROKER_ID, self.orders())
@@ -358,15 +418,10 @@ class ShadowOrderBook:
         """Resolve every resting order the retained evidence can now decide (D5.5)."""
         now_ms = self._clock()
         for record in list(self._ledger.latest_records_from(records).values()):
-            anchor, leg = record.anchor, record.leg
-            if (
-                record.order.status != _RESTING
-                or anchor is None
-                or leg is None
-                or anchor.fill_model != "limit_touch"
-                or anchor.cancel_at_ms is None
-            ):
+            settlable = _settlable(record)
+            if settlable is None:
                 continue
+            leg, anchor, cancel_at_ms = settlable
             client_order_id = record.order.client_order_id or record.order.order_id
             bars = self._evidence.bars_after(
                 anchor.evidence_account_id,
@@ -378,7 +433,7 @@ class ShadowOrderBook:
                 leg,
                 decision_bar_end_ms=anchor.decision_bar_end_ms,
                 bars=bars,
-                cancel_at_ms=anchor.cancel_at_ms,
+                cancel_at_ms=cancel_at_ms,
             )
             if fill is not None:
                 self._ledger.append_locked(
@@ -406,14 +461,14 @@ class ShadowOrderBook:
                 )
                 continue
             bucket_ms = anchor.decision_bar_end_ms - anchor.decision_bar_start_ms
-            if now_ms >= anchor.cancel_at_ms + bucket_ms:
+            if now_ms >= cancel_at_ms + bucket_ms:
                 self._ledger.append_locked(
                     records,
                     order=record.order.model_copy(
                         update={
                             "status": "canceled",
-                            "canceled_at_ms": anchor.cancel_at_ms,
-                            "updated_at_ms": anchor.cancel_at_ms,
+                            "canceled_at_ms": cancel_at_ms,
+                            "updated_at_ms": cancel_at_ms,
                             "observed_at_ms": now_ms,
                         }
                     ),

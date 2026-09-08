@@ -25,6 +25,10 @@ from app.broker.alpaca.clerk.shadow_broker import (
     verify_shadow_namespace_empty,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
+from app.broker.alpaca.clerk.synthesized_orders import (
+    SYNTHESIZED_ORDER_LEDGER_FILENAME,
+    SynthesizedOrderLedger,
+)
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerClockEvidence,
@@ -381,6 +385,47 @@ async def test_the_namespace_check_refuses_the_shadow_read_port(
     ports, _bars, _live, _clock = world
     with pytest.raises(ValueError, match="live read port"):
         await verify_shadow_namespace_empty(ports.read)
+
+
+async def test_a_read_takes_the_order_lock_only_when_something_can_settle(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settlement on read is a durable write under a cross-process lock. It has
+    to be while an order rests; it must not be the price of every read the
+    sweep and the gate make once nothing is resting."""
+    ports, bars, _live, _clock = world
+    settled_bar = _retain(bars, minute=600, close="100.25")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:done", settled_bar)
+    await ports.trade.submit(_market_leg(), client_order_id=f"{NAMESPACE}:done")
+
+    wal = (
+        tmp_path / "accounts" / "alpaca" / "shadow:9LIVE0001" / SYNTHESIZED_ORDER_LEDGER_FILENAME
+    )
+    before = wal.stat().st_size
+    transactions: list[str] = []
+    opened = SynthesizedOrderLedger.transaction
+
+    def _tracked(self: SynthesizedOrderLedger) -> Any:
+        transactions.append(self.account_id)
+        return opened(self)
+
+    monkeypatch.setattr(SynthesizedOrderLedger, "transaction", _tracked)
+
+    assert [order.status for order in await ports.read.list_orders()] == ["filled"]
+    assert ports.book.record(f"{NAMESPACE}:done") is not None
+    assert [position.symbol for position in await ports.read.list_positions()] == ["SPY"]
+    assert transactions == []
+    assert wal.stat().st_size == before
+
+    resting_bar = _retain(bars, minute=1020, close="100.00", phase="POST")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:rest", resting_bar)
+    await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{NAMESPACE}:rest")
+    transactions.clear()
+
+    await ports.read.list_orders()
+    assert transactions == ["shadow:9LIVE0001"]
 
 
 def test_an_evidence_namespace_that_never_existed_is_never_materialised(tmp_path: Path) -> None:
