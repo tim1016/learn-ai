@@ -122,10 +122,9 @@ class _Source:
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
     ) -> tuple[TwinFill, ...]:
+        # Half-open, exactly as the protocol and the SQLite projection define it.
         return tuple(
-            f
-            for f in self._fills.get(strategy_instance_id, ())
-            if from_ms <= f.filled_at_ms <= to_ms
+            f for f in self._fills.get(strategy_instance_id, ()) if from_ms <= f.filled_at_ms < to_ms
         )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:

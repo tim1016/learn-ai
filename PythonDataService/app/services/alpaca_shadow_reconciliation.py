@@ -37,6 +37,7 @@ from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
 from app.broker.alpaca.clerk.shadow_sessions import ShadowDayState, ShadowSessionLedger
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.broker.contract.capabilities import ExtendedHoursWindow
@@ -196,9 +197,18 @@ class FillSource(Protocol):
 
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
-    ) -> tuple[TwinFill, ...]: ...
+    ) -> tuple[TwinFill, ...]:
+        """One instance's fills in the half-open window ``[from_ms, to_ms)``.
 
-    def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]: ...
+        Half-open is the convention the SQLite projection already implements
+        (``economic_filled_at_ms < to_ms``), so it is the one every
+        implementation — the production adapter and any double — must hold to.
+        """
+        ...
+
+    def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
+        """Every run this authority recorded for one instance, oldest first."""
+        ...
 
 
 class EconomicFillSource:
@@ -214,6 +224,13 @@ class EconomicFillSource:
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
     ) -> tuple[TwinFill, ...]:
+        """This instance's fills in ``[from_ms, to_ms)`` — the protocol's half-open window.
+
+        ``account_fill_window`` is account-wide and identifies every fill by its
+        **custody subject**, so the instance filter is on ``bot_subject_id``, not
+        on the bare instance id (a manual fill has no instance id at all).
+        """
+        subject_id = bot_subject_id(strategy_instance_id)
         records = self._reader.account_fill_window(from_ms=from_ms, to_ms=to_ms)
         return tuple(
             TwinFill(
@@ -225,7 +242,7 @@ class EconomicFillSource:
                 order_ref=record.order_ref,
             )
             for record in records
-            if record.sid == strategy_instance_id
+            if record.sid == subject_id
         )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
@@ -238,12 +255,18 @@ class EconomicFillSource:
 def read_twin_fills(
     source: FillSource, *, strategy_instance_id: str, session_open_ms: int
 ) -> tuple[TwinFill, ...]:
-    """The ET calendar day's fills for one instance (a shadow extended fill can land after the close)."""
+    """The ET calendar day's fills for one instance (a shadow extended fill can land after the close).
+
+    ``[et_midnight_ms(day), et_day_end_ms(day))`` is the whole ET day under the
+    protocol's half-open convention: ``et_day_end_ms`` is already the next day's
+    ET midnight, so the day's final millisecond is in and the next day's first
+    is out.
+    """
     day = et_date_at_ms(session_open_ms)
     return source.fills_between(
         strategy_instance_id=strategy_instance_id,
         from_ms=et_midnight_ms(day),
-        to_ms=et_day_end_ms(day) - 1,
+        to_ms=et_day_end_ms(day),
     )
 
 
