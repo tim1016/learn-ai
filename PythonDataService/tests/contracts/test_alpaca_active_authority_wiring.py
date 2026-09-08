@@ -250,7 +250,21 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
         "publish = facade.publish_sweep_reconciliation"
     )
 
+    # The other half: the seam must reach every construction site. Counting
+    # only the bindings above would stay green if `on_result=on_result` were
+    # dropped from the shared composition's `ReconciliationSweep(...)` -- the
+    # `publish = ...` binding lives ~10 lines away from the call, so the two
+    # can be separated silently, and both the real-paper and shadow sweeps
+    # would stop publishing with every unit test still passing.
+    wired = source.count("on_result=on_result") + source.count(
+        "on_result=facade.publish_sweep_reconciliation"
+    )
+
     assert constructions > 0, "no sweep construction found; update this guard"
+    assert wired == constructions, (
+        f"{constructions} ReconciliationSweep construction(s) but {wired} pass "
+        "`on_result`; a sweep constructed without the listener publishes nothing"
+    )
     assert publishers == constructions, (
         f"{constructions} ReconciliationSweep construction(s) but {publishers} "
         "publish their verdict via the sweep-attributed seam; every sweep must "
