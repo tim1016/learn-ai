@@ -252,7 +252,7 @@ class StartRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
-    extended_hours: ExtendedHoursAdmissionFact = ExtendedHoursAdmissionFact(state="NOT_REQUESTED", observed_at_ms=0)
+    extended_hours: ExtendedHoursAdmissionFact
 
 
 class ResumeCheckpointAdmissionFact(BaseModel):
@@ -306,7 +306,7 @@ class ResumeRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
-    extended_hours: ExtendedHoursAdmissionFact = ExtendedHoursAdmissionFact(state="NOT_REQUESTED", observed_at_ms=0)
+    extended_hours: ExtendedHoursAdmissionFact
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     carryover_policy: Literal["FORBID", "ALLOW"]

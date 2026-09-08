@@ -181,8 +181,8 @@ def seam_not_permitted(kind: str) -> FaultSeamLimitation:
 # The drill double's own descriptor, not Alpaca's paper descriptor: SyntheticBroker.submit
 # ignores order_type/limit_price/time_in_force/extended_hours and fills only regular-session
 # market legs, so it must not advertise a session it cannot rehearse (task-5 review finding 1).
-DRILL_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.model_copy(
-    update={"supports_extended_hours": False, "extended_hours_window": None}
+DRILL_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.revised(
+    supports_extended_hours=False, extended_hours_window=None
 )
 
 

@@ -725,7 +725,6 @@ class SqliteAlpacaClerkFacade:
                 # disagreeing with the one that ships.
                 operation_leg = shape.apply(
                     symbol=entry.instrument.underlying,
-                    side=leg_side,
                     quantity=float(quantity * entry.qty_ratio),
                 )
                 if (

@@ -11,12 +11,12 @@ program leg is never guessed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
 
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.broker.contract.ports import BrokerReadPort
 from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
@@ -33,23 +33,42 @@ class ProgramLegPolicy:
     def regular_only(cls) -> ProgramLegPolicy:
         return cls(window=None, allowances=None)
 
+    @classmethod
+    def from_read_port(cls, read: BrokerReadPort) -> ProgramLegPolicy:
+        """The policy an activated authority's own capability read implies.
+
+        Both activation paths — the real paper Clerk and the ``sim:`` synthetic
+        authority — build the policy this same way; stating it once means the
+        two cannot answer the question differently.
+        """
+        return cls(
+            window=read.capabilities().extended_hours_window,
+            allowances=ExtendedHoursAllowances.from_environment(),
+        )
+
 
 @dataclass(frozen=True)
 class LegShape:
-    """The session-dependent part of a program leg; ``side`` names the side a limit was priced for."""
+    """The session-dependent part of a program leg, for the side it was priced for.
+
+    ``side`` is mandatory. It was optional so the one market shape could be a
+    module-level singleton, which made a discriminator hide inside an optional
+    and forced two separate "is this the side we meant?" reconciliations —
+    ``apply``'s and ``_create_reducing_order``'s. There is now exactly one, in
+    ``exit_resolution._create_reducing_order`` (ruling R11), because that is the
+    only place a shape can meet a side the deciding program did not expect.
+    """
 
     order_type: OrderType
     time_in_force: TimeInForce
     limit_price: float | None
     extended_hours: bool
-    side: OrderSide | None
+    side: OrderSide
 
-    def apply(self, *, symbol: str, side: OrderSide, quantity: float) -> BrokerOrderLeg:
-        if self.side is not None and side is not self.side:
-            raise ValueError("this leg shape was priced for the other side")
+    def apply(self, *, symbol: str, quantity: float) -> BrokerOrderLeg:
         return BrokerOrderLeg(
             symbol=symbol,
-            side=side,
+            side=self.side,
             quantity=quantity,
             order_type=self.order_type,
             limit_price=self.limit_price,
@@ -58,13 +77,15 @@ class LegShape:
         )
 
 
-REGULAR_SESSION_SHAPE: Final = LegShape(
-    order_type=OrderType.MARKET,
-    time_in_force=TimeInForce.DAY,
-    limit_price=None,
-    extended_hours=False,
-    side=None,
-)
+def regular_session_shape(side: OrderSide) -> LegShape:
+    """The market DAY leg every regular-session program order has always been."""
+    return LegShape(
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        limit_price=None,
+        extended_hours=False,
+        side=side,
+    )
 
 
 @dataclass(frozen=True)
@@ -163,12 +184,12 @@ def shape_program_leg(
     if session is None:
         raise ProgramLegRefused(EXTENDED_HOURS_UNSUPPORTED)
     if session.kind == "rth":
-        return REGULAR_SESSION_SHAPE
+        return regular_session_shape(side)
     if decision_bar is None:
         raise ProgramLegRefused(EXTENDED_ANCHOR_UNAVAILABLE)
     phase = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=session.window).phase
     if phase == "RTH":
-        return REGULAR_SESSION_SHAPE
+        return regular_session_shape(side)
     if phase not in TRADEABLE_EXTENDED_PHASES:
         raise ProgramLegRefused(session_closed_at_decision(phase))
     if policy.allowances is None:
@@ -197,11 +218,11 @@ __all__ = [
     "EXTENDED_ANCHOR_UNPRICEABLE",
     "EXTENDED_HOURS_ALLOWANCE_UNSET",
     "EXTENDED_HOURS_UNSUPPORTED",
-    "REGULAR_SESSION_SHAPE",
     "LegRefusal",
     "LegShape",
     "ProgramLegPolicy",
     "ProgramLegRefused",
+    "regular_session_shape",
     "session_closed_at_decision",
     "shape_program_leg",
 ]

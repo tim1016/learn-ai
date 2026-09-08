@@ -52,7 +52,6 @@ from app.broker.alpaca.clerk.trade_evidence import (
     SqliteTradeUpdateEvidenceSink,
     TradeUpdateEvidenceSink,
 )
-from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
 from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -323,10 +322,7 @@ async def select_active_clerk_runtime(
             intake=intake,
             # Proven above from the broker's own account read, not inferred.
             account_mode=account.account_mode,
-            program_leg_policy=ProgramLegPolicy(
-                window=ports.read.capabilities().extended_hours_window,
-                allowances=ExtendedHoursAllowances.from_environment(),
-            ),
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
         )
         # Keep the execution lease alive across the (possibly slow) startup
         # recovery passes. The reconcile loop still starts after boot recovery
@@ -565,10 +561,7 @@ async def select_synthetic_clerk_runtime(
             authority_kind="synthetic",
             # A simulator is a paper environment by construction (ADR 0054).
             account_mode="paper",
-            program_leg_policy=ProgramLegPolicy(
-                window=ports.read.capabilities().extended_hours_window,
-                allowances=ExtendedHoursAllowances.from_environment(),
-            ),
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
         )
         sweep = ReconciliationSweep(
             repo=repository,

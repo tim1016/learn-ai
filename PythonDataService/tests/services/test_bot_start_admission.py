@@ -51,6 +51,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import (
+    ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
     RunProcessAdmissionFact,
@@ -255,6 +256,9 @@ def _start_facts(
                 observed_at_ms=observed_at_ms,
                 source_timestamp_ms=observed_at_ms,
             ),
+        ),
+        extended_hours=ExtendedHoursAdmissionFact(
+            state="NOT_REQUESTED", observed_at_ms=observed_at_ms
         ),
     )
 

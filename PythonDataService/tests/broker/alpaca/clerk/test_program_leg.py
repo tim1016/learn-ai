@@ -10,10 +10,9 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import (
-    REGULAR_SESSION_SHAPE,
-    LegShape,
     ProgramLegPolicy,
     ProgramLegRefused,
+    regular_session_shape,
     shape_program_leg,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -59,8 +58,8 @@ def test_rth_binding_is_always_a_market_day_leg() -> None:
         policy=_POLICY,
     )
 
-    assert shape is REGULAR_SESSION_SHAPE
-    leg = shape.apply(symbol="SPY", side=OrderSide.BUY, quantity=3.0)
+    assert shape == regular_session_shape(OrderSide.BUY)
+    leg = shape.apply(symbol="SPY", quantity=3.0)
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
         OrderType.MARKET,
         TimeInForce.DAY,
@@ -78,7 +77,7 @@ def test_extended_binding_inside_the_regular_session_is_a_market_day_leg() -> No
         policy=_POLICY,
     )
 
-    assert shape is REGULAR_SESSION_SHAPE
+    assert shape == regular_session_shape(OrderSide.BUY)
 
 
 @pytest.mark.parametrize(
@@ -109,7 +108,7 @@ def test_extended_binding_outside_the_regular_session_is_a_marketable_day_limit(
     assert shape.extended_hours is True
     assert shape.limit_price == expected_limit
     assert shape.side is side
-    leg = shape.apply(symbol="SPY", side=side, quantity=2.5)
+    leg = shape.apply(symbol="SPY", quantity=2.5)
     assert leg.extended_hours is True
     assert leg.limit_price == expected_limit
 
@@ -157,22 +156,26 @@ def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() 
             decision_bar=_bar(11, 0),
             policy=policy,
         )
-        is REGULAR_SESSION_SHAPE
+        == regular_session_shape(OrderSide.BUY)
     )
 
 
-def test_apply_rejects_a_side_the_shape_was_not_priced_for() -> None:
-    """Nothing else reconciles ``side`` with ``self.side``; ``apply`` must (review finding 5)."""
-    shape = LegShape(
-        order_type=OrderType.LIMIT,
-        time_in_force=TimeInForce.DAY,
-        limit_price=100.10,
-        extended_hours=True,
-        side=OrderSide.BUY,
+def test_apply_uses_the_side_the_shape_was_priced_for() -> None:
+    """``side`` is mandatory on the shape, so ``apply`` has no side to reconcile.
+
+    The one place a shape can meet a side its author did not expect is
+    ``exit_resolution._create_reducing_order`` (ruling R11), which holds the
+    only mismatch policy in the codebase.
+    """
+    shape = shape_program_leg(
+        side=OrderSide.SELL,
+        purpose=EffectPurpose.EXIT,
+        use_rth=False,
+        decision_bar=_bar(18, 30),
+        policy=_POLICY,
     )
 
-    with pytest.raises(ValueError, match="priced for the other side"):
-        shape.apply(symbol="SPY", side=OrderSide.SELL, quantity=1.0)
+    assert shape.apply(symbol="SPY", quantity=1.0).side is OrderSide.SELL
 
 
 def test_an_unpriceable_anchor_is_a_typed_refusal_not_a_validation_error() -> None:

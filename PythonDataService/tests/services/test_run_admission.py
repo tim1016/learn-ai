@@ -201,6 +201,7 @@ def _resume_bot(
     phase: str = "OFF_DUTY",
     checkpoint: ResumeCheckpointAdmissionFact | None = None,
     mode: str = "trade",
+    extended_hours_state: str = "NOT_REQUESTED",
     terminal_evidence: TerminalEvidenceAdmissionFact = _READY_TERMINAL_EVIDENCE,
 ) -> ResumeRunFacts:
     return ResumeRunFacts(
@@ -230,6 +231,9 @@ def _resume_bot(
             observed_at_ms=_NOW - 1_000,
         ),
         market_liveness=_liveness(observed_at_ms=_NOW - 1_000),
+        extended_hours=ExtendedHoursAdmissionFact(
+            state=extended_hours_state, observed_at_ms=_NOW - 1_000
+        ),
         desired_state=desired_state,
         phase=phase,
         carryover_policy="ALLOW",
@@ -359,6 +363,42 @@ def test_start_admission_refuses_an_unsupported_extended_session_in_every_mode(m
 
     assert decision.allowed is False
     assert decision.reason_code == "EXTENDED_HOURS_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
+@pytest.mark.parametrize(
+    ("state", "reason_code"),
+    [
+        ("UNSUPPORTED", "EXTENDED_HOURS_UNSUPPORTED"),
+        ("ALLOWANCE_UNSET", "EXTENDED_HOURS_ALLOWANCE_UNSET"),
+    ],
+)
+def test_resume_admission_refuses_the_same_extended_states_as_start(
+    mode: str, state: str, reason_code: str
+) -> None:
+    """Triage T6: Resume is the path exercised after a crash mid-extended-session.
+
+    Resume reads the same ``ExtendedHoursAdmissionFact`` through the same gate,
+    so a divergence here would let a crashed extended run come back with an
+    authority that can no longer clock or price it.
+    """
+    decision = evaluate_run_admission(
+        _resume_bot(mode=mode, extended_hours_state=state), _clerk(), evaluated_at_ms=_NOW
+    )
+
+    assert decision.operation == "RESUME"
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
+
+
+@pytest.mark.parametrize("state", ["NOT_REQUESTED", "READY"])
+def test_resume_admission_admits_a_clocked_and_priced_extended_session(state: str) -> None:
+    decision = evaluate_run_admission(
+        _resume_bot(extended_hours_state=state), _clerk(), evaluated_at_ms=_NOW
+    )
+
+    assert decision.reason_code != "EXTENDED_HOURS_UNSUPPORTED"
+    assert decision.reason_code != "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:

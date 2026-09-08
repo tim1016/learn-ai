@@ -6,7 +6,7 @@ import base64
 import hashlib
 import logging
 
-from app.broker.alpaca.clerk.program_leg import REGULAR_SESSION_SHAPE, LegShape
+from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -45,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 
@@ -496,9 +496,12 @@ def _create_reducing_order(
     # The shape was priced for the side the deciding program expected to
     # reduce. Cancellation can resolve to the other one; a limit priced for
     # the wrong side would be unmarketable, so the regular-session leg —
-    # which is always executable — takes over.
-    resolved = REGULAR_SESSION_SHAPE if shape is None else shape
-    if resolved.side is not None and resolved.side.value != side:
+    # which is always executable — takes over. This is the one place a shape
+    # can meet a side its author did not expect, so it holds the only side
+    # reconciliation in the codebase (ruling R11).
+    reducing_side = OrderSide(side)
+    resolved = regular_session_shape(reducing_side) if shape is None else shape
+    if resolved.side is not reducing_side:
         logger.warning(
             "Reducing leg shape was priced for the other side; submitting a regular-session market leg instead",
             extra={
@@ -508,7 +511,7 @@ def _create_reducing_order(
                 "reducing_side": side,
             },
         )
-        resolved = REGULAR_SESSION_SHAPE
+        resolved = regular_session_shape(reducing_side)
     facts = ExitReducingOrderCreatedFacts(
         symbol=symbol,
         side=side.upper(),

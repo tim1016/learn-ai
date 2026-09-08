@@ -63,7 +63,7 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
 # other fact — IEX feed, stream caps, rate limit, buildable order types — is
 # the same account tier; keeping one literal per mode makes the difference
 # reviewable instead of a boolean flip buried in a constructor.
-ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.model_copy(update={"paper_only": False})
+ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.revised(paper_only=False)
 
 _PORTFOLIO_HISTORY_QUERY: dict[PortfolioHistoryRange, tuple[str, str]] = {
     PortfolioHistoryRange.ONE_DAY: ("1D", "1Min"),

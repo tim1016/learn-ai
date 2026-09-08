@@ -67,3 +67,14 @@ class BrokerCapabilities(BaseModel):
         if not self.supports_extended_hours and self.extended_hours_window is not None:
             raise ValueError("extended_hours_window is only meaningful when extended hours are supported")
         return self
+
+    def revised(self, **changes: object) -> BrokerCapabilities:
+        """A copy of this descriptor with ``changes`` applied, re-validated.
+
+        Pydantic's ``model_copy(update=...)`` skips validators, so a copy could
+        assert ``supports_extended_hours=True`` with no window — the exact pair
+        ``_window_agrees_with_support`` exists to keep consistent. Every
+        derived descriptor (the live-mode copy, the drill double) goes through
+        here so a future edit cannot mint an incoherent one.
+        """
+        return BrokerCapabilities.model_validate({**self.model_dump(), **changes})
