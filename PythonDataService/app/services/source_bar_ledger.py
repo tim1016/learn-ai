@@ -147,6 +147,15 @@ class SourceBarCheckpointBusyError(RuntimeError):
     """A truncating WAL checkpoint could not complete because a reader still held the log."""
 
 
+class SourceBarLedgerMissingError(RuntimeError):
+    """A read-only consumer named an evidence namespace that has retained nothing.
+
+    Only a writer creates a store. A reader that materialised one would turn a
+    garbage ``evidence_account_id`` into a silent empty answer instead of a
+    loud one, and leave an empty account directory behind as a side effect.
+    """
+
+
 _BUSY_TIMEOUT_MS = 5_000
 """How long a write or truncating checkpoint waits on another connection before failing."""
 
@@ -230,23 +239,50 @@ class SourceBarLedger:
     stream capacity fails closed so retention requires a reviewed rollover.
     """
 
-    def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+    def __init__(
+        self, *, artifacts_root: Path, account_id: str, read_only: bool = False
+    ) -> None:
+        """Open one authority's evidence store, as its owner or as a consumer.
+
+        ``read_only=True`` is for a consumer of *another* authority's evidence
+        (the shadow book settling against an instance's retained bars). It
+        creates nothing — no directory, no file, no schema, no migration — and
+        cannot write, so it can neither invent a store for a namespace that
+        never ran nor fold the owner's WAL out from under it.
+        """
         safe_account_id = safe_path_component(account_id, "account id")
         account_dir = resolve_contained_path(
             Path(artifacts_root), "accounts", "alpaca", safe_account_id
         )
-        account_dir.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            account_dir.mkdir(parents=True, exist_ok=True)
         self.account_id = account_id
+        self.read_only = read_only
         self._path = account_dir / SOURCE_BAR_LEDGER_FILENAME
         self._legacy_path = account_dir / _LEGACY_SOURCE_BAR_LEDGER_FILENAME
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
+        if read_only:
+            if not self._path.exists():
+                raise SourceBarLedgerMissingError(
+                    "SOURCE_BAR_LEDGER_MISSING: "
+                    f"{account_id!r} has retained no evidence at {self._path}"
+                )
+            self._conn = sqlite3.connect(
+                f"{self._path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+        else:
+            self._conn = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._configure()
-        self._create_schema()
+        if not read_only:
+            self._create_schema()
         self._refuse_foreign_account_rows()
-        self._migrate_evidence_schema_if_needed()
-        self._migrate_legacy_jsonl_if_needed()
+        if not read_only:
+            self._migrate_evidence_schema_if_needed()
+            self._migrate_legacy_jsonl_if_needed()
 
     @property
     def path(self) -> Path:
@@ -265,10 +301,12 @@ class SourceBarLedger:
 
         Read-only evidence consumers (run replay proof) pass checkpoint=False:
         they never wrote, so folding the WAL is the writer's job, and a busy
-        checkpoint must not fail a read.
+        checkpoint must not fail a read. A ``read_only=True`` handle ignores the
+        argument entirely — folding the WAL is a write it cannot perform, and
+        the owner is the only handle entitled to try.
         """
         with self._lock:
-            if checkpoint:
+            if checkpoint and not self.read_only:
                 self.checkpoint_wal()
             self._conn.close()
 
@@ -694,10 +732,15 @@ class SourceBarLedger:
         return int(cursor.lastrowid)
 
     def _configure(self) -> None:
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        if self.read_only:
+            # Every remaining pragma states how this handle *writes*, and a
+            # read-only handle never does; ``journal_mode`` would write the
+            # database header outright.
+            return
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         # SQLite checkpoints automatically at this bound; explicit shutdown
         # checkpoints use ``checkpoint_wal`` for a compact backup artifact.
         self._conn.execute("PRAGMA wal_autocheckpoint=1000")
@@ -988,6 +1031,7 @@ __all__ = [
     "SourceBarConflictError",
     "SourceBarLedger",
     "SourceBarLedgerCorruptError",
+    "SourceBarLedgerMissingError",
     "SourceBarRetentionLimitError",
     "verify_ledger_file",
 ]

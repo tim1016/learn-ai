@@ -26,8 +26,8 @@ order never touched.
 
 from __future__ import annotations
 
-import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,27 +106,36 @@ class ShadowNamespaceUnproven(RuntimeError):
 
 
 class EvidenceLedgers:
-    """Read handles on the per-instance evidence ledgers the shadow world settles against."""
+    """Per-call read-only handles on the evidence ledgers the shadow world settles against.
+
+    Every ledger here belongs to *another* authority — the instance that
+    retained the bars — and is opened read-only for the duration of one read
+    and then closed. Holding one would make this book a second, schema-creating
+    writer on a live ledger and leave it attached when that instance shuts
+    down, where a truncating checkpoint fails closed on a lingering reader.
+    """
 
     def __init__(self, artifacts_root: Path) -> None:
         self._root = artifacts_root
-        self._ledgers: dict[str, SourceBarLedger] = {}
-        self._lock = threading.Lock()
 
-    def ledger(self, account_id: str) -> SourceBarLedger:
+    @contextmanager
+    def open(self, account_id: str) -> Iterator[SourceBarLedger]:
+        """Open one instance's evidence ledger read-only for exactly one read."""
         if not is_shadow_evidence_account_id(account_id):
             raise SynthesizedBarBindingError(
                 "Shadow fills settle only against a shadow-evidence: ledger."
             )
-        with self._lock:
-            ledger = self._ledgers.get(account_id)
-            if ledger is None:
-                ledger = SourceBarLedger(artifacts_root=self._root, account_id=account_id)
-                self._ledgers[account_id] = ledger
-            return ledger
+        ledger = SourceBarLedger(
+            artifacts_root=self._root, account_id=account_id, read_only=True
+        )
+        try:
+            yield ledger
+        finally:
+            ledger.close(checkpoint=False)
 
     def verify(self, retained_bar: RetainedSourceBar) -> RetainedSourceBar:
-        persisted = self.ledger(retained_bar.account_id).by_identity(retained_bar.bar_identity)
+        with self.open(retained_bar.account_id) as ledger:
+            persisted = ledger.by_identity(retained_bar.bar_identity)
         if persisted != retained_bar:
             raise SynthesizedBarBindingError(
                 "Shadow bar binding is not the exact retained source-bar observation."
@@ -136,13 +145,8 @@ class EvidenceLedgers:
     def bars_after(
         self, account_id: str, *, provider: str, symbol: str, start_ms: int
     ) -> list[RetainedSourceBar]:
-        return self.ledger(account_id).bars_after(provider=provider, symbol=symbol, start_ms=start_ms)
-
-    def close(self) -> None:
-        with self._lock:
-            for ledger in self._ledgers.values():
-                ledger.close(checkpoint=False)
-            self._ledgers.clear()
+        with self.open(account_id) as ledger:
+            return ledger.bars_after(provider=provider, symbol=symbol, start_ms=start_ms)
 
 
 def _fill_event(client_order_id: str, *, at_ms: int, price: float, quantity: float) -> BrokerOrderEvent:
@@ -247,9 +251,6 @@ class ShadowOrderBook:
 
     def positions(self) -> list[BrokerPosition]:
         return synthesized_positions(SHADOW_BROKER_ID, self.orders())
-
-    def close(self) -> None:
-        self._evidence.close()
 
     @staticmethod
     def _evidence_namespace_for(client_order_id: str) -> str:

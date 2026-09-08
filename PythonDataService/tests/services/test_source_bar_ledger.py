@@ -22,6 +22,7 @@ from app.services.source_bar_ledger import (
     SourceBarConflictError,
     SourceBarLedger,
     SourceBarLedgerCorruptError,
+    SourceBarLedgerMissingError,
     SourceBarRetentionLimitError,
     verify_ledger_file,
 )
@@ -588,3 +589,36 @@ def test_journal_refuses_a_second_position_for_one_bar(tmp_path: Path) -> None:
         assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
     finally:
         ledger.close()
+
+
+def test_a_read_only_ledger_cannot_append_and_never_checkpoints_on_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer of *another* authority's evidence must not be able to create
+    schema on it, write to it, or fold its WAL out from under its owner."""
+    writer = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        writer.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        reader = SourceBarLedger(artifacts_root=tmp_path, account_id="acct", read_only=True)
+        assert len(reader.bars(provider="polygon-minute", symbol="SPY")) == 1
+
+        with pytest.raises(sqlite3.OperationalError):
+            reader.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
+
+        checkpoints: list[str] = []
+        monkeypatch.setattr(
+            SourceBarLedger, "checkpoint_wal", lambda self: checkpoints.append(self.account_id)
+        )
+        reader.close(checkpoint=True)
+        assert checkpoints == []
+    finally:
+        writer.close()
+
+
+def test_a_read_only_ledger_refuses_a_database_that_does_not_exist(tmp_path: Path) -> None:
+    with pytest.raises(SourceBarLedgerMissingError, match="shadow-evidence:absent"):
+        SourceBarLedger(
+            artifacts_root=tmp_path, account_id="shadow-evidence:absent", read_only=True
+        )
+
+    assert not (tmp_path / "accounts" / "alpaca" / "shadow-evidence:absent").exists()

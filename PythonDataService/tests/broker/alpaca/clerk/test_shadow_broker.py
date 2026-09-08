@@ -15,6 +15,7 @@ from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW, ALPACA_LIVE_C
 from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.shadow_broker import (
     SHADOW_BROKER_ID,
+    EvidenceLedgers,
     NoSubmitAlpacaTradePort,
     ShadowFillBindingError,
     ShadowNamespacePoisoned,
@@ -36,7 +37,11 @@ from app.broker.contract.models import (
 )
 from app.marketdata.feed import MarketDataBar
 from app.services.session_authority import declared_session_bounds, et_minute_of_day_ms
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.source_bar_ledger import (
+    RetainedSourceBar,
+    SourceBarLedger,
+    SourceBarLedgerMissingError,
+)
 
 DAY = date(2026, 9, 8)  # a Tuesday; a full NYSE session
 SID = "ema-shadow-1"
@@ -376,6 +381,36 @@ async def test_the_namespace_check_refuses_the_shadow_read_port(
     ports, _bars, _live, _clock = world
     with pytest.raises(ValueError, match="live read port"):
         await verify_shadow_namespace_empty(ports.read)
+
+
+def test_an_evidence_namespace_that_never_existed_is_never_materialised(tmp_path: Path) -> None:
+    """A garbage ``evidence_account_id`` on a durable anchor must fail loudly,
+    not quietly create an empty store and answer "no bars"."""
+    evidence = EvidenceLedgers(tmp_path)
+    missing = shadow_evidence_account_id_for_strategy("never-existed")
+
+    with pytest.raises(SourceBarLedgerMissingError, match="never-existed"), evidence.open(missing):
+        pass
+
+    assert not (tmp_path / "accounts" / "alpaca" / missing).exists()
+
+
+async def test_settlement_holds_no_handle_on_the_instances_own_evidence_ledger(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """The book reads another authority's ledger, so it must not still be
+    attached once that authority shuts down. ``close(checkpoint=True)`` fails
+    closed on a reader still holding the WAL (``SourceBarCheckpointBusyError``),
+    and the shadow book must never be that reader — the instance's controlled
+    close is not allowed to depend on the shadow world's shutdown order."""
+    ports, bars, _live, _clock = world
+    decision = _retain(bars, minute=1020, close="100.00", phase="POST")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:hold", decision)
+    await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{NAMESPACE}:hold")
+    _retain(bars, minute=1021, close="100.00", low="99.90", phase="POST")
+    assert (await ports.read.list_orders())[0].status == "new"
+
+    bars.close(checkpoint=True)
 
 
 def test_bars_after_returns_one_stream_in_open_order(tmp_path: Path) -> None:
