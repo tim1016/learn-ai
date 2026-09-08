@@ -13,6 +13,9 @@ from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+)
 from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedAnchor,
     SynthesizedBarBindingError,
@@ -360,12 +363,31 @@ def filter_synthesized_orders(
     limit: int | None,
     after_ms: int | None,
 ) -> list[BrokerOrder]:
-    """The read port's order filter, newest first (shared with the shadow read port)."""
-    if status is not None:
-        orders = [order for order in orders if order.status == status]
+    """The read port's order filter, newest first (shared with the shadow read port).
+
+    ``status`` is Alpaca's **query category** — ``open`` / ``closed`` / ``all``
+    — not an order status; the real port hands it straight to the vendor. The
+    sim world never noticed the difference because it cannot rest an order, so
+    every sim order is terminal and ``open`` was legitimately empty. The shadow
+    world can rest one, and the reconciliation sweep reads exactly
+    ``status="open"``: an exact-status match there would hide a working order
+    from the fold and report position drift in its place.
+    """
+    if status is not None and status != "all":
+        if status == "open":
+            orders = [order for order in orders if not _is_terminal_order(order)]
+        elif status == "closed":
+            orders = [order for order in orders if _is_terminal_order(order)]
+        else:
+            raise ValueError(f"unknown order query category {status!r}")
     if after_ms is not None:
         orders = [order for order in orders if (order.updated_at_ms or 0) >= after_ms]
     return list(reversed(orders))[:limit]
+
+
+def _is_terminal_order(order: BrokerOrder) -> bool:
+    """Whether an order has reached a terminal status, in the sweep's convention."""
+    return order.status.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 
 
 __all__ = [

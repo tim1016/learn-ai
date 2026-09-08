@@ -514,7 +514,13 @@ async def verify_shadow_namespace_empty(read: BrokerReadPort) -> None:
     (``SHADOW_NAMESPACE_UNPROVEN``), the same posture the sweep takes at its
     own 500-row boundary; any Clerk-minted ``client_order_id`` is poisoned
     state (``SHADOW_NAMESPACE_POISONED``).
+
+    The subject is the **live** account. Handed the shadow port instead, every
+    category would answer from the synthesized book — empty at cold start — and
+    the check would pass vacuously on a poisoned account, so it refuses.
     """
+    if read.broker_id == SHADOW_BROKER_ID:
+        raise ValueError("the shadow namespace check needs the live read port, not the shadow one")
     history = await read.list_orders(status="all", limit=MAX_OPEN_ORDER_SNAPSHOT)
     if len(history) >= MAX_OPEN_ORDER_SNAPSHOT:
         raise ShadowNamespaceUnproven(

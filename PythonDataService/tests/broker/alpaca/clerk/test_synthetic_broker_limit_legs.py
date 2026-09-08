@@ -86,3 +86,28 @@ async def test_a_market_buy_is_unchanged(tmp_path: Path) -> None:
     assert order.order_type == "market"
     assert order.status == "filled"
     assert order.filled_avg_price == float(retained.close)
+
+
+@pytest.mark.asyncio
+async def test_list_orders_speaks_the_vendors_query_category(tmp_path: Path) -> None:
+    """``status`` is Alpaca's query category (``open``/``closed``/``all``), never
+    an order status: a filled sim order is *closed*, and an unknown category is
+    refused the way the vendor refuses an unknown ``QueryOrderStatus``."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    retained = ledger.append(_bar(), run_id="run-a")
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
+    broker.bind_evaluated_bar("bot:ema:enter", retained)
+    await broker.submit(
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        client_order_id="bot:ema:enter",
+    )
+
+    assert await broker.list_orders(status="open") == []
+    assert [order.client_order_id for order in await broker.list_orders(status="closed")] == [
+        "bot:ema:enter"
+    ]
+    assert [order.client_order_id for order in await broker.list_orders(status="all")] == [
+        "bot:ema:enter"
+    ]
+    with pytest.raises(ValueError, match="unknown order query category"):
+        await broker.list_orders(status="filled")

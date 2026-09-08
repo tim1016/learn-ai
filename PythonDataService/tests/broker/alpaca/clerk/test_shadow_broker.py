@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.shadow_broker import (
     compose_shadow_ports,
     verify_shadow_namespace_empty,
 )
+from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerClockEvidence,
@@ -39,6 +40,7 @@ from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 
 DAY = date(2026, 9, 8)  # a Tuesday; a full NYSE session
 SID = "ema-shadow-1"
+NAMESPACE = f"learn-ai/{SID}/v1"
 EVIDENCE = shadow_evidence_account_id_for_strategy(SID)
 MINUTE_MS = 60_000
 
@@ -307,6 +309,41 @@ async def test_namespace_check_passes_clean_accounts_and_refuses_poison_or_full_
         await verify_shadow_namespace_empty(full_page)
     assert unproven.value.reason_code == "SHADOW_NAMESPACE_UNPROVEN"
     assert full_page.order_calls == ["all"]
+
+
+async def test_list_orders_speaks_the_vendors_query_category_not_an_order_status(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """``status`` is Alpaca's query category, and the shadow world is the first
+    one that can hold a non-terminal order: the reconciliation sweep's
+    ``status="open"`` read must see a resting order or it folds nothing and
+    reports ``position_drift`` where an order is still working."""
+    ports, bars, _live, _clock = world
+    settled_bar = _retain(bars, minute=600, close="100.25")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:done", settled_bar)
+    await ports.trade.submit(_market_leg(), client_order_id=f"{NAMESPACE}:done")
+
+    resting_bar = _retain(bars, minute=1020, close="100.00", phase="POST")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:rest", resting_bar)
+    await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{NAMESPACE}:rest")
+
+    working = await ports.read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT)
+    assert [order.client_order_id for order in working] == [f"{NAMESPACE}:rest"]
+    closed = await ports.read.list_orders(status="closed")
+    assert [order.client_order_id for order in closed] == [f"{NAMESPACE}:done"]
+    assert len(await ports.read.list_orders(status="all")) == 2
+    with pytest.raises(ValueError, match="unknown order query category"):
+        await ports.read.list_orders(status="filled")
+
+
+async def test_the_namespace_check_refuses_the_shadow_read_port(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """The shadow port answers ``[]`` for every category of the *live* account's
+    history, so proving the live namespace empty against it proves nothing."""
+    ports, _bars, _live, _clock = world
+    with pytest.raises(ValueError, match="live read port"):
+        await verify_shadow_namespace_empty(ports.read)
 
 
 def test_bars_after_returns_one_stream_in_open_order(tmp_path: Path) -> None:
