@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
     EconomicProjectionError,
@@ -20,19 +21,33 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     _to_fill_record,
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
+    UncertaintyRaisedFacts,
+)
+from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ManualOrderSubmission,
+    accept_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ExecutionCoverageConflictCause,
+)
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
 _SID = "s2-economic"
 _RUN_ID = "run-s2-economic"
+_OPERATOR_ID = "operator-42"
+_TICKET_ID = "7de3a77c-b698-4e0d-a5d1-2f624574ed35"
+_LEG_ID = "09d6d63e-6375-4e6d-8d20-3b1bf70c2465"
 _ATOL = 1e-6
 _RTOL = 0.0
 
@@ -160,6 +175,64 @@ def _append_correction(
     result = repo.append_execution_correction_or_raise(
         correction=correction,
         build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
+    )
+    assert result == "appended"
+
+
+def _accept_manual(repo: ClerkSqliteRepository) -> ManualOrderSubmission:
+    """Register one operator-owned ticket leg: a fill with no strategy instance."""
+    return accept_manual_order(
+        repo,
+        account_id=_ACCOUNT_ID,
+        operator_id=_OPERATOR_ID,
+        ticket_id=_TICKET_ID,
+        leg_id=_LEG_ID,
+        leg=BrokerOrderLeg(symbol="MSFT", side="buy", quantity=2),
+    )
+
+
+def _append_manual_slice(
+    repo: ClerkSqliteRepository,
+    manual: ManualOrderSubmission,
+    *,
+    execution_id: str,
+    side: str,
+    quantity: float,
+    price: float,
+    occurred_at_ms: int,
+) -> None:
+    facts = ExecutionSliceFilledFacts(
+        execution_id=execution_id,
+        symbol="MSFT",
+        side=side,
+        slice_qty=quantity,
+        slice_price=price,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=occurred_at_ms,
+    )
+    result = repo.append_execution_slice_if_absent(
+        execution_id=execution_id,
+        order_ref=manual.leg.order_ref or "",
+        build_transition=lambda: TransitionInput(
+            strategy_instance_id=None,
+            run_id=None,
+            command_id=manual.command.command_id,
+            effect_operation_id=manual.leg.effect_operation_id,
+            order_ref=manual.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=occurred_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=facts.to_facts_json(),
+        ),
+        build_coverage_conflict=lambda: (_ for _ in ()).throw(
+            AssertionError("exact test fixture cannot have cumulative recovery coverage")
+        ),
     )
     assert result == "appended"
 
@@ -372,6 +445,232 @@ def test_bot_fill_window_returns_all_effective_records_or_fails_before_truncatio
             "exec-history-1",
             "exec-history-2",
         ]
+    finally:
+        repo.close()
+
+
+def test_account_fill_window_spans_every_custody_owner_inside_the_window(
+    tmp_path: Path,
+) -> None:
+    """Account-wide fee truth owes on manual fills too, and refuses truncation."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-inside-strategy",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        _append_manual_slice(
+            repo,
+            _accept_manual(repo),
+            execution_id="exec-inside-manual",
+            side="BUY",
+            quantity=2.0,
+            price=50.0,
+            occurred_at_ms=session.open_ms_utc + 2_000,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-outside-window",
+            side="BUY",
+            quantity=1.0,
+            price=101.0,
+            occurred_at_ms=session.close_ms_utc,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            fills = reader.account_fill_window(
+                from_ms=session.open_ms_utc,
+                to_ms=session.close_ms_utc,
+            )
+            with pytest.raises(EconomicProjectionUnavailable, match="window limit"):
+                reader.account_fill_window(
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                    limit=1,
+                )
+        finally:
+            reader.close()
+
+        assert [fill.event_key for fill in fills] == [
+            "exec-inside-strategy",
+            "exec-inside-manual",
+        ]
+        assert [fill.symbol for fill in fills] == ["GOOGL", "MSFT"]
+        assert [fill.sid for fill in fills] == [
+            f"bot:{_SID}",
+            manual_operator_subject_id(_OPERATOR_ID),
+        ]
+    finally:
+        repo.close()
+
+
+def test_account_fill_window_refuses_cumulative_recovery_evidence(tmp_path: Path) -> None:
+    """A window fold cannot vouch for aggregate-recovered fill evidence."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        assert accepted.effect_operation_id is not None
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id,
+            order=BrokerOrder(
+                broker="alpaca",
+                order_id="broker-cumulative-recovery",
+                client_order_id=accepted.order_ref,
+                symbol="GOOGL",
+                asset_class="us_equity",
+                side="buy",
+                order_type="market",
+                time_in_force="day",
+                quantity=5.0,
+                filled_quantity=5.0,
+                limit_price=None,
+                stop_price=None,
+                filled_avg_price=100.0,
+                status="filled",
+                submitted_at_ms=session.open_ms_utc,
+                created_at_ms=session.open_ms_utc,
+                updated_at_ms=session.open_ms_utc + 500,
+                filled_at_ms=session.open_ms_utc + 500,
+                canceled_at_ms=None,
+                expired_at_ms=None,
+                events=[],
+                observed_at_ms=session.open_ms_utc + 500,
+            ),
+        )
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            with pytest.raises(EconomicProjectionUnavailable, match="cumulative-recovery"):
+                reader.account_fill_window(
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                )
+        finally:
+            reader.close()
+    finally:
+        repo.close()
+
+
+def test_account_fill_window_refuses_unresolved_execution_coverage_conflict(tmp_path: Path) -> None:
+    """An open coverage-conflict uncertainty fences every account-wide window read."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-conflict-fill",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        conflict = UncertaintyRaisedFacts(
+            severity="error",
+            blocks_new_exposure=True,
+            allows_reduction=False,
+            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            headline="Exact execution overlaps aggregate recovery evidence",
+            explanation="Historical authority retained the execution ID but not its exact economics.",
+            operator_impact="New exposure is blocked until exact coverage is recovered.",
+            next_step="Recover the retained exact broker execution.",
+            evidence_refs=["exec-conflict-fill"],
+            cause_facts=ExecutionCoverageConflictCause(
+                order_ref=accepted.order_ref,
+                execution_id="exec-conflict-fill",
+            ).to_mapping(),
+        )
+        repo.append_transition(
+            TransitionInput(
+                strategy_instance_id=_SID,
+                run_id=accepted.command.run_id,
+                command_id=accepted.command.command_id,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                transition_kind="UNCERTAINTY_RAISED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=repo.clock(),
+                summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+                facts_json=conflict.to_facts_json(),
+            )
+        )
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            with pytest.raises(
+                EconomicProjectionUnavailable, match="unresolved execution-coverage conflict"
+            ):
+                reader.account_fill_window(
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                )
+        finally:
+            reader.close()
+    finally:
+        repo.close()
+
+
+def test_account_fill_window_refuses_a_filled_external_order(tmp_path: Path) -> None:
+    """A filled external order means this window cannot vouch for the account's whole fee truth."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-external-window-fill",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        observe_external_order(
+            repo,
+            order=BrokerOrder(
+                broker="alpaca",
+                order_id="external-order-1",
+                client_order_id="alpaca-console:external-1",
+                symbol="MSFT",
+                asset_class="us_equity",
+                side="buy",
+                order_type="market",
+                time_in_force="day",
+                quantity=3.0,
+                filled_quantity=3.0,
+                limit_price=None,
+                stop_price=None,
+                filled_avg_price=50.0,
+                status="filled",
+                submitted_at_ms=session.open_ms_utc,
+                created_at_ms=session.open_ms_utc,
+                updated_at_ms=session.open_ms_utc + 500,
+                filled_at_ms=session.open_ms_utc + 500,
+                canceled_at_ms=None,
+                expired_at_ms=None,
+                events=[],
+                observed_at_ms=session.open_ms_utc + 500,
+            ),
+        )
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            with pytest.raises(EconomicProjectionUnavailable, match="filled external order"):
+                reader.account_fill_window(
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                )
+        finally:
+            reader.close()
     finally:
         repo.close()
 

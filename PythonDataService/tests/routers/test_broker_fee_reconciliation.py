@@ -1,0 +1,94 @@
+"""GET /api/brokers/{broker}/fees/session-reconciliation."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+from app.broker.contract.errors import BrokerRateLimited
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.routers import brokers as brokers_router
+from app.utils.session_anchors import et_midnight_ms
+
+SESSION_OPEN_MS = session_open_ms_utc(date(2026, 9, 8))
+PATH = "/api/brokers/alpaca/fees/session-reconciliation"
+
+
+def _app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(brokers_router.router)
+    return app
+
+
+class _Port:
+    async def list_activities(self, *, after_ms: int | None = None, limit: int = 100) -> list:
+        return []
+
+
+@pytest.mark.parametrize(
+    "session_open_ms",
+    [
+        SESSION_OPEN_MS + 60_000,  # a minute after the open is not the session anchor
+        et_midnight_ms(date(2026, 9, 8)),  # ET midnight is a different anchor
+        session_open_ms_utc(date(2026, 9, 4)) + 3 * 24 * 60 * 60 * 1000,  # Labor Day 2026-09-07
+    ],
+)
+async def test_rejects_a_value_that_is_not_a_trading_days_session_open(session_open_ms: int) -> None:
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(PATH, params={"session_open_ms": session_open_ms})
+
+    assert response.status_code == 422
+    assert "session open" in response.json()["detail"]
+
+
+async def test_refuses_a_broker_the_fee_model_does_not_describe() -> None:
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(
+            "/api/brokers/ibkr/fees/session-reconciliation",
+            params={"session_open_ms": SESSION_OPEN_MS},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["reason"] == "fee_reconciliation_unsupported_broker"
+
+
+async def test_reports_unavailable_without_an_active_sqlite_clerk(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_active_clerk_runtime(None)
+    monkeypatch.setattr(brokers_router, "_resolve_port", lambda broker: _Port())
+
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(PATH, params={"session_open_ms": SESSION_OPEN_MS})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == "unavailable"
+    assert body["session_open_ms"] == SESSION_OPEN_MS
+    assert body["predicted"] is None
+
+
+async def test_translates_a_broker_contract_error_through_the_shared_run_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint routes through ``_run`` so a ``BrokerError`` gets the shared what/why."""
+
+    async def _raise_rate_limited(*, broker: str, port: object, session_open_ms: int) -> None:
+        raise BrokerRateLimited(
+            "Alpaca throttled this read.",
+            broker=broker,
+            detail="cooldown before retry",
+            retry_after_ms=2_500,
+        )
+
+    monkeypatch.setattr(brokers_router, "session_fee_reconciliation", _raise_rate_limited)
+    monkeypatch.setattr(brokers_router, "_resolve_port", lambda broker: _Port())
+
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(PATH, params={"session_open_ms": SESSION_OPEN_MS})
+
+    assert response.status_code == BrokerRateLimited.http_status
+    assert response.headers["Retry-After"] == "3"
+    assert response.json()["detail"]["broker"] == "alpaca"

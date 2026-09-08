@@ -61,6 +61,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 | Broker orders grouped by symbol (gross requested, filled, and working quantities) | `PythonDataService/app/services/broker_order_groups.py` | — | Product read-model formula over absolute broker-reported quantities; decimal arithmetic from the Python standard library. These activity totals are never net position or directional exposure. | `PythonDataService/tests/services/test_broker_order_groups.py` | canonical |
 | Alpaca order submission-to-fill latency (seconds) | `PythonDataService/app/broker/alpaca/adapter.py::fill_latency_seconds` | —; Angular renders the supplied scalar without recomputing it. | Alpaca Trading API order properties (`submitted_at`, `filled_at`): `https://docs.alpaca.markets/us/docs/brokerapi-trading`. Formula: `(filled_at_ms - submitted_at_ms) / 1,000`; unavailable until both broker clocks exist. | `PythonDataService/tests/broker/alpaca/test_adapter_orders.py::test_filled_order_maps_every_field_and_synthesizes_fill_event` and `::test_fill_latency_is_unknown_until_both_broker_clocks_exist` (`atol=1e-12, rtol=0`) | canonical |
 
+### Broker fees (pass-through)
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Alpaca equity regulatory fees (SEC §31, FINRA TAF, FINRA CAT; EOD per-component cent round-up) | `PythonDataService/app/broker/alpaca/regulatory_fees.py` | none (the IBKR tier model in `app/research/parity/ibkr_commission.py` is a different concept — broker commission, not regulatory pass-through) | Alpaca Broker Fee Schedule (retrieved 2026-09-07); SEC fee-rate advisories 2024-2/2025-2/2026-2; FINRA SR-FINRA-2024-019 — see [alpaca-regulatory-fees](docs/references/alpaca-regulatory-fees.md) | `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py`; golden `FEE-001` in `tests/fixtures/test_alpaca_regulatory_fees_fixture.py` (hand_computed, atol=0) | canonical — 4-field provenance block present |
+
 ### Indicators — Python-canonical, ported from LEAN
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |

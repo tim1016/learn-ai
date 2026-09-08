@@ -339,6 +339,76 @@ class SqliteEconomicProjectionReader:
                 fills=fills,
             )
 
+    def account_fill_window(
+        self,
+        *,
+        from_ms: int,
+        to_ms: int,
+        limit: int = DEFAULT_CHART_FILL_WINDOW_LIMIT,
+    ) -> tuple[FillRecord, ...]:
+        """Every effective account fill in the window, or raise ``EconomicProjectionUnavailable``.
+
+        The account-wide sibling of :meth:`bot_fill_window`: bot, manual and S2
+        fills alike, identified by their custody subject because a manual fill
+        has no ``strategy_instance_id`` and still belongs to the account's
+        economics.  Filtering is on the root's economic time, not the
+        correction's audit-arrival time.  This method never returns a fill set
+        it cannot vouch for: more rows than ``limit`` raises (the
+        FillWindowProjection contract), and so does incomplete fill evidence —
+        cumulative-recovery evidence inside the window, an unresolved
+        execution-coverage-conflict uncertainty, or a filled external order
+        (mirrors the completeness gate in :meth:`account_pnl_attribution`).
+        """
+        _validate_window(from_ms=from_ms, to_ms=to_ms)
+        limit = _bounded_chart_fill_window_limit(limit)
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_fill_rows(
+                strategy_instance_ids=None,
+                from_ms=from_ms,
+                to_ms=to_ms,
+                cursor_key=None,
+                limit=limit,
+            )
+            if len(rows) > limit:
+                raise EconomicProjectionUnavailable(
+                    "SQLite account fill window limit exceeded; narrow the requested range."
+                )
+            coverage = self._account_execution_coverage(rows)
+            external_fill_exists = self._conn.execute(
+                "SELECT 1 FROM external_orders "
+                "WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9 LIMIT 1"
+            ).fetchone() is not None
+            if coverage != "complete" or external_fill_exists:
+                causes: list[str] = []
+                if any(row["evidence_source"] == "cumulative_recovery" for row in rows):
+                    causes.append("cumulative-recovery evidence")
+                if self._conn.execute(
+                    "SELECT 1 FROM uncertainties WHERE reason_code = ? "
+                    "AND resolved_at_ms IS NULL LIMIT 1",
+                    (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+                ).fetchone() is not None:
+                    causes.append("an unresolved execution-coverage conflict")
+                if external_fill_exists:
+                    causes.append("a filled external order")
+                raise EconomicProjectionUnavailable(
+                    "SQLite account fill evidence is incomplete for this window: "
+                    + " / ".join(causes)
+                )
+            return tuple(
+                sorted(
+                    (
+                        _to_fill_record(
+                            row,
+                            account_id=self._account_id,
+                            custody_subject_identity=True,
+                        )
+                        for row in rows
+                    ),
+                    key=lambda record: (record.filled_at_ms, record.ledger_sequence),
+                )
+            )
+
     def account_executions(
         self,
         *,

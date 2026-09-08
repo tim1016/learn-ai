@@ -62,12 +62,17 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
-from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.lean_sidecar.trading_calendar import (
+    current_trading_session_window,
+    is_trading_day,
+    session_open_ms_utc,
+)
 from app.schemas.account_pnl_attribution import (
     AccountPnlAttributionResponse,
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
+from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.schemas.manual_orders import (
@@ -84,6 +89,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
+from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
 from app.services.alpaca_live_verdict import alpaca_live_verdict
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
@@ -95,7 +101,7 @@ from app.services.sqlite_clerk_compat import (
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
@@ -308,6 +314,37 @@ async def list_activities(
     return await _run(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
+    )
+
+
+@router.get(
+    "/{broker}/fees/session-reconciliation",
+    response_model=SessionFeeReconciliation,
+)
+async def get_session_fee_reconciliation(
+    broker: str,
+    session_open_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
+) -> SessionFeeReconciliation:
+    """Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6)."""
+    # The fee model, its rate table and the SQLite fill window are all Alpaca's;
+    # nothing here generalizes to another broker on the shared ``{broker}`` path.
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "fee_reconciliation_unsupported_broker",
+                "message": f"No fee reconciliation for broker '{broker}'.",
+            },
+        )
+    trade_date = et_date_at_ms(session_open_ms)
+    if not is_trading_day(trade_date) or session_open_ms_utc(trade_date) != session_open_ms:
+        raise HTTPException(
+            status_code=422,
+            detail="session_open_ms must be the calendar's session open (ET) of a trading day",
+        )
+    return await _run(
+        broker,
+        lambda port: session_fee_reconciliation(broker=broker, port=port, session_open_ms=session_open_ms),
     )
 
 

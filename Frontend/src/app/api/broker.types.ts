@@ -1507,6 +1507,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/fees/session-reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Fee Reconciliation
+         * @description Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6).
+         */
+        get: operations["get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/live-verdict": {
         parameters: {
             query?: never;
@@ -15629,6 +15649,20 @@ export interface components {
          */
         PortfolioHistoryRange: "1D" | "30D" | "60D";
         /**
+         * PredictedSessionFees
+         * @description The model's end-of-day charge for the session, per component.
+         */
+        PredictedSessionFees: {
+            /** Cat Usd */
+            cat_usd: number;
+            /** Sec Usd */
+            sec_usd: number;
+            /** Taf Usd */
+            taf_usd: number;
+            /** Total Usd */
+            total_usd: number;
+        };
+        /**
          * PredictionComparison
          * @description Compare a per-bar prediction value against a constant threshold.
          */
@@ -18367,6 +18401,58 @@ export interface components {
             symbol: string;
             /** Time Zone Id */
             time_zone_id: string;
+        };
+        /**
+         * SessionFeeReconciliation
+         * @description Predicted fees for one ET trade date against the FEE activities Alpaca posted.
+         */
+        SessionFeeReconciliation: {
+            /** Account Id */
+            account_id: string | null;
+            /** Broker */
+            broker: string;
+            /** Delta Usd */
+            delta_usd: number | null;
+            /** Fill Count */
+            fill_count: number;
+            /**
+             * Fill Window End Ms
+             * Format: int64
+             */
+            fill_window_end_ms: number;
+            /**
+             * Fill Window Start Ms
+             * Format: int64
+             */
+            fill_window_start_ms: number;
+            /** Observed Activity Count */
+            observed_activity_count: number;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /** Observed Total Usd */
+            observed_total_usd: number | null;
+            predicted: components["schemas"]["PredictedSessionFees"] | null;
+            /** Sell Fill Count */
+            sell_fill_count: number;
+            /**
+             * Session Open Ms
+             * Format: int64
+             */
+            session_open_ms: number;
+            /** Tolerance Usd */
+            tolerance_usd: number | null;
+            /** Unpinned Components */
+            unpinned_components: string[];
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "within_tolerance" | "drift" | "pending" | "unobserved" | "no_fills" | "rate_unpinned" | "unavailable";
+            /** Why */
+            why: string;
         };
         /** SetHoldings */
         SetHoldings: {
@@ -25272,6 +25358,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerClockEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get: {
+        parameters: {
+            query: {
+                session_open_ms: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFeeReconciliation"];
                 };
             };
             /** @description Validation Error */

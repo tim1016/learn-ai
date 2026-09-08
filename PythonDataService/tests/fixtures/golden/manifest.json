@@ -1466,6 +1466,47 @@
         }
       },
       "status": "active"
+    },
+    {
+      "id": "FEE-001",
+      "name": "Alpaca equity regulatory pass-through fees",
+      "category": "broker-fees",
+      "canonical_module": "PythonDataService/app/broker/alpaca/regulatory_fees.py",
+      "canonical_callable": "fees_for_fill",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "exact decimal arithmetic over the published SEC/TAF/CAT rates without importing canonical code",
+        "citation": "Alpaca Broker Fee Schedule (retrieved 2026-09-07), SEC fee-rate advisories 2024-2/2025-2/2026-2, FINRA SR-FINRA-2024-019; see docs/references/alpaca-regulatory-fees.md."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/alpaca_regulatory_fees.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact Decimal oracle and exact Decimal model; compared for Decimal equality."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "dac84142cd0ab6bd5179ea9aef51c05c6a3921a948dad072432e1fbc0d0694e2",
+            "output.json": "1410d0b91882c0045262ee1900ef58b8cbd0f27be24d9e9ec47c82352f49cc80"
+          },
+          "file_sha256": {
+            "input.json": "576461a46a0fe83f044f4c2ce4d30e29cd0edb23bd4ee488d01de474330de558",
+            "output.json": "e2a7f2a1dec96089298d84021de8caeec972a969d0f5ec48dc8231ccc656d90f",
+            "attribution.md": "2a4a33ff90cebfc14941fe94ddb70855b7e66b4cde55e2e1196f8538ff6f290b"
+          }
+        }
+      },
+      "status": "active"
     }
   ]
 }
