@@ -136,10 +136,19 @@ def test_from_database_path_reads_a_running_authority_and_refuses_a_foreign_file
     reader = SqliteEconomicProjectionReader.from_database_path(repo.db_path)
     try:
         assert [run.run_id for run in reader.runs_for_strategy(_SID)] == [f"{_SID}:l-1"]
+        # A *write* while the foreign reader is open — only that proves the
+        # reader never took the lease the repository is still holding.
+        repo.clock.advance(1_000)
+        submit_stop_run(
+            repo,
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=_SID,
+            lifecycle_run_id="l-1",
+        )
+        assert [run.state for run in reader.runs_for_strategy(_SID)] == ["STOPPED"]
     finally:
         reader.close()
-    assert repo.active_run(_SID) is not None
-    repo.close()
+        repo.close()
 
     stranger = tmp_path / "not-a-clerk.db"
     connection = sqlite3.connect(stranger)

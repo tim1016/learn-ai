@@ -21,6 +21,7 @@ from app.services.alpaca_shadow_reconciliation import (
     FILL_PRICE_ATOL,
     ShadowTwinMismatch,
     TwinFill,
+    _digest_default,
     evaluate_shadow_gate,
     reconcile_twin_day,
     twins_agree,
@@ -120,6 +121,13 @@ def test_price_and_time_drift_are_reported_never_gated() -> None:
         DAY, 600
     )
     assert _reconcile([_fill(600)], []).max_fill_time_drift_ms is None
+
+
+def test_the_digest_encoder_names_every_type_it_will_hash() -> None:
+    assert _digest_default(Decimal("1.0")) == "1.0"
+    assert _digest_default(DivergenceCategory.DECISION_MISMATCH) == "decision_mismatch"
+    with pytest.raises(TypeError, match="no digest representation"):
+        _digest_default(object())
 
 
 def _seal(**overrides: object) -> SealedBotProgram:
@@ -370,6 +378,34 @@ def test_every_incomplete_sweep_says_which_half_is_missing(
     [verdict] = _evaluate(tmp_path, ledger=ledger, source=source).sessions
 
     assert (verdict.state, verdict.detail) == ("sweep_not_clean", detail)
+
+
+@pytest.mark.parametrize(
+    ("update", "match"),
+    [
+        ({"use_rth": False}, "session shape"),
+        ({"sealed_program": _seal(sealed_account_id="PA-OTHER")}, "named twin account"),
+    ],
+)
+def test_a_twin_that_is_not_this_instances_twin_is_refused(
+    tmp_path: Path, update: dict[str, object], match: str
+) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    source = _Source({}, {})
+
+    with pytest.raises(ShadowTwinMismatch, match=match):
+        evaluate_shadow_gate(
+            live_account_id="9LIVE0001",
+            shadow_binding=_binding(SID, "shadow:9LIVE0001"),
+            twin_binding=_binding(TWIN, "PA-TEST").model_copy(update=update),
+            twin_account_id="PA-TEST",
+            required_sessions=1,
+            session_ledger=ledger,
+            shadow_source=source,
+            twin_source=source,
+            window=ALPACA_EXTENDED_HOURS_WINDOW,
+            now_ms=CLOSE + 1,
+        )
 
 
 def test_a_binding_with_no_sealed_program_is_refused(tmp_path: Path) -> None:

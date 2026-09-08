@@ -51,11 +51,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.lean_sidecar.trading_calendar import (
-    expected_sessions,
-    session_close_ms_utc,
-    session_open_ms_utc,
-)
+from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -98,6 +94,20 @@ class TwinDivergence:
     detail: str
 
 
+def _digest_default(value: object) -> str:
+    """The only two non-JSON types this report carries — anything else must fail loudly.
+
+    A catch-all ``default=str`` would silently hash a future field as its
+    ``repr``, which is exactly the kind of drift a durably-pinned digest
+    cannot absorb.
+    """
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, DivergenceCategory):
+        return value.value
+    raise TypeError(f"{type(value).__name__} has no digest representation")
+
+
 @dataclass(frozen=True)
 class TwinDayReconciliation:
     session_open_ms: int
@@ -121,8 +131,17 @@ class TwinDayReconciliation:
         return not self.gating
 
     def report_sha256(self) -> str:
-        """A content hash of the whole comparison — what the receipt names."""
-        payload = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), default=str)
+        """A content hash of the whole comparison — what the receipt names.
+
+        The digest is *representation*-sensitive, not value-sensitive:
+        ``Decimal("1")`` and ``Decimal("1.0")`` compare equal and produce zero
+        divergences but hash differently. Both sides reach it through the same
+        ``Decimal(str(float))`` adapter, so this is stable in production —
+        a receipt pinning this digest is pinning a representation.
+        """
+        payload = json.dumps(
+            asdict(self), sort_keys=True, separators=(",", ":"), default=_digest_default
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -345,11 +364,13 @@ class ShadowGateEvaluation:
 
 
 def _decision_span(session: RunDecisionSession, day: date) -> tuple[int, int]:
+    """``day``'s decision span — the close from the session's own canonical helper."""
     if session.kind == "rth":
-        return session_open_ms_utc(day), session_close_ms_utc(day)
+        return session_open_ms_utc(day), session.close_ms(day)
     bounds = declared_session_bounds(day, session.window)
-    assert bounds is not None  # ``day`` comes from expected_sessions
-    return bounds.open_ms, bounds.close_ms
+    if bounds is None:  # ``day`` comes from expected_sessions, so this is a state error
+        raise ValueError(f"{day.isoformat()} is not a trading day")
+    return bounds.open_ms, session.close_ms(day)
 
 
 def _covering_run(
@@ -382,14 +403,20 @@ def evaluate_shadow_gate(
     """Judge every trading day since the shadow instance first ran (ADR 0059 D2)."""
     if shadow_binding.sealed_program is None or twin_binding.sealed_program is None:
         raise ShadowTwinMismatch("both bindings must carry their sealed program")
+    if shadow_binding.use_rth != twin_binding.use_rth:
+        # The seal carries no session shape, so twins deciding on different
+        # minutes would otherwise fail closed as a misleading twin divergence.
+        raise ShadowTwinMismatch("the twins do not share a session shape")
     disagreement = twins_agree(shadow_binding.sealed_program, twin_binding.sealed_program)
     if disagreement is not None:
         raise ShadowTwinMismatch(disagreement)
+    if twin_account_id != twin_binding.sealed_program.sealed_account_id:
+        raise ShadowTwinMismatch("the twin is not sealed to the named twin account")
     runs = shadow_source.runs_for_strategy(shadow_binding.strategy_instance_id)
     session = RunDecisionSession.resolve(use_rth=shadow_binding.use_rth, window=window)
     verdicts: list[ShadowSessionVerdict] = []
     if runs and session is not None:
-        first_day = et_date_at_ms(min(run.started_at_ms for run in runs))
+        first_day = et_date_at_ms(runs[0].started_at_ms)  # oldest first, per the protocol
         for day in expected_sessions(first_day, et_date_at_ms(now_ms)):
             open_ms, close_ms = _decision_span(session, day)
             if close_ms > now_ms:
@@ -452,24 +479,28 @@ def _judge_day(
     state = session_ledger.day_state(calendar_open_ms)
     if not state.complete:
         return ShadowSessionVerdict(
-            calendar_open_ms, "sweep_not_clean", _sweep_failure(state), None, None
+            session_open_ms=calendar_open_ms,
+            state="sweep_not_clean",
+            detail=_sweep_failure(state),
+            shadow_run_id=None,
+            reconciliation=None,
         )
     if state.opened_at_ms is not None and state.opened_at_ms > open_ms:
         return ShadowSessionVerdict(
-            calendar_open_ms,
-            "sweep_opened_late",
-            "the sweep's first pass came after the decision session opened",
-            None,
-            None,
+            session_open_ms=calendar_open_ms,
+            state="sweep_opened_late",
+            detail="the sweep's first pass came after the decision session opened",
+            shadow_run_id=None,
+            reconciliation=None,
         )
     run = _covering_run(runs, open_ms=open_ms, close_ms=close_ms)
     if run is None:
         return ShadowSessionVerdict(
-            calendar_open_ms,
-            "run_not_covering",
-            "no run of this instance spanned the whole decision session",
-            None,
-            None,
+            session_open_ms=calendar_open_ms,
+            state="run_not_covering",
+            detail="no run of this instance spanned the whole decision session",
+            shadow_run_id=None,
+            reconciliation=None,
         )
     try:
         shadow_fills = read_twin_fills(
@@ -504,11 +535,20 @@ def _judge_day(
         twin_fills=twin_fills,
     )
     if not reconciliation.passed:
-        detail = "; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating)
         return ShadowSessionVerdict(
-            calendar_open_ms, "twin_diverged", detail, run.run_id, reconciliation
+            session_open_ms=calendar_open_ms,
+            state="twin_diverged",
+            detail="; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating),
+            shadow_run_id=run.run_id,
+            reconciliation=reconciliation,
         )
-    return ShadowSessionVerdict(calendar_open_ms, "counted", "", run.run_id, reconciliation)
+    return ShadowSessionVerdict(
+        session_open_ms=calendar_open_ms,
+        state="counted",
+        detail="",
+        shadow_run_id=run.run_id,
+        reconciliation=reconciliation,
+    )
 
 
 __all__ = [

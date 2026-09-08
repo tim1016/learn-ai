@@ -441,7 +441,7 @@ class SqliteEconomicProjectionReader:
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         """Every run the authority recorded for one instance, oldest first."""
         with self._read_transaction():
-            self._verified_meta()
+            self._verify_identity()
             rows = self._conn.execute(
                 "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
                 "stopped_at_ms FROM runs WHERE strategy_instance_id = ? "
