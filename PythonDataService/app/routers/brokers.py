@@ -326,6 +326,16 @@ async def get_session_fee_reconciliation(
     session_open_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
 ) -> SessionFeeReconciliation:
     """Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6)."""
+    # The fee model, its rate table and the SQLite fill window are all Alpaca's;
+    # nothing here generalizes to another broker on the shared ``{broker}`` path.
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "fee_reconciliation_unsupported_broker",
+                "message": f"No fee reconciliation for broker '{broker}'.",
+            },
+        )
     trade_date = et_date_at_ms(session_open_ms)
     if not is_trading_day(trade_date) or session_open_ms_utc(trade_date) != session_open_ms:
         raise HTTPException(

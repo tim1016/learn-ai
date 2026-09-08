@@ -44,6 +44,17 @@ async def test_rejects_a_value_that_is_not_a_trading_days_session_open(session_o
     assert "session open" in response.json()["detail"]
 
 
+async def test_refuses_a_broker_the_fee_model_does_not_describe() -> None:
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as client:
+        response = await client.get(
+            "/api/brokers/ibkr/fees/session-reconciliation",
+            params={"session_open_ms": SESSION_OPEN_MS},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["reason"] == "fee_reconciliation_unsupported_broker"
+
+
 async def test_reports_unavailable_without_an_active_sqlite_clerk(monkeypatch: pytest.MonkeyPatch) -> None:
     set_active_clerk_runtime(None)
     monkeypatch.setattr(brokers_router, "_resolve_port", lambda broker: _Port())

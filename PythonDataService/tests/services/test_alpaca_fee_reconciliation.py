@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
-from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
-from app.broker.alpaca.clerk.sqlite.economic_projection_models import ExecutionPage, ExecutionRow
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    set_active_clerk_runtime,
+)
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.services.alpaca_fee_reconciliation import (
@@ -14,7 +19,6 @@ from app.services.alpaca_fee_reconciliation import (
     SessionFill,
     reconcile_session_fees,
     session_fee_reconciliation,
-    session_fills,
 )
 from app.utils.session_anchors import et_midnight_ms
 
@@ -51,6 +55,23 @@ def _fee(activity_id: str, net_amount: float | None, occurred_at_ms: int | None 
     )
 
 
+def _older(activity_id: str = "older") -> BrokerActivity:
+    """One non-FEE activity dated before the window: proof the read reached back."""
+    return BrokerActivity(
+        broker="alpaca",
+        activity_id=activity_id,
+        activity_type="CSD",
+        category="non_trade_activity",
+        symbol=None,
+        side=None,
+        quantity=None,
+        price=None,
+        net_amount=1_000.0,
+        occurred_at_ms=DAY_START_MS - 1,
+        observed_at_ms=DAY_END_MS,
+    )
+
+
 def _reconcile(fills=SESSION_FILLS, activities=(), now_ms: int = DAY_END_MS + 1):
     return reconcile_session_fees(
         broker="alpaca",
@@ -74,7 +95,9 @@ def test_prediction_and_window_are_reported() -> None:
 
 
 def test_observed_within_tolerance() -> None:
-    result = _reconcile(activities=(_fee("f1", -14.95), _fee("f2", -29.39), _fee("f3", -0.55)))
+    result = _reconcile(
+        activities=(_older(), _fee("f1", -14.95), _fee("f2", -29.39), _fee("f3", -0.55))
+    )
 
     assert result.verdict == "within_tolerance"
     assert result.observed_total_usd == 44.89
@@ -83,10 +106,46 @@ def test_observed_within_tolerance() -> None:
 
 
 def test_observed_drift_beyond_tolerance() -> None:
-    result = _reconcile(activities=(_fee("f1", -45.10),))
+    result = _reconcile(activities=(_older(), _fee("f1", -45.10)))
 
     assert result.verdict == "drift"
     assert result.delta_usd == 0.27
+
+
+def test_a_read_that_never_reached_the_windows_start_cannot_be_compared() -> None:
+    """A bounded newest-first activity read may have truncated the day's FEE rows."""
+    result = _reconcile(activities=(_fee("f1", -14.95), _fee("f2", -29.88)))
+
+    assert result.verdict == "unobserved"
+    assert "cannot be shown to be complete" in result.why
+    assert result.delta_usd is None
+    assert result.observed_total_usd is None
+
+
+def test_the_same_rows_compare_once_an_older_activity_proves_coverage() -> None:
+    result = _reconcile(activities=(_older(), _fee("f1", -14.95), _fee("f2", -29.88)))
+
+    assert result.verdict == "within_tolerance"
+    assert result.observed_total_usd == 44.83
+
+
+def test_observation_below_the_model_is_bounded_by_end_of_day_rounding_alone() -> None:
+    """Per-trade rounding can only add cents, so only 3c of slack exists below."""
+    five_below = _reconcile(activities=(_older(), _fee("f1", -44.78)))
+    three_below = _reconcile(activities=(_older(), _fee("f1", -44.80)))
+
+    assert (five_below.verdict, five_below.delta_usd) == ("drift", -0.05)
+    assert (three_below.verdict, three_below.delta_usd) == ("within_tolerance", -0.03)
+
+
+def test_only_fee_rows_dated_this_trade_date_are_summed() -> None:
+    result = _reconcile(
+        activities=(_older(), _fee("today", -44.83), _fee("tomorrow", -100.00, DAY_END_MS))
+    )
+
+    assert result.observed_activity_count == 1
+    assert result.observed_total_usd == 44.83
+    assert result.verdict == "within_tolerance"
 
 
 def test_fee_activities_from_other_days_are_ignored() -> None:
@@ -126,23 +185,26 @@ def test_no_fills_and_no_fees() -> None:
 
 
 def test_fees_observed_with_no_fills_is_drift() -> None:
-    result = _reconcile(fills=(), activities=(_fee("f1", -1.00),))
+    result = _reconcile(fills=(), activities=(_older(), _fee("f1", -1.00)))
 
     assert result.verdict == "drift"
     assert result.delta_usd == 1.0
 
 
-def test_rate_unpinned_session_has_no_prediction() -> None:
+def _unpinned_2025(activities=()):
     open_2025 = session_open_ms_utc(date(2025, 6, 2))
-
-    result = reconcile_session_fees(
+    return reconcile_session_fees(
         broker="alpaca",
         account_id="123456789",
         session_open_ms=open_2025,
         fills=(SessionFill(side=OrderSide.SELL, quantity=D("1"), fill_price=D("1")),),
-        fee_activities=(),
+        fee_activities=activities,
         now_ms=open_2025,
     )
+
+
+def test_rate_unpinned_session_has_no_prediction() -> None:
+    result = _unpinned_2025()
 
     assert result.verdict == "rate_unpinned"
     assert result.predicted is None
@@ -150,79 +212,20 @@ def test_rate_unpinned_session_has_no_prediction() -> None:
     assert result.tolerance_usd is None
 
 
-def _row(fill_id: str, filled_at_ms: int, side: OrderSide, quantity: float, price: float) -> ExecutionRow:
-    return ExecutionRow(
-        fill_id=fill_id,
-        execution_id=None,
-        order_ref=f"order-{fill_id}",
-        strategy_instance_id=None,
-        origin="strategy",
-        state="effective",
-        event_kind="fill",
-        symbol="AAPL",
-        side=side,
-        quantity=quantity,
-        price=price,
-        fee=None,
-        fee_fidelity="not_reported",
-        filled_at_ms=filled_at_ms,
-        recorded_at_ms=filled_at_ms,
+def test_rate_unpinned_still_reports_what_alpaca_charged() -> None:
+    """An unpredictable session is not an unobservable one: the charge is still fact."""
+    day_start_2025 = et_midnight_ms(date(2025, 6, 2))
+    charged = (
+        _fee("f1", -0.75, day_start_2025),
+        _fee("f2", -0.20, day_start_2025),
     )
 
+    result = _unpinned_2025(activities=charged)
 
-def _page(rows: tuple[ExecutionRow, ...], next_cursor: str | None) -> ExecutionPage:
-    return ExecutionPage(
-        account_id="123456789",
-        authority_generation=1,
-        control_revision=1,
-        executions=rows,
-        next_cursor=next_cursor,
-    )
-
-
-class _Pager:
-    """Newest-first pages keyed by cursor, recording every call."""
-
-    def __init__(self, pages: dict[str | None, ExecutionPage]) -> None:
-        self.pages = pages
-        self.calls: list[tuple[str | None, int, str | None]] = []
-
-    def account_executions(self, *, cursor: str | None, limit: int, state: str | None) -> ExecutionPage:
-        self.calls.append((cursor, limit, state))
-        return self.pages[cursor]
-
-
-def test_session_fills_keeps_only_the_window_and_stops_paging_before_it() -> None:
-    pager = _Pager(
-        {
-            None: _page(
-                (
-                    _row("after", DAY_END_MS, OrderSide.SELL, 1.0, 1.0),
-                    _row("late", DAY_END_MS - 1, OrderSide.SELL, 100.0, 250.0),
-                    _row("early", DAY_START_MS, OrderSide.BUY, 0.5, 400.0),
-                ),
-                "page-2",
-            ),
-            "page-2": _page((_row("before", DAY_START_MS - 1, OrderSide.SELL, 7.0, 7.0),), "page-3"),
-            "page-3": _page((), None),
-        }
-    )
-
-    fills = session_fills(pager, window_start_ms=DAY_START_MS, window_end_ms=DAY_END_MS)
-
-    assert fills == [
-        SessionFill(side=OrderSide.SELL, quantity=D("100"), fill_price=D("250")),
-        SessionFill(side=OrderSide.BUY, quantity=D("0.5"), fill_price=D("400")),
-    ]
-    assert pager.calls == [(None, 100, "effective"), ("page-2", 100, "effective")]
-
-
-def test_session_fills_stops_when_pages_run_out() -> None:
-    pager = _Pager({None: _page((_row("only", SESSION_OPEN_MS, OrderSide.SELL, 2.0, 3.0),), None)})
-
-    fills = session_fills(pager, window_start_ms=DAY_START_MS, window_end_ms=DAY_END_MS)
-
-    assert fills == [SessionFill(side=OrderSide.SELL, quantity=D("2"), fill_price=D("3"))]
+    assert result.verdict == "rate_unpinned"
+    assert result.predicted is None
+    assert result.observed_total_usd == 0.95
+    assert result.observed_activity_count == 2
 
 
 class _Port:
@@ -245,3 +248,36 @@ async def test_facade_is_unavailable_without_an_active_sqlite_clerk() -> None:
     assert result.predicted is None
     assert (result.fill_window_start_ms, result.fill_window_end_ms) == (DAY_START_MS, DAY_END_MS)
     assert port.calls == []
+
+
+async def test_facade_reads_the_account_window_and_an_activity_span_it_can_bound(
+    tmp_path: Path,
+) -> None:
+    """The activity read must be able to reach before the window it must cover."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-FEE-RECON", artifacts_root=tmp_path)
+    port = _Port()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
+                repo=repo,
+                read=port,  # type: ignore[arg-type]
+                trade=port,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        result = await session_fee_reconciliation(
+            broker="alpaca",
+            port=port,
+            session_open_ms=SESSION_OPEN_MS,
+            now_ms=DAY_END_MS,
+        )
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert result.account_id == "PA-FEE-RECON"
+    assert (result.fill_count, result.verdict) == (0, "no_fills")
+    assert port.calls == [(0, 100)]

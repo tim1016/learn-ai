@@ -10,18 +10,15 @@ the ET calendar day, not the RTH session — extended-hours fills bill the same 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Protocol
 
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
-    MAX_FILL_PAGE_LIMIT,
     SqliteEconomicProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.economic_projection_models import ExecutionPage, ExecutionState
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.regulatory_fees import (
     FillFees,
@@ -37,6 +34,7 @@ from app.schemas.alpaca_fee_reconciliation import (
     PredictedSessionFees,
     SessionFeeReconciliation,
 )
+from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
@@ -46,6 +44,15 @@ FEE_POSTING_GRACE_MS = 24 * 60 * 60 * 1000
 _ONE_DAY = timedelta(days=1)
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0")
+# Per-trade rounding can only push the observed charge UP (Σ ceil(aᵢ) ≥ ceil(Σ aᵢ)),
+# so only end-of-day rounding — 3 components, one cent each — explains an
+# observation BELOW the model.
+_BELOW_MODEL_BAND = Decimal("-0.03")
+_INCOMPLETE_READ_WHY = (
+    "the broker activity read did not reach the start of this trade date, so the "
+    "day's FEE rows cannot be shown to be complete; a young account with no "
+    "earlier activity also lands here"
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +62,12 @@ class SessionFill:
     side: OrderSide
     quantity: Decimal
     fill_price: Decimal
+
+
+def _et_day_window_ms(session_open_ms: int) -> tuple[int, int]:
+    """The trade date's ET calendar day as ``[ET midnight, next ET midnight)``."""
+    trade_date = et_date_at_ms(session_open_ms)
+    return et_midnight_ms(trade_date), et_midnight_ms(trade_date + _ONE_DAY)
 
 
 @dataclass(frozen=True)
@@ -111,13 +124,13 @@ def _frame(
     fee_rows: Sequence[BrokerActivity],
     now_ms: int,
 ) -> _Frame:
-    trade_date = et_date_at_ms(session_open_ms)
+    window_start_ms, window_end_ms = _et_day_window_ms(session_open_ms)
     return _Frame(
         broker=broker,
         account_id=account_id,
         session_open_ms=session_open_ms,
-        fill_window_start_ms=et_midnight_ms(trade_date),
-        fill_window_end_ms=et_midnight_ms(trade_date + _ONE_DAY),
+        fill_window_start_ms=window_start_ms,
+        fill_window_end_ms=window_end_ms,
         fill_count=len(fills),
         sell_fill_count=sum(1 for fill in fills if fill.side == OrderSide.SELL),
         observed_activity_count=len(fee_rows),
@@ -139,6 +152,34 @@ def _observed_total(fee_rows: Sequence[BrokerActivity]) -> Decimal | None:
     if not fee_rows or any(row.net_amount is None for row in fee_rows):
         return None
     return -sum((Decimal(str(row.net_amount)) for row in fee_rows), _ZERO)
+
+
+def _unobserved_reason(
+    *,
+    has_fills: bool,
+    has_fee_rows: bool,
+    now_ms: int,
+    window_end_ms: int,
+) -> tuple[FeeReconciliationVerdict, str]:
+    """Why the day's charge is unknown, when no observed total could be summed."""
+    if not has_fills and not has_fee_rows:
+        return "no_fills", "no fills and no FEE activity on this trade date"
+    if has_fee_rows:
+        return (
+            "unobserved",
+            "a FEE activity for this trade date carries no net_amount; "
+            "the observed charge is unknown",
+        )
+    if now_ms < window_end_ms + FEE_POSTING_GRACE_MS:
+        return (
+            "pending",
+            "Alpaca has not posted this trade date's FEE activity yet "
+            "(charged at end of day)",
+        )
+    return (
+        "unobserved",
+        "no FEE activity was posted for this trade date within a day of its end",
+    )
 
 
 def reconcile_session_fees(
@@ -182,7 +223,8 @@ def reconcile_session_fees(
     except RateNotPinnedError as exc:
         return frame.verdict(
             "rate_unpinned",
-            f"no pinned rate for {', '.join(exc.components)} on this trade date; the model cannot predict this session",
+            f"no pinned rate for {', '.join(exc.components)} on this trade date; "
+            "the model cannot predict this session",
             observed_total_usd=None if observed is None else float(observed),
             unpinned_components=exc.components,
         )
@@ -190,70 +232,61 @@ def reconcile_session_fees(
     # 3 cents of end-of-day rounding plus, per sell, the extra cent each of SEC and
     # TAF could carry under the per-trade-rounding reading of Alpaca's support page.
     tolerance = _CENT * (3 + 2 * frame.sell_fill_count)
-    if observed is None:
-        if not fills and not fee_rows:
-            return frame.verdict("no_fills", "no fills and no FEE activity on this trade date", predicted=predicted, tolerance_usd=float(tolerance))
-        if fee_rows:
-            return frame.verdict("unobserved", "a FEE activity for this trade date carries no net_amount; the observed charge is unknown", predicted=predicted, tolerance_usd=float(tolerance))
-        if now_ms < frame.fill_window_end_ms + FEE_POSTING_GRACE_MS:
-            return frame.verdict("pending", "Alpaca has not posted this trade date's FEE activity yet (charged at end of day)", predicted=predicted, tolerance_usd=float(tolerance))
-        return frame.verdict("unobserved", "no FEE activity was posted for this trade date within a day of its end", predicted=predicted, tolerance_usd=float(tolerance))
-    delta = observed - settled.total
-    within = abs(delta) <= tolerance
-    return frame.verdict(
-        "within_tolerance" if within else "drift",
-        "observed charge agrees with the model within tolerance" if within else "observed charge differs from the model by more than the tolerance",
-        predicted=predicted,
-        observed_total_usd=float(observed),
-        delta_usd=float(delta),
-        tolerance_usd=float(tolerance),
+    # The broker's activity read is newest-first and bounded, so an in-window FEE
+    # set is only demonstrably complete when the read also returned something
+    # older than the window. Without that, the day's rows may be truncated and no
+    # confident comparison may be published.
+    covered = any(
+        activity.occurred_at_ms is not None
+        and activity.occurred_at_ms < frame.fill_window_start_ms
+        for activity in fee_activities
     )
+    if observed is not None and covered:
+        delta = observed - settled.total
+        within = _BELOW_MODEL_BAND <= delta <= tolerance
+        return frame.verdict(
+            "within_tolerance" if within else "drift",
+            "observed charge agrees with the model within tolerance"
+            if within
+            else "observed charge differs from the model by more than the tolerance",
+            predicted=predicted,
+            observed_total_usd=float(observed),
+            delta_usd=float(delta),
+            tolerance_usd=float(tolerance),
+        )
+    verdict, why = (
+        ("unobserved", _INCOMPLETE_READ_WHY)
+        if observed is not None
+        else _unobserved_reason(
+            has_fills=bool(fills),
+            has_fee_rows=bool(fee_rows),
+            now_ms=now_ms,
+            window_end_ms=frame.fill_window_end_ms,
+        )
+    )
+    return frame.verdict(verdict, why, predicted=predicted, tolerance_usd=float(tolerance))
 
 
-class ExecutionPager(Protocol):
-    """The one read this module needs from the SQLite economic projection."""
-
-    def account_executions(
-        self, *, cursor: str | None, limit: int, state: ExecutionState | None
-    ) -> ExecutionPage: ...
-
-
-def session_fills(
-    pager: ExecutionPager,
+def _read_session_fills(
+    clerk: SqliteAlpacaClerkFacade,
     *,
-    window_start_ms: int,
-    window_end_ms: int,
+    from_ms: int,
+    to_ms: int,
 ) -> list[SessionFill]:
-    """Effective fills with ``window_start_ms <= filled_at_ms < window_end_ms``.
-
-    Pages are newest-first, so paging stops as soon as a page ends before the
-    window; the read is bounded by the day's fill count, not the account's history.
-    """
-    fills: list[SessionFill] = []
-    cursor: str | None = None
-    while True:
-        page = pager.account_executions(cursor=cursor, limit=MAX_FILL_PAGE_LIMIT, state="effective")
-        for row in page.executions:
-            if window_start_ms <= row.filled_at_ms < window_end_ms:
-                fills.append(
-                    SessionFill(
-                        side=row.side,
-                        quantity=Decimal(str(row.quantity)),
-                        fill_price=Decimal(str(row.price)),
-                    )
-                )
-        reached_before_window = bool(page.executions) and page.executions[-1].filled_at_ms < window_start_ms
-        if page.next_cursor is None or reached_before_window:
-            return fills
-        cursor = page.next_cursor
-
-
-def _active_sqlite_clerk() -> SqliteAlpacaClerkFacade | None:
-    runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.authority_kind != "sqlite":
-        return None
-    clerk = runtime.clerk
-    return clerk if isinstance(clerk, SqliteAlpacaClerkFacade) else None
+    """Read the ET day's effective account fills. Blocking SQLite: call in a thread."""
+    reader = SqliteEconomicProjectionReader.from_repository(clerk.repository)
+    try:
+        records = reader.account_fill_window(from_ms=from_ms, to_ms=to_ms)
+    finally:
+        reader.close()
+    return [
+        SessionFill(
+            side=record.side,
+            quantity=Decimal(str(record.quantity)),
+            fill_price=Decimal(str(record.fill_price)),
+        )
+        for record in records
+    ]
 
 
 async def session_fee_reconciliation(
@@ -265,7 +298,7 @@ async def session_fee_reconciliation(
 ) -> SessionFeeReconciliation:
     """Reconcile one trade date: SQLite fills priced by the model vs Alpaca's FEE rows."""
     observed_at_ms = now_ms_utc() if now_ms is None else now_ms
-    clerk = _active_sqlite_clerk()
+    clerk = active_sqlite_facade("alpaca")
     if clerk is None:
         frame = _frame(
             broker=broker,
@@ -279,24 +312,17 @@ async def session_fee_reconciliation(
             "unavailable",
             "no active SQLite Clerk authority; the session's fills cannot be read",
         )
-    frame = _frame(
-        broker=broker,
-        account_id=clerk.account_id,
-        session_open_ms=session_open_ms,
-        fills=(),
-        fee_rows=(),
-        now_ms=observed_at_ms,
+    window_start_ms, window_end_ms = _et_day_window_ms(session_open_ms)
+    fills = await asyncio.to_thread(
+        _read_session_fills,
+        clerk,
+        from_ms=window_start_ms,
+        to_ms=window_end_ms,
     )
-    reader = SqliteEconomicProjectionReader.from_repository(clerk.repository)
-    try:
-        fills = session_fills(
-            reader,
-            window_start_ms=frame.fill_window_start_ms,
-            window_end_ms=frame.fill_window_end_ms,
-        )
-    finally:
-        reader.close()
-    activities = await port.list_activities(after_ms=frame.fill_window_start_ms)
+    # Read from the epoch, not from the window start: the port's own filter drops
+    # everything older than ``after_ms``, and the completeness check above needs
+    # to see whether the bounded read reached past this day's start.
+    activities = await port.list_activities(after_ms=0)
     return reconcile_session_fees(
         broker=broker,
         account_id=clerk.account_id,
