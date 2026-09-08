@@ -151,10 +151,56 @@ def _deploy_params_schema(strategy_key: str) -> StrategyParamsSchema:
 
 BrokerExecutionMode = Literal["paper", "shadow"]
 
+DeployExecutionMode = Literal["dry_run", "paper", "shadow"]
+
 
 def _broker_mode_for(custody_world: CustodyWorld) -> BrokerExecutionMode:
     """The one broker-contacting mode this custody world can offer."""
     return "shadow" if custody_world == "shadow" else "paper"
+
+
+@dataclass(frozen=True)
+class _ReceiptCopy:
+    """The operator sentences one execution mode's terminal receipt says.
+
+    ``duty`` names the world the bot is now on duty in and is the one field
+    an evidence override never replaces — an override is a statement about
+    the *proof*, not about where the effects land.
+    """
+
+    duty: str
+    explanation: str
+    next_action: str
+
+
+_RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
+    "dry_run": _ReceiptCopy(
+        duty="Dry Run",
+        explanation="The immutable Dry Run binding consumes market data and records only simulated activity.",
+        next_action="Open the bot panel and verify clearly labelled simulated decisions and fills.",
+    ),
+    "paper": _ReceiptCopy(
+        duty="Alpaca paper",
+        explanation="The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk.",
+        next_action="Open the production bot panel and verify the first Clerk receipt.",
+    ),
+    "shadow": _ReceiptCopy(
+        duty="Alpaca shadow",
+        explanation=(
+            "The deployment binding is durable; the shadow Clerk synthesizes every fill "
+            "against this live account's real reads and submits nothing (ADR 0059 D2)."
+        ),
+        next_action="Open the bot panel and verify the first synthesized shadow receipt.",
+    ),
+}
+
+_OVERRIDE_RECEIPT_EXPLANATION = (
+    "The immutable binding records a human override of evidence-only strategy proof. "
+    "This launch is not numerical-equivalence evidence; all other admission gates remain in force."
+)
+_OVERRIDE_RECEIPT_NEXT_ACTION = (
+    "Open the bot panel, inspect every early decision, and stop the bot if behavior differs from expectation."
+)
 
 
 def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecutionMode, ...]:
@@ -662,37 +708,24 @@ def build_alpaca_paper_deploy_receipt(
     admission: RunAdmissionDecision,
     resolved_params: ResolvedDeployParams,
 ) -> AlpacaPaperDeployReceipt:
-    """Author the terminal receipt after the runner accepts the deployment."""
+    """Author the terminal receipt after the runner accepts the deployment.
+
+    The three operator sentences are derived once from the mode's own copy
+    row, so a shadow deployment on a live account never inherits paper
+    prose (ADR 0059 D2). ``receipt_id``'s prefix is an opaque audit token
+    and is deliberately not world-scoped.
+    """
+    copy = _RECEIPT_COPY[request.execution_mode]
+    overridden = request.evidence_override is not None
     return AlpacaPaperDeployReceipt(
         status="deployed",
         receipt_id=(
             f"alpaca-paper-deploy:{view.account_id}:{request.strategy_instance_id}:{bot.binding_created_at_ms}"
         ),
         recorded_at_ms=bot.binding_created_at_ms,
-        message=(
-            f"{request.strategy_instance_id} is on duty in Dry Run."
-            if request.execution_mode == "dry_run"
-            else f"{request.strategy_instance_id} is on duty in Alpaca paper."
-        ),
-        explanation=(
-            "The immutable binding records a human override of evidence-only strategy proof. "
-            "This launch is not numerical-equivalence evidence; all other admission gates remain in force."
-            if request.evidence_override is not None
-            else (
-                "The immutable Dry Run binding consumes market data and records only simulated activity."
-                if request.execution_mode == "dry_run"
-                else "The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."
-            )
-        ),
-        next_action=(
-            "Open the bot panel, inspect every early decision, and stop the bot if behavior differs from expectation."
-            if request.evidence_override is not None
-            else (
-                "Open the bot panel and verify clearly labelled simulated decisions and fills."
-                if request.execution_mode == "dry_run"
-                else "Open the production bot panel and verify the first Clerk receipt."
-            )
-        ),
+        message=f"{request.strategy_instance_id} is on duty in {copy.duty}.",
+        explanation=_OVERRIDE_RECEIPT_EXPLANATION if overridden else copy.explanation,
+        next_action=_OVERRIDE_RECEIPT_NEXT_ACTION if overridden else copy.next_action,
         panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{request.strategy_instance_id}"),
         account_id=view.account_id,
         execution_mode=request.execution_mode,
