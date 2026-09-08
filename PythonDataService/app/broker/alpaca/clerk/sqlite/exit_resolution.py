@@ -57,16 +57,16 @@ async def resolve_exit(
     *,
     effect_operation_id: str,
     trade: BrokerTradePort,
-    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Advance one EXIT under one exclusive, attempt-scoped broker claim.
 
-    ``reducing_shape`` is the shape the deciding program computed for this
-    EXIT (ADR 0059 D5.3). It applies only when *this* pass is the one that
-    creates the reducing order; every later pass rebuilds the leg from the
-    durable creation facts. Callers with no deciding program — the
-    reconciliation sweep, recovery, the manual paths — pass nothing and get
-    the regular-session market DAY leg.
+    The reducing leg's shape is never passed in: it is read from this EXIT's
+    own ``EXIT_ACCEPTED`` facts (ADR 0059 D5.3), so the deciding runner's
+    first pass, the reconciliation sweep's re-drive, the watchdog and
+    recovery all build the same leg for the same EXIT. An EXIT accepted with
+    no deciding program — safe flatten, the watchdog's own re-drive,
+    recovery — recorded no shape and still gets the regular-session market
+    DAY leg (ruling R5).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -85,7 +85,6 @@ async def resolve_exit(
             repo,
             effect_operation_id=effect_operation_id,
             broker=broker,
-            reducing_shape=reducing_shape,
         )
     finally:
         repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim.token)
@@ -136,7 +135,6 @@ async def _resolve_claimed(
     *,
     effect_operation_id: str,
     broker: ClaimedBrokerIO,
-    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -189,7 +187,7 @@ async def _resolve_claimed(
             effect_operation_id=effect_operation_id,
             symbol=symbol,
             quantity=remaining_qty,
-            shape=reducing_shape,
+            shape=_accepted_reducing_shape(repo, effect_operation_id=effect_operation_id),
         )
         await _submit_reducing_order(
             repo,
@@ -476,6 +474,25 @@ async def _refresh_terminal_entries(
         if not _is_terminal(current.broker_state):
             return False
     return True
+
+
+def _accepted_reducing_shape(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str
+) -> LegShape | None:
+    """The leg shape this EXIT's own acceptance recorded, if any.
+
+    Read here rather than threaded from the caller so a reduction created on
+    a later pass — the 15 s reconciliation sweep, the stuck-EXIT watchdog,
+    restart recovery — carries the deciding program's shape instead of
+    silently falling back to a market DAY order the vendor queues to the
+    next regular open.
+    """
+    transition = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_ACCEPTED"
+    )
+    if transition is None:
+        return None
+    return ExitAcceptedFacts.from_facts_json(transition["facts_json"]).reducing_shape()
 
 
 def _create_reducing_order(

@@ -106,6 +106,7 @@ def _accept_exit_capture(
     entry_order_ref: str,
     resolve_run_id: Callable[[OrderResource], str],
     decision_receipt: AtomicDecisionReceipt | None,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
@@ -159,7 +160,7 @@ def _accept_exit_capture(
             decision_id=decision_id,
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
-        )
+        ).with_reducing_shape(reducing_shape)
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -211,8 +212,18 @@ def accept_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     decision_receipt: AtomicDecisionReceipt | None = None,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
-    """Capture one EXIT and every same-strategy/symbol entry before contact."""
+    """Capture one EXIT and every same-strategy/symbol entry before contact.
+
+    ``reducing_shape`` is the leg shape the deciding program computed for
+    this EXIT (ADR 0059 D5.3). It is durable *with the acceptance*, not with
+    the reducing order, because the two can be many passes apart: when the
+    entry is still working, cancel-and-prove defers, and whichever later pass
+    creates the reduction — the reconciliation sweep, the watchdog, recovery
+    — knows nothing about the decision. Only a non-regular shape is recorded;
+    see ``ExitAcceptedFacts.with_reducing_shape``.
+    """
     reject_colon("lifecycle_run_id", lifecycle_run_id)
 
     def resolve_run_id(_target: OrderResource) -> str:
@@ -226,6 +237,7 @@ def accept_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=decision_receipt,
+        reducing_shape=reducing_shape,
     )
 
 
@@ -329,7 +341,6 @@ async def resolve_accepted_exit(
     *,
     accepted: ExitSubmission,
     trade: BrokerTradePort,
-    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
 
@@ -341,8 +352,9 @@ async def resolve_accepted_exit(
     "accepted, await reconciliation" receipt instead of a crash. TERMINAL
     refusals still raise.
 
-    ``reducing_shape`` carries the deciding program's leg shape through to
-    the reducing order (ADR 0059 D5.3); see :func:`resolve_exit`.
+    No leg shape is threaded here: the reducing order is built from the shape
+    the EXIT's own acceptance recorded (ADR 0059 D5.3), so this call and the
+    sweep's re-drive of the very same EXIT cannot produce different legs.
     """
     assert accepted.effect_operation_id is not None
     try:
@@ -350,7 +362,6 @@ async def resolve_accepted_exit(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
-            reducing_shape=reducing_shape,
         )
     except OperationClaimError:
         if accepted.created:

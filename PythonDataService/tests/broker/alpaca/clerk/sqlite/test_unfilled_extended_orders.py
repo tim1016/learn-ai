@@ -194,6 +194,7 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
             decision_id="exit-2",
             lifecycle_run_id=RUN_ID,
             entry_order_ref=entry_ref,
+            reducing_shape=new_anchor,
         )
     except AdmissionBlockedError as exc:
         pytest.fail(
@@ -209,7 +210,6 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
         repo,
         effect_operation_id=second_accepted.effect_operation_id,
         trade=second_trade,
-        reducing_shape=new_anchor,
     )
 
     assert second.reducing_order_ref is not None

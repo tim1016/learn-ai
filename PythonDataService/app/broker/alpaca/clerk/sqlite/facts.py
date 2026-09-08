@@ -30,7 +30,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -39,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.program_leg import LegShape
     from app.broker.contract.models import BrokerOrderLeg
 
 FACTS_SCHEMA_VERSION = 1
@@ -185,6 +187,36 @@ class OrderSubmitFailedFacts:
         return cls(**json.loads(facts_json))
 
 
+# ADR 0059 D5.3: the regular-session leg shape. A reduction at these values
+# omits them from its canonical JSON, so every row written before slice 3 —
+# and every regular-session row written after it — hashes identically
+# (hash-chained schema evolution). Shared by the two facts that carry a
+# reducing leg's shape: the EXIT's acceptance and the reducing order's
+# creation.
+_REDUCING_SHAPE_DEFAULTS: Mapping[str, Any] = {
+    "order_type": "market",
+    "time_in_force": "day",
+    "limit_price": None,
+    "extended_hours": False,
+}
+# ``reducing_side`` is what makes an accepted shape *present*: the four
+# fields above are all at their defaults for a regular-session leg, so the
+# side is the only field that can say "a deciding program recorded a shape
+# here" — and it is written only when that shape is not the regular one.
+_ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {**_REDUCING_SHAPE_DEFAULTS, "reducing_side": None}
+
+
+def _omit_defaults(payload: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop every field holding its default, so old rows stay byte-identical.
+
+    The one canonical omit-when-default rule for durable facts (see the
+    hash-chained-schema rule in ``.claude/rules/numerical-rigor.md``): a
+    field added by a later schema version must not appear in the canonical
+    JSON of a row that does not use it.
+    """
+    return {name: value for name, value in payload.items() if defaults.get(name, object()) != value}
+
+
 @dataclass(frozen=True)
 class ExitAcceptedFacts:
     """``EXIT_ACCEPTED`` (#1379): command idempotency key/hash/kind/action,
@@ -193,11 +225,19 @@ class ExitAcceptedFacts:
     ``_fold_exit_accepted`` needs to rebuild the command, operation, and
     immutable-provenance custody links from a finalized mirror line. Unlike
     ``EnterAcceptedFacts``, no ``leg`` is captured here: the reducing
-    order's side/quantity aren't known at acceptance time (they depend on
-    how the entry's cancellation resolves), so there is nothing immutable
-    about them to snapshot yet — the eventual reducing order's shape is
-    captured by ``ExitReducingOrderCreatedFacts`` once it's actually
-    computed."""
+    order's *quantity* isn't known at acceptance time (it depends on how the
+    entry's cancellation resolves), so there is nothing immutable about it to
+    snapshot yet — the eventual reducing order's full identity is captured by
+    ``ExitReducingOrderCreatedFacts`` once it's actually computed.
+
+    The deciding program's leg *shape* is different, and is recorded here
+    (ADR 0059 D5.3): it is fixed the moment the decision is accepted, and the
+    reducing order can be created several passes later — by the
+    reconciliation sweep, the watchdog, or recovery, none of which knows the
+    decision. Before it was durable at acceptance, a cancel-and-prove that
+    was not terminal on the first pass lost the shape entirely, and the
+    sweep created a regular-session market DAY reduction the vendor queues to
+    the next open, leaving extended-hours exposure standing."""
 
     idempotency_key: str
     payload_hash: str
@@ -209,25 +249,58 @@ class ExitAcceptedFacts:
     decision_id: str
     entry_order_ref: str
     entry_order_refs: list[str]
+    # The deciding program's reducing leg shape, absent unless it recorded a
+    # non-regular one; see ``_ACCEPTED_SHAPE_DEFAULTS``.
+    reducing_side: str | None = None
+    order_type: str = "market"
+    time_in_force: str = "day"
+    limit_price: float | None = None
+    extended_hours: bool = False
+
+    def with_reducing_shape(self, shape: LegShape | None) -> ExitAcceptedFacts:
+        """Record the deciding program's reducing shape, unless it is the default.
+
+        A regular-session shape is exactly what ``_create_reducing_order``
+        builds when no shape was recorded, so writing it out would add
+        nothing but would change the canonical JSON of every regular-hours
+        EXIT acceptance — and every sealed receipt hashed over one. An EXIT
+        with no deciding program at all (safe flatten, the watchdog,
+        recovery) records nothing and still yields market DAY.
+        """
+        from app.broker.alpaca.clerk.program_leg import regular_session_shape
+
+        if shape is None or shape == regular_session_shape(shape.side):
+            return self
+        return replace(
+            self,
+            reducing_side=shape.side.value,
+            order_type=shape.order_type.value,
+            time_in_force=shape.time_in_force.value,
+            limit_price=shape.limit_price,
+            extended_hours=shape.extended_hours,
+        )
+
+    def reducing_shape(self) -> LegShape | None:
+        """The recorded shape, or ``None`` when this EXIT recorded none."""
+        from app.broker.alpaca.clerk.program_leg import LegShape
+        from app.broker.contract.models import OrderSide, OrderType, TimeInForce
+
+        if self.reducing_side is None:
+            return None
+        return LegShape(
+            order_type=OrderType(self.order_type),
+            time_in_force=TimeInForce(self.time_in_force),
+            limit_price=self.limit_price,
+            extended_hours=self.extended_hours,
+            side=OrderSide(self.reducing_side),
+        )
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        return canonicalize(_omit_defaults(asdict(self), _ACCEPTED_SHAPE_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExitAcceptedFacts:
         return cls(**json.loads(facts_json))
-
-
-# ADR 0059 D5.3: the regular-session leg shape. A reducing order at these
-# values omits them from its canonical JSON, so every row written before
-# slice 3 — and every regular-session row written after it — hashes
-# identically (hash-chained schema evolution).
-_REDUCING_SHAPE_DEFAULTS = {
-    "order_type": "market",
-    "time_in_force": "day",
-    "limit_price": None,
-    "extended_hours": False,
-}
 
 
 @dataclass(frozen=True)
@@ -252,11 +325,7 @@ class ExitReducingOrderCreatedFacts:
     extended_hours: bool = False
 
     def to_facts_json(self) -> str:
-        payload = asdict(self)
-        for name, default in _REDUCING_SHAPE_DEFAULTS.items():
-            if payload[name] == default:
-                payload.pop(name)
-        return canonicalize(payload)
+        return canonicalize(_omit_defaults(asdict(self), _REDUCING_SHAPE_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:

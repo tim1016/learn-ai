@@ -854,6 +854,10 @@ class SqliteAlpacaClerkFacade:
                         lifecycle_run_id=run_id,
                         entry_order_ref=candidates[-1].order_ref,
                         decision_receipt=atomic_receipt,
+                        # Durable with the acceptance, not with this call:
+                        # a deferred cancel-and-prove leaves the reducing
+                        # order to a later sweep that knows no decision.
+                        reducing_shape=shape,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake
@@ -898,7 +902,6 @@ class SqliteAlpacaClerkFacade:
             self._repo,
             accepted=accepted_exit,
             trade=trade,
-            reducing_shape=shape,
         )
         order_refs = tuple(
             ref
