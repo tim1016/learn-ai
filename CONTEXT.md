@@ -467,8 +467,10 @@ so they survive a broker change.
   _Avoid_: live mode, production account, real account
 - **Shadow Account Authority** — an isolated `shadow:` custody authority that
   reads one real-money account and synthesizes every fill under an explicit
-  fill model. It never submits. _Avoid_: dry run on live, paper on live,
-  observation mode
+  fill model. It never submits. This is an *account world*, not the IBKR-era
+  per-run `submit_mode: shadow` / `execution_source: shadow_sim` above: those
+  name one run's adapter, this names whose account the custody is.
+  _Avoid_: dry run on live, paper on live, observation mode
 - **Mode agreement** — the three-way match of configured mode, live activation,
   and broker-observed mode that a live authority requires before it can exist.
   A disagreement is a refusal, never a guess. _Avoid_: live flag, live toggle,
@@ -476,7 +478,7 @@ so they survive a broker change.
 - **Shadow gate** — the per-instance requirement that a bounded number of
   shadow sessions complete and reconcile against the instance's paper twin
   before the instance may arm. A session counts only when the day's sweep was
-  clean from before the instance's decision session opened until after it
+  clean from at or before the instance's decision session opened until after it
   closed, one run spanned that whole session, and the twin comparison found no
   divergence in a decision. _Avoid_: warm-up, trial period, soak
 - **Paper twin** — the sealed instance on the paper account that shares a

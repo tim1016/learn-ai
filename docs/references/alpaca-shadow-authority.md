@@ -46,8 +46,9 @@ trading day since the shadow instance first ran.
 append-only per-instance receipt, over the shared write discipline in
 `app/broker/alpaca/clerk/sealed_ledger.py`.
 `PythonDataService/scripts/manage_alpaca_shadow.py` is the operator CLI, and the
-existing live verdict (`app/services/alpaca_live_verdict.py`) gained one new
-fact, `shadow_state`. Ruling R13: the operator surface is a CLI, not an
+existing live verdict (`app/services/alpaca_live_verdict.py`) gained the durable
+observation behind its slice-1 `shadow_state` field — `observe_shadow_state` —
+and a `clerk_authority` widened to `shadow`. Ruling R13: the operator surface is a CLI, not an
 endpoint — an endpoint would only wrap the same functions.
 
 ## Worlds and paths
@@ -64,8 +65,9 @@ parallel copy of all three.
 | Activation fence and receipts | `accounts/shadow/` — `shadow_activation.jsonl`, `shadow_receipts.jsonl` |
 | Per-instance retained source bars | `accounts/alpaca/shadow-evidence:<strategy_instance_id>/` |
 
-The ADR's "under `accounts/shadow/<live_account_id>/`" is honoured by the
-fence/receipt directory. `shadow-evidence:` is deliberately not `shadow:`: an
+The ADR's "under `accounts/shadow/<live_account_id>/`" is satisfied in spirit by
+the `accounts/shadow/` fence and receipt ledgers, which scope by row rather than
+by directory; the custody database is at `accounts/alpaca/shadow:<id>/`. `shadow-evidence:` is deliberately not `shadow:`: an
 evidence namespace is never a custody identity, and one function —
 `account_authority.evidence_account_id_for` — chooses it for both the binding
 authority and the replay proof.
@@ -130,8 +132,9 @@ a bar retained by any other instance is refused.
 
 `verify_shadow_namespace_empty` transfers ADR 0002 invariant 1 to the live
 account: it holds no Clerk-minted order, ever. The check is bounded by what the
-read port can see (ruling R9) — the newest page of the whole history
-(`limit=MAX_OPEN_ORDER_SNAPSHOT`, 500) plus every open order — and it insists on
+read port can see (ruling R9) — the newest page of the whole history plus the
+newest page of open orders (both `limit=MAX_OPEN_ORDER_SNAPSHOT`, 500; only the
+history page being full yields `SHADOW_NAMESPACE_UNPROVEN`) — and it insists on
 the **live** read port, because handed the shadow port every category would
 answer from the synthesized book and the check would pass vacuously on a
 poisoned account.
@@ -230,8 +233,8 @@ two worlds. Session shape is checked separately at the gate
 because the seal carries no session shape and twins deciding on different
 minutes would otherwise fail closed as a misleading twin divergence.
 
-**A session counts** (ruling R10) when the journal shows the day opened before
-the instance's decision session opened, closed clean after it closed, with no
+**A session counts** (ruling R10) when the journal shows the day opened at or
+before the instance's decision session opened, closed clean after it closed, with no
 non-clean pass; one run of the instance spanned the whole decision session; and
 the twin reconciliation has no gating divergence. The other five outcomes —
 `sweep_not_clean`, `sweep_opened_late`, `run_not_covering`, `twin_diverged`,
@@ -260,8 +263,9 @@ order is needed.
 The receipt ledger and the activation ledger are different records with
 different error types but the same file on disk, so **one write discipline**
 serves both, in `sealed_ledger.py`: canonical JSON (`sort_keys`, tight
-separators, `ensure_ascii`), sha256 sealing over that canonical form, seal
-verification on read, refusal of a symlinked or otherwise non-regular ledger
+separators, `ensure_ascii`), sha256 sealing over that canonical form (each store
+verifies its own rows against it on read, in its `from_payload`, using the
+shared `canonical_sha256`), refusal of a symlinked or otherwise non-regular ledger
 file, and a durable append that fsyncs the handle and fsyncs the parent
 directory on creation. A correction to any of those — adding `O_NOFOLLOW`,
 changing when the parent is fsynced — lands once instead of protecting one
@@ -299,6 +303,13 @@ python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> receipt \
     --twin-artifacts-root <PAPER_HOST_CLERK_DIR>
 ```
 
+**The data plane must stay up, and sweeping cleanly, until the declared
+window's close.** A day is journaled `session_closed_clean` only by a clean
+sweep pass at or after that close — the broker's declared window, 20:00 ET,
+which is not the RTH close and does not narrow for an RTH-only instance.
+Shutting the plane down at 16:00 ET therefore counts no session at all, and
+the day reports `sweep_not_clean` with "the sweep did not close the day clean".
+
 `--required-sessions` falls back to `ALPACA_LIVE_SHADOW_SESSIONS`; the repo's
 `.env` does not set it today, so either the flag or the setting must be supplied
 or the command refuses. Both are bounded `>= 1` — a gate of zero sessions is
@@ -311,15 +322,17 @@ refuses repeated sessions, a session list shorter than the required count, and a
 timestamp past `MAX_TIMESTAMP_MS`.
 
 Exit codes: `0` when the command answered (including `sessions` on an
-unsatisfied gate — reporting is its whole job); `2` when `receipt` found the
-gate unsatisfied, when the named twin is not this instance's twin
-(`SHADOW_TWIN_MISMATCH`), and — because argparse exits `2` on a usage error —
-when the invocation itself was refused; `1` when the command cannot be run as
-asked: a reserved `shadow:`/`sim:` identity, a binding or custody database that
-is not there, a required session count nobody stated, or a receipt the sealer
-will not accept. A script should therefore read stdout's `error` key rather than
-inferring the cause from `2` alone. Every invocation writes exactly one JSON
-object to stdout, and every temporal value in it is `int64 ms UTC`.
+unsatisfied gate — reporting is its whole job); `1` when the command cannot be
+run as asked: a reserved `shadow:`/`sim:` identity, a binding or custody
+database that is not there, a required session count nobody stated, an economic
+projection the authority will not vouch for (`EconomicProjectionUnavailable`), a
+receipt the sealer will not accept, or a usage refusal — an absent flag, an
+unknown subcommand, a flag outside its bound; `2` when `receipt` found the gate
+unsatisfied, or when the named twin is not this instance's twin
+(`SHADOW_TWIN_MISMATCH`). Every invocation writes exactly one JSON object to
+stdout, and every temporal value in it is `int64 ms UTC`, so a script reads the
+`error` key rather than inferring a cause from an exit code. (`--help` is
+argparse's own usage text and exits `0`; it runs no command.)
 
 **The verdict banner.** `GET /api/brokers/{broker}/live-verdict` reports
 `clerk_authority="shadow"` and a `shadow_state` of `none` / `in_progress` /
