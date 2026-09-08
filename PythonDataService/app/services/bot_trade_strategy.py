@@ -56,7 +56,7 @@ from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
-from app.services.source_bar_ledger import SourceBarLedger
+from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
 if TYPE_CHECKING:
@@ -740,10 +740,13 @@ async def run_trade_bot(
 
     ``source_bars`` retains every unfiltered feed observation before the
     sealed session's RTH policy applies (Direction 2: a paper run must be
-    replayable from its own retained bars). ``None`` disables retention and
-    exists only for focused unit tests; production wiring
-    (``bot_runtime.execute_bot_run``) always supplies the instance-scoped
-    ledger and fails closed without one.
+    replayable from its own retained bars), and is where each decision's
+    exact anchor bar is read back from (``_decision_bar_evidence``). ``None``
+    disables retention and exists only for focused unit tests; production
+    wiring (``bot_runtime.execute_bot_run``) always supplies the
+    instance-scoped ledger and fails closed without one, and an extended run
+    refuses the unretained seam outright below -- with no ledger there is no
+    anchor, and every extended decision would be refused per decision.
     """
     clerk = get_alpaca_clerk()
     if clerk is None:
@@ -877,6 +880,9 @@ async def run_trade_bot(
                 "bar_end_ms": intent.bar_close_ms,
             },
         )
+        retained, decision_evidence = _decision_bar_evidence(
+            binding, evaluation, intent, source_bars=source_bars
+        )
         try:
             receipt = await clerk.execute_for_instance(
                 strategy_instance_id=binding.strategy_instance_id,
@@ -887,19 +893,8 @@ async def run_trade_bot(
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
                 capability_account_id=capability_account_id,
-                decision_evidence=EffectDecisionEvidence(
-                    evaluation_id=decision_id,
-                    bar_ref=_decision_bar_ref(binding, evaluation),
-                    symbol=binding.symbol,
-                    outcome=(
-                        "enter_intent"
-                        if intent.kind is SignalIntentKind.ENTER
-                        else "exit_intent"
-                    ),
-                    observed_at_ms=now_ms_utc(),
-                    trace_digest=_evaluation_trace_digest(evaluation),
-                    decision_bar_close_ms=evaluation.decision_bar_close_ms,
-                ),
+                retained_source_bar=retained,
+                decision_evidence=decision_evidence,
             )
         except AdmissionBlockedError as exc:
             _dispose_transient_exit_refusal(
@@ -1038,6 +1033,50 @@ def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation)
     )
 
 
+def _decision_bar_evidence(
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+    *,
+    source_bars: SourceBarLedger | None,
+) -> tuple[RetainedSourceBar | None, EffectDecisionEvidence]:
+    """The exact retained decision bar and the evidence that names it.
+
+    Both runners resolve this identically, and must: the Clerk anchors an
+    extended-session program leg to the decision bar
+    (``program_leg.shape_program_leg``), so a runner that omits it refuses
+    every ``use_rth=False`` decision with ``EXTENDED_ANCHOR_UNAVAILABLE`` --
+    including the RTH-inside-extended ones that only ever wanted a market
+    leg. It was written out once per runner before, and only the Dry Run
+    copy resolved the bar.
+
+    The ledger identity is authored from each observation's feed provenance.
+    A wrapper's stream capability name may differ (for example a test or
+    pause wrapper), so it is not evidence of the decision bar's provider.
+    """
+    retained = (
+        None
+        if source_bars is None
+        else source_bars.find_by_closed_end(
+            provider=evaluation.bar.feed_id,
+            symbol=binding.symbol,
+            end_ms=intent.bar_close_ms,
+        )
+    )
+    evidence = EffectDecisionEvidence(
+        evaluation_id=evaluation.evaluation_id,
+        bar_ref=(
+            retained.bar_ref if retained is not None else _decision_bar_ref(binding, evaluation)
+        ),
+        symbol=binding.symbol,
+        outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
+        observed_at_ms=now_ms_utc(),
+        trace_digest=_evaluation_trace_digest(evaluation),
+        decision_bar_close_ms=evaluation.decision_bar_close_ms,
+    )
+    return retained, evidence
+
+
 async def run_dry_run_bot(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
@@ -1124,14 +1163,8 @@ async def run_dry_run_bot(
             )
             continue
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
-        retained = source_bars.find_by_closed_end(
-            # The ledger identity is authored from each observation's feed
-            # provenance. A wrapper's stream capability name may differ
-            # (for example a test or pause wrapper), so it is not evidence
-            # of the decision bar's provider.
-            provider=evaluation.bar.feed_id,
-            symbol=binding.symbol,
-            end_ms=intent.bar_close_ms,
+        retained, decision_evidence = _decision_bar_evidence(
+            binding, evaluation, intent, source_bars=source_bars
         )
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
@@ -1143,23 +1176,7 @@ async def run_dry_run_bot(
             use_rth=binding.use_rth,
             capability_account_id=market_data_capability_account_id(feed),
             retained_source_bar=retained,
-            decision_evidence=EffectDecisionEvidence(
-                evaluation_id=evaluation.evaluation_id,
-                bar_ref=(
-                    retained.bar_ref
-                    if retained is not None
-                    else _decision_bar_ref(binding, evaluation)
-                ),
-                symbol=binding.symbol,
-                outcome=(
-                    "enter_intent"
-                    if intent.kind is SignalIntentKind.ENTER
-                    else "exit_intent"
-                ),
-                observed_at_ms=now_ms_utc(),
-                trace_digest=_evaluation_trace_digest(evaluation),
-                decision_bar_close_ms=evaluation.decision_bar_close_ms,
-            ),
+            decision_evidence=decision_evidence,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _discard_evaluation(evaluation)

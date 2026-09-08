@@ -16,6 +16,9 @@ import pytest
 
 import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import (
+    paper_evidence_account_id_for_strategy,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.execution.portfolio import Portfolio
@@ -27,6 +30,11 @@ from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed, _SqliteRunt
 from tests._helpers.canary_admission import admit_canary_pairing
 
 from ._support import _RTH_MS, _WIN_START_MS, _bar, _green_bar, _red_bar, _wait_for
+
+# The evidence namespace a trade-mode run's source-bar ledger is opened
+# under (``run_replay_proof.ledger_account_id_for``), and so the prefix
+# of every retained bar's stable ``bar_ref``.
+_LEDGER_ACCOUNT_ID = paper_evidence_account_id_for_strategy(_SID)
 
 
 @pytest.mark.asyncio
@@ -125,8 +133,20 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
         # shape/meaning directly (feed_id + symbol + the closed bar's own
         # close timestamp), not a value copied from the current build's
         # output.
+        #
+        # A bar that reached the Clerk is named by the exact retained ledger
+        # row the decision was anchored to instead (ADR 0059 D5.3): the trade
+        # path resolves that row for every effect, as the Dry Run path always
+        # did, and the evidence names what the Clerk was actually handed. The
+        # no-action bars never reach the Clerk and keep the derived ref.
+        enter_bar_close_ms = _RTH_MS + 60_000 + 60_000
         assert [fact["bar_ref"] for fact in facts] == [
-            f"decision-bar:ibkr:SPY:{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
+            f"decision-bar:ibkr:SPY:{_RTH_MS + 60_000}",
+            (
+                f"source-bar:{_LEDGER_ACCOUNT_ID}:ibkr:SPY:"
+                f"{enter_bar_close_ms - 60_000}:{enter_bar_close_ms}"
+            ),
+            f"decision-bar:ibkr:SPY:{_RTH_MS + 2 * 60_000 + 60_000}",
         ]
         # decision_id/intent_id are now evaluation_id (decision_id ==
         # evaluation_id, PRD section 16) -- a content-addressed SHA-256, not

@@ -55,6 +55,8 @@ Start and Resume each carry an `ExtendedHoursAdmissionFact` (`app/schemas/run_ad
 
 Inside the regular session (the run's `RunDecisionSession` is `rth`, or the decision bar's own phase resolves to `RTH`) the leg is always `regular_session_shape(side)` — market, DAY, `extended_hours=False` — so an `rth` binding is never shaped by the bar at all. A recovery-created reducing order (sweep, watchdog, safe-flatten, or a manual ticket) carries no deciding-program leg shape, so `_create_reducing_order` resolves `shape=None` to the regular-session shape and stays market DAY — it is never re-anchored to an extended-session limit.
 
+Every decision reaches `shape_program_leg` with its exact retained decision bar: both runners resolve it through the one shared `bot_trade_strategy._decision_bar_evidence`, which also names that bar in the decision receipt's `bar_ref`. A runner that resolved none would refuse every `use_rth=False` decision `EXTENDED_ANCHOR_UNAVAILABLE`, RTH-inside-extended decisions included.
+
 A bar is *filtered into* the run by its **open** (`start_ms`, `RunDecisionSession.includes`) and *shapes an order* by its **close** (`end_ms`, `shape_program_leg`). Both are correct and they are deliberately different instants: the session that produced the bar is the one it opened in, while the order it drives exists only once the bucket has closed.
 
 ## Unfilled orders (D5.4)
