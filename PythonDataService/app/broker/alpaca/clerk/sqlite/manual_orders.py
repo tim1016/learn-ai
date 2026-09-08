@@ -136,7 +136,7 @@ def _identity(
                 "subject_id": subject_id,
                 "ticket_id": ticket_id,
                 "leg_id": leg_id,
-                "instruction": leg.model_dump(mode="json"),
+                "instruction": leg_instruction_payload(leg),
             }
         ).encode("utf-8")
     ).hexdigest()

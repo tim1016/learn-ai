@@ -67,7 +67,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
-from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts
+from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, leg_instruction_payload
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -135,7 +135,7 @@ def _enter_identity(
                 "strategy_instance_id": strategy_instance_id,
                 "decision_id": decision_id,
                 "action": ACTION_ENTER,
-                "leg": leg.model_dump(mode="json"),
+                "leg": leg_instruction_payload(leg),
             }
         ).encode("utf-8")
     ).hexdigest()

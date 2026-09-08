@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualPreviewRevision,
     ManualTicketContinuationError,
     ManualTicketLeg,
+    _identity,
     accept_manual_order,
     next_manual_ticket_leg,
     submit_manual_order,
@@ -225,6 +226,54 @@ def test_accepted_facts_with_an_extended_hours_leg_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="regular-session"):
         validate_manual_order_accepted_facts(facts)
+
+
+def test_identity_payload_hash_matches_the_pre_migration_shape_for_a_regular_leg() -> None:
+    """Retrying a manual order accepted before slice 3 must not conflict.
+
+    ``_identity``'s durable ``payload_hash`` is compared against the stored
+    hash on every future ``accept_manual_order`` retry for the same
+    ``command_id`` (``repository.py``'s ``commit_first_transition``). It must
+    route through ``leg_instruction_payload`` like every other leg hash, so a
+    regular-session leg produces the exact hash it did before ``extended_hours``
+    existed.
+    """
+    leg = market_buy()
+    subject_id = manual_operator_subject_id(OPERATOR_ID)
+
+    _, payload_hash, _, _, _ = _identity(
+        account_id=ACCOUNT_ID, subject_id=subject_id, ticket_id=TICKET_ID, leg_id=LEG_ID, leg=leg
+    )
+
+    pre_migration_hash = hashlib.sha256(
+        canonicalize(
+            {
+                "account_id": ACCOUNT_ID,
+                "subject_id": subject_id,
+                "ticket_id": TICKET_ID,
+                "leg_id": LEG_ID,
+                "instruction": {k: v for k, v in leg.model_dump(mode="json").items() if k != "extended_hours"},
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    assert payload_hash == pre_migration_hash
+
+
+def test_identity_payload_hash_differs_for_an_extended_hours_leg() -> None:
+    subject_id = manual_operator_subject_id(OPERATOR_ID)
+    regular_leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25)
+    extended_leg = BrokerOrderLeg(
+        symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25, extended_hours=True
+    )
+
+    _, regular_hash, _, _, _ = _identity(
+        account_id=ACCOUNT_ID, subject_id=subject_id, ticket_id=TICKET_ID, leg_id=LEG_ID, leg=regular_leg
+    )
+    _, extended_hash, _, _, _ = _identity(
+        account_id=ACCOUNT_ID, subject_id=subject_id, ticket_id=TICKET_ID, leg_id=LEG_ID, leg=extended_leg
+    )
+
+    assert regular_hash != extended_hash
 
 
 @pytest.mark.asyncio

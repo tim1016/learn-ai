@@ -814,9 +814,15 @@ def validate_custody_subject_registered_facts(facts: CustodySubjectRegisteredFac
 
 
 def leg_instruction_payload(leg: BrokerOrderLeg) -> dict[str, object]:
-    """The canonical leg payload a manual instruction hash is computed over.
+    """The one canonical leg payload every durable leg hash is computed over.
 
-    ``extended_hours`` is omitted when ``False`` so every ticket accepted
+    Every producer and validator of a durable hash taken over a
+    ``BrokerOrderLeg`` — the manual instruction hash, the manual command's
+    ``payload_hash``, and the bot-driven ENTER decision's ``payload_hash`` —
+    routes through this function rather than dumping the leg itself, so
+    there is exactly one payload rule (CLAUDE.md guiding philosophy #5).
+
+    ``extended_hours`` is omitted when ``False`` so every leg accepted
     before the field existed keeps validating against its stored hash
     (the hash-chained schema-evolution rule).
     """

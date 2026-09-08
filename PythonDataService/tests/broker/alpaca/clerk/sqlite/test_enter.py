@@ -12,6 +12,7 @@ broker attempt.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,13 +22,16 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import (
+    ACTION_ENTER,
     EnterSubmission,
+    _enter_identity,
     accept_enter,
     fold_order_evidence,
     resolve_enter_submission,
     submit_enter,
 )
 from app.broker.alpaca.clerk.sqlite.facts import OrderFillObservedFacts
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
     InvalidIdentityError,
@@ -164,6 +168,52 @@ class _FakeTrade:
             # requested one, to exercise the mismatch guard.
             return self._lookup_result
         return _broker_order(client_order_id).model_copy(update={"order_id": f"bo-{client_order_id}"})
+
+
+def test_enter_identity_payload_hash_matches_the_pre_migration_shape_for_a_regular_leg() -> None:
+    """Retrying an ENTER decision accepted before slice 3 must not conflict.
+
+    ``_enter_identity``'s durable ``payload_hash`` is compared against the
+    stored hash on every future ``accept_enter`` retry for the same
+    ``command_id`` (``repository.py``'s ``commit_first_transition``). It must
+    route through ``leg_instruction_payload`` like every other leg hash, so a
+    regular-session leg produces the exact hash it did before ``extended_hours``
+    existed.
+    """
+    leg = _leg()
+
+    _, payload_hash, _, _ = _enter_identity(
+        account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="dec-1", leg=leg
+    )
+
+    pre_migration_hash = hashlib.sha256(
+        canonicalize(
+            {
+                "account_id": ACCOUNT_ID,
+                "strategy_instance_id": SID,
+                "decision_id": "dec-1",
+                "action": ACTION_ENTER,
+                "leg": {k: v for k, v in leg.model_dump(mode="json").items() if k != "extended_hours"},
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    assert payload_hash == pre_migration_hash
+
+
+def test_enter_identity_payload_hash_differs_for_an_extended_hours_leg() -> None:
+    regular_leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25)
+    extended_leg = BrokerOrderLeg(
+        symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25, extended_hours=True
+    )
+
+    _, regular_hash, _, _ = _enter_identity(
+        account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="dec-1", leg=regular_leg
+    )
+    _, extended_hash, _, _ = _enter_identity(
+        account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="dec-1", leg=extended_leg
+    )
+
+    assert regular_hash != extended_hash
 
 
 # ── Capture-before-contact, concurrency, and the definitive outcomes ────────
