@@ -6,11 +6,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr.capability import probe_session_data_capability
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.schemas.broker_capability import SessionDataCapability
-from app.services.session_authority import session_state_at_ms
+from app.services.session_authority import EXTENDED_PHASES, session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +111,13 @@ def get_market_data_capability_service() -> MarketDataCapabilityService:
     return _SERVICE
 
 
-_EXTENDED_PHASES = frozenset({"PRE", "POST", "OVERNIGHT"})
-
-
-def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str | None) -> bool:
+def extended_phase_proven_at_ms(
+    *,
+    now_ms: int,
+    symbol: str,
+    account_id: str | None,
+    extended_window: ExtendedHoursWindow | None = None,
+) -> bool:
     """Whether extended-session (PRE/POST/OVERNIGHT) capability is proven
     for this instrument/account right now.
 
@@ -121,38 +125,57 @@ def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str | N
     something that can legitimately come up empty (a market-data feed with
     no capability identity, a panel rendered before an account is known) —
     each one would otherwise have to repeat the same "no account, no proof"
-    guard before calling in. ``None`` fails closed here instead.
+    guard before calling in. ``None`` fails closed here **only for the
+    capability path**: a declared ``extended_window`` is not account-scoped
+    (ADR 0059 D5.2), so when one is supplied it still resolves the session
+    with no capability lookup and no account.
 
-    Resolves the capability snapshot this service owns, then defers the
-    actual session decision to the pure, injection-only
-    ``session_authority.session_state_at_ms`` — that module has no service
-    dependencies of its own, so the I/O lookup lives here instead. Shared
-    by every caller that must reconcile a broker's RTH-only live clock
-    (which reports CLOSED outside regular hours regardless of actual
-    extended-session availability) against the canonical session
+    Resolves the capability snapshot this service owns (when an account is
+    given), then defers the actual session decision to the pure,
+    injection-only ``session_authority.session_state_at_ms`` — that module
+    has no service dependencies of its own, so the I/O lookup lives here
+    instead. Shared by every caller that must reconcile a broker's RTH-only
+    live clock (which reports CLOSED outside regular hours regardless of
+    actual extended-session availability) against the canonical session
     authority: the ENTER gate in ``bot_trade_strategy.py`` and its
     Clerk-boundary recheck in ``runtime.py`` (#1671), via
     ``market_liveness.liveness_blocks_entry``.
 
     ``session.extended_phase_proven`` is a *provenance* flag — it only says
-    the answer came from a fresh, matching capability snapshot rather than
-    the bare NYSE calendar. It is also true when that snapshot resolves to
-    ``RTH`` or ``CLOSED``, so checking it alone would let a running
-    ``use_rth=False`` bot override fresh, correct Alpaca ``CLOSED``
-    evidence during e.g. an emergency RTH closure. Only a *resolved phase*
-    of PRE, POST, or OVERNIGHT counts as "proven extended" — not
-    ``session.permits_strategy_activity``, which answers a different
-    question (whether the *caller's own* allowed-sessions policy, defaulted
-    here to RTH-only since none is supplied, permits the resolved phase)
-    and would be false for every extended phase by construction.
+    the answer came from a fresh, matching capability snapshot or a
+    declared window, rather than the bare NYSE calendar. It is also true
+    when that snapshot resolves to ``RTH`` or ``CLOSED``, so checking it
+    alone would let a running ``use_rth=False`` bot override fresh,
+    correct Alpaca ``CLOSED`` evidence during e.g. an emergency RTH
+    closure. Only a *resolved phase* of PRE, POST, or OVERNIGHT counts as
+    "proven extended" — not ``session.permits_strategy_activity``, which
+    answers a different question (whether the *caller's own*
+    allowed-sessions policy, defaulted here to RTH-only since none is
+    supplied, permits the resolved phase) and would be false for every
+    extended phase by construction.
+
+    **This answers the schedule, never liveness.** Both sources it resolves
+    — a declared broker window and a capability snapshot — describe the
+    session that was *supposed* to run at ``now_ms``; neither can see an
+    unscheduled PRE/POST closure, which Alpaca's RTH-only clock reports as
+    plain ``CLOSED``, exactly as it reports an ordinary extended session.
+    So a ``True`` here is a necessary condition for admitting extended
+    exposure and never a sufficient one: ``market_liveness.
+    liveness_blocks_entry`` pairs it with ``market_data_bars_live`` — the
+    feed actually printing bars for the symbol — and admits only on both
+    (ADR 0022: the calendar owns scheduled structure, the live feed owns
+    liveness).
     """
-    if account_id is None:
+    if account_id is None and extended_window is None:
         return False
-    capability = get_market_data_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
+    capability: SessionDataCapability | None = None
+    if account_id is not None:
+        capability = get_market_data_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
     session = session_state_at_ms(
         now_ms=now_ms,
         capability=capability,
         symbol=symbol,
         account_id=account_id,
+        extended_window=extended_window,
     )
-    return session.extended_phase_proven and session.phase in _EXTENDED_PHASES
+    return session.extended_phase_proven and session.phase in EXTENDED_PHASES

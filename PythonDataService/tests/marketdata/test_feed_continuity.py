@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr.bars import (
     IBKRBarInterrupted,
     IBKRBarStreamError,
@@ -26,7 +27,9 @@ from app.marketdata.feed import (
     SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+from app.services.decision_session import RunDecisionSession
 
+_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _MINUTE0 = 1_788_375_600_000  # 2026-09-02 15:00:00 ET
 _TF = 900_000
 
@@ -79,9 +82,24 @@ def _next_trigger(last_end: int) -> int:
 
 def _policy(sink: _RecordingSink, *, grant=None) -> ContinuityPolicy:
     return ContinuityPolicy(
-        decision_session="rth",
+        session=RunDecisionSession(kind="rth", window=None),
         next_trigger_ms=_next_trigger,
         substitution_grant=grant or (lambda s, e: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED")),
+        record_event=sink,
+    )
+
+
+def _extended_policy(sink: _RecordingSink) -> ContinuityPolicy:
+    """The policy an ADR 0059 ``use_rth=False`` run streams under.
+
+    Its window is the real declared one, so ``includes_instant`` resolves the
+    genuine 04:00-20:00 ET bounds of ``_MINUTE0``'s trading day -- the RTH
+    monkeypatch above never reaches this branch.
+    """
+    return ContinuityPolicy(
+        session=RunDecisionSession(kind="extended", window=_WINDOW),
+        next_trigger_ms=_next_trigger,
+        substitution_grant=lambda s, e: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=sink,
     )
 
@@ -155,7 +173,10 @@ class _Source:
 def _no_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.marketdata.ibkr_continuity.get_monitor", lambda: None)
     monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 45_000)
-    monkeypatch.setattr("app.marketdata.ibkr_continuity.session_state_at_ms",
+    # The RTH half of ``RunDecisionSession.includes_instant`` resolves the phase
+    # through the calendar; this module works in a synthetic session whose open
+    # is one hour before ``_MINUTE0``.
+    monkeypatch.setattr("app.services.decision_session.session_state_at_ms",
                         lambda now_ms: SimpleNamespace(phase="RTH" if now_ms >= _MINUTE0 - 3_600_000 else "PRE"))
 
 
@@ -563,6 +584,59 @@ async def test_unresolvable_minute_outside_rth_is_a_gap_and_the_run_continues(mo
     assert [b.start_ms for b in bars] == [pre - 60_000, pre + 60_000]
     assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"]
     assert sink.events[-1].window_start_ms == pre
+
+
+async def test_an_unresolvable_pre_market_minute_is_fatal_for_an_extended_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same minute the RTH run above omits is a refusal for an extended run.
+
+    An extended run decides on 07:00 ET, so a minute nothing can prove complete
+    is a hole in a series it is about to decide on -- the fail-closed half of
+    the continuity floor, which was ``False`` for every minute of every
+    extended run before this fix.
+    """
+    sink = _RecordingSink()
+    pre = _MINUTE0 - 8 * 3_600_000  # 07:00 ET, inside the declared 04:00-20:00 window
+    source = _Source(
+        [_ibkr_bar(pre - 60_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(pre, contribution_count=3, spans_interruption=True, phase="PRE")],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: pre + 30_000)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _extended_policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
+    assert sink.events[-1].window_start_ms == pre
+
+
+async def test_an_unresolvable_overnight_minute_is_still_a_gap_for_an_extended_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside the declared window an extended run decides on nothing, so the
+    omission stays survivable -- the floor widened to the window, not to the day."""
+    sink = _RecordingSink()
+    overnight = _MINUTE0 - 13 * 3_600_000  # 02:00 ET, before the declared open
+    source = _Source(
+        [_ibkr_bar(overnight - 60_000, phase="CLOSED"), IBKRBarInterrupted("x", cause="socket_down")],
+        [
+            _ibkr_bar(overnight, contribution_count=3, spans_interruption=True, phase="CLOSED"),
+            _ibkr_bar(overnight + 60_000, phase="CLOSED"),
+        ],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: overnight + 30_000)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _extended_policy(sink), 2)
+
+    assert [b.start_ms for b in bars] == [overnight - 60_000, overnight + 60_000]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"]
+    assert sink.events[-1].window_start_ms == overnight
 
 
 async def test_a_touched_pre_market_minute_holding_every_print_is_delivered(

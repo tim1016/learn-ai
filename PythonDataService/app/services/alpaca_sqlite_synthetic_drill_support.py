@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.fault_injection import (
@@ -15,6 +16,7 @@ from app.broker.alpaca.fault_injection import (
     FrameFaultKind,
     WriteFaultKind,
 )
+from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from app.services.account_custody_synthetic_scenarios import SyntheticScenarioId
 
@@ -176,6 +178,14 @@ def seam_not_permitted(kind: str) -> FaultSeamLimitation:
     )
 
 
+# The drill double's own descriptor, not Alpaca's paper descriptor: SyntheticBroker.submit
+# ignores order_type/limit_price/time_in_force/extended_hours and fills only regular-session
+# market legs, so it must not advertise a session it cannot rehearse (task-5 review finding 1).
+DRILL_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.revised(
+    supports_extended_hours=False, extended_hours_window=None
+)
+
+
 class TickClock:
     def __init__(self, value: int = 1_786_200_000_000) -> None:
         self.value = value
@@ -202,6 +212,16 @@ class SyntheticBroker:
         self.fill_during_cancel_quantity: float | None = None
         self.cancel_started: asyncio.Event | None = None
         self.cancel_release: asyncio.Event | None = None
+
+    def capabilities(self) -> BrokerCapabilities:
+        """The drill double's own descriptor — not Alpaca's paper descriptor.
+
+        The drills drive the real boot selector, which reads the executing
+        broker's declared capabilities (ADR 0059 D5.3). ``submit`` below fills
+        only regular-session market legs, so this double must not advertise an
+        extended session it cannot rehearse.
+        """
+        return DRILL_CAPABILITIES
 
     def proof(self) -> SimulatedBrokerProof:
         return SimulatedBrokerProof(

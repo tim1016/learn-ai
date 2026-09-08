@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -213,6 +214,8 @@ class _CustodyClerk:
     authority_kind = "sqlite"
     broker_id = "alpaca"
     account_id = "PA-TEST"
+    # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
+    program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
     def __init__(self, proof: InstanceCustodyProof) -> None:
         self.proof = proof
@@ -249,9 +252,11 @@ class _CustodyClerk:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar=None,
         decision_evidence=None,
     ) -> EffectOperationReceipt:
-        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth, capability_account_id, decision_evidence
+        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
+        del capability_account_id, retained_source_bar, decision_evidence
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -429,6 +434,8 @@ class _FakeClerk:
 
     authority_kind = "sqlite"
     account_id = "PA-TEST"
+    # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
+    program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
     def __init__(
         self,
@@ -526,9 +533,10 @@ class _FakeClerk:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
-        del use_rth, capability_account_id
+        del capability_account_id
         if self._should_raise is not None:
             raise self._should_raise
 
@@ -539,6 +547,12 @@ class _FakeClerk:
             "purpose": purpose.value,
             "quantity": quantity,
             "action_plan": action_plan,
+            # The Clerk anchors an extended-session leg to this exact bar, so
+            # a runner that never resolves it refuses every extended decision
+            # (ADR 0059 D5.3). Recorded here so a runner test can prove the
+            # real path hands it over.
+            "use_rth": use_rth,
+            "retained_source_bar": retained_source_bar,
         }
         self.calls.append(call)
         if decision_evidence is not None and isinstance(

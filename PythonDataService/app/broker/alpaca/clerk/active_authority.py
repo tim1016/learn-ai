@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.account_authority import (
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -321,6 +322,7 @@ async def select_active_clerk_runtime(
             intake=intake,
             # Proven above from the broker's own account read, not inferred.
             account_mode=account.account_mode,
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
         )
         # Keep the execution lease alive across the (possibly slow) startup
         # recovery passes. The reconcile loop still starts after boot recovery
@@ -559,6 +561,7 @@ async def select_synthetic_clerk_runtime(
             authority_kind="synthetic",
             # A simulator is a paper environment by construction (ADR 0054).
             account_mode="paper",
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
         )
         sweep = ReconciliationSweep(
             repo=repository,
@@ -645,6 +648,14 @@ def get_active_clerk_runtime() -> ActiveClerkRuntime | None:
     return _runtime
 
 
+def active_program_leg_policy() -> ProgramLegPolicy:
+    """The active authority's leg policy; regular-only while none is active."""
+    runtime = get_active_clerk_runtime()
+    if runtime is None or runtime.clerk is None:
+        return ProgramLegPolicy.regular_only()
+    return runtime.clerk.program_leg_policy
+
+
 def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
     global _runtime
     _runtime = runtime
@@ -718,6 +729,7 @@ __all__ = [
     "ClerkAuthorityRegistry",
     "ClerkStartupFailure",
     "activate_synthetic_clerk_authority",
+    "active_program_leg_policy",
     "close_synthetic_clerk_runtimes",
     "get_active_clerk_runtime",
     "get_alpaca_clerk",

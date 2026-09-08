@@ -10,15 +10,19 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
+    ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     RunAdmissionDecision,
     RunProcessAdmissionFact,
@@ -289,6 +293,21 @@ async def resolve_start_runtime_fact(
     )
 
 
+def extended_hours_admission_fact(
+    *, use_rth: bool, policy: ProgramLegPolicy, observed_at_ms: int
+) -> ExtendedHoursAdmissionFact:
+    """Pure: what the active authority can do for a run outside regular hours."""
+    if use_rth:
+        state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"] = "NOT_REQUESTED"
+    elif policy.window is None:
+        state = "UNSUPPORTED"
+    elif policy.allowances is None:
+        state = "ALLOWANCE_UNSET"
+    else:
+        state = "READY"
+    return ExtendedHoursAdmissionFact(state=state, observed_at_ms=observed_at_ms)
+
+
 def _admission_clerk(binding: BrokerBotBinding) -> ActiveAlpacaClerk:
     """Resolve only the real-paper Clerk; Dry Run supplies its exact sim authority."""
     from app.broker.alpaca.clerk import get_alpaca_clerk
@@ -400,6 +419,7 @@ class BotStartAdmission:
         activate: CustodyBoundActivator,
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
+        program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -410,6 +430,7 @@ class BotStartAdmission:
         self._activate = activate
         self._session_capability = session_capability
         self._market_liveness = market_liveness
+        self._program_leg_policy = program_leg_policy
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -474,6 +495,7 @@ class BotStartAdmission:
                     verified_at_ms=observed_at_ms,
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
+                policy = self._program_leg_policy()
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
@@ -495,10 +517,14 @@ class BotStartAdmission:
                             else None
                         ),
                         account_id=capability_account_id,
+                        extended_window=policy.window,
                     ),
                     market_liveness=self._market_liveness(
                         binding.symbol,
                         observed_at_ms,
+                    ),
+                    extended_hours=extended_hours_admission_fact(
+                        use_rth=binding.use_rth, policy=policy, observed_at_ms=observed_at_ms
                     ),
                 )
                 yield (
@@ -523,12 +549,14 @@ def market_data_admission_fact(
     use_rth: bool,
     capability: SessionDataCapability | None = None,
     account_id: str | None = None,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> MarketDataAdmissionFact:
     session = session_state_at_ms(
         now_ms=observed_at_ms,
         capability=capability,
         symbol=symbol,
         account_id=account_id,
+        extended_window=extended_window,
     )
     session_fields = {
         "scheduled_phase": session.phase,
@@ -565,6 +593,7 @@ def market_data_admission_fact(
         capability=capability,
         symbol=symbol,
         account_id=account_id,
+        extended_window=extended_window,
     )
     session_fields = {
         "scheduled_phase": session.phase,

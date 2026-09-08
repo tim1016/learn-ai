@@ -22,6 +22,7 @@ from app.marketdata.feed import (
 )
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
+from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
@@ -32,6 +33,7 @@ from tests.services.test_candidate_uncaptured_at_crash import (  # noqa: F401 --
     _PhaseFeed,
 )
 
+_RTH_SESSION = RunDecisionSession(kind="rth", window=None)
 _T0 = 1_700_000_000_000
 
 
@@ -104,7 +106,7 @@ async def test_retained_feed_consumes_modes_of_filtered_bars(tmp_path: Path) -> 
     pause_feed = PauseAwareFeed(_MixedPhaseFeed(bars), gate)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:leak")
     try:
-        retained = _RetainedSourceBarFeed(pause_feed, ledger, run_id="run-1")
+        retained = _RetainedSourceBarFeed(pause_feed, ledger, run_id="run-1", session=_RTH_SESSION)
 
         yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True)]
 
@@ -131,7 +133,7 @@ def _continuity_policy() -> ContinuityPolicy:
         raise AssertionError("forwarding a policy must not record a continuity event")
 
     return ContinuityPolicy(
-        decision_session="rth",
+        session=_RTH_SESSION,
         next_trigger_ms=lambda last_end_ms: last_end_ms + 60_000,
         substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_record,
@@ -152,7 +154,7 @@ def _recording_policy(*, trigger_ms: int) -> tuple[ContinuityPolicy, list[FeedCo
         return ContinuityEventRef(run_id="run-x", evidence_seq=len(events))
 
     policy = ContinuityPolicy(
-        decision_session="rth",
+        session=_RTH_SESSION,
         next_trigger_ms=lambda last_end_ms: trigger_ms,
         substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_sink,
@@ -181,7 +183,7 @@ async def test_a_recovered_decision_bar_exactly_at_its_allowance_is_admitted(
     monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_000)
     try:
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([on_time], mode="finite"), ledger, run_id="run-x", continuity=policy
+            _FakeFeed([on_time], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
         )
         delivered = [bar async for bar in feed.stream_bars("SPY", use_rth=True)]
     finally:
@@ -229,7 +231,7 @@ async def test_retained_feed_refuses_a_continuity_policy_that_is_not_its_runs(tm
     policy = _continuity_policy()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:continuity")
     try:
-        retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1", continuity=policy)
+        retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1", session=_RTH_SESSION, continuity=policy)
 
         with pytest.raises(ValueError, match="may not substitute"):
             async for _bar in retained.stream_bars("SPY", use_rth=True, continuity=_continuity_policy()):
@@ -287,7 +289,9 @@ async def test_retained_feed_appends_bars_with_the_run_id_and_provenance(tmp_pat
     """
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        feed = _RetainedSourceBarFeed(_FakeFeed([_bar(_T0)], mode="finite"), ledger, run_id="run-x")
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([_bar(_T0)], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION
+        )
 
         async for _ in feed.stream_bars("SPY", use_rth=True):
             pass
@@ -320,7 +324,9 @@ async def test_retained_warmup_bars_keep_their_continuity_provenance(tmp_path: P
             ),
             run_id="run-x",
         )
-        feed = _RetainedSourceBarFeed(_FakeFeed([], mode="finite"), ledger, run_id="run-x")
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION
+        )
 
         warmup = await feed.recent_closed_bars("SPY", use_rth=True)
 
@@ -352,7 +358,7 @@ async def test_late_non_realtime_trigger_bar_is_refused_as_decision_late(
     monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
         )
 
         with pytest.raises(FeedContinuityRefused) as excinfo:
@@ -385,7 +391,7 @@ async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
         raise OSError("journal unwritable")
 
     policy = ContinuityPolicy(
-        decision_session=policy.decision_session,
+        session=policy.session,
         next_trigger_ms=policy.next_trigger_ms,
         substitution_grant=policy.substitution_grant,
         record_event=_unwritable,
@@ -395,7 +401,7 @@ async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
     monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
         )
 
         with pytest.raises(MarketDataFeedError) as excinfo:
@@ -421,7 +427,7 @@ async def test_warmup_bars_fetched_from_the_source_are_journalled_to_this_run(
     source.recent_closed_bars = _serving_warmup([_bar(_T0)])  # type: ignore[method-assign]
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        feed = _RetainedSourceBarFeed(source, ledger, run_id="run-x")
+        feed = _RetainedSourceBarFeed(source, ledger, run_id="run-x", session=_RTH_SESSION)
 
         await feed.recent_closed_bars("SPY", use_rth=True)
 
@@ -448,7 +454,7 @@ async def test_late_non_trigger_bar_is_admitted(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
         )
 
         async for _ in feed.stream_bars("SPY", use_rth=True):

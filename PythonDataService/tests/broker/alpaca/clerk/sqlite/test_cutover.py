@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
 from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite import cutover as cutover_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
@@ -26,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     MIRROR_FILENAME,
     ClerkSqliteRepository,
 )
+from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.live.desired_state import DesiredState, DesiredStateRecord
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
@@ -43,6 +45,9 @@ ACCOUNT_ID = "PACUTOVER"
 
 class _StartupBroker:
     broker_id = "alpaca"
+
+    def capabilities(self) -> BrokerCapabilities:
+        return ALPACA_PAPER_CAPABILITIES
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return BrokerAccountSnapshot(

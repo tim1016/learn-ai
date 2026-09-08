@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -39,6 +41,7 @@ from app.broker.alpaca.clerk.models import (
     RecoveryEvaluationObservation,
 )
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
@@ -48,6 +51,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import (
+    ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
     RunProcessAdmissionFact,
@@ -69,6 +73,7 @@ from app.services.bot_start_admission import (
 )
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
+from app.utils.timestamps import to_ms_utc
 from tests._helpers.ibkr_feed_adversarial import (
     NeverFirstBarFeedFixture,
     OnePrintThenSilenceFeedFixture,
@@ -252,6 +257,9 @@ def _start_facts(
                 source_timestamp_ms=observed_at_ms,
             ),
         ),
+        extended_hours=ExtendedHoursAdmissionFact(
+            state="NOT_REQUESTED", observed_at_ms=observed_at_ms
+        ),
     )
 
 
@@ -395,6 +403,54 @@ def test_market_data_admission_marks_extended_phase_unproved_without_matching_ca
 
     assert fact.session_authority_source == "nyse_calendar"
     assert fact.extended_phase_proven is False
+
+
+_EIGHTEEN_ET_ON_A_TRADING_DAY = to_ms_utc(
+    datetime(2026, 9, 2, 18, 0, tzinfo=ZoneInfo("America/New_York"))
+)
+_DECLARED_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+
+
+def test_market_data_admission_resolves_post_from_a_declared_window() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _EIGHTEEN_ET_ON_A_TRADING_DAY,
+        use_rth=False,
+        extended_window=_DECLARED_WINDOW,
+    )
+
+    assert fact.scheduled_phase == "POST"
+    assert fact.session_authority_source == "broker_declared_window"
+    assert fact.extended_phase_proven is True
+    assert fact.state == "AVAILABLE"
+
+
+def test_market_data_admission_without_a_declared_window_cannot_prove_the_same_instant() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _EIGHTEEN_ET_ON_A_TRADING_DAY,
+        use_rth=False,
+    )
+
+    assert fact.state == "UNKNOWN"
 
 
 def test_unproved_extended_phase_blocks_connected_stale_feed_admission(

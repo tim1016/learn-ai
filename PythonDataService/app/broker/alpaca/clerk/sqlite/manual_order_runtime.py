@@ -243,17 +243,25 @@ async def preview_manual_order(
         )
     for ticket_leg in legs:
         leg = ticket_leg.instruction
+        # Kept in step with ``manual_orders._require_supported_leg``, which
+        # refuses the same shapes at the acceptance boundary: an operator must
+        # read the refusal on preview rather than discover it on submit.
+        # ``extended_hours`` is one of them — a manual ticket has no deciding
+        # program and no decision bar, so nothing anchors an extended-session
+        # leg (ruling R6).
         if (
             leg.side not in {OrderSide.BUY, OrderSide.SELL}
             or leg.order_type not in {OrderType.MARKET, OrderType.LIMIT}
             or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}
+            or leg.extended_hours
         ):
             return ManualOrderPreview(
                 capability=ManualOrderCapability(
                     False,
                     ManualOrderUnavailable(
                         "UNSUPPORTED_MANUAL_ORDER_SHAPE",
-                        "Manual tickets support only BUY or SELL market/limit DAY/GTC equity legs.",
+                        "Manual tickets support only regular-session BUY or SELL "
+                        "market/limit DAY/GTC equity legs.",
                     ),
                 ),
                 preview_token=None,

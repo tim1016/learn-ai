@@ -7166,6 +7166,11 @@ export interface components {
             events?: components["schemas"]["BrokerOrderEvent"][];
             /** Expired At Ms */
             expired_at_ms: number | null;
+            /**
+             * Extended Hours
+             * @default false
+             */
+            extended_hours?: boolean;
             /** Fill Latency Seconds */
             fill_latency_seconds?: number | null;
             /** Filled At Ms */
@@ -7253,6 +7258,11 @@ export interface components {
          *     validates. The quantity is a positive share count; the *sign* is ``side``.
          */
         BrokerOrderLeg: {
+            /**
+             * Extended Hours
+             * @default false
+             */
+            extended_hours?: boolean;
             /** Limit Price */
             limit_price?: number | null;
             /**

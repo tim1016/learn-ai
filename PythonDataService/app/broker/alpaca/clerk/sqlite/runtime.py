@@ -13,7 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -35,6 +35,11 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
     RecoveryEvaluationObservation,
+)
+from app.broker.alpaca.clerk.program_leg import (
+    ProgramLegPolicy,
+    ProgramLegRefused,
+    shape_program_leg,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
@@ -128,6 +133,8 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
+# An EXIT reduces the program's own position, so its leg is the opposite side.
+_REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
 logger = logging.getLogger(__name__)
 
 
@@ -196,6 +203,7 @@ class SqliteAlpacaClerkFacade:
         intake: ReentrantAsyncLock | None = None,
         authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
         account_mode: Literal["paper", "live"],
+        program_leg_policy: ProgramLegPolicy | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -212,6 +220,10 @@ class SqliteAlpacaClerkFacade:
         # caller positively learned from the broker at activation, never a
         # guess from the account-id shape.
         self._account_mode = account_mode
+        # ADR 0059 D5.3: what this authority may shape an extended-session leg
+        # from. Passed in, never read off the ports here — the composition root
+        # owns which capabilities and which operator allowances apply.
+        self._program_leg_policy = program_leg_policy or ProgramLegPolicy.regular_only()
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -245,6 +257,10 @@ class SqliteAlpacaClerkFacade:
     @property
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
+
+    @property
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        return self._program_leg_policy
 
     def channel_health_snapshot(
         self,
@@ -686,12 +702,31 @@ class SqliteAlpacaClerkFacade:
                     ),
                 )
             )
-            operation_leg = BrokerOrderLeg(
-                symbol=entry.instrument.underlying,
-                side=(OrderSide.BUY if entry.position == "long" else OrderSide.SELL),
-                quantity=float(quantity * entry.qty_ratio),
-            )
+            program_side = OrderSide.BUY if entry.position == "long" else OrderSide.SELL
+            leg_side = program_side if purpose is EffectPurpose.ENTER else _REDUCING_SIDE[program_side]
+            try:
+                shape = shape_program_leg(
+                    side=leg_side,
+                    purpose=purpose,
+                    use_rth=use_rth,
+                    decision_bar=retained_source_bar,
+                    policy=self._program_leg_policy,
+                )
+            except ProgramLegRefused as exc:
+                return rejected(
+                    reason_code=exc.reason_code,
+                    explanation=exc.explanation,
+                    next_step=exc.next_step,
+                )
             if purpose is EffectPurpose.ENTER:
+                # The EXIT branch threads ``shape`` into the reducing order's
+                # durable facts instead; building a leg it discards would be a
+                # second, silent leg construction one refactor away from
+                # disagreeing with the one that ships.
+                operation_leg = shape.apply(
+                    symbol=entry.instrument.underlying,
+                    quantity=float(quantity * entry.qty_ratio),
+                )
                 if (
                     stream_health_refusal(
                         self._stream_health,
@@ -738,6 +773,22 @@ class SqliteAlpacaClerkFacade:
                             now_ms=self._repo.clock(),
                             symbol=entry.instrument.underlying,
                             account_id=capability_account_id,
+                            extended_window=self._program_leg_policy.window,
+                        ),
+                        # The declared window proves only the *schedule*.
+                        # An unscheduled PRE/POST closure reads exactly like
+                        # an ordinary extended session on Alpaca's RTH-only
+                        # clock, so new exposure also needs live evidence
+                        # the venue is printing. Read through the same
+                        # market-data channel `stream_health_refusal` above
+                        # already consults, so this recheck and the
+                        # strategy's ENTER gate cannot diverge. No gate
+                        # installed proves nothing, so it refuses.
+                        extended_session_live=lambda: (
+                            self._stream_health is not None
+                            and self._stream_health.market_data_live(
+                                entry.instrument.underlying
+                            )
                         ),
                     ):
                         return rejected(
@@ -818,6 +869,10 @@ class SqliteAlpacaClerkFacade:
                         lifecycle_run_id=run_id,
                         entry_order_ref=candidates[-1].order_ref,
                         decision_receipt=atomic_receipt,
+                        # Durable with the acceptance, not with this call:
+                        # a deferred cancel-and-prove leaves the reducing
+                        # order to a later sweep that knows no decision.
+                        reducing_shape=shape,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake

@@ -16,6 +16,7 @@ from app.broker.contract.models import BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
+from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_ledger import (
     SourceBarCheckpointBusyError,
     SourceBarConflictError,
@@ -131,7 +132,9 @@ async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_poli
 
     source = _Source()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1")
+    retained = _RetainedSourceBarFeed(
+        source, ledger, run_id="run-1", session=RunDecisionSession(kind="rth", window=None)
+    )
 
     yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True)]
 

@@ -28,9 +28,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    # Type-only: ``decision_session`` sits above this port and imports from it
+    # (through ``session_authority``), so a runtime import here would close a
+    # cycle. ``from __future__ import annotations`` keeps the field annotation
+    # a string, which is all a plain dataclass needs.
+    from app.services.decision_session import RunDecisionSession
 
 
 class MarketDataFeedError(Exception):
@@ -161,8 +168,10 @@ ContinuityEventKind = Literal["interruption", "recovered", "gap", "substituted",
 InterruptionCause = Literal["socket_down", "soft_loss_1100", "stall", "generation_changed"]
 """Why delivery stopped, in the vocabulary the broker boundary can prove."""
 
-DecisionSession = Literal["rth", "all"]
-"""Which minutes the consumer's decision clock treats as decidable."""
+DecisionSession = Literal["rth", "extended"]
+"""Which minutes the consumer's decision clock treats as decidable: the
+calendar's regular session, or the executing broker's declared extended
+session around it (ADR 0059 D5.2)."""
 
 
 class FeedContinuityEvent(BaseModel):
@@ -248,25 +257,18 @@ class ContinuityPolicy:
     ``substitution_grant(window_start_ms, window_end_ms)`` either authorizes
     backfill of that window or refuses it. ``record_event`` persists a
     continuity event and returns the reference to stamp on affected bars.
+
+    ``session`` is the run's resolved :class:`~app.services.decision_session.RunDecisionSession`
+    — the same object the consumer filters its bars with, so the continuity
+    floor and the bar filter can never disagree about which minutes are
+    decidable.
     """
 
-    decision_session: DecisionSession
+    session: RunDecisionSession
     next_trigger_ms: Callable[[int], int]
     substitution_grant: Callable[[int, int], SubstitutionGrant | SubstitutionRefusal]
     record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
     delivery_allowance_ms: int = 20_000
-
-    def __post_init__(self) -> None:
-        # ``DecisionSession`` reserves "all" (spec §12) but no calendar-proven
-        # trigger set exists for it yet (ruling R1). Refusing it here, where the
-        # policy is authored, is the only place the consumer can be told; left
-        # to the stream, ``inside_decision_session`` would quietly fail open
-        # while ``next_trigger_ms`` raised ``NotImplementedError`` mid-run.
-        if self.decision_session != "rth":
-            raise ValueError(
-                f"decision_session {self.decision_session!r} has no calendar-proven "
-                "trigger set yet; only 'rth' can be scheduled against."
-            )
 
     def deadline_ms(self, last_delivered_end_ms: int) -> int:
         """Wall-clock by which the next decision bar must have been delivered."""

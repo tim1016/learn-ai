@@ -27,6 +27,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -37,7 +38,10 @@ from app.marketdata.feed import (
     SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+from app.services.decision_session import RunDecisionSession
 from tests._helpers.ibkr_feed_adversarial import NeverFirstBarFeedFixture
+
+_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
 # ---------------------------------------------------------------------------
 # Helpers and fakes
@@ -781,7 +785,7 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
         return candidate if candidate > last_end else candidate + 900_000
 
     policy = ContinuityPolicy(
-        decision_session="rth",
+        session=RunDecisionSession(kind="rth", window=None),
         next_trigger_ms=_next_trigger,
         substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_sink,
@@ -793,22 +797,21 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
     assert policy.is_trigger_ms(1_800_000) is False
 
 
-def test_continuity_policy_refuses_a_session_it_has_no_trigger_set_for() -> None:
-    """``DecisionSession`` reserves "all"; a policy may not be authored against it yet.
-
-    Refused where the policy is written, not mid-stream: the feed's
-    session check would fail open on "all" while the decision clock raised.
-    """
+def test_continuity_policy_accepts_the_extended_session() -> None:
+    """``DecisionSession`` no longer reserves "all" (Ruling R7): "extended" is a
+    first-class session, authored the same way "rth" is."""
     async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called
-        raise AssertionError("construction must fail before any event can be recorded")
+        raise AssertionError("this test never records an event")
 
-    with pytest.raises(ValueError, match="'all'"):
-        ContinuityPolicy(
-            decision_session="all",
-            next_trigger_ms=lambda last_end: last_end + 60_000,
-            substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
-            record_event=_sink,
-        )
+    policy = ContinuityPolicy(
+        session=RunDecisionSession(kind="extended", window=_WINDOW),
+        next_trigger_ms=lambda last_end: last_end + 60_000,
+        substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_sink,
+    )
+
+    assert policy.session.kind == "extended"
+    assert policy.session.window == _WINDOW
 
 
 def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:

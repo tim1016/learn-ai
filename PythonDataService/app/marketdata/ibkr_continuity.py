@@ -33,7 +33,6 @@ from app.marketdata.feed import (
     SubstitutionRefusal,
     record_continuity_event,
 )
-from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -372,11 +371,15 @@ class ContinuityLoop:
     # -- resolving what the interruption cost -------------------------------
 
     def _inside_decision_session(self, window_start_ms: int) -> bool:
-        """Whether the consumer's decision clock treats ``window_start_ms`` as decidable."""
-        return (
-            self.policy.decision_session == "rth"
-            and session_state_at_ms(now_ms=window_start_ms).phase == "RTH"
-        )
+        """Whether the consumer's decision clock treats ``window_start_ms`` as decidable.
+
+        The consumer's own session answers, so this floor covers exactly the
+        minutes the run decides on — a regular-hours run's RTH minutes, and an
+        extended run's whole declared window. Asking anything narrower would
+        journal a swallowed pre-market minute as a survivable gap and let an
+        extended run keep deciding on a series with a hole in it.
+        """
+        return self.policy.session.includes_instant(window_start_ms)
 
     def _session_uniform_windows(self, start_ms: int, end_ms: int) -> list[tuple[int, int]]:
         """Split ``[start_ms, end_ms)`` into the fewest windows of one session verdict each.

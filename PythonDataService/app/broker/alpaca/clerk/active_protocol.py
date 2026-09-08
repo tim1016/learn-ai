@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         InstanceCustodyProof,
         ReconciliationVerdict,
     )
+    from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
     from app.schemas.action_plan import ActionPlan
@@ -44,6 +45,17 @@ class ActiveAlpacaClerk(Protocol):
 
     authority_kind: Literal["sqlite", "synthetic"]
     broker_id: str
+
+    @property
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        """How this authority may shape an extended-session leg (ADR 0059 D5.3).
+
+        ``program_leg_policy.window`` is the declared extended session
+        (``None`` for a regular-only authority); it has no second accessor of
+        its own, so a caller can never read a window the policy that prices
+        against it does not carry.
+        """
+        ...
 
     async def recover(self) -> None: ...
 

@@ -67,6 +67,14 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 |---|---|---|---|---|---|
 | Alpaca equity regulatory fees (SEC §31, FINRA TAF, FINRA CAT; EOD per-component cent round-up) | `PythonDataService/app/broker/alpaca/regulatory_fees.py` | none (the IBKR tier model in `app/research/parity/ibkr_commission.py` is a different concept — broker commission, not regulatory pass-through) | Alpaca Broker Fee Schedule (retrieved 2026-09-07); SEC fee-rate advisories 2024-2/2025-2/2026-2; FINRA SR-FINRA-2024-019 — see [alpaca-regulatory-fees](docs/references/alpaca-regulatory-fees.md) | `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py`; golden `FEE-001` in `tests/fixtures/test_alpaca_regulatory_fees_fixture.py` (hand_computed, atol=0) | canonical — 4-field provenance block present |
 
+### Broker session and order anchoring (ADR 0059 D5)
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Marketable-limit anchor (extended-session program legs) | `PythonDataService/app/broker/alpaca/marketable_limit.py::marketable_limit_price` | Alpaca's $1 tick rule is also enforced on the final price by `BrokerOrderLeg._limit_price_matches_order_type` (contract boundary); this copy picks the tick from the pre-quantisation value | ADR 0059 D5.3; [alpaca-extended-hours](docs/references/alpaca-extended-hours.md) | `PythonDataService/tests/broker/alpaca/test_marketable_limit.py` — including `::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price`, the parity sweep across the $1 boundary | canonical — 4-field provenance block present |
+| Extended-session decision triggers | `PythonDataService/app/services/decision_clock.py::extended_trigger_instants` | none — bucket rule shares its file with `rth_trigger_instants`, a different concept (regular-session buckets) | ADR 0059 D5.2; [alpaca-extended-hours](docs/references/alpaca-extended-hours.md) | `PythonDataService/tests/services/test_decision_clock.py` | canonical — 4-field provenance block present |
+| Synthetic fill models (`immediate_fill_price` for the `sim:` world, `limit_touch_fill` for the shadow port) | `PythonDataService/app/broker/alpaca/clerk/fill_models.py` | none — both models live in this one file, which is the point: `synthetic_broker` calls `immediate_fill_price` rather than deciding marketability itself | ADR 0059 D5.5 (limit_touch), plan ruling R9 (immediate); [alpaca-extended-hours](docs/references/alpaca-extended-hours.md) | `PythonDataService/tests/broker/alpaca/clerk/test_fill_models.py` | canonical (`immediate_fill_price` consumer: `synthetic_broker._resolved_order`; `limit_touch_fill` consumer: slice-4 shadow port) — 4-field provenance block present |
+
 ### Indicators — Python-canonical, ported from LEAN
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |

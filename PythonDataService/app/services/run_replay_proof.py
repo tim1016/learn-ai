@@ -39,9 +39,10 @@ from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
-from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
+from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
+from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
     RetainedSourceBar,
@@ -432,7 +433,10 @@ class _RunReplayFeed:
 
     ``recent_closed_bars`` returns the warmup slice regardless of
     ``lookback_days`` -- the exact behavior of ``_RetainedSourceBarFeed``'s
-    retained branch, which is what the live run's own warmup consumed.
+    retained branch, which is what the live run's own warmup consumed. Both
+    streams filter through the run's ``RunDecisionSession``, resolved once by
+    ``RunReplayProofService._compute``, so a replay decides on exactly the
+    bars the live run did.
     Exposes no ``evaluation_mode_for``, so every bar replays in DECIDE mode
     (``bot_trade_strategy._evaluation_mode_for`` fallback); live OBSERVE_ONLY
     buckets are receipted ``blocked``/``PAUSED_OBSERVE_ONLY`` and classify as
@@ -446,11 +450,13 @@ class _RunReplayFeed:
         symbol: str,
         warmup_bars: Sequence[MarketDataBar],
         live_bars: Sequence[MarketDataBar],
+        session: RunDecisionSession,
     ) -> None:
         self.feed_id = provider
         self._symbol = symbol
         self._warmup_bars = list(warmup_bars)
         self._live_bars = list(live_bars)
+        self._session = session
 
     @property
     def capability_account_id(self) -> None:
@@ -463,19 +469,19 @@ class _RunReplayFeed:
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        del continuity  # a retained-bar replay has no live connection to lose
+        del continuity, use_rth  # the run's own session filters; see __init__
         for bar in self._live_bars:
-            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth):
+            if bar.symbol == symbol and self._session.includes(bar):
                 yield bar
 
     async def recent_closed_bars(
         self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
     ) -> list[MarketDataBar]:
-        del lookback_days
+        del lookback_days, use_rth
         return [
             bar
             for bar in self._warmup_bars
-            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth)
+            if bar.symbol == symbol and self._session.includes(bar)
         ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
@@ -498,6 +504,7 @@ async def run_fidelity_over_bars(
     live: Sequence[RetainedSourceBar],
     records: Sequence[LiveDecisionRecord],
     captured_decisions: Mapping[str, str],
+    session: RunDecisionSession,
     crash_records: Sequence[LiveDecisionRecord] = (),
 ) -> RunFidelityResult:
     """Replay the run's bars through the production seam, settling each stage
@@ -510,12 +517,19 @@ async def run_fidelity_over_bars(
     ``captured_decisions`` (the FR-016 machinery); crash-window buckets replay
     as ``crash_recovered`` and are digest-verified against their protected
     receipts rather than trusted on presence.
+
+    ``session`` is the run's decision session, resolved by the caller
+    (``RunReplayProofService._compute``), which refuses replay outright when a
+    ``use_rth=False`` binding has no declared window rather than replaying an
+    empty stream (Task 4 review finding 1 -- an empty replay must never be
+    mistaken for a proven one).
     """
     feed = _RunReplayFeed(
         provider=provider,
         symbol=binding.symbol,
         warmup_bars=[to_market_bar(bar) for bar in warmup],
         live_bars=[to_market_bar(bar) for bar in live],
+        session=session,
     )
     records_by_eval = {record.evaluation_id: record for record in records}
     crash_by_eval = {record.evaluation_id: record for record in crash_records}
@@ -544,7 +558,7 @@ async def run_fidelity_over_bars(
         )
 
     async for evaluation in strategy_evaluations(
-        binding, feed, captured_decisions=dict(captured_decisions)
+        binding, feed, captured_decisions=dict(captured_decisions), session=session
     ):
         eval_id = evaluation.evaluation_id
         replay_digest = trace_root([evaluation.trace])
@@ -987,6 +1001,28 @@ class RunReplayProofService:
                 artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
             )
             try:
+                # The window a run decided under is that run's own durable
+                # evidence, resolved before any read or compute work below.
+                # Reading the *live* authority instead failed in both
+                # directions: it refused whenever no authority happened to be
+                # active (on-demand generation, boot repair), and a window
+                # changed after the fact would have filtered the same
+                # retained bars differently -- a replay that no longer proves
+                # what the run did. An extended run with no recorded session
+                # is refused loudly rather than replayed as an
+                # empty-but-"proven" receipt for bars its
+                # ``RunDecisionSession`` could never have matched (Task 4
+                # review finding 1); an ``rth`` run needs no record, since
+                # ``use_rth=True`` carries no window to prove.
+                session = ledger.decision_session(run_id=run_record.run_id)
+                if session is None:
+                    if not binding.use_rth:
+                        raise RunReplayUnavailableError(
+                            "This run recorded no decision session, so the extended window it "
+                            "decided under cannot be proven; it cannot be replayed.",
+                            http_status=503,
+                        )
+                    session = RunDecisionSession(kind="rth", window=None)
                 provider = replay_provider_for(ledger, binding.symbol)
                 all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
                 # The Stop-time snapshot is this run's evidence cut; a run that
@@ -1020,7 +1056,7 @@ class RunReplayProofService:
                 first_decision_close_ms=first_decision_close_ms,
                 decision_timeframe_ms=decision_timeframe_ms,
             )
-            decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
+            decided = [bar for bar in bars if session.includes(bar)]
             parity = engine_parity_over_bars(
                 binding.strategy_key,
                 binding.symbol,
@@ -1036,6 +1072,7 @@ class RunReplayProofService:
                     records=evidence.records,
                     captured_decisions=evidence.captured_decisions,
                     crash_records=evidence.crash_records,
+                    session=session,
                 )
             )
             return provider, bars, events, evidence_end_seq, parity, fidelity

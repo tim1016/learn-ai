@@ -7,8 +7,10 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.run_admission import (
@@ -31,6 +33,7 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartRequest,
+    extended_hours_admission_fact,
     market_data_admission_fact,
     market_data_capability_account_id,
     new_run_binding,
@@ -119,6 +122,7 @@ class BotResumeAdmission:
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
         legacy_migration_repository: LegacyMigrationLineageWriter | None = None,
+        program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -135,6 +139,7 @@ class BotResumeAdmission:
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
         self._session_capability = session_capability
         self._market_liveness = market_liveness
+        self._program_leg_policy = program_leg_policy
         # PRD Sec 11.5 legacy migration (#1728): only ``resume()`` persists
         # clone lineage evidence (``preview()`` stays mutation-free). ``None``
         # keeps every existing caller working unchanged for the common
@@ -293,6 +298,7 @@ class BotResumeAdmission:
                     mutating=mutating,
                 )
                 proposed = proposed.model_copy(update={"program_build": program_build})
+                policy = self._program_leg_policy()
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,
@@ -315,10 +321,14 @@ class BotResumeAdmission:
                             else None
                         ),
                         account_id=capability_account_id,
+                        extended_window=policy.window,
                     ),
                     market_liveness=self._market_liveness(
                         prior.symbol,
                         observed_at_ms,
+                    ),
+                    extended_hours=extended_hours_admission_fact(
+                        use_rth=prior.use_rth, policy=policy, observed_at_ms=observed_at_ms
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,

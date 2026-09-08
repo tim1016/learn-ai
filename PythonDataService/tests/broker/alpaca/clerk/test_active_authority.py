@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
 from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
@@ -21,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
 )
+from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot
 
 
@@ -60,6 +62,9 @@ def _activation() -> ActivationRecord:
 
 class _Broker:
     broker_id = "alpaca"
+
+    def capabilities(self) -> BrokerCapabilities:
+        return ALPACA_PAPER_CAPABILITIES
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return _account()

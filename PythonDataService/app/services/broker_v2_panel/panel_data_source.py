@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Literal, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     EffectOperationState,
@@ -364,6 +365,7 @@ async def _get_panel_with_entries_from_authority(
             ),
             use_rth=binding.use_rth,
             bot_running=status.running,
+            extended_window=active_program_leg_policy().window,
         ),
     )
     # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)

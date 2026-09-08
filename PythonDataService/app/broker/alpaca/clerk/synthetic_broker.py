@@ -23,7 +23,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
+from app.broker.alpaca.clerk.fill_models import immediate_fill_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
@@ -48,6 +50,7 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     paper_only=True,
     supports_fractional=True,
     supports_extended_hours=True,
+    extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     supported_order_types=("market", "limit"),
     data_feed="retained_source_bars",
     bars_may_gap=False,
@@ -92,6 +95,11 @@ def _order_lock(path: Path) -> threading.Lock:
 
 class SyntheticBroker:
     """Durable immediate-fill port that derives prices only from retained bars.
+
+    A market leg, or a limit leg marketable against the decision bar's close,
+    fills immediately at that close. The sim world cannot rest an order: a
+    non-marketable limit is canceled on the spot with zero fills (ruling R9)
+    rather than waiting for a later bar to touch it.
 
     The Clerk remains the custody authority.  This adapter supplies the
     broker-shaped acknowledgement and fills it needs without contacting Alpaca
@@ -262,7 +270,7 @@ class SyntheticBroker:
                 symbol=leg.symbol,
                 retained_bar=retained_bar,
             )
-            order = self._filled_order(leg, client_order_id=client_order_id, bar=bar)
+            order = self._resolved_order(leg, client_order_id=client_order_id, bar=bar)
             self._append_order_locked(order, records)
             return order
 
@@ -380,14 +388,19 @@ class SyntheticBroker:
             )
         return persisted
 
-    def _filled_order(
-        self,
-        leg: BrokerOrderLeg,
-        *,
-        client_order_id: str,
-        bar: RetainedSourceBar,
-    ) -> BrokerOrder:
-        filled_at_ms = bar.end_ms
+    def _resolved_order(self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar) -> BrokerOrder:
+        """The order this leg becomes against one decision bar: filled, or cancelled unfilled.
+
+        The fill decision itself belongs to ``fill_models`` — a second copy of
+        "would this have transacted?" living here is exactly how the sim world
+        and the shadow port drift apart. This method only shapes the resulting
+        ``BrokerOrder``.
+        """
+        at_ms = bar.end_ms
+        # The sim world cannot rest an order: a non-marketable limit is
+        # cancelled on the spot, with no execution (ruling R9).
+        fill = immediate_fill_price(leg, bar.close)
+        filled = fill is not None
         return BrokerOrder(
             broker=self.broker_id,
             order_id=f"sim-order:{client_order_id}",
@@ -395,30 +408,35 @@ class SyntheticBroker:
             symbol=leg.symbol,
             asset_class="us_equity",
             side=leg.side,
-            order_type="market",
-            time_in_force="day",
+            order_type=str(leg.order_type),
+            time_in_force=str(leg.time_in_force),
             quantity=leg.quantity,
-            filled_quantity=leg.quantity,
-            limit_price=None,
+            limit_price=leg.limit_price,
             stop_price=None,
-            filled_avg_price=float(bar.close),
-            status="filled",
-            submitted_at_ms=filled_at_ms,
-            created_at_ms=filled_at_ms,
-            updated_at_ms=filled_at_ms,
-            filled_at_ms=filled_at_ms,
-            canceled_at_ms=None,
+            extended_hours=leg.extended_hours,
+            submitted_at_ms=at_ms,
+            created_at_ms=at_ms,
+            updated_at_ms=at_ms,
             expired_at_ms=None,
-            events=[
-                {
-                    "event_type": "fill",
-                    "occurred_at_ms": filled_at_ms,
-                    "price": float(bar.close),
-                    "quantity": leg.quantity,
-                    "execution_id": f"sim-execution:{client_order_id}",
-                }
-            ],
             observed_at_ms=now_ms_utc(),
+            filled_quantity=leg.quantity if filled else 0.0,
+            filled_avg_price=float(fill) if fill is not None else None,
+            status="filled" if filled else "canceled",
+            filled_at_ms=at_ms if filled else None,
+            canceled_at_ms=None if filled else at_ms,
+            events=(
+                [
+                    {
+                        "event_type": "fill",
+                        "occurred_at_ms": at_ms,
+                        "price": float(fill),
+                        "quantity": leg.quantity,
+                        "execution_id": f"sim-execution:{client_order_id}",
+                    }
+                ]
+                if fill is not None
+                else []
+            ),
         )
 
     def _find_order(

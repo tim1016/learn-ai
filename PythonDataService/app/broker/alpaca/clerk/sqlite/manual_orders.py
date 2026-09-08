@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderAcceptedFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
+    leg_instruction_payload,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
@@ -94,7 +95,7 @@ class ManualOrderSubmission:
 
 def manual_instruction_hash(leg: BrokerOrderLeg) -> str:
     """Hash the complete normalized broker instruction, never display input."""
-    return hashlib.sha256(canonicalize(leg.model_dump(mode="json")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonicalize(leg_instruction_payload(leg)).encode("utf-8")).hexdigest()
 
 
 def _ticket_instruction_hash(
@@ -135,7 +136,7 @@ def _identity(
                 "subject_id": subject_id,
                 "ticket_id": ticket_id,
                 "leg_id": leg_id,
-                "instruction": leg.model_dump(mode="json"),
+                "instruction": leg_instruction_payload(leg),
             }
         ).encode("utf-8")
     ).hexdigest()
@@ -150,12 +151,31 @@ def manual_order_command_id(ticket_id: str, leg_id: str) -> str:
 
 
 def _require_supported_leg(leg: BrokerOrderLeg) -> None:
+    """Refuse an unsupported ticket shape before any durable write.
+
+    ``extended_hours`` is refused here for the same reason the rest is: a
+    manual ticket carries no deciding program, no decision bar and therefore
+    no anchor, so there is nothing to price an extended-session leg from
+    (ruling R6). ``validate_manual_order_accepted_facts`` refuses it again at
+    the fold; that is the last line of defence, not the boundary — reaching
+    it means an untranslated ``ValueError`` and an HTTP 500 where the
+    operator should have read a refusal.
+
+    ``ManualTicketConflictError`` rather than a bare ``ValueError`` so the
+    router answers with the typed 409 it already maps for every other refused
+    ticket shape. It subclasses ``ValueError``, so any caller catching that
+    still does.
+    """
     if (
         leg.side not in {OrderSide.BUY, OrderSide.SELL}
         or leg.order_type not in {OrderType.MARKET, OrderType.LIMIT}
         or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}
+        or leg.extended_hours
     ):
-        raise ValueError("manual tickets support only BUY or SELL market/limit DAY/GTC equity legs")
+        raise ManualTicketConflictError(
+            "manual tickets support only regular-session BUY or SELL market/limit "
+            "DAY/GTC equity legs"
+        )
 
 
 def _require_ticket_legs(legs: tuple[ManualTicketLeg, ...]) -> None:

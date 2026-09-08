@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.broker.contract.capabilities import BrokerCapabilities
+from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerClockEvidence,
@@ -224,6 +224,7 @@ def test_capabilities_are_frozen_data() -> None:
         paper_only=True,
         supports_fractional=True,
         supports_extended_hours=True,
+        extended_hours_window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
         supported_order_types=("market", "limit"),
         data_feed="iex",
         bars_may_gap=True,
@@ -236,3 +237,21 @@ def test_capabilities_are_frozen_data() -> None:
     assert caps.max_stream_symbols == 30
     with pytest.raises(ValidationError):
         caps.bars_may_gap = False  # frozen
+
+
+def test_extended_hours_leg_requires_a_day_or_gtc_limit() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.25, extended_hours=True
+    )
+
+    assert leg.extended_hours is True
+    assert leg.time_in_force is TimeInForce.DAY
+
+
+def test_extended_hours_market_leg_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="extended-hours orders must be limit orders"):
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, extended_hours=True)
+
+
+def test_regular_leg_defaults_to_not_extended() -> None:
+    assert BrokerOrderLeg(symbol="SPY", side="buy", quantity=1).extended_hours is False

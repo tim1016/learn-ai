@@ -14,7 +14,7 @@ from __future__ import annotations
 from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, get_alpaca_settings
-from app.broker.contract.capabilities import BrokerCapabilities
+from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -30,6 +30,12 @@ from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 
 _ACTIVITY_MAX_PAGES = 3
 
+# Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
+# Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
+# The overnight session (20:00–04:00) is a separate venue and is not part of
+# the decision clock in slice 3 (ADR 0059 D5.2; ruling R1 in the slice-3 plan).
+ALPACA_EXTENDED_HOURS_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+
 # Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
 # differences declared as data so callers gate on capability, not identity:
 # IEX gaps on illiquid symbols (bars_may_gap), 30-symbol / 1-connection stream
@@ -40,6 +46,7 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     paper_only=True,
     supports_fractional=True,
     supports_extended_hours=True,
+    extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     # Advertise only what BrokerOrderLeg can construct today. ``stop`` /
     # ``stop_limit`` / ``trailing_stop`` are unbuilt (OrderType has no member),
     # so advertising them was a false "yes" to a caller gating on capability.
@@ -56,7 +63,7 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
 # other fact — IEX feed, stream caps, rate limit, buildable order types — is
 # the same account tier; keeping one literal per mode makes the difference
 # reviewable instead of a boolean flip buried in a constructor.
-ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.model_copy(update={"paper_only": False})
+ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.revised(paper_only=False)
 
 _PORTFOLIO_HISTORY_QUERY: dict[PortfolioHistoryRange, tuple[str, str]] = {
     PortfolioHistoryRange.ONE_DAY: ("1D", "1Min"),

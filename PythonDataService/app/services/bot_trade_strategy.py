@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     RefusalClass,
     classify_admission_refusal,
 )
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -41,7 +42,6 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     trace_root,
 )
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import (
     ContinuityPolicy,
     FeedHealth,
@@ -52,9 +52,14 @@ from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
+from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
-from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
+from app.services.market_liveness import (
+    liveness_blocks_entry,
+    market_data_bars_live,
+    market_liveness_fact,
+)
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
@@ -195,13 +200,23 @@ class _RetainedSourceBarFeed:
         ledger: SourceBarLedger,
         *,
         run_id: str,
+        session: RunDecisionSession,
         continuity: ContinuityPolicy | None = None,
     ) -> None:
         self._source = source
         self._ledger = ledger
         self._run_id = run_id
+        self._session = session
         self._continuity = continuity
         self.feed_id = source.feed_id
+        # The one place every retained run records the session it decided
+        # under, beside the bars and continuity facts that session governs.
+        # The replay proof reads it back from here rather than from whatever
+        # the executing authority declares at replay time (ADR 0059 D5.2): a
+        # capability change after the fact must not reinterpret a finished
+        # run, and a replay generated on demand or during boot repair must
+        # not need an authority to be active at all.
+        ledger.record_decision_session(session, run_id=run_id, recorded_at_ms=now_ms_utc())
 
     @property
     def capability_account_id(self) -> str | None:
@@ -215,6 +230,21 @@ class _RetainedSourceBarFeed:
     def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
         """Forward the immutable mode captured by the outer runtime feed."""
         return _evaluation_mode_for(self._source, bar)
+
+    def _require_own_session(self, use_rth: bool) -> RunDecisionSession:
+        """The run's own session, refusing a caller that asks for a different one.
+
+        ``use_rth`` is on the ``MarketDataFeed`` Protocol, but the run resolved
+        its decision session once at its boundary; honouring a contradicting
+        flag would filter this run's bars by a rule its clock, its continuity
+        floor and its leg shaping do not share.
+        """
+        if use_rth != (self._session.kind == "rth"):
+            raise ValueError(
+                "_RetainedSourceBarFeed filters under the decision session its run was "
+                "constructed with; a caller may not substitute a different one."
+            )
+        return self._session
 
     async def stream_bars(
         self,
@@ -233,6 +263,7 @@ class _RetainedSourceBarFeed:
                 "_RetainedSourceBarFeed streams under the continuity policy its run was "
                 "constructed with; a caller may not substitute a different one."
             )
+        session = self._require_own_session(use_rth)
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
@@ -240,7 +271,7 @@ class _RetainedSourceBarFeed:
         async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
             await admit_on_delivery(self._continuity, bar)
             self._ledger.append(bar, run_id=self._run_id)
-            if _includes_session_phase(bar, use_rth=use_rth):
+            if session.includes(bar):
                 yield bar
             else:
                 # The session only consumes (and pops) a captured evaluation
@@ -257,6 +288,7 @@ class _RetainedSourceBarFeed:
         use_rth: bool = True,
         lookback_days: int = 5,
     ) -> list[MarketDataBar]:
+        session = self._require_own_session(use_rth)
         retained = self._ledger.bars(provider=self.feed_id, symbol=symbol)
         if retained:
             # Recovery must rebuild the session from the precise observations
@@ -283,32 +315,54 @@ class _RetainedSourceBarFeed:
                     continuity_event_ref=row.continuity_event_ref,
                 )
                 for row in retained
-                if _includes_session_phase(row, use_rth=use_rth)
+                if session.includes(row)
             ]
         bars = await self._source.recent_closed_bars(
             symbol, use_rth=False, lookback_days=lookback_days
         )
         for bar in bars:
             self._ledger.append_history(bar, run_id=self._run_id)
-        return [bar for bar in bars if _includes_session_phase(bar, use_rth=use_rth)]
+        return [bar for bar in bars if session.includes(bar)]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)
 
 
-def _includes_session_phase(
-    bar: MarketDataBar | RetainedSourceBar,
-    *,
-    use_rth: bool,
-) -> bool:
-    """Apply the sealed RTH policy after the source observation is durable."""
-    return not use_rth or bar.session_phase == "RTH"
+def require_decision_session(
+    binding: BrokerBotBinding, *, window: ExtendedHoursWindow | None = None
+) -> RunDecisionSession:
+    """This run's decision session, or a loud refusal to start one it cannot describe.
+
+    Start admission refuses a ``use_rth=False`` deploy whose active authority
+    declares no extended window, so reaching here without one is a state error
+    — never a reason to stream on with an RTH filter, no force-flush and no
+    continuity floor, which is what the six separate ``None`` fallbacks this
+    replaced amounted to.
+    """
+    session = RunDecisionSession.resolve(use_rth=binding.use_rth, window=window)
+    if session is None:
+        logger.error(
+            "An extended-session run has no declared window to decide against",
+            extra={
+                "action": "decision_session_unresolvable",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "run_id": binding.run_id,
+                "symbol": binding.symbol,
+            },
+        )
+        raise RuntimeError(
+            "An extended-session run requires the executing authority's declared "
+            "extended-hours window; this run has none."
+        )
+    return session
 
 
 def _liveness_blocks_entry(
     binding: BrokerBotBinding,
     capability_account_id: str | None,
     liveness: MarketLivenessFact,
+    session: RunDecisionSession,
+    feed: MarketDataFeed,
 ) -> bool:
     """Decide whether the live liveness fact should block this ENTER.
 
@@ -324,14 +378,48 @@ def _liveness_blocks_entry(
     wrong one means the capability lookup never finds a match and every
     extended-hours entry is rejected. ``None`` (no capability account
     resolvable) fails closed — never proven.
+
+    ``session.window`` is the executing authority's declared extended session
+    (ADR 0059 D5.2). It is not account-scoped, so when one is declared it
+    proves PRE/POST on its own, with no capability lookup — but a declared
+    schedule is not liveness, so ``feed`` supplies the second half: whether
+    the venue is actually printing bars for this symbol right now.
     """
     return liveness_blocks_entry(
         liveness,
         use_rth=binding.use_rth,
         extended_phase_proven=lambda: extended_phase_proven_at_ms(
-            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=capability_account_id
+            now_ms=now_ms_utc(),
+            symbol=binding.symbol,
+            account_id=capability_account_id,
+            extended_window=session.window,
         ),
+        extended_session_live=lambda: _market_data_live(feed, binding.symbol),
     )
+
+
+def _market_data_live(feed: MarketDataFeed, symbol: str) -> bool:
+    """Whether the feed is printing bars for ``symbol`` right now.
+
+    A health probe that raises proves nothing, and an extended session must
+    be *proven* live before new exposure is created, so it refuses — the
+    same disposition ``bot_start_admission.market_data_admission_fact``
+    takes on the same failure.
+    """
+    try:
+        health = feed.health(symbol)
+    except Exception as exc:
+        logger.warning(
+            "market-data health could not prove an extended session live",
+            extra={
+                "action": "bot_extended_session_liveness_unknown",
+                "feed_id": feed.feed_id,
+                "symbol": symbol,
+                "error": str(exc),
+            },
+        )
+        return False
+    return market_data_bars_live(health)
 
 
 def _engine_bar(bar: MarketDataBar) -> TradeBar:
@@ -466,6 +554,8 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
     captured_decisions: Mapping[str, str] | None,
     quarantine_receipts: QuarantineReceiptSink | None,
+    *,
+    session: RunDecisionSession,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -497,12 +587,12 @@ async def _signal_strategy_evaluations(
         if evaluation is not None:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
-        # bucket lazily, when a *later* bar arrives. RTH streaming stops
-        # at the session close, so the final 15:45-16:00 bucket would
-        # otherwise sit unflushed until the next session's bars start
-        # arriving -- stranding that decision overnight. Force the flush
-        # at the exact session-close boundary instead.
-        if market_bar.end_ms == session_close_ms_utc(ny_datetime(market_bar.end_ms).date()):
+        # bucket lazily, when a *later* bar arrives. Streaming stops at the
+        # decision session's close, so the final bucket would otherwise sit
+        # unflushed until the next session's bars start arriving -- stranding
+        # that decision overnight. Force the flush at the exact
+        # decision-session-close boundary instead.
+        if market_bar.end_ms == session.close_ms(ny_datetime(market_bar.end_ms).date()):
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
@@ -591,6 +681,7 @@ async def strategy_evaluations(
     *,
     captured_decisions: Mapping[str, str] | None = None,
     quarantine_receipts: QuarantineReceiptSink | None = None,
+    session: RunDecisionSession | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -608,11 +699,21 @@ async def strategy_evaluations(
     counted but unreceipted, which is correct for the read-only replay and
     qualification callers -- they re-drive bars a live run already judged,
     so a receipt from them would be a second, spurious record of one event.
+
+    ``session`` is the run's resolved decision session (ADR 0059 D5.2). A
+    custody runner resolves it once at its own boundary, from the executing
+    authority's declared window, and passes it here. Omitting it means "this
+    caller declares no window", which a regular-hours binding resolves fine
+    and an extended one refuses loudly rather than deciding on nothing.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     async for evaluation in _signal_strategy_evaluations(
-        binding, feed, captured_decisions, quarantine_receipts
+        binding,
+        feed,
+        captured_decisions,
+        quarantine_receipts,
+        session=require_decision_session(binding) if session is None else session,
     ):
         yield evaluation
 
@@ -679,10 +780,13 @@ async def run_trade_bot(
 
     ``source_bars`` retains every unfiltered feed observation before the
     sealed session's RTH policy applies (Direction 2: a paper run must be
-    replayable from its own retained bars). ``None`` disables retention and
-    exists only for focused unit tests; production wiring
-    (``bot_runtime.execute_bot_run``) always supplies the instance-scoped
-    ledger and fails closed without one.
+    replayable from its own retained bars), and is where each decision's
+    exact anchor bar is read back from (``_decision_bar_evidence``). ``None``
+    disables retention and exists only for focused unit tests; production
+    wiring (``bot_runtime.execute_bot_run``) always supplies the
+    instance-scoped ledger and fails closed without one, and an extended run
+    refuses the unretained seam outright below -- with no ledger there is no
+    anchor, and every extended decision would be refused per decision.
     """
     clerk = get_alpaca_clerk()
     if clerk is None:
@@ -704,6 +808,16 @@ async def run_trade_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    session = require_decision_session(binding, window=clerk.program_leg_policy.window)
+    if source_bars is None and session.kind != "rth":
+        # `bot_runtime.execute_bot_run` refuses a run with no ledger, so the
+        # unretained seam below is unit tests only. Without a ledger there is
+        # no `_RetainedSourceBarFeed` to apply the session filter, and the raw
+        # feed would hand an extended run every minute of the day unfiltered.
+        raise RuntimeError(
+            "An extended-session run requires its source-bar ledger; the unretained "
+            "test seam cannot apply the broker's declared window."
+        )
     run_feed = (
         feed
         if source_bars is None
@@ -711,7 +825,8 @@ async def run_trade_bot(
             feed,
             source_bars,
             run_id=binding.run_id,
-            continuity=continuity_policy_for(binding, source_bars),
+            session=session,
+            continuity=continuity_policy_for(binding, source_bars, session=session),
         )
     )
     async for evaluation in strategy_evaluations(
@@ -719,6 +834,7 @@ async def run_trade_bot(
         run_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
         quarantine_receipts=decision_receipts,
+        session=session,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -765,7 +881,7 @@ async def run_trade_bot(
         # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if _liveness_blocks_entry(binding, capability_account_id, liveness):
+            if _liveness_blocks_entry(binding, capability_account_id, liveness, session, feed):
                 # Settle the staged candidate as refused. The strategy has not
                 # taken the position — it mutates position custody only in
                 # ``commit_signal_decision``, which never ran — so DISCARD is
@@ -804,6 +920,9 @@ async def run_trade_bot(
                 "bar_end_ms": intent.bar_close_ms,
             },
         )
+        retained, decision_evidence = _decision_bar_evidence(
+            binding, evaluation, intent, source_bars=source_bars
+        )
         try:
             receipt = await clerk.execute_for_instance(
                 strategy_instance_id=binding.strategy_instance_id,
@@ -814,19 +933,8 @@ async def run_trade_bot(
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
                 capability_account_id=capability_account_id,
-                decision_evidence=EffectDecisionEvidence(
-                    evaluation_id=decision_id,
-                    bar_ref=_decision_bar_ref(binding, evaluation),
-                    symbol=binding.symbol,
-                    outcome=(
-                        "enter_intent"
-                        if intent.kind is SignalIntentKind.ENTER
-                        else "exit_intent"
-                    ),
-                    observed_at_ms=now_ms_utc(),
-                    trace_digest=_evaluation_trace_digest(evaluation),
-                    decision_bar_close_ms=evaluation.decision_bar_close_ms,
-                ),
+                retained_source_bar=retained,
+                decision_evidence=decision_evidence,
             )
         except AdmissionBlockedError as exc:
             _dispose_transient_exit_refusal(
@@ -965,6 +1073,50 @@ def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation)
     )
 
 
+def _decision_bar_evidence(
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+    *,
+    source_bars: SourceBarLedger | None,
+) -> tuple[RetainedSourceBar | None, EffectDecisionEvidence]:
+    """The exact retained decision bar and the evidence that names it.
+
+    Both runners resolve this identically, and must: the Clerk anchors an
+    extended-session program leg to the decision bar
+    (``program_leg.shape_program_leg``), so a runner that omits it refuses
+    every ``use_rth=False`` decision with ``EXTENDED_ANCHOR_UNAVAILABLE`` --
+    including the RTH-inside-extended ones that only ever wanted a market
+    leg. It was written out once per runner before, and only the Dry Run
+    copy resolved the bar.
+
+    The ledger identity is authored from each observation's feed provenance.
+    A wrapper's stream capability name may differ (for example a test or
+    pause wrapper), so it is not evidence of the decision bar's provider.
+    """
+    retained = (
+        None
+        if source_bars is None
+        else source_bars.find_by_closed_end(
+            provider=evaluation.bar.feed_id,
+            symbol=binding.symbol,
+            end_ms=intent.bar_close_ms,
+        )
+    )
+    evidence = EffectDecisionEvidence(
+        evaluation_id=evaluation.evaluation_id,
+        bar_ref=(
+            retained.bar_ref if retained is not None else _decision_bar_ref(binding, evaluation)
+        ),
+        symbol=binding.symbol,
+        outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
+        observed_at_ms=now_ms_utc(),
+        trace_digest=_evaluation_trace_digest(evaluation),
+        decision_bar_close_ms=evaluation.decision_bar_close_ms,
+    )
+    return retained, evidence
+
+
 async def run_dry_run_bot(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
@@ -989,17 +1141,20 @@ async def run_dry_run_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    session = require_decision_session(binding, window=clerk.program_leg_policy.window)
     retained_feed = _RetainedSourceBarFeed(
         feed,
         source_bars,
         run_id=binding.run_id,
-        continuity=continuity_policy_for(binding, source_bars),
+        session=session,
+        continuity=continuity_policy_for(binding, source_bars, session=session),
     )
     async for evaluation in strategy_evaluations(
         binding,
         retained_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
         quarantine_receipts=decision_receipts,
+        session=session,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
@@ -1048,14 +1203,8 @@ async def run_dry_run_bot(
             )
             continue
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
-        retained = source_bars.find_by_closed_end(
-            # The ledger identity is authored from each observation's feed
-            # provenance. A wrapper's stream capability name may differ
-            # (for example a test or pause wrapper), so it is not evidence
-            # of the decision bar's provider.
-            provider=evaluation.bar.feed_id,
-            symbol=binding.symbol,
-            end_ms=intent.bar_close_ms,
+        retained, decision_evidence = _decision_bar_evidence(
+            binding, evaluation, intent, source_bars=source_bars
         )
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
@@ -1067,23 +1216,7 @@ async def run_dry_run_bot(
             use_rth=binding.use_rth,
             capability_account_id=market_data_capability_account_id(feed),
             retained_source_bar=retained,
-            decision_evidence=EffectDecisionEvidence(
-                evaluation_id=evaluation.evaluation_id,
-                bar_ref=(
-                    retained.bar_ref
-                    if retained is not None
-                    else _decision_bar_ref(binding, evaluation)
-                ),
-                symbol=binding.symbol,
-                outcome=(
-                    "enter_intent"
-                    if intent.kind is SignalIntentKind.ENTER
-                    else "exit_intent"
-                ),
-                observed_at_ms=now_ms_utc(),
-                trace_digest=_evaluation_trace_digest(evaluation),
-                decision_bar_close_ms=evaluation.decision_bar_close_ms,
-            ),
+            decision_evidence=decision_evidence,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _discard_evaluation(evaluation)

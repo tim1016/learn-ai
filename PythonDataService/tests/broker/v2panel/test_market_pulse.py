@@ -69,6 +69,7 @@ def _admission_fact(
     last_bar_ms: int | None,
     reason: str = "",
     stale: bool = False,
+    connected: bool | None = None,
     active_subscription_count: int = 1,
 ) -> None:
     def fact(*args: object, **_kwargs: object) -> SimpleNamespace:
@@ -80,6 +81,9 @@ def _admission_fact(
             observed_at_ms=121_000,
             reason=reason,
             stale=stale,
+            # The real fact carries both; the panel's extended-hours
+            # reconciliation reads them together (ADR 0059 D5 / #1671).
+            connected=state != "UNAVAILABLE" if connected is None else connected,
             active_subscription_count=active_subscription_count,
             scheduled_phase=session.phase,
             session_authority_source=session.source,
@@ -382,3 +386,49 @@ def test_closed_liveness_without_proven_extended_phase_still_shows_market_closed
 
     assert pulse.headline == "Market closed by live broker evidence"
     assert pulse.attention_required is True
+
+
+def test_closed_liveness_during_a_proven_extended_phase_with_a_dead_feed_still_shows_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The panel applies the same pair the execution gate does.
+
+    A declared window proves the *schedule*; an unscheduled PRE/POST closure
+    reads exactly like a live session on Alpaca's RTH-only clock. Without
+    fresh bars the gate blocks the ENTER, so the panel must not show the
+    market tradable.
+    """
+    _session(monkeypatch, "PRE")
+    _admission_fact(
+        monkeypatch,
+        state="STALE",
+        last_bar_ms=1_000,
+        reason="No bar arrived.",
+        stale=True,
+    )
+    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=121_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=121_000,
+            vendor_timestamp_ms=121_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=121_000,
+        symbol_status=None,
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        symbol="SPY",
+        account_id="ibkr-acct",
+        use_rth=False,
+        bot_running=True,
+        liveness=liveness,
+    )
+
+    assert pulse.market_state == "CLOSED"

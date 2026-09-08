@@ -89,6 +89,9 @@ class BrokerOrderLeg(_ContractModel):
     # Required for a limit order, forbidden for a market order — enforced below.
     limit_price: float | None = Field(default=None, gt=0)
     time_in_force: TimeInForce = TimeInForce.DAY
+    # ADR 0059 D5.1: the leg carries the session. True only for a LIMIT leg
+    # with DAY or GTC — enforced below so the vendor's 422 is unreachable.
+    extended_hours: bool = False
 
     @model_validator(mode="after")
     def _limit_price_matches_order_type(self) -> BrokerOrderLeg:
@@ -107,6 +110,10 @@ class BrokerOrderLeg(_ContractModel):
                 )
         if self.time_in_force is TimeInForce.GTC and not self.quantity.is_integer():
             raise ValueError("Alpaca fractional-share orders must use DAY time in force.")
+        if self.extended_hours and self.order_type is not OrderType.LIMIT:
+            raise ValueError("Alpaca extended-hours orders must be limit orders with a limit_price.")
+        if self.extended_hours and self.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
+            raise ValueError("Alpaca extended-hours orders must use DAY or GTC time in force.")
         return self
 
 
@@ -211,6 +218,7 @@ class BrokerOrder(_ContractModel):
     filled_quantity: float
     limit_price: float | None
     stop_price: float | None
+    extended_hours: bool = False
     filled_avg_price: float | None
     status: str
     submitted_at_ms: int | None

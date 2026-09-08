@@ -178,6 +178,7 @@ def test_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
         "side",
         "type",
         "time_in_force",
+        "extended_hours",
         "client_order_id",
     }
 
@@ -210,6 +211,7 @@ def test_limit_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
         "side",
         "type",
         "time_in_force",
+        "extended_hours",
         "limit_price",
         "client_order_id",
     }

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
+from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.lean_sidecar.trading_calendar import is_trading_day, next_trading_day, session_window_for_date
 from app.marketdata.feed import BarSessionPhase
 from app.schemas.broker_capability import SessionDataCapability, SessionKind
+from app.utils.timestamps import to_ms_utc
 
 # Not a second definition of the phase set: this is the canonical object from
 # ``app.marketdata.feed``, aliased so session code reads in session vocabulary
 # rather than bar vocabulary. ``TradingSessionPhase is BarSessionPhase``.
 TradingSessionPhase = BarSessionPhase
-SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar"]
+SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"]
 
 _NY = ZoneInfo("America/New_York")
 _SESSION_PRIORITY: tuple[SessionKind, ...] = ("RTH", "PRE", "POST", "OVERNIGHT")
@@ -23,6 +26,80 @@ _DAY_SESSION_SEQUENCE: tuple[SessionKind, ...] = ("PRE", "RTH", "POST")
 # boundary.  Retaining it beyond a day could project yesterday's entitlement
 # onto a new session, so it cannot author an extended phase after this bound.
 CAPABILITY_MAX_AGE_MS = 24 * 60 * 60 * 1_000
+
+# The phase sets this repo asks about, named for what they mean and defined
+# once — they were four definitions with three memberships before the slice-3
+# fix wave. ``TradingSessionPhase`` is the vocabulary; these are the questions.
+# "Which phases does an extended run decide on?" is deliberately not among
+# them: that answer is the declared window's span, and
+# ``RunDecisionSession.includes`` reads the bounds rather than a phase set.
+#: Sessions outside the regular one that a *capability probe* can prove.
+EXTENDED_PHASES: frozenset[TradingSessionPhase] = frozenset({"PRE", "POST", "OVERNIGHT"})
+#: Extended sessions a program leg may actually be placed into (ADR 0059 D5.3
+#: shapes a marketable limit for these; OVERNIGHT is a separate venue, R1).
+TRADEABLE_EXTENDED_PHASES: frozenset[TradingSessionPhase] = frozenset({"PRE", "POST"})
+
+
+def et_minute_of_day_ms(day: date, minute_of_day: int) -> int:
+    """``minute_of_day`` past midnight on ``day`` in America/New_York, as int64 ms UTC.
+
+    Wall-clock arithmetic on an aware datetime, so the UTC offset is the one
+    in force at that wall time — a fixed offset would be an hour wrong across
+    a DST boundary (temporal-rigor rule). The minutes are capability data;
+    this function holds no session literal of its own.
+    """
+    wall = datetime(day.year, day.month, day.day, tzinfo=_NY) + timedelta(minutes=minute_of_day)
+    return to_ms_utc(wall)
+
+
+@dataclass(frozen=True)
+class ExtendedSessionBounds:
+    """One trading day's declared extended session around its regular session."""
+
+    open_ms: int
+    rth_open_ms: int
+    rth_close_ms: int
+    close_ms: int
+
+
+def extended_session_bounds_ms(session_date: date, *, window: ExtendedHoursWindow) -> ExtendedSessionBounds:
+    """The declared window applied to ``session_date``'s calendar session (ADR 0059 D5.2)."""
+    if not is_trading_day(session_date):
+        raise ValueError(f"{session_date.isoformat()} is not a trading day")
+    regular = session_window_for_date(session_date)
+    open_ms = et_minute_of_day_ms(session_date, window.open_minute_et)
+    close_ms = et_minute_of_day_ms(session_date, window.close_minute_et)
+    if not (open_ms <= regular.open_ms_utc and regular.close_ms_utc <= close_ms):
+        raise ValueError("the declared extended window must enclose the regular session")
+    return ExtendedSessionBounds(
+        open_ms=open_ms,
+        rth_open_ms=regular.open_ms_utc,
+        rth_close_ms=regular.close_ms_utc,
+        close_ms=close_ms,
+    )
+
+
+@lru_cache(maxsize=512)
+def declared_session_bounds(
+    session_date: date, window: ExtendedHoursWindow
+) -> ExtendedSessionBounds | None:
+    """The declared window on ``session_date``, or ``None`` when it is not a trading day.
+
+    One trading day's bounds are four integers that never change, but deriving
+    them builds a fresh ``pandas_market_calendars`` schedule twice
+    (``is_trading_day`` then ``session_window_for_date``) — ~3 ms. A per-bar
+    predicate asking the same day about 390 bars paid that 390 times, which is
+    what pinned the event loop on warmup and made the replay proof's two
+    200k-bar filters minutes of blocking CPU. Resolve the day once; every
+    caller after that compares integers.
+
+    ``ExtendedHoursWindow`` is a frozen Pydantic model, so it hashes; the
+    cache key is (date, window) and a differently-declared window can never
+    read another window's bounds.
+    """
+    if not is_trading_day(session_date):
+        return None
+    return extended_session_bounds_ms(session_date, window=window)
 
 
 @dataclass(frozen=True)
@@ -44,30 +121,41 @@ def session_state_at_ms(
     account_id: str | None = None,
     strategy_session_policy: Literal["rth_only"] | None = None,
     allowed_sessions: tuple[SessionKind, ...] | None = None,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> SessionAuthorityState:
     """Return the scheduled session state for one instrument and account.
 
-    The canonical NYSE calendar can prove only RTH/CLOSED.  PRE, POST, and
-    OVERNIGHT require a current capability snapshot matched to both the target
-    instrument and account; no caller may infer them from a local clock.
+    The canonical NYSE calendar can prove only RTH/CLOSED. PRE and POST can
+    also be proven by the executing broker's declared extended-hours window
+    (``extended_window``), which resolves them by declaration around the
+    calendar's regular session — no probe required. OVERNIGHT still needs a
+    current capability snapshot matched to both the target instrument and
+    account; no caller may infer it from a local clock.
     """
     if now_ms < 0:
         raise ValueError("now_ms must be non-negative int64 ms UTC")
-    if _is_fresh_matching_capability(
+    usable = _fresh_matching_capability(
         capability,
         now_ms=now_ms,
         symbol=symbol,
         account_id=account_id,
-    ):
-        assert capability is not None
+    )
+    if usable is not None:
         state = _session_from_capability(
             now_ms=now_ms,
-            capability=capability,
+            capability=usable,
             strategy_session_policy=strategy_session_policy,
             allowed_sessions=allowed_sessions,
         )
         if state is not None:
             return state
+    if extended_window is not None:
+        return _session_from_declared_window(
+            now_ms=now_ms,
+            window=extended_window,
+            strategy_session_policy=strategy_session_policy,
+            allowed_sessions=allowed_sessions,
+        )
     return _session_from_nyse_calendar(
         now_ms=now_ms,
         strategy_session_policy=strategy_session_policy,
@@ -170,6 +258,50 @@ def _session_from_nyse_calendar(
     )
 
 
+def _session_from_declared_window(
+    *,
+    now_ms: int,
+    window: ExtendedHoursWindow,
+    strategy_session_policy: Literal["rth_only"] | None,
+    allowed_sessions: tuple[SessionKind, ...] | None,
+) -> SessionAuthorityState:
+    """PRE/RTH/POST from the calendar's regular session and the broker's declared window.
+
+    Proven by declaration (the executing broker publishes the window as a
+    capability), which is what ``extended_phase_proven`` means for a broker
+    with no probe-based session capability.
+    """
+    day = _ny_dt(now_ms).date()
+
+    def _state_for(phase: TradingSessionPhase, next_transition_ms: int) -> SessionAuthorityState:
+        return _state(
+            phase=phase,
+            now_ms=now_ms,
+            next_transition_ms=next_transition_ms,
+            timezone="America/New_York",
+            source="broker_declared_window",
+            extended_phase_proven=True,
+            strategy_session_policy=strategy_session_policy,
+            allowed_sessions=allowed_sessions,
+        )
+
+    def _next_open(after: date) -> int:
+        return extended_session_bounds_ms(next_trading_day(after), window=window).open_ms
+
+    bounds = declared_session_bounds(day, window)
+    if bounds is None:
+        return _state_for("CLOSED", _next_open(day))
+    if now_ms < bounds.open_ms:
+        return _state_for("CLOSED", bounds.open_ms)
+    if now_ms < bounds.rth_open_ms:
+        return _state_for("PRE", bounds.rth_open_ms)
+    if now_ms < bounds.rth_close_ms:
+        return _state_for("RTH", bounds.rth_close_ms)
+    if now_ms < bounds.close_ms:
+        return _state_for("POST", bounds.close_ms)
+    return _state_for("CLOSED", _next_open(day))
+
+
 def _state(
     *,
     phase: TradingSessionPhase,
@@ -219,24 +351,29 @@ def _next_capability_transition(
     return transitions[0] if transitions else None
 
 
-def _is_fresh_matching_capability(
+def _fresh_matching_capability(
     capability: SessionDataCapability | None,
     *,
     now_ms: int,
     symbol: str | None,
     account_id: str | None,
-) -> bool:
-    """Accept only a current, scoped, structurally valid capability snapshot."""
+) -> SessionDataCapability | None:
+    """The snapshot if it is current, scoped and structurally valid; else ``None``.
+
+    Returns the capability rather than a bool so the caller reads the proven
+    value instead of re-asserting that the one it already holds is not
+    ``None`` — the assertion the boolean form forced.
+    """
     if capability is None or symbol is None or account_id is None:
-        return False
+        return None
     if capability.symbol != symbol.upper() or capability.account_id != account_id:
-        return False
+        return None
     age_ms = now_ms - capability.probed_at_ms
     if age_ms < 0 or age_ms > CAPABILITY_MAX_AGE_MS:
-        return False
+        return None
     if not all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY):
-        return False
-    return _has_ordered_day_sessions(capability)
+        return None
+    return capability if _has_ordered_day_sessions(capability) else None
 
 
 def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bool:
@@ -282,7 +419,6 @@ SessionSubmitBlockReason = Literal[
 ]
 
 _TRADEABLE_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "RTH", "POST", "OVERNIGHT")
-_EXTENDED_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "POST", "OVERNIGHT")
 
 
 def evaluate_session_submit(
@@ -306,7 +442,7 @@ def evaluate_session_submit(
         return "strategy_session_not_permitted"
     if phase not in order_mechanism_sessions:
         return "order_mechanism_not_enabled"
-    if phase in _EXTENDED_PHASES and not extended_reference_price_ok:
+    if phase in EXTENDED_PHASES and not extended_reference_price_ok:
         return "extended_limit_price_unavailable"
     return None
 

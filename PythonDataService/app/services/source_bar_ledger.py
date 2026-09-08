@@ -27,7 +27,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import ContinuityEventRef, FeedContinuityEvent, MarketDataBar
+from app.services.decision_session import RunDecisionSession
 
 SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
 """Indexed durable authority store for retained source observations."""
@@ -332,6 +334,92 @@ class SourceBarLedger:
                 self._conn.execute("ROLLBACK")
                 raise
         return ContinuityEventRef(run_id=run_id, evidence_seq=evidence_seq)
+
+    def record_decision_session(
+        self,
+        session: RunDecisionSession,
+        *,
+        run_id: str,
+        recorded_at_ms: int,
+    ) -> None:
+        """Record, once, the decision session this run decided under.
+
+        The window a run decided on is **run evidence**, not a live lookup: a
+        replay must resolve the same bars this run did, whatever the executing
+        authority happens to declare now — a capability change after the fact
+        must not silently reinterpret a finished run, and a replay generated
+        on demand or during boot repair must not depend on any authority being
+        active at all. It belongs beside the bars and continuity facts it
+        governs, in this run's own evidence.
+
+        Write-once and idempotent: a re-entered run (a resumed stream, a
+        second runner pass) records the same session and is a no-op, while a
+        *different* session for the same run identity is a corruption of the
+        run's evidence and raises rather than overwriting it.
+        """
+        window = session.window
+        row = (
+            run_id,
+            session.kind,
+            None if window is None else window.open_minute_et,
+            None if window is None else window.close_minute_et,
+            recorded_at_ms,
+        )
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO source_run_decision_session (
+                        run_id, kind, window_open_minute_et, window_close_minute_et, recorded_at_ms
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id) DO NOTHING
+                    """,
+                    row,
+                )
+                stored = self._conn.execute(
+                    "SELECT kind, window_open_minute_et, window_close_minute_et "
+                    "FROM source_run_decision_session WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        assert stored is not None
+        if (stored["kind"], stored["window_open_minute_et"], stored["window_close_minute_et"]) != row[1:4]:
+            raise SourceBarConflictError(
+                "SOURCE_BAR_DECISION_SESSION_CONFLICT: "
+                f"run {run_id!r} already decided under {stored['kind']!r} "
+                f"{stored['window_open_minute_et']}-{stored['window_close_minute_et']}"
+            )
+
+    def decision_session(self, *, run_id: str) -> RunDecisionSession | None:
+        """The session recorded for one run, or ``None`` when it recorded none.
+
+        ``None`` is not "regular hours": a run that predates this record, or
+        one that never opened a retained feed, simply left no statement. Only
+        the caller knows whether its binding makes that absence answerable —
+        an ``rth`` binding needs no record, a ``use_rth=False`` one cannot be
+        replayed without it.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT kind, window_open_minute_et, window_close_minute_et "
+                "FROM source_run_decision_session WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        window = (
+            None
+            if row["window_open_minute_et"] is None
+            else ExtendedHoursWindow(
+                open_minute_et=int(row["window_open_minute_et"]),
+                close_minute_et=int(row["window_close_minute_et"]),
+            )
+        )
+        return RunDecisionSession(kind=row["kind"], window=window)
 
     def events(
         self,
@@ -651,6 +739,15 @@ class SourceBarLedger:
                 last_delivered_end_ms INTEGER,
                 deadline_ms INTEGER,
                 contribution_count INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS source_run_decision_session (
+                run_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL CHECK(kind IN ('rth','extended')),
+                window_open_minute_et INTEGER,
+                window_close_minute_et INTEGER,
+                recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms >= 0),
+                CHECK((kind = 'extended') = (window_open_minute_et IS NOT NULL)),
+                CHECK((kind = 'extended') = (window_close_minute_et IS NOT NULL))
             );
             CREATE TABLE IF NOT EXISTS source_evidence_journal (
                 evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,

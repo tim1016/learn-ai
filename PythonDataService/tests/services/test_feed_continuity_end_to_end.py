@@ -33,6 +33,7 @@ from app.marketdata import ibkr_feed as feed_module
 from app.marketdata.feed import ContinuityEventRef, FeedContinuityEvent
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
+from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import continuity_policy_for
 from app.services.run_replay_proof import continuity_event_digest
 from app.services.source_bar_ledger import RetainedContinuityEvent, SourceBarLedger
@@ -43,6 +44,7 @@ from tests.services.test_signal_program_admission import _sealed_binding
 # seal's 15-minute clock (those fall at 15:01:00 and 15:16:00 *bucket* + 60 s),
 # so the recovered bar is admitted on its own terms rather than on the wall
 # clock this suite happens to run at.
+_RTH_SESSION = RunDecisionSession(kind="rth", window=None)
 _BAR_ONE_START_MS = 1_788_375_660_000
 _BAR_TWO_START_MS = 1_788_375_720_000
 
@@ -67,7 +69,7 @@ async def test_one_reconnect_lands_in_the_ledger_as_ordered_evidence(
     binding = _sealed_binding()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=binding.sealed_account_id)
     try:
-        policy = continuity_policy_for(binding, ledger)
+        policy = continuity_policy_for(binding, ledger, session=_RTH_SESSION)
         assert policy is not None, "a sealed RTH binding must carry a continuity policy"
 
         emitted: list[FeedContinuityEvent] = []
@@ -92,6 +94,7 @@ async def test_one_reconnect_lands_in_the_ledger_as_ordered_evidence(
             IbkrMarketDataFeed(_client()),
             ledger,
             run_id=binding.run_id,
+            session=_RTH_SESSION,
             continuity=policy,
         )
 

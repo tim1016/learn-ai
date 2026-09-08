@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 
+from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -43,9 +45,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+
+logger = logging.getLogger(__name__)
 
 
 async def resolve_exit(
@@ -54,7 +58,16 @@ async def resolve_exit(
     effect_operation_id: str,
     trade: BrokerTradePort,
 ) -> ExitSubmission:
-    """Advance one EXIT under one exclusive, attempt-scoped broker claim."""
+    """Advance one EXIT under one exclusive, attempt-scoped broker claim.
+
+    The reducing leg's shape is never passed in: it is read from this EXIT's
+    own ``EXIT_ACCEPTED`` facts (ADR 0059 D5.3), so the deciding runner's
+    first pass, the reconciliation sweep's re-drive, the watchdog and
+    recovery all build the same leg for the same EXIT. An EXIT accepted with
+    no deciding program — safe flatten, the watchdog's own re-drive,
+    recovery — recorded no shape and still gets the regular-session market
+    DAY leg (ruling R5).
+    """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     if effect.state in ("succeeded", "failed", "rejected"):
@@ -174,6 +187,7 @@ async def _resolve_claimed(
             effect_operation_id=effect_operation_id,
             symbol=symbol,
             quantity=remaining_qty,
+            shape=_accepted_reducing_shape(repo, effect_operation_id=effect_operation_id),
         )
         await _submit_reducing_order(
             repo,
@@ -199,12 +213,18 @@ async def _resolve_claimed(
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
     else:
         # A synchronous submit response can truthfully say the reducing order
-        # is terminal while its execution slice has not reached the websocket
-        # capture path yet.  That is incomplete custody evidence, not proof
-        # that an EXIT failed to flatten.  Hold the effect unknown until an
-        # exact execution or labelled recovery observation can establish the
-        # economic delta.
-        if not repo.fills_for_order(reducing.order_ref):
+        # is terminal (``filled``/``replaced``) while its execution slice has
+        # not reached the websocket capture path yet.  That is incomplete
+        # custody evidence, not proof that an EXIT failed to flatten, so hold
+        # the effect unknown until an exact execution or labelled recovery
+        # observation can establish the economic delta.  A ``canceled`` /
+        # ``expired`` / ``rejected`` terminal snapshot with no recorded
+        # execution carries no such ambiguity — it is proven unfilled
+        # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
+        if (
+            not repo.fills_for_order(reducing.order_ref)
+            and (reducing.broker_state or "").lower() not in _UNFILLED_TERMINAL_STATES
+        ):
             if effect.state != "unknown":
                 fold_uncertain(
                     repo,
@@ -456,12 +476,32 @@ async def _refresh_terminal_entries(
     return True
 
 
+def _accepted_reducing_shape(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str
+) -> LegShape | None:
+    """The leg shape this EXIT's own acceptance recorded, if any.
+
+    Read here rather than threaded from the caller so a reduction created on
+    a later pass — the 15 s reconciliation sweep, the stuck-EXIT watchdog,
+    restart recovery — carries the deciding program's shape instead of
+    silently falling back to a market DAY order the vendor queues to the
+    next regular open.
+    """
+    transition = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_ACCEPTED"
+    )
+    if transition is None:
+        return None
+    return ExitAcceptedFacts.from_facts_json(transition["facts_json"]).reducing_shape()
+
+
 def _create_reducing_order(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
     symbol: str,
     quantity: float,
+    shape: LegShape | None,
 ) -> OrderResource:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -470,10 +510,33 @@ def _create_reducing_order(
         build_bot_order_namespace(effect.strategy_instance_id),
         _deterministic_intent_id(effect_operation_id),
     )
+    # The shape was priced for the side the deciding program expected to
+    # reduce. Cancellation can resolve to the other one; a limit priced for
+    # the wrong side would be unmarketable, so the regular-session leg —
+    # which is always executable — takes over. This is the one place a shape
+    # can meet a side its author did not expect, so it holds the only side
+    # reconciliation in the codebase (ruling R11).
+    reducing_side = OrderSide(side)
+    resolved = regular_session_shape(reducing_side) if shape is None else shape
+    if resolved.side is not reducing_side:
+        logger.warning(
+            "Reducing leg shape was priced for the other side; submitting a regular-session market leg instead",
+            extra={
+                "action": "reducing_leg_shape_side_mismatch",
+                "effect_operation_id": effect_operation_id,
+                "shaped_side": resolved.side.value,
+                "reducing_side": side,
+            },
+        )
+        resolved = regular_session_shape(reducing_side)
     facts = ExitReducingOrderCreatedFacts(
         symbol=symbol,
         side=side.upper(),
         quantity=abs(quantity),
+        order_type=resolved.order_type.value,
+        time_in_force=resolved.time_in_force.value,
+        limit_price=resolved.limit_price,
+        extended_hours=resolved.extended_hours,
     )
     repo.append_transition(
         TransitionInput(
@@ -543,6 +606,10 @@ async def _submit_reducing_order(
         symbol=facts.symbol,
         side=facts.side.lower(),
         quantity=facts.quantity,
+        order_type=facts.order_type,
+        time_in_force=facts.time_in_force,
+        limit_price=facts.limit_price,
+        extended_hours=facts.extended_hours,
     )
     _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
     try:
@@ -688,6 +755,13 @@ def _deterministic_intent_id(effect_operation_id: str) -> str:
 
 def _is_terminal(broker_state: str | None) -> bool:
     return broker_state is not None and broker_state.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+
+
+_UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
+"""Terminal broker states that, with no recorded execution, are proven
+unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
+terminal snapshot can truthfully precede its execution slice on the
+websocket."""
 
 
 def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubmission:

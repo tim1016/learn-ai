@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.hold_debounce import HoldSampleVerdict
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
+from app.services.market_liveness import market_data_bars_live
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
 # Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
@@ -56,7 +57,7 @@ def market_data_channel_health(
             reason="Shared market-data feed is not installed.",
             observed_at_ms=now_ms,
         )
-    healthy = feed_health.connected and not feed_health.stale
+    healthy = market_data_bars_live(feed_health)
     return ChannelHealth(
         stream="market_data",
         healthy=healthy,
@@ -136,13 +137,28 @@ class StreamHealthGate:
     execution: ChannelHealthProvider
     market_data_for_symbol: SymbolChannelHealthProvider | None = None
 
-    def snapshot(self, symbol: str | None = None) -> tuple[ChannelHealth, ChannelHealth]:
-        market_data = (
+    def _market_data_health(self, symbol: str | None) -> ChannelHealth:
+        return (
             self.market_data_for_symbol(symbol)
             if symbol is not None and self.market_data_for_symbol is not None
             else self.market_data()
         )
-        return (market_data, self.execution())
+
+    def snapshot(self, symbol: str | None = None) -> tuple[ChannelHealth, ChannelHealth]:
+        return (self._market_data_health(symbol), self.execution())
+
+    def market_data_live(self, symbol: str | None = None) -> bool:
+        """Whether the market-data channel alone is printing for one symbol.
+
+        The clerk's submission-boundary reading of
+        ``market_liveness.market_data_bars_live`` (this fact is what
+        ``market_data_channel_health`` computes ``healthy`` from), for the
+        one caller that must not also fail on the execution stream: an
+        extended-session ENTER needs proof the *venue* is live, and the
+        order websocket says nothing about that. ``stream_health_refusal``
+        still refuses either broken channel separately, ahead of it.
+        """
+        return self._market_data_health(symbol).healthy
 
     def broken(self, symbol: str | None = None) -> tuple[ChannelHealth, ...]:
         return tuple(

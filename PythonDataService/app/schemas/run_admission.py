@@ -51,8 +51,17 @@ class MarketDataAdmissionFact(BaseModel):
     stale: bool | None = None
     active_subscription_count: int | None = Field(default=None, ge=0)
     scheduled_phase: BarSessionPhase = "UNKNOWN"
-    session_authority_source: Literal["ibkr_capability", "nyse_calendar"] | None = None
+    session_authority_source: Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"] | None = None
     extended_phase_proven: bool = False
+
+
+class ExtendedHoursAdmissionFact(BaseModel):
+    """Whether the active authority can clock and price a ``use_rth=False`` run (ADR 0059 D5)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"]
+    observed_at_ms: int = Field(ge=0)
 
 
 class StartRuntimeAdmissionFact(BaseModel):
@@ -243,6 +252,7 @@ class StartRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+    extended_hours: ExtendedHoursAdmissionFact
 
 
 class ResumeCheckpointAdmissionFact(BaseModel):
@@ -296,6 +306,7 @@ class ResumeRunFacts(BaseModel):
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+    extended_hours: ExtendedHoursAdmissionFact
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     carryover_policy: Literal["FORBID", "ALLOW"]

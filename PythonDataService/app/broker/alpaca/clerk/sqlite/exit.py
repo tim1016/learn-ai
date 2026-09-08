@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
+from app.broker.alpaca.clerk.program_leg import LegShape
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
@@ -105,6 +106,7 @@ def _accept_exit_capture(
     entry_order_ref: str,
     resolve_run_id: Callable[[OrderResource], str],
     decision_receipt: AtomicDecisionReceipt | None,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
@@ -158,7 +160,7 @@ def _accept_exit_capture(
             decision_id=decision_id,
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
-        )
+        ).with_reducing_shape(reducing_shape)
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -210,8 +212,18 @@ def accept_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     decision_receipt: AtomicDecisionReceipt | None = None,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
-    """Capture one EXIT and every same-strategy/symbol entry before contact."""
+    """Capture one EXIT and every same-strategy/symbol entry before contact.
+
+    ``reducing_shape`` is the leg shape the deciding program computed for
+    this EXIT (ADR 0059 D5.3). It is durable *with the acceptance*, not with
+    the reducing order, because the two can be many passes apart: when the
+    entry is still working, cancel-and-prove defers, and whichever later pass
+    creates the reduction — the reconciliation sweep, the watchdog, recovery
+    — knows nothing about the decision. Only a non-regular shape is recorded;
+    see ``ExitAcceptedFacts.with_reducing_shape``.
+    """
     reject_colon("lifecycle_run_id", lifecycle_run_id)
 
     def resolve_run_id(_target: OrderResource) -> str:
@@ -225,6 +237,7 @@ def accept_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=decision_receipt,
+        reducing_shape=reducing_shape,
     )
 
 
@@ -338,6 +351,10 @@ async def resolve_accepted_exit(
     here is the F19 fix — the caller (runner or panel) sees an honest
     "accepted, await reconciliation" receipt instead of a crash. TERMINAL
     refusals still raise.
+
+    No leg shape is threaded here: the reducing order is built from the shape
+    the EXIT's own acceptance recorded (ADR 0059 D5.3), so this call and the
+    sweep's re-drive of the very same EXIT cannot produce different legs.
     """
     assert accepted.effect_operation_id is not None
     try:

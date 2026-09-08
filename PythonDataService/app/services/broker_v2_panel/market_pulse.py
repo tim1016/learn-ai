@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.broker_v2_panel import MarketPulseView
@@ -25,6 +26,7 @@ def build_market_pulse(
     use_rth: bool,
     bot_running: bool,
     liveness: MarketLivenessFact | None = None,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> MarketPulseView:
     """Present the same typed market-data fact Start admission consumes,
     with scheduled session kept separate from the shared live liveness fact."""
@@ -39,6 +41,7 @@ def build_market_pulse(
         use_rth=use_rth,
         capability=capability,
         account_id=account_id,
+        extended_window=extended_window,
     )
     session = fact.scheduled_phase
     bars_expected = session == "RTH" if use_rth else session in {"PRE", "RTH", "POST", "OVERNIGHT"}
@@ -61,11 +64,20 @@ def build_market_pulse(
     # bot. This must resolve identically to liveness_blocks_entry's own
     # reconciliation — the same function, not a re-derived approximation —
     # or the panel contradicts the execution gate it is describing.
+    # Both halves of that reconciliation, in the same order the gate applies
+    # them: the schedule says PRE/POST, and the feed proves the venue is
+    # actually printing for this symbol. A declared window alone would let
+    # the panel report an unscheduled extended-hours closure as tradable,
+    # which the RTH-only clock cannot distinguish from a live session.
     live_closed_is_actually_extended_hours = (
         liveness.state == "CLOSED"
         and not use_rth
         and symbol is not None
-        and extended_phase_proven_at_ms(now_ms=now_ms, symbol=symbol, account_id=account_id)
+        and bool(fact.connected)
+        and not fact.stale
+        and extended_phase_proven_at_ms(
+            now_ms=now_ms, symbol=symbol, account_id=account_id, extended_window=extended_window
+        )
     )
     # The Market badge (market_state) renders right beside `headline` in the
     # V2 header (panel-header.component.html) — reporting the raw "CLOSED"

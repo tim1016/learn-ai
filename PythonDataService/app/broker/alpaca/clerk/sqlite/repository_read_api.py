@@ -235,6 +235,33 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
 
+    def first_effect_transition(
+        self: ClerkSqliteRepository,
+        *,
+        effect_operation_id: str,
+        transition_kind: str,
+    ) -> dict | None:
+        """The earliest transition of one kind for one effect operation.
+
+        The effect-scoped twin of :meth:`first_order_transition`, and not a
+        convenience: a re-driven EXIT reuses the same entry ``order_ref``, so
+        the order-scoped read hands back the *first* EXIT's acceptance for
+        every later one. A reduction rebuilt from the wrong acceptance would
+        carry the wrong decision's leg shape.
+
+        ``ix_custody_transitions_effect_sequence`` yields sequence order, so
+        the ``LIMIT 1`` short-circuits rather than sorting the operation's
+        whole history.
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE effect_operation_id = ? AND transition_kind = ? "
+                "ORDER BY sequence ASC LIMIT 1",
+                (effect_operation_id, transition_kind),
+            ).fetchone()
+            return None if row is None else writes.row_to_payload(row)
+
     def max_order_transition_recorded_at_ms(
         self: ClerkSqliteRepository,
         *,

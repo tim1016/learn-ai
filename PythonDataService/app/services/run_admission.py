@@ -12,6 +12,11 @@ import logging
 import math
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.program_leg import (
+    EXTENDED_HOURS_ALLOWANCE_UNSET,
+    EXTENDED_HOURS_UNSUPPORTED,
+    LegRefusal,
+)
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_NEXT_STEP,
     ResumeRunFacts,
@@ -32,6 +37,13 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
 )
 
 logger = logging.getLogger(__name__)
+
+# What an `ExtendedHoursAdmissionFact` state means at the gate. `NOT_REQUESTED`
+# and `READY` admit, so they are simply absent here.
+_EXTENDED_HOURS_REFUSALS: dict[str, LegRefusal] = {
+    "UNSUPPORTED": EXTENDED_HOURS_UNSUPPORTED,
+    "ALLOWANCE_UNSET": EXTENDED_HOURS_ALLOWANCE_UNSET,
+}
 
 
 def _exposure_matches(
@@ -315,6 +327,20 @@ def evaluate_run_admission(
             reason_code=reason_codes[bot.market_data.state],
             explanation="The required market-data feed is not proven ready for this run.",
             next_step=f"Restore fresh market data before {bot.operation.title()}.",
+        )
+    # One rule, no mode carve-out: whatever the Clerk will refuse per decision,
+    # the gate refuses up front. A Dry Run routes every intent through the same
+    # `shape_program_leg` on the synthetic authority, so admitting one with
+    # unset allowances started a run that then rejected every extended decision
+    # it made. The refusals are `program_leg.py`'s named values, so the gate and
+    # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
+    extended_refusal = _EXTENDED_HOURS_REFUSALS.get(bot.extended_hours.state)
+    if extended_refusal is not None:
+        return decide(
+            allowed=False,
+            reason_code=extended_refusal.reason_code,
+            explanation=extended_refusal.explanation,
+            next_step=extended_refusal.next_step,
         )
     # #1702: everything from here down is either an execution-channel gate or
     # a custody/evidence gate — Dry Run makes no broker contact, holds no
