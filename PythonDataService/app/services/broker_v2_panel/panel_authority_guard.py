@@ -19,6 +19,7 @@ from app.schemas.account_authority import (
     AuthorityKind,
     AuthorityScopedRow,
     SingleAuthorityAggregate,
+    account_authority_agrees,
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import RecentDecisionView, RecentFillView
@@ -41,6 +42,13 @@ def default_authority_account_id(status: BotStatusView, account_id: str) -> str:
     Used only when a caller has no facade-derived override to pass
     ``build_panel`` (every direct test in ``test_panel_projection.py``, plus
     any future caller that hasn't selected a SQLite authority yet).
+
+    A shadow binding never reaches this in production: its route account id
+    is the *live* account, while its custody is ``shadow:<live_account_id>``,
+    so ``panel_data_source._panel_authority_for_binding`` always yields the
+    facade whose id ``build_panel`` then uses. Falling back here for such a
+    binding would label synthesized fills with a real-money account — which
+    ``reject_mixed_authority`` below refuses outright.
     """
     if status.mode == "dry_run":
         return synthetic_account_id_for_strategy(status.strategy_instance_id)
@@ -64,7 +72,17 @@ def reject_mixed_authority(
     (``panel_projection_service._recent_activity_views`` stamps it on every
     branch); a row that doesn't is itself a projection bug, so this fails
     closed rather than silently skipping it.
+
+    The aggregate's own id and kind are checked before the rows are, so a
+    shadow authority paired with a bare route account id is refused even on
+    an empty evidence cut — the pairing is what says whether a synthesized
+    fill may be labelled with a real-money account.
     """
+    if not account_authority_agrees(authority_account_id, authority_kind):
+        raise MixedAuthorityAggregateError(
+            "panel evidence authority names an account id from another world: "
+            f"{authority_account_id!r} is not a {authority_kind} account"
+        )
     rows: list[AuthorityScopedRow] = []
     for view in (*decision_views, *fill_views):
         if view.authority_account_id is None or view.authority_kind is None:

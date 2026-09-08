@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -47,6 +47,14 @@ from app.utils.timestamps import now_ms_utc
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
 _REPOSITORY_BACKED: frozenset[str] = frozenset({"sqlite", "synthetic", "shadow"})
+SQLITE_FACADE_AUTHORITIES: Final[frozenset[str]] = frozenset({"sqlite", "shadow"})
+"""Authority kinds whose clerk is a real-account ``SqliteAlpacaClerkFacade``.
+
+The one closed set every operator surface selects the primary authority
+through. The isolated ``synthetic`` world is deliberately absent: its facade
+is composed per instance and selected explicitly, never found by an
+account-scoped selector.
+"""
 _ACCOUNT_KIND_BY_AUTHORITY: dict[str, AccountAuthorityKind] = {
     "sqlite": "real_paper",
     "synthetic": "synthetic",
@@ -364,6 +372,7 @@ __all__ = [
     "DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S",
     "DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S",
     "DEFAULT_STARTUP_RECOVERY_TIMEOUT_S",
+    "SQLITE_FACADE_AUTHORITIES",
     "ActiveClerkRuntime",
     "AuthorityKind",
     "BackgroundSweep",

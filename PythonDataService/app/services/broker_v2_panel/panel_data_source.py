@@ -120,12 +120,17 @@ async def _panel_authority_for_binding(
     """Select the Clerk authority named by one durable bot binding.
 
     The request account remains the real operator account used for route
-    authorization. Dry Run custody is intentionally stored under a separate
-    ``sim:<strategy_instance_id>`` account and must be selected explicitly for
-    its evidence reads.
+    authorization; what this yields is the authority the binding actually
+    runs on, whose account id may differ from it. Dry Run custody is stored
+    under a separate ``sim:<strategy_instance_id>`` account; a shadow
+    authority custodies ``shadow:<live_account_id>`` while the route names
+    the live account. Under real paper the two are the same id, so yielding
+    the facade is behaviour-identical there — and under shadow it is what
+    keeps the evidence read addressed at the repository it came from and
+    every synthesized fill labelled ``simulated`` (ADR 0059 D2, ruling R8).
     """
     if getattr(binding, "mode", None) != "dry_run":
-        yield None
+        yield active_sqlite_facade(str(getattr(binding, "broker", "alpaca")))
         return
     projection_runtime = getattr(registry, "synthetic_runtime_for_projection", None)
     if not callable(projection_runtime):

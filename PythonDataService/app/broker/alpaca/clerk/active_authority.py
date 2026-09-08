@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    SQLITE_FACADE_AUTHORITIES,
     ActiveClerkRuntime,
     AuthorityKind,
     ClerkStartupFailure,
@@ -520,7 +521,7 @@ def get_alpaca_clerk() -> ActiveAlpacaClerk | None:
     refusing on the facade's ``account_mode`` -- a shadow authority answers
     ``"live"``.
     """
-    if _runtime is None or _runtime.authority_kind not in {"sqlite", "shadow"}:
+    if _runtime is None or _runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES:
         return None
     return _runtime.clerk
 

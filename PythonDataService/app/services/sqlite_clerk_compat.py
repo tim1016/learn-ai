@@ -11,6 +11,7 @@ from app.broker.alpaca.clerk.active_authority import (
     get_active_clerk_runtime,
     primary_custody_world,
 )
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
     AccountOperatorPostureContext,
@@ -57,7 +58,7 @@ def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | No
     runtime = get_active_clerk_runtime()
     if (
         runtime is None
-        or runtime.authority_kind != "sqlite"
+        or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES
         or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     ):
         return None
@@ -81,7 +82,7 @@ def active_reconciliation_sweep(broker: str = "alpaca") -> ReconciliationSweep |
     runtime = get_active_clerk_runtime()
     if (
         runtime is None
-        or runtime.authority_kind != "sqlite"
+        or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES
         or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
         or not isinstance(runtime.sweep, ReconciliationSweep)
     ):
