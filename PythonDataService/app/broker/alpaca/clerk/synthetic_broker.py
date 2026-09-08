@@ -19,6 +19,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,6 +37,8 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPortfolioHistory,
     BrokerPosition,
+    OrderSide,
+    OrderType,
     PortfolioHistoryRange,
 )
 from app.services.jsonl_wal import JsonlWal
@@ -94,6 +97,11 @@ def _order_lock(path: Path) -> threading.Lock:
 
 class SyntheticBroker:
     """Durable immediate-fill port that derives prices only from retained bars.
+
+    A market leg, or a limit leg marketable against the decision bar's close,
+    fills immediately at that close. The sim world cannot rest an order: a
+    non-marketable limit is canceled on the spot with zero fills (ruling R9)
+    rather than waiting for a later bar to touch it.
 
     The Clerk remains the custody authority.  This adapter supplies the
     broker-shaped acknowledgement and fills it needs without contacting Alpaca
@@ -382,45 +390,63 @@ class SyntheticBroker:
             )
         return persisted
 
-    def _filled_order(
-        self,
-        leg: BrokerOrderLeg,
-        *,
-        client_order_id: str,
-        bar: RetainedSourceBar,
-    ) -> BrokerOrder:
-        filled_at_ms = bar.end_ms
-        return BrokerOrder(
+    def _filled_order(self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar) -> BrokerOrder:
+        at_ms = bar.end_ms
+        marketable = leg.order_type is OrderType.MARKET or (
+            leg.limit_price is not None
+            and (
+                bar.close <= Decimal(str(leg.limit_price))
+                if leg.side is OrderSide.BUY
+                else bar.close >= Decimal(str(leg.limit_price))
+            )
+        )
+        common = dict(
             broker=self.broker_id,
             order_id=f"sim-order:{client_order_id}",
             client_order_id=client_order_id,
             symbol=leg.symbol,
             asset_class="us_equity",
             side=leg.side,
-            order_type="market",
-            time_in_force="day",
+            order_type=str(leg.order_type),
+            time_in_force=str(leg.time_in_force),
             quantity=leg.quantity,
-            filled_quantity=leg.quantity,
-            limit_price=None,
+            limit_price=leg.limit_price,
             stop_price=None,
+            extended_hours=leg.extended_hours,
+            submitted_at_ms=at_ms,
+            created_at_ms=at_ms,
+            updated_at_ms=at_ms,
+            expired_at_ms=None,
+            observed_at_ms=now_ms_utc(),
+        )
+        if not marketable:
+            # The sim world cannot rest an order: a non-marketable limit is
+            # cancelled on the spot, with no execution (ruling R9).
+            return BrokerOrder(
+                **common,
+                filled_quantity=0.0,
+                filled_avg_price=None,
+                status="canceled",
+                filled_at_ms=None,
+                canceled_at_ms=at_ms,
+                events=[],
+            )
+        return BrokerOrder(
+            **common,
+            filled_quantity=leg.quantity,
             filled_avg_price=float(bar.close),
             status="filled",
-            submitted_at_ms=filled_at_ms,
-            created_at_ms=filled_at_ms,
-            updated_at_ms=filled_at_ms,
-            filled_at_ms=filled_at_ms,
+            filled_at_ms=at_ms,
             canceled_at_ms=None,
-            expired_at_ms=None,
             events=[
                 {
                     "event_type": "fill",
-                    "occurred_at_ms": filled_at_ms,
+                    "occurred_at_ms": at_ms,
                     "price": float(bar.close),
                     "quantity": leg.quantity,
                     "execution_id": f"sim-execution:{client_order_id}",
                 }
             ],
-            observed_at_ms=now_ms_utc(),
         )
 
     def _find_order(
