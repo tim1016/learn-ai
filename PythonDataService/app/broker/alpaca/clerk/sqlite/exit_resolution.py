@@ -215,12 +215,18 @@ async def _resolve_claimed(
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
     else:
         # A synchronous submit response can truthfully say the reducing order
-        # is terminal while its execution slice has not reached the websocket
-        # capture path yet.  That is incomplete custody evidence, not proof
-        # that an EXIT failed to flatten.  Hold the effect unknown until an
-        # exact execution or labelled recovery observation can establish the
-        # economic delta.
-        if not repo.fills_for_order(reducing.order_ref):
+        # is terminal (``filled``/``replaced``) while its execution slice has
+        # not reached the websocket capture path yet.  That is incomplete
+        # custody evidence, not proof that an EXIT failed to flatten, so hold
+        # the effect unknown until an exact execution or labelled recovery
+        # observation can establish the economic delta.  A ``canceled`` /
+        # ``expired`` / ``rejected`` terminal snapshot with no recorded
+        # execution carries no such ambiguity — it is proven unfilled
+        # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
+        if (
+            not repo.fills_for_order(reducing.order_ref)
+            and (reducing.broker_state or "").lower() not in _UNFILLED_TERMINAL_STATES
+        ):
             if effect.state != "unknown":
                 fold_uncertain(
                     repo,
@@ -729,6 +735,13 @@ def _deterministic_intent_id(effect_operation_id: str) -> str:
 
 def _is_terminal(broker_state: str | None) -> bool:
     return broker_state is not None and broker_state.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+
+
+_UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
+"""Terminal broker states that, with no recorded execution, are proven
+unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
+terminal snapshot can truthfully precede its execution slice on the
+websocket."""
 
 
 def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubmission:
