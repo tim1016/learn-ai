@@ -240,12 +240,49 @@ def test_a_flag_outside_its_bound_is_a_usage_error(
     if flag != "--required-sessions":
         argv += ["--required-sessions", "2"]
 
-    with pytest.raises(SystemExit) as refusal:
-        main(argv, evaluate=_never_called)
+    assert main(argv, evaluate=_never_called) == 1
 
-    assert refusal.value.code == 2
-    stderr = capsys.readouterr().err
-    assert flag in stderr and bound in stderr
+    error = _last_object(capsys)["error"]
+    assert flag in error and bound in error
+
+
+@pytest.mark.parametrize(
+    ("argv", "fragment"),
+    [
+        pytest.param([], "--live-account-id", id="missing-required-flag"),
+        pytest.param(
+            ["--live-account-id", LIVE_ACCOUNT, "nosuch"], "invalid choice", id="unknown-subcommand"
+        ),
+        pytest.param(
+            [
+                "--live-account-id",
+                LIVE_ACCOUNT,
+                "sessions",
+                "--strategy-instance-id",
+                SID,
+                "--twin-account-id",
+                "PA-TEST",
+                "--twin-strategy-instance-id",
+                TWIN,
+                "--required-sessions",
+                "not-a-number",
+            ],
+            "--required-sessions",
+            id="bad-type-value",
+        ),
+    ],
+)
+def test_every_usage_refusal_is_one_json_object_at_exit_one(
+    capsys: pytest.CaptureFixture[str], argv: list[str], fragment: str
+) -> None:
+    """Exit ``1``, never argparse's bare ``2`` -- which "gate not satisfied" owns.
+
+    A script reading only the exit code could not otherwise tell a typo from a
+    real-money arming precondition that has not been met.
+    """
+    assert main(argv, evaluate=_never_called) == 1
+
+    assert fragment in _last_object(capsys)["error"]
 
 
 def test_a_receipt_the_sealer_refuses_is_an_evidence_error(

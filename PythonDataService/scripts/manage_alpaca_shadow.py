@@ -6,11 +6,18 @@ appends its activation proof -- the one write no startup path performs.
 against its paper twin. ``receipt`` does the same and, when the gate is
 satisfied, seals the result into the receipt store.
 
-Exit codes: ``0`` the command answered; ``2`` the gate is not satisfied, the
-named twin is not this instance's twin, or the invocation itself was refused
-(argparse: an absent flag, or one outside its bound); ``1`` the command cannot
-be run as asked (a reserved identity, a binding or database that is not there,
-a required count nobody stated, a receipt the sealer will not accept).
+Exit codes: ``0`` the command answered; ``1`` the command cannot be run as
+asked -- a reserved identity, a binding or database that is not there, a
+required count nobody stated, an economic projection the authority will not
+vouch for, a receipt the sealer will not accept, or a usage refusal (an absent
+flag, an unknown subcommand, a flag outside its bound); ``2`` the named twin
+is not this instance's twin, or ``receipt`` found the gate unsatisfied.
+
+Every invocation writes exactly one JSON object to stdout, and every temporal
+value in it is ``int64 ms UTC``. (``--help`` is argparse's own usage text on
+stdout and exits ``0``; it runs no command.) A usage refusal is therefore a
+readable ``error`` key at exit ``1`` rather than argparse's bare exit ``2``,
+which used to collide with "the gate is not satisfied".
 """
 
 from __future__ import annotations
@@ -86,9 +93,14 @@ def _timestamp_ms(raw: str) -> int:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # ``exit_on_error=False`` on this parser *and* on every subparser: without
+    # it argparse writes usage to stderr and exits 2 on its own, which is the
+    # code "the gate is not satisfied" already owns. Each subparser keeps its
+    # own flag bounds, so each must refuse the same way.
     parser = argparse.ArgumentParser(
         prog="scripts.manage_alpaca_shadow",
         description="Activate one live account's shadow authority, judge its sessions, seal the receipt.",
+        exit_on_error=False,
     )
     parser.add_argument("--live-account-id", required=True)
     parser.add_argument("--artifacts-root", type=Path)
@@ -97,12 +109,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers.add_parser(
         "activate",
         help="Initialize this live account's shadow custody database and append its activation proof.",
+        exit_on_error=False,
     )
     for operation, help_text in (
         ("sessions", "Report every judged session without writing anything."),
         ("receipt", "Judge the sessions and, when the gate holds, seal the receipt."),
     ):
-        gate = subparsers.add_parser(operation, help=help_text)
+        gate = subparsers.add_parser(operation, help=help_text, exit_on_error=False)
         gate.add_argument("--strategy-instance-id", required=True)
         gate.add_argument("--twin-account-id", required=True)
         gate.add_argument("--twin-strategy-instance-id", required=True)
@@ -299,8 +312,8 @@ def _judge(
 
 
 def main(argv: list[str] | None = None, *, evaluate: ShadowGateEvaluator = _default_evaluate) -> int:
-    args = _parse_args(argv)
     try:
+        args = _parse_args(argv)
         # Before anything reaches the shadow world: a reserved ``shadow:`` or
         # ``sim:`` id is not a live account, and must never become the subject
         # of an activation or a receipt.
@@ -321,6 +334,9 @@ def main(argv: list[str] | None = None, *, evaluate: ShadowGateEvaluator = _defa
         AccountAuthorityIdentityError,
         ShadowOperatorRefusal,
         EconomicProjectionUnavailable,
+        # A usage refusal is an input error, not a gate verdict. Reaching it
+        # here is what keeps the promise above: one JSON object, always.
+        argparse.ArgumentError,
         # The sealer is the last word on the receipt's own shape. Bounded flags
         # make its refusal unreachable from operator input; it is caught anyway
         # so a shape nobody anticipated is still a sentence, not a traceback.
