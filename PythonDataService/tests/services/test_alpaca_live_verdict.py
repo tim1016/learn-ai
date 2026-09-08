@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ClerkStartupFailure,
 )
 from app.broker.alpaca.config import AlpacaSettings
+from app.schemas.alpaca_live_verdict import ShadowState
 from app.services.alpaca_live_verdict import alpaca_live_verdict
 
 _NOW = 1_800_000_000_000
@@ -140,9 +141,12 @@ def _shadow_runtime() -> ActiveClerkRuntime:
     return ActiveClerkRuntime(authority_kind="shadow", account_id="shadow:9LIVE0001", account_authority_kind="shadow")
 
 
-@pytest.mark.parametrize("shadow_state", ["none", "in_progress", "complete"])
-def test_live_shadow_authority_reports_the_observed_shadow_state(shadow_state: str) -> None:
-    verdict = alpaca_live_verdict(settings=_live(), runtime=_shadow_runtime(), now_ms=_NOW, shadow_state=shadow_state)  # type: ignore[arg-type]
+_SHADOW_STATES: tuple[ShadowState, ...] = ("none", "in_progress", "complete")
+
+
+@pytest.mark.parametrize("shadow_state", _SHADOW_STATES)
+def test_live_shadow_authority_reports_the_observed_shadow_state(shadow_state: ShadowState) -> None:
+    verdict = alpaca_live_verdict(settings=_live(), runtime=_shadow_runtime(), now_ms=_NOW, shadow_state=shadow_state)
 
     assert verdict.clerk_authority == "shadow"
     assert verdict.observed_account_id == "shadow:9LIVE0001"
@@ -150,6 +154,10 @@ def test_live_shadow_authority_reports_the_observed_shadow_state(shadow_state: s
     assert verdict.final_verdict == "live-unarmed"
     assert verdict.shadow_state == shadow_state
     assert "shadow authority" in verdict.headline
+    # The headline names the LIVE account a human recognises; ``shadow:`` is a
+    # runtime custody namespace, not part of the account number.
+    assert "LIVE account 9LIVE0001 " in verdict.headline
+    assert "shadow:" not in verdict.headline
 
 
 def test_shadow_state_is_not_applicable_on_paper_even_if_supplied() -> None:

@@ -150,6 +150,10 @@ def alpaca_live_verdict(
     # Slice 1: no arming exists, so an agreed live account is always unarmed.
     observed_shadow: ShadowState = shadow_state if shadow_state is not None else "none"
     shadow_active = authority == "shadow"
+    # The copy names the LIVE account a human recognises. ``shadow:`` is the
+    # runtime's custody namespace for the same account, not part of its number,
+    # and it reads as a different account in a sentence beginning "LIVE account".
+    named_account_id = account_id.removeprefix(SHADOW_ACCOUNT_PREFIX) if account_id is not None else account_id
     return AlpacaLiveVerdict(
         configured_mode="live",
         observed_account_id=account_id,
@@ -161,9 +165,9 @@ def alpaca_live_verdict(
         shadow_state=observed_shadow,
         final_verdict="live-unarmed",
         headline=(
-            f"LIVE account {account_id} — shadow authority active, no instance armed"
+            f"LIVE account {named_account_id} — shadow authority active, no instance armed"
             if shadow_active
-            else f"LIVE account {account_id} — real money, no instance armed"
+            else f"LIVE account {named_account_id} — real money, no instance armed"
         ),
         detail=(
             "This is a real-money Alpaca account. Its shadow authority reads it and "
