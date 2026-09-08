@@ -21,7 +21,36 @@ from app.schemas.account_authority import AuthorityKind, CustodyWorld
 AccountAuthorityKind = AuthorityKind
 SIM_ACCOUNT_PREFIX = "sim:"
 SHADOW_ACCOUNT_PREFIX = "shadow:"
-_RESERVED_PREFIXES: tuple[str, ...] = (SIM_ACCOUNT_PREFIX, SHADOW_ACCOUNT_PREFIX)
+PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
+"""Instance-scoped evidence namespace for real-paper retained source bars.
+
+Not a Clerk custody account: custody stays on the real Alpaca account. This
+namespace only scopes the ``SourceBarLedger`` file so each paper instance's
+retained-replay warmup (FR-016) sees exactly its own observations, mirroring
+Dry Run's ``sim:`` scoping.
+"""
+
+
+SHADOW_EVIDENCE_ACCOUNT_PREFIX = "shadow-evidence:"
+"""Instance-scoped evidence namespace for shadow retained source bars.
+
+Custody is the account-scoped ``shadow:<live_account_id>`` authority; every
+instance that runs on it keeps its own retained-bar ledger here, exactly as a
+real-paper instance keeps ``paper:<instance>``. The prefix is deliberately not
+``shadow:`` — an evidence namespace is never a custody identity.
+"""
+
+
+# Every namespace a real Alpaca account id may not occupy: the two reserved
+# custody worlds and the two instance-scoped evidence namespaces. All four are
+# minted by this module, so a "real" account carrying any of them is a
+# composition bug, not an operator typo.
+_RESERVED_PREFIXES: tuple[str, ...] = (
+    SIM_ACCOUNT_PREFIX,
+    SHADOW_ACCOUNT_PREFIX,
+    PAPER_EVIDENCE_ACCOUNT_PREFIX,
+    SHADOW_EVIDENCE_ACCOUNT_PREFIX,
+)
 
 
 class AccountAuthorityIdentityError(ValueError):
@@ -44,7 +73,8 @@ def require_real_account_id(account_id: str) -> str:
         raise AccountAuthorityIdentityError("real account identity must be non-empty")
     if account_id.startswith(_RESERVED_PREFIXES):
         raise AccountAuthorityIdentityError(
-            "real Alpaca ports refuse reserved sim:/shadow: account identities"
+            "real Alpaca ports refuse the reserved sim:/shadow:/paper:/shadow-evidence: "
+            "account identities"
         )
     return account_id
 
@@ -111,31 +141,11 @@ def custody_account_id_for(world: CustodyWorld, observed_account_id: str) -> str
     return observed_account_id
 
 
-PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
-"""Instance-scoped evidence namespace for real-paper retained source bars.
-
-Not a Clerk custody account: custody stays on the real Alpaca account. This
-namespace only scopes the ``SourceBarLedger`` file so each paper instance's
-retained-replay warmup (FR-016) sees exactly its own observations, mirroring
-Dry Run's ``sim:`` scoping.
-"""
-
-
 def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
     """Return the isolated real-paper source-bar namespace for one instance."""
     from app.engine.live.identity import validate_strategy_instance_id
 
     return f"{PAPER_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
-
-
-SHADOW_EVIDENCE_ACCOUNT_PREFIX = "shadow-evidence:"
-"""Instance-scoped evidence namespace for shadow retained source bars.
-
-Custody is the account-scoped ``shadow:<live_account_id>`` authority; every
-instance that runs on it keeps its own retained-bar ledger here, exactly as a
-real-paper instance keeps ``paper:<instance>``. The prefix is deliberately not
-``shadow:`` — an evidence namespace is never a custody identity.
-"""
 
 
 def shadow_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:

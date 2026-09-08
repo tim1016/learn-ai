@@ -38,8 +38,19 @@ def test_shadow_prefix_is_reserved_and_distinct_from_sim() -> None:
     assert is_shadow_account_id("PA0SANITIZED00001") is False
 
 
-@pytest.mark.parametrize("account_id", ["sim:ema-1", "shadow:9LIVE0001"])
-def test_real_ports_refuse_both_reserved_namespaces(account_id: str) -> None:
+@pytest.mark.parametrize(
+    "account_id",
+    [
+        "sim:ema-1",
+        "shadow:9LIVE0001",
+        # The two evidence namespaces are minted by this module too, so a
+        # "real" account id carrying one is a composition bug. The guard read
+        # as though it covered every reserved namespace and covered two.
+        "paper:ema-1",
+        "shadow-evidence:ema-1",
+    ],
+)
+def test_real_ports_refuse_every_reserved_namespace(account_id: str) -> None:
     with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
         require_real_account_id(account_id)
 

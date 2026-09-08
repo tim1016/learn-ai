@@ -52,7 +52,15 @@ def append_canonical_jsonl_line(
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(payload), sort_keys=True, separators=(",", ":")) + "\n")
+        # Byte-identical to ``canonical_sha256`` above, ensure_ascii included:
+        # a row whose encoder disagreed with the hasher would seal to a digest
+        # of bytes the file does not contain.
+        handle.write(
+            json.dumps(
+                dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            + "\n"
+        )
         handle.flush()
         os.fsync(handle.fileno())
     if not existed:

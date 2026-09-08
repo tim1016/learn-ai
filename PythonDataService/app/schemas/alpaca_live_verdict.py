@@ -29,6 +29,13 @@ class AlpacaLiveVerdict(BaseModel):
 
     configured_mode: ConfiguredMode
     observed_account_id: str | None
+    """The custody account id the verdict observed.
+
+    Under a shadow authority this carries the ``shadow:`` prefix while the
+    headline names the live account (controller ruling FR1-C1): the field is
+    the identity the verdict was computed against, and that identity is the
+    shadow custody one, not the account the broker read answered.
+    """
     mode_agreement: ModeAgreement
     clerk_authority: ClerkAuthority
     clerk_refusal_reason_code: str | None
