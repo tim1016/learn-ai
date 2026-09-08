@@ -13,10 +13,12 @@ causes are account-wide and fail closed; no generic clear primitive exists.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
     UncertaintyRaisedFacts,
@@ -31,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
     HOLD_REASON_CODES,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -175,21 +178,28 @@ def raise_account_hold(
     reason_code: str,
     evidence_refs: list[str],
     provenance: TransitionProvenance = TransitionProvenance(),
+    cause_facts: Mapping[str, Any] | None = None,
 ) -> str:
     """Raise or refresh one account-hold episode (ADR 0048 Decision 2).
 
-    The two former ``holds`` causes now travel the ordinary uncertainty path:
+    The former ``holds`` causes now travel the ordinary uncertainty path:
     same table, same append-on-change-only gate, same atomic check-then-append
     under one write lock. What this adds over calling :func:`raise_uncertainty`
     directly is that the caller supplies only its cause and evidence — the
     operator envelope comes from :func:`account_hold_envelope`, so the two
     producers cannot drift into describing the same hold differently.
 
+    ``cause_facts`` is for a hold whose cause is not derivable from its
+    evidence lines — the ADR 0059 D4 loss hold, whose cause is the breached
+    day-P&L numbers. The envelope refuses to describe that hold without them.
+
     ``blocks_new_exposure`` and ``allows_reduction`` are deliberately *not*
     taken from the envelope: :func:`raise_uncertainty` reads them from the
     registered policy, which is the authority on what an episode permits.
     """
-    envelope = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
+    envelope = account_hold_envelope(
+        reason_code=reason_code, evidence_refs=evidence_refs, cause_facts=cause_facts
+    )
     return raise_uncertainty(
         repo,
         strategy_instance_id=None,
@@ -473,6 +483,12 @@ def _exit_stuck_allows_action(
     return cause.symbol == intent.symbol.upper()
 
 
+def _hold_defers_reduction_to_its_cause(reason_code: str) -> bool:
+    """Whether this hold leaves REDUCE to the per-reason evaluation."""
+    policy = _REASON_POLICIES.get(reason_code)
+    return policy is not None and policy.allows_reduction
+
+
 def decide_capability(
     repo: ClerkSqliteRepository,
     *,
@@ -513,10 +529,21 @@ def decide_capability(
                 ),
             )
 
-    holds = repo.active_holds_for_admission(
-        strategy_instance_id=strategy_instance_id,
-        subject_id=subject_id,
-    )
+    # Before ADR 0059 D4 every hold forbade both capabilities, so this check
+    # could short-circuit whatever it was asked about. The loss hold blocks
+    # entries account-wide and admits every exit, so a hold whose registered
+    # policy allows reduction falls through to the per-reason evaluation below
+    # rather than being refused here. An unregistered code has no policy and
+    # stays fail-closed.
+    holds = [
+        hold
+        for hold in repo.active_holds_for_admission(
+            strategy_instance_id=strategy_instance_id,
+            subject_id=subject_id,
+        )
+        if capability is Capability.NEW_EXPOSURE
+        or not _hold_defers_reduction_to_its_cause(hold["reason_code"])
+    ]
     if holds:
         hold = holds[0]
         return CapabilityDecision(
@@ -584,6 +611,11 @@ def decide_capability(
                             reduction_intent.signed_delta,
                         )
                     )
+                    # ADR 0059 D4: the loss hold is account-scoped and says
+                    # nothing about any one position, so it authorizes every
+                    # reduction without a per-symbol proof — the point of the
+                    # hold is that each program keeps managing its own exit.
+                    or reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
                 )
             )
         )
@@ -662,13 +694,18 @@ class RefusalClass(StrEnum):
 # CUSTODY_SUBJECT episode and every unknown future code — stays TERMINAL so
 # an unclassified refusal keeps today's fail-closed behavior (F19 fix shape:
 # ops study §9 "classify snapshot-staleness admission blocks as
-# retry-on-next-clock in the runner's error taxonomy").
-TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
-    {
-        BROKER_SNAPSHOT_STALE_REASON_CODE,
-        RECONCILIATION_INCOMPLETE_REASON_CODE,
-        "RECONCILIATION_IN_PROGRESS",
-    }
+# retry-on-next-clock in the runner's error taxonomy"). Every envelope refusal
+# joins them: ADR 0059 forbids halting or pausing a bot for an account-scoped
+# fact, so an envelope refusal retries on the next decision clock.
+TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
+    frozenset(
+        {
+            BROKER_SNAPSHOT_STALE_REASON_CODE,
+            RECONCILIATION_INCOMPLETE_REASON_CODE,
+            "RECONCILIATION_IN_PROGRESS",
+        }
+    )
+    | ENVELOPE_ADMISSION_REASON_CODES
 )
 
 

@@ -1059,7 +1059,7 @@ SELECT
     resolved_at_ms                                              AS resolved_at_ms,
     evidence_refs_json                                          AS evidence_refs_json
 FROM uncertainties
-WHERE reason_code IN ('STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
+WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
 ```
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,

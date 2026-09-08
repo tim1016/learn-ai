@@ -18,7 +18,8 @@ import pytest
 from app.broker.alpaca.clerk.sqlite import hold_migration, reads, schema
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    HOLD_REASON_CODES,
+    HOLD_REASON_CODE_SQL_PARAMS,
+    HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
@@ -241,9 +242,11 @@ def test_every_migrated_episode_lands_and_none_is_silently_discarded() -> None:
 
     schema.migrate_schema(conn, from_version=11)
 
+    # Rendered rather than a literal ``(?, ?)``: ADR 0059 D4 added a third
+    # hold cause, and the placeholder count has to follow the registry.
     landed = conn.execute(
-        "SELECT COUNT(*) FROM uncertainties WHERE reason_code IN (?, ?)",
-        tuple(sorted(HOLD_REASON_CODES)),
+        f"SELECT COUNT(*) FROM uncertainties WHERE reason_code IN ({HOLD_REASON_CODE_SQL_PLACEHOLDERS})",
+        HOLD_REASON_CODE_SQL_PARAMS,
     ).fetchone()[0]
     assert landed == 2
 
@@ -279,8 +282,9 @@ def test_the_two_projections_stay_disjoint_after_the_merge() -> None:
     non_hold_ids = {
         row["uncertainty_id"]
         for row in conn.execute(
-            "SELECT uncertainty_id FROM uncertainties WHERE reason_code NOT IN (?, ?)",
-            tuple(sorted(HOLD_REASON_CODES)),
+            "SELECT uncertainty_id FROM uncertainties WHERE reason_code NOT IN "
+            f"({HOLD_REASON_CODE_SQL_PLACEHOLDERS})",
+            HOLD_REASON_CODE_SQL_PARAMS,
         )
     }
     assert hold_ids == {"hold:7"}

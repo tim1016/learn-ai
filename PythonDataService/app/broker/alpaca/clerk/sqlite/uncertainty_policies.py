@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -32,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
+    LossHoldCause,
     PositionDriftCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
@@ -147,6 +149,14 @@ def _stream_health_hold_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _loss_hold_cause_is_valid(value: Any) -> bool:
+    try:
+        LossHoldCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 _REASON_POLICIES: dict[str, ReasonPolicy] = {
     POSITION_DRIFT_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -230,6 +240,16 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_stream_health_hold_cause_is_valid,
+        age=CauseCleared(),
+    ),
+    # ADR 0059 D4: the loss hold refuses entries account-wide and lets every
+    # program keep managing its own position. It clears only by the guarded
+    # operator action, never on a timer and never at session rollover.
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        cause_is_valid=_loss_hold_cause_is_valid,
         age=CauseCleared(),
     ),
 }
