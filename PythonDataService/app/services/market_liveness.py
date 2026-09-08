@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.broker.contract.models import BrokerClockEvidence
+from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
@@ -210,11 +211,30 @@ def compose_market_liveness(
     )
 
 
+def market_data_bars_live(health: FeedHealth | None) -> bool:
+    """Whether the market-data feed is actually printing for this symbol.
+
+    The only *live* evidence an extended session is really running. Alpaca's
+    clock is RTH-only — it reports CLOSED through every scheduled PRE and
+    POST session (see :func:`clock_liveness_evidence`), so "CLOSED" carries
+    no extended-hours information at all, and the schedule alone cannot tell
+    a live pre-market from an unscheduled closure. Bars can: a live extended
+    session prints them and a closed venue does not.
+
+    The one predicate behind both readings of that fact — this one over a
+    raw :class:`FeedHealth`, and the clerk's ``StreamHealthGate``
+    market-data channel, whose ``healthy`` is computed from it — so the ENTER
+    gate and the submission-boundary recheck cannot disagree (#1671).
+    """
+    return health is not None and health.connected and not health.stale
+
+
 def liveness_blocks_entry(
     liveness: MarketLivenessFact,
     *,
     use_rth: bool,
     extended_phase_proven: Callable[[], bool],
+    extended_session_live: Callable[[], bool],
 ) -> bool:
     """Decide whether a live liveness fact should block one ENTER (#1671).
 
@@ -222,9 +242,20 @@ def liveness_blocks_entry(
     module exists to provide. CLOSED is different: the broker clock behind
     it is RTH-only (see :func:`clock_liveness_evidence`), so for a non-RTH
     caller it cannot distinguish a genuinely closed market from an ordinary
-    extended-hours session — only in that specific case is
-    ``extended_phase_proven`` consulted, and lazily: every other branch
-    resolves without paying for a capability-service lookup.
+    extended-hours session.
+
+    Exempting that caller needs **two** facts, not one, and both are
+    consulted lazily so every other branch resolves without paying for a
+    lookup. ``extended_phase_proven`` says the *schedule* puts this instant
+    in PRE or POST — a declared window or a fresh capability snapshot, never
+    a live signal. ``extended_session_live`` says the venue is *actually*
+    printing bars for this symbol right now. The schedule alone would admit
+    new exposure straight through an unscheduled extended-hours closure,
+    which the RTH-only clock reports exactly as it reports an ordinary
+    extended session; the calendar answers "was this a scheduled session?"
+    and the feed answers "is it live?" (ADR 0022). A symbol-specific halt is
+    already refused upstream — ``compose_market_liveness`` resolves HALTED
+    before the CLOSED branch, precisely so this exemption cannot see past it.
 
     The single shared predicate for both the ENTER gate
     (``bot_trade_strategy.py``) and its Clerk submission-boundary recheck
@@ -234,7 +265,7 @@ def liveness_blocks_entry(
         return liveness.state != "TRADABLE"
     if use_rth:
         return True
-    return not extended_phase_proven()
+    return not (extended_phase_proven() and extended_session_live())
 
 
 def clock_liveness_evidence(clock: BrokerClockEvidence) -> MarketClockLivenessEvidence:

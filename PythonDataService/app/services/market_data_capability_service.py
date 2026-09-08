@@ -153,6 +153,18 @@ def extended_phase_proven_at_ms(
     allowed-sessions policy, defaulted here to RTH-only since none is
     supplied, permits the resolved phase) and would be false for every
     extended phase by construction.
+
+    **This answers the schedule, never liveness.** Both sources it resolves
+    — a declared broker window and a capability snapshot — describe the
+    session that was *supposed* to run at ``now_ms``; neither can see an
+    unscheduled PRE/POST closure, which Alpaca's RTH-only clock reports as
+    plain ``CLOSED``, exactly as it reports an ordinary extended session.
+    So a ``True`` here is a necessary condition for admitting extended
+    exposure and never a sufficient one: ``market_liveness.
+    liveness_blocks_entry`` pairs it with ``market_data_bars_live`` — the
+    feed actually printing bars for the symbol — and admits only on both
+    (ADR 0022: the calendar owns scheduled structure, the live feed owns
+    liveness).
     """
     if account_id is None and extended_window is None:
         return False

@@ -775,6 +775,21 @@ class SqliteAlpacaClerkFacade:
                             account_id=capability_account_id,
                             extended_window=self._program_leg_policy.window,
                         ),
+                        # The declared window proves only the *schedule*.
+                        # An unscheduled PRE/POST closure reads exactly like
+                        # an ordinary extended session on Alpaca's RTH-only
+                        # clock, so new exposure also needs live evidence
+                        # the venue is printing. Read through the same
+                        # market-data channel `stream_health_refusal` above
+                        # already consults, so this recheck and the
+                        # strategy's ENTER gate cannot diverge. No gate
+                        # installed proves nothing, so it refuses.
+                        extended_session_live=lambda: (
+                            self._stream_health is not None
+                            and self._stream_health.market_data_live(
+                                entry.instrument.underlying
+                            )
+                        ),
                     ):
                         return rejected(
                             reason_code="MARKET_LIVENESS_BLOCKED",

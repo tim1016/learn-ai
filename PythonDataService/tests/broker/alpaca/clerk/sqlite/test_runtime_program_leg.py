@@ -9,19 +9,23 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     active_program_leg_policy,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.stream_health import STREAM_HEALTH_REASON_CODE, StreamHealthGate
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import OrderType, TimeInForce
+from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import to_ms_utc
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
@@ -76,12 +80,32 @@ def _binding(*, use_rth: bool) -> BrokerBotBinding:
     )
 
 
+def _stream_health(*, market_data_healthy: bool) -> StreamHealthGate:
+    """A gate whose two channels report exactly this health."""
+
+    def _channel(stream: str, healthy: bool) -> ChannelHealth:
+        return ChannelHealth(
+            stream=stream,
+            healthy=healthy,
+            connected=healthy,
+            reason="" if healthy else "test",
+            observed_at_ms=1_700_000_000_000,
+        )
+
+    return StreamHealthGate(
+        market_data=lambda: _channel("market_data", market_data_healthy),
+        execution=lambda: _channel("execution", True),
+        market_data_for_symbol=lambda _symbol: _channel("market_data", market_data_healthy),
+    )
+
+
 async def _enter(
     tmp_path: Path,
     *,
     use_rth: bool,
     policy: ProgramLegPolicy,
     retained_source_bar: RetainedSourceBar | None,
+    stream_health: StreamHealthGate | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
@@ -92,6 +116,7 @@ async def _enter(
         trade=trade,
         account_mode="paper",
         program_leg_policy=policy,
+        stream_health=stream_health,
     )
     binding = _binding(use_rth=use_rth)
     await facade.register_strategy_run(binding)
@@ -321,3 +346,92 @@ def test_the_process_accessor_reads_the_active_authoritys_policy(tmp_path: Path)
     finally:
         set_active_clerk_runtime(None)
         repo.close()
+
+
+def _closed_clock(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+    """What Alpaca's RTH-only clock reports through every extended session."""
+    return compose_market_liveness(
+        symbol,
+        now_ms=observed_at_ms,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=observed_at_ms,
+            vendor_timestamp_ms=observed_at_ms,
+        ),
+        connected=True,
+        connection_changed_at_ms=observed_at_ms,
+        symbol_status=None,
+    )
+
+
+async def test_a_closed_clock_admits_an_extended_enter_when_the_feed_is_printing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The declared window resolves POST and the market-data channel is live."""
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _closed_clock)
+
+    trade, state, _explanation = await _enter(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+        stream_health=_stream_health(market_data_healthy=True),
+    )
+
+    assert state is not EffectOperationState.REJECTED
+    (leg,) = trade.submitted_legs
+    assert (leg.order_type, leg.extended_hours) == (OrderType.LIMIT, True)
+
+
+async def test_a_closed_clock_refuses_an_extended_enter_with_no_live_feed_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The recheck's own half of the #1671 pair, at the submission boundary.
+
+    The declared window still resolves POST, so before the bar-freshness
+    conjunct this ENTER was admitted on the schedule alone — which an
+    unscheduled PRE/POST closure reads exactly like. With no stream-health
+    gate installed there is no live evidence at all, so nothing proves the
+    venue is printing and the Clerk refuses before broker contact.
+    """
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _closed_clock)
+
+    trade, state, explanation = await _enter(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+        stream_health=None,
+    )
+
+    assert state is EffectOperationState.REJECTED
+    assert explanation.startswith("MARKET_LIVENESS_BLOCKED:")
+    assert trade.submitted_legs == []
+
+
+async def test_a_closed_clock_refuses_an_extended_enter_on_an_unhealthy_market_data_channel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale or disconnected feed is refused by the stream-health gate first.
+
+    Pinned so the two refusals stay distinguishable: this one names the
+    broken channel, the one above names the missing liveness proof, and both
+    stop the same ENTER before broker contact.
+    """
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _closed_clock)
+
+    trade, state, explanation = await _enter(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+        stream_health=_stream_health(market_data_healthy=False),
+    )
+
+    assert state is EffectOperationState.REJECTED
+    assert explanation.startswith(f"{STREAM_HEALTH_REASON_CODE}:")
+    assert trade.submitted_legs == []

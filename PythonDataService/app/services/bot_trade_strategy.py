@@ -55,7 +55,11 @@ from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, r
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
-from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
+from app.services.market_liveness import (
+    liveness_blocks_entry,
+    market_data_bars_live,
+    market_liveness_fact,
+)
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
@@ -350,6 +354,7 @@ def _liveness_blocks_entry(
     capability_account_id: str | None,
     liveness: MarketLivenessFact,
     session: RunDecisionSession,
+    feed: MarketDataFeed,
 ) -> bool:
     """Decide whether the live liveness fact should block this ENTER.
 
@@ -368,7 +373,9 @@ def _liveness_blocks_entry(
 
     ``session.window`` is the executing authority's declared extended session
     (ADR 0059 D5.2). It is not account-scoped, so when one is declared it
-    proves PRE/POST on its own, with no capability lookup.
+    proves PRE/POST on its own, with no capability lookup — but a declared
+    schedule is not liveness, so ``feed`` supplies the second half: whether
+    the venue is actually printing bars for this symbol right now.
     """
     return liveness_blocks_entry(
         liveness,
@@ -379,7 +386,32 @@ def _liveness_blocks_entry(
             account_id=capability_account_id,
             extended_window=session.window,
         ),
+        extended_session_live=lambda: _market_data_live(feed, binding.symbol),
     )
+
+
+def _market_data_live(feed: MarketDataFeed, symbol: str) -> bool:
+    """Whether the feed is printing bars for ``symbol`` right now.
+
+    A health probe that raises proves nothing, and an extended session must
+    be *proven* live before new exposure is created, so it refuses — the
+    same disposition ``bot_start_admission.market_data_admission_fact``
+    takes on the same failure.
+    """
+    try:
+        health = feed.health(symbol)
+    except Exception as exc:
+        logger.warning(
+            "market-data health could not prove an extended session live",
+            extra={
+                "action": "bot_extended_session_liveness_unknown",
+                "feed_id": feed.feed_id,
+                "symbol": symbol,
+                "error": str(exc),
+            },
+        )
+        return False
+    return market_data_bars_live(health)
 
 
 def _engine_bar(bar: MarketDataBar) -> TradeBar:
@@ -841,7 +873,7 @@ async def run_trade_bot(
         # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if _liveness_blocks_entry(binding, capability_account_id, liveness, session):
+            if _liveness_blocks_entry(binding, capability_account_id, liveness, session, feed):
                 # Settle the staged candidate as refused. The strategy has not
                 # taken the position — it mutates position custody only in
                 # ``commit_signal_decision``, which never ran — so DISCARD is

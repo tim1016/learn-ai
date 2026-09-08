@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     SymbolTradingStatusEvidence,
@@ -9,6 +10,8 @@ from app.schemas.market_liveness import (
 from app.services.market_liveness import (
     MARKET_CLOCK_MAX_AGE_MS,
     compose_market_liveness,
+    liveness_blocks_entry,
+    market_data_bars_live,
 )
 
 _NOW = 1_700_000_000_000
@@ -203,3 +206,95 @@ def test_stale_market_clock_fails_closed() -> None:
 
     assert fact.state == "UNKNOWN"
     assert fact.reason_code == "MARKET_CLOCK_STALE"
+
+
+def _health(*, connected: bool, stale: bool) -> FeedHealth:
+    return FeedHealth(
+        connected=connected,
+        stale=stale,
+        last_bar_ms=_NOW - 60_000,
+        reason="" if connected and not stale else "test",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+
+def test_only_a_connected_unstale_feed_proves_bars_are_printing() -> None:
+    assert market_data_bars_live(_health(connected=True, stale=False)) is True
+    assert market_data_bars_live(_health(connected=True, stale=True)) is False
+    assert market_data_bars_live(_health(connected=False, stale=False)) is False
+    assert market_data_bars_live(None) is False
+
+
+def test_a_closed_clock_needs_both_the_schedule_and_live_bars_to_admit_an_enter() -> None:
+    """ADR 0022: the calendar owns scheduled structure, the feed owns liveness.
+
+    The declared window resolves the same PRE/POST phase during an
+    unscheduled venue closure as during a live session, because Alpaca's
+    clock is RTH-only and reports CLOSED through both. Only the feed
+    printing bars separates them.
+    """
+    closed = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock("CLOSED"),
+        connected=True,
+        connection_changed_at_ms=_NOW,
+        symbol_status=None,
+    )
+
+    def blocks(*, proven: bool, live: bool, use_rth: bool = False) -> bool:
+        return liveness_blocks_entry(
+            closed,
+            use_rth=use_rth,
+            extended_phase_proven=lambda: proven,
+            extended_session_live=lambda: live,
+        )
+
+    assert blocks(proven=True, live=True) is False
+    assert blocks(proven=True, live=False) is True
+    assert blocks(proven=False, live=True) is True
+    assert blocks(proven=True, live=True, use_rth=True) is True
+
+
+def test_neither_extended_predicate_is_consulted_off_the_closed_branch() -> None:
+    """Both stay lazy: every other state resolves without a lookup."""
+
+    def _never() -> bool:
+        raise AssertionError("the extended-hours predicates must not be consulted here")
+
+    tradable = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock(),
+        connected=True,
+        connection_changed_at_ms=_NOW,
+        symbol_status=_status(),
+    )
+    halted = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock(),
+        connected=True,
+        connection_changed_at_ms=_NOW,
+        symbol_status=_status("HALTED"),
+    )
+
+    assert (
+        liveness_blocks_entry(
+            tradable,
+            use_rth=False,
+            extended_phase_proven=_never,
+            extended_session_live=_never,
+        )
+        is False
+    )
+    assert (
+        liveness_blocks_entry(
+            halted,
+            use_rth=False,
+            extended_phase_proven=_never,
+            extended_session_live=_never,
+        )
+        is True
+    )

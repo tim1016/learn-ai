@@ -16,6 +16,7 @@ from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
@@ -247,15 +248,9 @@ async def test_blocked_entry_is_rolled_back_and_can_re_enter(
         repo.close()
 
 
-def test_closed_liveness_with_extended_phase_proven_does_not_block_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Alpaca's clock is RTH-only (#1671): a non-RTH binding whose account
-    and instrument have a fresh, proven extended-session capability must not
-    be blocked just because the RTH-only clock reports CLOSED."""
-    from types import SimpleNamespace
-
-    liveness = compose_market_liveness(
+def _closed_clock_liveness() -> MarketLivenessFact:
+    """The one fact all four gate cases share: a fresh, CLOSED broker clock."""
+    return compose_market_liveness(
         "SPY",
         now_ms=1_700_000_000_000,
         market_clock=MarketClockLivenessEvidence(
@@ -268,61 +263,136 @@ def test_closed_liveness_with_extended_phase_proven_does_not_block_entry(
         connection_changed_at_ms=1_700_000_000_000,
         symbol_status=None,
     )
+
+
+def _feed_with_health(*, connected: bool, stale: bool) -> _FakeFeed:
+    """A feed whose ``health`` reports exactly this liveness."""
+    feed = _FakeFeed([], mode="finite")
+    feed.health = lambda _symbol=None: FeedHealth(  # type: ignore[method-assign]
+        connected=connected,
+        stale=stale,
+        last_bar_ms=None,
+        reason="" if connected and not stale else "test",
+        active_subscription_count=1,
+        observed_at_ms=1_700_000_000_000,
+    )
+    return feed
+
+
+def test_closed_liveness_with_a_proven_phase_and_fresh_bars_does_not_block_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alpaca's clock is RTH-only (#1671): a non-RTH binding whose schedule
+    proves PRE/POST and whose feed is printing must not be blocked just
+    because the RTH-only clock reports CLOSED."""
+    from types import SimpleNamespace
+
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is False
+    blocked = bot_trade_strategy._liveness_blocks_entry(
+        binding,
+        "PA-TEST",
+        _closed_clock_liveness(),
+        _RTH_SESSION,
+        _feed_with_health(connected=True, stale=False),
+    )
+
+    assert blocked is False
+
+
+@pytest.mark.parametrize(
+    ("connected", "stale"),
+    [(True, True), (False, False), (False, True)],
+)
+def test_closed_liveness_with_a_proven_phase_but_no_fresh_bars_blocks_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    connected: bool,
+    stale: bool,
+) -> None:
+    """The declared window proves the *schedule*, not liveness.
+
+    Alpaca's clock reports CLOSED through every scheduled extended session,
+    so it cannot distinguish one from an unscheduled PRE/POST closure. The
+    live evidence that separates them is the feed printing bars for the
+    symbol; without it, a static window would have admitted new exposure
+    straight into a closed venue.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    binding = SimpleNamespace(use_rth=False, symbol="SPY")
+
+    blocked = bot_trade_strategy._liveness_blocks_entry(
+        binding,
+        "PA-TEST",
+        _closed_clock_liveness(),
+        _RTH_SESSION,
+        _feed_with_health(connected=connected, stale=stale),
+    )
+
+    assert blocked is True
+
+
+def test_closed_liveness_with_an_unreadable_feed_health_blocks_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A health probe that raises proves nothing, so it refuses."""
+    from types import SimpleNamespace
+
+    def _raise(_symbol: str | None = None):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    feed = _FakeFeed([], mode="finite")
+    feed.health = _raise  # type: ignore[method-assign]
+    binding = SimpleNamespace(use_rth=False, symbol="SPY")
+
+    blocked = bot_trade_strategy._liveness_blocks_entry(
+        binding, "PA-TEST", _closed_clock_liveness(), _RTH_SESSION, feed
+    )
+
+    assert blocked is True
 
 
 def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without a fresh, matching capability the calendar can prove only
-    RTH/CLOSED — CLOSED must still block a non-RTH binding's entry."""
+    RTH/CLOSED — CLOSED must still block a non-RTH binding's entry, however
+    healthy the feed is."""
     from types import SimpleNamespace
 
-    liveness = compose_market_liveness(
-        "SPY",
-        now_ms=1_700_000_000_000,
-        market_clock=MarketClockLivenessEvidence(
-            state="CLOSED",
-            source="test.clock",
-            observed_at_ms=1_700_000_000_000,
-            vendor_timestamp_ms=1_700_000_000_000,
-        ),
-        connected=True,
-        connection_changed_at_ms=1_700_000_000_000,
-        symbol_status=None,
-    )
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: False)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is True
+    blocked = bot_trade_strategy._liveness_blocks_entry(
+        binding,
+        "PA-TEST",
+        _closed_clock_liveness(),
+        _RTH_SESSION,
+        _feed_with_health(connected=True, stale=False),
+    )
+
+    assert blocked is True
 
 
-def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding() -> None:
     """An RTH-only binding never consults extended-phase capability — CLOSED
     blocks unconditionally, matching the previous, unambiguous behavior."""
     from types import SimpleNamespace
 
-    liveness = compose_market_liveness(
-        "SPY",
-        now_ms=1_700_000_000_000,
-        market_clock=MarketClockLivenessEvidence(
-            state="CLOSED",
-            source="test.clock",
-            observed_at_ms=1_700_000_000_000,
-            vendor_timestamp_ms=1_700_000_000_000,
-        ),
-        connected=True,
-        connection_changed_at_ms=1_700_000_000_000,
-        symbol_status=None,
-    )
     binding = SimpleNamespace(use_rth=True, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, _RTH_SESSION) is True
+    blocked = bot_trade_strategy._liveness_blocks_entry(
+        binding,
+        "PA-TEST",
+        _closed_clock_liveness(),
+        _RTH_SESSION,
+        _feed_with_health(connected=True, stale=False),
+    )
+
+    assert blocked is True
 
 
 @pytest.mark.asyncio
