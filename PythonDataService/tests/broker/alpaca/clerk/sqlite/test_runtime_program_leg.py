@@ -27,7 +27,7 @@ from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLiven
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import RetainedSourceBar
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import Clock, now_ms_utc, to_ms_utc
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
@@ -61,6 +61,19 @@ def _bar(hour: int, minute: int, *, phase: str, close: str = "100.00") -> Retain
         fetched_at_ms=end,
         session_phase=phase,
     )
+
+
+def _decision_clock(bar: RetainedSourceBar | None) -> Clock:
+    """Pin the Clerk's clock to the decision instant — the bar's close.
+
+    The runtime proves an extended phase at the repository's clock, so the
+    wall-clock default admits an extended ENTER only while the host clock
+    itself sits inside an extended session of a trading day.
+    """
+    if bar is None:
+        return now_ms_utc
+    end_ms = bar.end_ms
+    return lambda: end_ms
 
 
 def _binding(*, use_rth: bool) -> BrokerBotBinding:
@@ -108,7 +121,11 @@ async def _enter(
     stream_health: StreamHealthGate | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt."""
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_decision_clock(retained_source_bar),
+    )
     trade = _FakeTradePort()
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
@@ -144,7 +161,11 @@ async def _exit(
     retained_source_bar: RetainedSourceBar | None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt."""
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_decision_clock(retained_source_bar),
+    )
     trade = _FakeTradePort()
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
