@@ -6,9 +6,14 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
+)
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    EconomicProjectionUnavailable,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -55,7 +60,7 @@ def _fee(activity_id: str, net_amount: float | None, occurred_at_ms: int | None 
     )
 
 
-def _older(activity_id: str = "older") -> BrokerActivity:
+def _older(activity_id: str = "older", occurred_at_ms: int = DAY_START_MS - 1) -> BrokerActivity:
     """One non-FEE activity dated before the window: proof the read reached back."""
     return BrokerActivity(
         broker="alpaca",
@@ -67,7 +72,7 @@ def _older(activity_id: str = "older") -> BrokerActivity:
         quantity=None,
         price=None,
         net_amount=1_000.0,
-        occurred_at_ms=DAY_START_MS - 1,
+        occurred_at_ms=occurred_at_ms,
         observed_at_ms=DAY_END_MS,
     )
 
@@ -110,6 +115,20 @@ def test_observed_drift_beyond_tolerance() -> None:
 
     assert result.verdict == "drift"
     assert result.delta_usd == 0.27
+    assert "external orders" in result.why
+
+
+def test_when_the_tolerance_band_swallows_the_charge_the_why_says_so() -> None:
+    """100 sells of a fractional-cent fill: tolerance dwarfs the predicted charge."""
+    fills = tuple(
+        SessionFill(side=OrderSide.SELL, quantity=D("1"), fill_price=D("0.01")) for _ in range(100)
+    )
+
+    result = _reconcile(fills=fills, activities=(_older(), _fee("f1", -1.00)))
+
+    assert result.verdict == "within_tolerance"
+    assert "tolerance band" in result.why
+    assert "validate on low-sell-count sessions" in result.why
 
 
 def test_a_read_that_never_reached_the_windows_start_cannot_be_compared() -> None:
@@ -155,8 +174,16 @@ def test_fee_activities_from_other_days_are_ignored() -> None:
     assert result.verdict == "pending"  # nothing observed for this date; still inside the posting grace
 
 
-def test_pending_inside_the_posting_grace_period() -> None:
+def test_uncovered_read_is_unobserved_even_inside_the_grace_period() -> None:
+    """An incomplete read cannot prove "not posted yet" any more than it can prove "no fills"."""
     result = _reconcile(now_ms=DAY_END_MS + FEE_POSTING_GRACE_MS - 1)
+
+    assert result.verdict == "unobserved"
+    assert result.observed_total_usd is None
+
+
+def test_pending_inside_the_grace_period_with_coverage() -> None:
+    result = _reconcile(activities=(_older(),), now_ms=DAY_END_MS + FEE_POSTING_GRACE_MS - 1)
 
     assert result.verdict == "pending"
     assert result.observed_total_usd is None
@@ -176,12 +203,19 @@ def test_fee_row_without_net_amount_is_unobserved_not_zero() -> None:
     assert result.observed_activity_count == 2
 
 
-def test_no_fills_and_no_fees() -> None:
+def test_no_fills_and_no_activities_at_all_is_unobserved_not_no_fills() -> None:
+    """An incomplete read cannot prove "no fills posted" either; a young account also lands here."""
     result = _reconcile(fills=())
 
-    assert result.verdict == "no_fills"
+    assert result.verdict == "unobserved"
     assert result.predicted is not None
     assert result.predicted.total_usd == 0.0
+
+
+def test_no_fills_with_a_covering_activity_is_no_fills() -> None:
+    result = _reconcile(fills=(), activities=(_older(),))
+
+    assert result.verdict == "no_fills"
 
 
 def test_fees_observed_with_no_fills_is_drift() -> None:
@@ -216,6 +250,7 @@ def test_rate_unpinned_still_reports_what_alpaca_charged() -> None:
     """An unpredictable session is not an unobservable one: the charge is still fact."""
     day_start_2025 = et_midnight_ms(date(2025, 6, 2))
     charged = (
+        _older(occurred_at_ms=day_start_2025 - 1),
         _fee("f1", -0.75, day_start_2025),
         _fee("f2", -0.20, day_start_2025),
     )
@@ -228,12 +263,24 @@ def test_rate_unpinned_still_reports_what_alpaca_charged() -> None:
     assert result.observed_activity_count == 2
 
 
+def test_rate_unpinned_without_coverage_withholds_the_observed_total() -> None:
+    """Coverage gates the rate_unpinned arm's claim too: it just can't withhold a prediction."""
+    day_start_2025 = et_midnight_ms(date(2025, 6, 2))
+    charged = (_fee("f1", -0.75, day_start_2025),)
+
+    result = _unpinned_2025(activities=charged)
+
+    assert result.verdict == "rate_unpinned"
+    assert result.observed_total_usd is None
+    assert "cannot be shown to be complete" in result.why
+
+
 class _Port:
     def __init__(self) -> None:
-        self.calls: list[tuple[int | None, int]] = []
+        self.calls: list[int | None] = []
 
     async def list_activities(self, *, after_ms: int | None = None, limit: int = 100) -> list[BrokerActivity]:
-        self.calls.append((after_ms, limit))
+        self.calls.append(after_ms)
         return []
 
 
@@ -279,5 +326,47 @@ async def test_facade_reads_the_account_window_and_an_activity_span_it_can_bound
         repo.close()
 
     assert result.account_id == "PA-FEE-RECON"
-    assert (result.fill_count, result.verdict) == (0, "no_fills")
-    assert port.calls == [(0, 100)]
+    # The fake port returns no activities at all, so the read never demonstrates it
+    # reached past the window start: "unobserved", not "no_fills" (I2 gates that
+    # claim on coverage too).
+    assert (result.fill_count, result.verdict) == (0, "unobserved")
+    assert port.calls == [0]
+
+
+async def test_facade_reports_unavailable_when_the_reader_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader refusal (row-count guard, malformed row) becomes ``unavailable``, not a 500."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-FEE-RECON", artifacts_root=tmp_path)
+    port = _Port()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
+                repo=repo,
+                read=port,  # type: ignore[arg-type]
+                trade=port,  # type: ignore[arg-type]
+            ),
+        )
+    )
+
+    def _refuse(clerk: SqliteAlpacaClerkFacade, *, from_ms: int, to_ms: int) -> list[SessionFill]:
+        raise EconomicProjectionUnavailable("SQLite session fill window limit exceeded.")
+
+    monkeypatch.setattr("app.services.alpaca_fee_reconciliation._read_session_fills", _refuse)
+    try:
+        result = await session_fee_reconciliation(
+            broker="alpaca",
+            port=port,
+            session_open_ms=SESSION_OPEN_MS,
+            now_ms=DAY_END_MS,
+        )
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert result.verdict == "unavailable"
+    assert result.account_id == "PA-FEE-RECON"
+    assert "SQLite session fill window limit exceeded." in result.why
+    assert port.calls == []
