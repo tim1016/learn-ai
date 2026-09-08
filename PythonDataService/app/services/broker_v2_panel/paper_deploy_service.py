@@ -160,6 +160,71 @@ def _broker_mode_for(custody_world: CustodyWorld) -> BrokerExecutionMode:
 
 
 @dataclass(frozen=True)
+class _DeployViewCopy:
+    """Every sentence the deploy view scopes to the custody world.
+
+    The shadow world reads a live, real-money account by design (ADR 0059
+    D2), so calling that account "paper" on the page is exactly the false
+    safety signal this slice exists to prevent. Only the *prose* is
+    world-scoped: ``gate_id`` and the eligibility ``reason_code`` stay
+    world-neutral, because they are opaque wire tokens the Frontend already
+    consumes.
+    """
+
+    posture_label: str
+    posture_ready_headline: str
+    posture_blocked_headline: str
+    posture_ready_explanation: str
+    posture_evidence_summary: str
+    posture_recovery: str
+    eligible_headline: str
+    eligible_explanation: str
+
+
+def _deploy_view_copy(account: BrokerAccountSnapshot, custody_world: CustodyWorld) -> _DeployViewCopy:
+    """The one place the deploy view's prose branches on the custody world."""
+    if custody_world == "shadow":
+        return _DeployViewCopy(
+            posture_label="Shadow account posture",
+            posture_ready_headline="The Alpaca shadow account is active and readable.",
+            posture_blocked_headline="Deployment is blocked by the Alpaca shadow account posture.",
+            posture_ready_explanation=(
+                "The server resolved the live account this shadow authority reads and found no "
+                "broker trading block."
+            ),
+            posture_evidence_summary=(
+                f"Alpaca live account {account.account_id}, read through its shadow authority, "
+                f"reports status {account.account_status}."
+            ),
+            posture_recovery=(
+                f"Restore live account {account.account_id} to ACTIVE and unblocked, then refresh."
+            ),
+            eligible_headline="This Alpaca account is eligible for a Clerk-governed shadow deployment.",
+            eligible_explanation=(
+                "The operator may choose Clerk-governed shadow execution — every fill synthesized "
+                "against this live account's real reads, nothing submitted — or a zero-broker-write "
+                "Dry Run before launch."
+            ),
+        )
+    return _DeployViewCopy(
+        posture_label="Paper account posture",
+        posture_ready_headline="The Alpaca paper account is active and tradable.",
+        posture_blocked_headline="Deployment is blocked by the Alpaca paper account posture.",
+        posture_ready_explanation=(
+            "The server resolved the selected paper account and found no broker trading block."
+        ),
+        posture_evidence_summary=(
+            f"Alpaca paper account {account.account_id} reports status {account.account_status}."
+        ),
+        posture_recovery="Restore the paper account to ACTIVE and unblocked, then refresh.",
+        eligible_headline="This Alpaca paper account is eligible for a Clerk-governed deployment.",
+        eligible_explanation=(
+            "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class _ReceiptCopy:
     """The operator sentences one execution mode's terminal receipt says.
 
@@ -339,6 +404,7 @@ def _readiness_checks(
     *,
     now_ms: int,
     symbol: str | None,
+    copy: _DeployViewCopy,
     custody_world: CustodyWorld,
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
     accepted_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "accepted")
@@ -410,24 +476,20 @@ def _readiness_checks(
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="broker.account_posture",
-            label="Paper account posture",
+            label=copy.posture_label,
             ready=account_ready,
             scope="account",
             authority="Alpaca account snapshot",
-            headline=(
-                "The Alpaca paper account is active and tradable."
-                if account_ready
-                else "Deployment is blocked by the Alpaca paper account posture."
-            ),
+            headline=(copy.posture_ready_headline if account_ready else copy.posture_blocked_headline),
             explanation=(
-                "The server resolved the selected paper account and found no broker trading block."
+                copy.posture_ready_explanation
                 if account_ready
                 else (
                     f"Account mode is {account.account_mode}; status is {account.account_status}; "
                     f"trading_blocked={account.trading_blocked}; account_blocked={account.account_blocked}."
                 )
             ),
-            evidence_summary=(f"Alpaca paper account {account.account_id} reports status {account.account_status}."),
+            evidence_summary=copy.posture_evidence_summary,
             evidence={
                 "account_id": account.account_id,
                 "mode": account.account_mode,
@@ -435,7 +497,7 @@ def _readiness_checks(
                 "trading_blocked": account.trading_blocked,
                 "account_blocked": account.account_blocked,
             },
-            recovery=None if account_ready else "Restore the paper account to ACTIVE and unblocked, then refresh.",
+            recovery=None if account_ready else copy.posture_recovery,
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="clerk.custody_freeze",
@@ -536,6 +598,8 @@ def _readiness_checks(
 
 def _eligibility(
     checks: tuple[AlpacaPaperDeployReadinessCheck, ...],
+    *,
+    copy: _DeployViewCopy,
 ) -> AlpacaPaperDeployEligibility:
     blocked = next((check for check in checks if not check.ready), None)
     if blocked is not None:
@@ -557,10 +621,8 @@ def _eligibility(
     return AlpacaPaperDeployEligibility(
         eligible=True,
         reason_code="ALPACA_PAPER_DEPLOY_READY",
-        headline="This Alpaca paper account is eligible for a Clerk-governed deployment.",
-        explanation=(
-            "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
-        ),
+        headline=copy.eligible_headline,
+        explanation=copy.eligible_explanation,
         next_action="Complete the deployment ticket, review the summary, then deploy the bot.",
     )
 
@@ -642,15 +704,17 @@ def build_alpaca_paper_deploy_view(
     strategies = _strategy_views(
         validation_entries, account_id=account.account_id, custody_world=custody_world
     )
+    copy = _deploy_view_copy(account, custody_world)
     readiness_checks = _readiness_checks(
         account,
         clerk_status,
         strategies,
         now_ms=evaluated_at_ms,
         symbol=symbol,
+        copy=copy,
         custody_world=custody_world,
     )
-    eligibility = _eligibility(readiness_checks)
+    eligibility = _eligibility(readiness_checks, copy=copy)
     dry_run_eligibility = _dry_run_eligibility(
         strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
     )

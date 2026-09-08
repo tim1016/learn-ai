@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, HoldState
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.broker_bots import (
+    AlpacaPaperDeployReadinessCheck,
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
@@ -113,10 +114,9 @@ def test_shadow_world_authors_shadow_and_dry_run_only(monkeypatch: pytest.Monkey
     assert view.eligibility.eligible is True  # account_ready admits the shadow world
 
 
-def test_real_paper_world_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+def _paper_view(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperDeployView:
     admit_canary_pairing(monkeypatch, _STRATEGY_KEY, ACCT)
-
-    view = build_alpaca_paper_deploy_view(
+    return build_alpaca_paper_deploy_view(
         account_snapshot(),
         _clerk_status(ACCT),
         _entries(),
@@ -124,10 +124,66 @@ def test_real_paper_world_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
         custody_world="real_paper",
     )
 
+
+def test_real_paper_world_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    view = _paper_view(monkeypatch)
+
     assert view.account_mode == "paper"
     assert view.account_label == f"Alpaca paper · {ACCT}"
     assert {mode.mode for mode in view.execution_modes} == {"dry_run", "paper", "live"}
     assert any("paper" in strategy.admissible_modes for strategy in view.strategies)
+
+
+def _account_posture_row(view: AlpacaPaperDeployView) -> AlpacaPaperDeployReadinessCheck:
+    return next(check for check in view.readiness_checks if check.gate_id == "broker.account_posture")
+
+
+def test_shadow_view_never_calls_the_live_account_a_paper_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The page must not tell an operator that a real-money account is paper."""
+    view = _shadow_view(monkeypatch)
+    row = _account_posture_row(view)
+
+    assert row.label == "Shadow account posture"
+    assert row.headline == "The Alpaca shadow account is active and readable."
+    assert row.evidence_summary == (
+        f"Alpaca live account {LIVE_ACCT}, read through its shadow authority, reports status ACTIVE."
+    )
+    assert view.eligibility.headline == (
+        "This Alpaca account is eligible for a Clerk-governed shadow deployment."
+    )
+    prose = (
+        row.label,
+        row.headline,
+        row.explanation,
+        row.evidence_summary,
+        view.eligibility.headline,
+        view.eligibility.explanation,
+    )
+    assert not any("paper" in sentence.lower() for sentence in prose)
+    # The wire tokens the Frontend consumes are deliberately not world-scoped.
+    assert row.gate_id == "broker.account_posture"
+    assert view.eligibility.reason_code == "ALPACA_PAPER_DEPLOY_READY"
+
+
+def test_real_paper_view_still_names_the_paper_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Characterization pin: the real-paper world's prose stays byte-identical."""
+    view = _paper_view(monkeypatch)
+    row = _account_posture_row(view)
+
+    assert row.label == "Paper account posture"
+    assert row.headline == "The Alpaca paper account is active and tradable."
+    assert row.explanation == (
+        "The server resolved the selected paper account and found no broker trading block."
+    )
+    assert row.evidence_summary == f"Alpaca paper account {ACCT} reports status ACTIVE."
+    assert view.eligibility.headline == (
+        "This Alpaca paper account is eligible for a Clerk-governed deployment."
+    )
+    assert view.eligibility.explanation == (
+        "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
+    )
 
 
 def _request(execution_mode: str) -> AlpacaPaperDeployRequest:
