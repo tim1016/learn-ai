@@ -339,6 +339,52 @@ class SqliteEconomicProjectionReader:
                 fills=fills,
             )
 
+    def account_fill_window(
+        self,
+        *,
+        from_ms: int,
+        to_ms: int,
+        limit: int = DEFAULT_CHART_FILL_WINDOW_LIMIT,
+    ) -> tuple[FillRecord, ...]:
+        """Every effective account fill with ``from_ms <= economic filled time < to_ms``.
+
+        The account-wide sibling of :meth:`bot_fill_window`: bot, manual and S2
+        fills alike, identified by their custody subject because a manual fill
+        has no ``strategy_instance_id`` and still belongs to the account's
+        economics.  Filtering is on the root's economic time, not the
+        correction's audit-arrival time.  Never silently truncates: more rows
+        than ``limit`` raises ``EconomicProjectionUnavailable`` (the
+        FillWindowProjection contract).
+        """
+        _validate_window(from_ms=from_ms, to_ms=to_ms)
+        limit = _bounded_chart_fill_window_limit(limit)
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_fill_rows(
+                strategy_instance_ids=None,
+                from_ms=from_ms,
+                to_ms=to_ms,
+                cursor_key=None,
+                limit=limit,
+            )
+            if len(rows) > limit:
+                raise EconomicProjectionUnavailable(
+                    "SQLite account fill window limit exceeded; narrow the requested range."
+                )
+            return tuple(
+                sorted(
+                    (
+                        _to_fill_record(
+                            row,
+                            account_id=self._account_id,
+                            custody_subject_identity=True,
+                        )
+                        for row in rows
+                    ),
+                    key=lambda record: (record.filled_at_ms, record.ledger_sequence),
+                )
+            )
+
     def account_executions(
         self,
         *,

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
     EconomicProjectionError,
@@ -24,6 +25,10 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
+from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ManualOrderSubmission,
+    accept_manual_order,
+)
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg
@@ -33,6 +38,9 @@ from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
 _SID = "s2-economic"
 _RUN_ID = "run-s2-economic"
+_OPERATOR_ID = "operator-42"
+_TICKET_ID = "7de3a77c-b698-4e0d-a5d1-2f624574ed35"
+_LEG_ID = "09d6d63e-6375-4e6d-8d20-3b1bf70c2465"
 _ATOL = 1e-6
 _RTOL = 0.0
 
@@ -160,6 +168,64 @@ def _append_correction(
     result = repo.append_execution_correction_or_raise(
         correction=correction,
         build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
+    )
+    assert result == "appended"
+
+
+def _accept_manual(repo: ClerkSqliteRepository) -> ManualOrderSubmission:
+    """Register one operator-owned ticket leg: a fill with no strategy instance."""
+    return accept_manual_order(
+        repo,
+        account_id=_ACCOUNT_ID,
+        operator_id=_OPERATOR_ID,
+        ticket_id=_TICKET_ID,
+        leg_id=_LEG_ID,
+        leg=BrokerOrderLeg(symbol="MSFT", side="buy", quantity=2),
+    )
+
+
+def _append_manual_slice(
+    repo: ClerkSqliteRepository,
+    manual: ManualOrderSubmission,
+    *,
+    execution_id: str,
+    side: str,
+    quantity: float,
+    price: float,
+    occurred_at_ms: int,
+) -> None:
+    facts = ExecutionSliceFilledFacts(
+        execution_id=execution_id,
+        symbol="MSFT",
+        side=side,
+        slice_qty=quantity,
+        slice_price=price,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=occurred_at_ms,
+    )
+    result = repo.append_execution_slice_if_absent(
+        execution_id=execution_id,
+        order_ref=manual.leg.order_ref or "",
+        build_transition=lambda: TransitionInput(
+            strategy_instance_id=None,
+            run_id=None,
+            command_id=manual.command.command_id,
+            effect_operation_id=manual.leg.effect_operation_id,
+            order_ref=manual.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=occurred_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=facts.to_facts_json(),
+        ),
+        build_coverage_conflict=lambda: (_ for _ in ()).throw(
+            AssertionError("exact test fixture cannot have cumulative recovery coverage")
+        ),
     )
     assert result == "appended"
 
@@ -371,6 +437,68 @@ def test_bot_fill_window_returns_all_effective_records_or_fails_before_truncatio
             "exec-history-0",
             "exec-history-1",
             "exec-history-2",
+        ]
+    finally:
+        repo.close()
+
+
+def test_account_fill_window_spans_every_custody_owner_inside_the_window(
+    tmp_path: Path,
+) -> None:
+    """Account-wide fee truth owes on manual fills too, and refuses truncation."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-inside-strategy",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        _append_manual_slice(
+            repo,
+            _accept_manual(repo),
+            execution_id="exec-inside-manual",
+            side="BUY",
+            quantity=2.0,
+            price=50.0,
+            occurred_at_ms=session.open_ms_utc + 2_000,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-outside-window",
+            side="BUY",
+            quantity=1.0,
+            price=101.0,
+            occurred_at_ms=session.close_ms_utc,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            fills = reader.account_fill_window(
+                from_ms=session.open_ms_utc,
+                to_ms=session.close_ms_utc,
+            )
+            with pytest.raises(EconomicProjectionUnavailable, match="window limit"):
+                reader.account_fill_window(
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                    limit=1,
+                )
+        finally:
+            reader.close()
+
+        assert [fill.event_key for fill in fills] == [
+            "exec-inside-strategy",
+            "exec-inside-manual",
+        ]
+        assert [fill.symbol for fill in fills] == ["GOOGL", "MSFT"]
+        assert [fill.sid for fill in fills] == [
+            f"bot:{_SID}",
+            manual_operator_subject_id(_OPERATOR_ID),
         ]
     finally:
         repo.close()
