@@ -135,7 +135,7 @@ class ActiveClerkRuntime:
         return _ACCOUNT_KIND_BY_AUTHORITY.get(self.authority_kind)
 
 
-def _open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteRepository:
+def open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteRepository:
     return ClerkSqliteRepository.open(
         account_id=account_id,
         artifacts_root=artifacts_root,
@@ -172,7 +172,7 @@ class _ComposedAuthority:
     hold_sync: StreamHealthHoldSync
 
 
-async def _compose_repository_runtime(
+async def compose_repository_runtime(
     *,
     ports: AccountBoundBrokerPorts,
     authority_kind: Literal["sqlite", "shadow"],
@@ -287,7 +287,7 @@ async def _compose_repository_runtime(
         raise
 
 
-def _unavailable(
+def unavailable_runtime(
     reason_code: str,
     *,
     account_id: str | None,
@@ -312,7 +312,7 @@ def _unavailable(
     )
 
 
-async def _activate_isolated_authority(
+async def activate_isolated_authority(
     *,
     account_id: str,
     artifacts_root: Path,
@@ -368,4 +368,8 @@ __all__ = [
     "AuthorityKind",
     "BackgroundSweep",
     "ClerkStartupFailure",
+    "activate_isolated_authority",
+    "compose_repository_runtime",
+    "open_repository",
+    "unavailable_runtime",
 ]

@@ -18,9 +18,9 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
-    _activate_isolated_authority,
-    _compose_repository_runtime,
-    _unavailable,
+    activate_isolated_authority,
+    compose_repository_runtime,
+    unavailable_runtime,
 )
 from app.broker.alpaca.clerk.shadow_activation import (
     ShadowActivationInvalid,
@@ -74,9 +74,9 @@ async def select_shadow_clerk_runtime(
             "live account refused for shadow: order namespace not proven empty",
             extra={"action": "shadow_namespace_refused", "reason_code": exc.reason_code},
         )
-        return _unavailable(exc.reason_code, account_id=account.account_id, recovery=str(exc))
+        return unavailable_runtime(exc.reason_code, account_id=account.account_id, recovery=str(exc))
     except BrokerError as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=account.account_id,
             recovery=f"Restore the live account's order-history read: {exc}",
@@ -98,7 +98,7 @@ async def select_shadow_clerk_runtime(
             },
             exc_info=True,
         )
-        return _unavailable(
+        return unavailable_runtime(
             "SHADOW_CLERK_STARTUP_FAILED",
             account_id=account.account_id,
             recovery=f"Restore the live account's shadow composition: {exc}",
@@ -108,14 +108,14 @@ async def select_shadow_clerk_runtime(
     try:
         activation = store.latest(shadow.account_id)
     except ShadowActivationInvalid as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "SHADOW_ACTIVATION_RECORD_INVALID",
             account_id=shadow.account_id,
             recovery=str(exc),
             activation_detected=True,
         )
     if activation is None:
-        return _unavailable(
+        return unavailable_runtime(
             "SHADOW_ACTIVATION_REQUIRED",
             account_id=shadow.account_id,
             recovery=(
@@ -136,7 +136,7 @@ async def select_shadow_clerk_runtime(
         window=read.capabilities().extended_hours_window,
     )
     try:
-        composed = await _compose_repository_runtime(
+        composed = await compose_repository_runtime(
             ports=ports,
             authority_kind="shadow",
             account_mode=account.account_mode,
@@ -156,7 +156,7 @@ async def select_shadow_clerk_runtime(
             extra={"action": "shadow_active_clerk_startup_failed", "account_id": shadow.account_id},
             exc_info=True,
         )
-        return _unavailable(
+        return unavailable_runtime(
             (
                 "SHADOW_ACTIVATION_RECORD_INVALID"
                 if isinstance(exc, ShadowActivationInvalid)
@@ -192,7 +192,7 @@ async def activate_shadow_clerk_authority(
     ``scripts.manage_alpaca_shadow activate``. The custody database it creates
     is the shadow world's own -- the live account's authority is untouched.
     """
-    record = await _activate_isolated_authority(
+    record = await activate_isolated_authority(
         account_id=shadow_account_id_for_live_account(live_account_id),
         artifacts_root=artifacts_root,
         store=activation_store or ShadowActivationStore(artifacts_root),

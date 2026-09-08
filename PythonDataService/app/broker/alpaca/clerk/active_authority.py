@@ -33,10 +33,10 @@ from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
     AuthorityKind,
     ClerkStartupFailure,
-    _activate_isolated_authority,
-    _compose_repository_runtime,
-    _open_repository,
-    _unavailable,
+    activate_isolated_authority,
+    compose_repository_runtime,
+    open_repository,
+    unavailable_runtime,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
@@ -89,7 +89,7 @@ async def select_active_clerk_runtime(
     trade: BrokerTradePort,
     artifacts_root: Path,
     activation_store: ActivationResolver | None = None,
-    repository_opener: Callable[[str, Path], ClerkSqliteRepository] = _open_repository,
+    repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
     execution_lease_wait_timeout_s: float = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
@@ -110,7 +110,7 @@ async def select_active_clerk_runtime(
             "Alpaca configured mode and observed account disagree; Clerk unavailable",
             extra={"action": "active_clerk_mode_disagreement", "detail": exc.detail},
         )
-        return _unavailable(
+        return unavailable_runtime(
             exc.reason_code,
             account_id=None,
             recovery=exc.detail or exc.message,
@@ -121,7 +121,7 @@ async def select_active_clerk_runtime(
             extra={"action": "active_clerk_account_resolution_failed"},
             exc_info=True,
         )
-        return _unavailable(
+        return unavailable_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=None,
             recovery=f"Restore the Alpaca account identity probe: {exc}",
@@ -145,7 +145,7 @@ async def select_active_clerk_runtime(
             trade=trade,
         )
     except AccountAuthorityIdentityError as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "REAL_PORT_REJECTED_SYNTHETIC_ACCOUNT",
             account_id=account.account_id,
             recovery=str(exc),
@@ -155,7 +155,7 @@ async def select_active_clerk_runtime(
     try:
         activation = store.latest(account.account_id)
     except ActivationRecordInvalid as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "ACTIVATION_RECORD_INVALID",
             account_id=account.account_id,
             recovery=str(exc),
@@ -169,7 +169,7 @@ async def select_active_clerk_runtime(
         prior_authority_generation=activation.authority_generation,
         artifacts_root=artifacts_root,
     ):
-        return _unavailable(
+        return unavailable_runtime(
             "DEVELOPER_RESET_REACTIVATION_REQUIRED",
             account_id=account.account_id,
             recovery=(
@@ -182,7 +182,7 @@ async def select_active_clerk_runtime(
         )
 
     if activation is None:
-        return _unavailable(
+        return unavailable_runtime(
             "ACTIVATION_REQUIRED",
             account_id=account.account_id,
             recovery=(
@@ -204,7 +204,7 @@ async def select_active_clerk_runtime(
             raise ActivationRecordInvalid("activation record disappeared during SQLite startup")
 
     try:
-        composed = await _compose_repository_runtime(
+        composed = await compose_repository_runtime(
             ports=ports,
             authority_kind="sqlite",
             account_mode=account.account_mode,
@@ -226,7 +226,7 @@ async def select_active_clerk_runtime(
             },
             exc_info=True,
         )
-        return _unavailable(
+        return unavailable_runtime(
             (
                 "ACTIVATION_RECORD_INVALID"
                 if isinstance(exc, ActivationRecordInvalid)
@@ -267,7 +267,7 @@ async def activate_synthetic_clerk_authority(
     until a caller deliberately performs this one-time activation step.
     """
     require_synthetic_account_id(account_id)
-    record = await _activate_isolated_authority(
+    record = await activate_isolated_authority(
         account_id=account_id,
         artifacts_root=artifacts_root,
         store=activation_store or SyntheticActivationStore(artifacts_root),
@@ -283,7 +283,7 @@ async def select_synthetic_clerk_runtime(
     trade: BrokerTradePort,
     artifacts_root: Path,
     activation_store: SyntheticActivationStore | None = None,
-    repository_opener: Callable[[str, Path], ClerkSqliteRepository] = _open_repository,
+    repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
 ) -> ActiveClerkRuntime:
     """Recover one explicit synthetic account without consulting Alpaca.
@@ -298,7 +298,7 @@ async def select_synthetic_clerk_runtime(
         if observed.account_id != account_id:
             raise AccountAuthorityIdentityError("synthetic account probe disagrees with authority key")
     except (AccountAuthorityIdentityError, ValueError) as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "SYNTHETIC_PORT_ACCOUNT_MISMATCH",
             account_id=account_id,
             recovery=str(exc),
@@ -308,14 +308,14 @@ async def select_synthetic_clerk_runtime(
     try:
         activation = store.latest(account_id)
     except SyntheticActivationInvalid as exc:
-        return _unavailable(
+        return unavailable_runtime(
             "SYNTHETIC_ACTIVATION_RECORD_INVALID",
             account_id=account_id,
             recovery=str(exc),
             activation_detected=True,
         )
     if activation is None:
-        return _unavailable(
+        return unavailable_runtime(
             "SYNTHETIC_ACTIVATION_REQUIRED",
             account_id=account_id,
             recovery="Explicitly activate this sim: account before composing its Clerk.",
@@ -371,7 +371,7 @@ async def select_synthetic_clerk_runtime(
             await sweep.stop()
         if repository is not None:
             repository.close()
-        return _unavailable(
+        return unavailable_runtime(
             "SYNTHETIC_CLERK_STARTUP_FAILED",
             account_id=account_id,
             recovery=str(exc),
