@@ -5255,7 +5255,7 @@ export interface components {
              * Clerk Authority
              * @enum {string}
              */
-            clerk_authority: "sqlite" | "synthetic" | "unavailable" | "not_installed";
+            clerk_authority: "sqlite" | "synthetic" | "shadow" | "unavailable" | "not_installed";
             /** Clerk Refusal Reason Code */
             clerk_refusal_reason_code: string | null;
             /**

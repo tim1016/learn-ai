@@ -791,8 +791,11 @@ async def run_trade_bot(
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
-    if getattr(clerk, "authority_kind", None) != "sqlite":
-        raise RuntimeError("Trade-mode decisions require the active SQLite Alpaca Clerk.")
+    if getattr(clerk, "authority_kind", None) not in {"sqlite", "shadow"}:
+        raise RuntimeError(
+            "Trade-mode decisions require the active account Clerk "
+            "(real paper, or the shadow of a live account)."
+        )
     account_id = getattr(clerk, "account_id", None)
     if not isinstance(account_id, str) or not account_id:
         raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")

@@ -241,13 +241,26 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     # timestamp the recovery-evaluation observation reads. Wiring the plain
     # publisher would keep reads fresh but let a dead sweep masquerade as
     # alive through one-off admission reconciliations.
-    publishers = source.count("on_result=facade.publish_sweep_reconciliation")
+    #
+    # Two binding shapes exist since the shadow authority joined (ADR 0059 D2):
+    # the synthetic path names the seam inline, and the shared real-paper /
+    # shadow composition binds it to ``publish`` first so a shadow authority's
+    # per-day session journal can wrap it.
+    publishers = source.count("on_result=facade.publish_sweep_reconciliation") + source.count(
+        "publish = facade.publish_sweep_reconciliation"
+    )
 
     assert constructions > 0, "no sweep construction found; update this guard"
     assert publishers == constructions, (
         f"{constructions} ReconciliationSweep construction(s) but {publishers} "
         "publish their verdict via the sweep-attributed seam; every sweep must "
         "feed the read projection and the sweep-liveness observation"
+    )
+    # A wrapping listener must compose *around* the seam, never displace it:
+    # the publisher still runs, and the listener observes what it published.
+    assert "sweep_listener(publish(result))" in source, (
+        "the composed sweep listener no longer runs the sweep-attributed "
+        "publisher; a wrapped sweep must publish before its listener observes"
     )
 
 

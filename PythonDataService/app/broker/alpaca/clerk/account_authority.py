@@ -198,6 +198,21 @@ def bind_synthetic_ports(
     )
 
 
+def bind_shadow_ports(
+    *,
+    account_id: str,
+    read: BrokerReadPort,
+    trade: BrokerTradePort,
+) -> AccountBoundBrokerPorts:
+    """Create a shadow composition only for the reserved namespace (ADR 0059 D2)."""
+    return AccountBoundBrokerPorts(
+        account_id=require_shadow_account_id(account_id),
+        authority_kind="shadow",
+        read=read,
+        trade=trade,
+    )
+
+
 __all__ = [
     "PAPER_EVIDENCE_ACCOUNT_PREFIX",
     "SHADOW_ACCOUNT_PREFIX",
@@ -208,6 +223,7 @@ __all__ = [
     "AccountBoundBrokerPorts",
     "authority_kind_for_account",
     "bind_real_alpaca_ports",
+    "bind_shadow_ports",
     "bind_synthetic_ports",
     "evidence_account_id_for",
     "is_shadow_account_id",

@@ -755,3 +755,22 @@ async def test_unexplained_hold_refresh_retains_its_broker_event_and_names_its_e
     assert "broker-evt-1" in json.loads(raised["facts_json"])["evidence_refs"]
     assert "broker-evt-2" in json.loads(refreshed["facts_json"])["evidence_refs"]
     assert "broker-evt-2" in json.loads(active["evidence_refs_json"])
+
+
+async def test_null_sink_records_nothing_and_answers_order_event() -> None:
+    from app.broker.alpaca.clerk.trade_evidence import NullTradeUpdateEvidenceSink
+
+    sink = NullTradeUpdateEvidenceSink()
+    read = object()
+
+    assert sink.guard_reconnect_read(read) is read  # type: ignore[arg-type]
+    disposition = await sink.record_lifecycle_event(
+        client_order_id="x",
+        event=BrokerOrderEvent(event_type="fill", occurred_at_ms=1, price=1.0, quantity=1.0),
+        event_key="k",
+        order=None,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    assert disposition == "order_event"
+    assert await sink.reconcile_gap() is None

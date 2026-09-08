@@ -43,7 +43,7 @@ class RevisionBoundRunRegistrar(Protocol):
 class ActiveAlpacaClerk(Protocol):
     """Safety-critical surface exposed by the activated SQLite authority."""
 
-    authority_kind: Literal["sqlite", "synthetic"]
+    authority_kind: Literal["sqlite", "synthetic", "shadow"]
     broker_id: str
 
     @property

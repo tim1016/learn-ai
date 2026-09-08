@@ -257,3 +257,20 @@ async def test_generate_without_any_end_bound_refuses(tmp_path: Path) -> None:
 
     with pytest.raises(RunReplayUnavailableError):
         await service.generate("alpaca", _SID, "run-1")
+
+
+def test_ledger_namespace_follows_the_sealed_binding_custody_world() -> None:
+    from app.services.run_replay_proof import ledger_account_id_for
+
+    trade = _binding(run_id="run-1")
+
+    assert (
+        ledger_account_id_for(trade.model_copy(update={"sealed_account_id": "shadow:9LIVE0001"}))
+        == f"shadow-evidence:{_SID}"
+    )
+    assert (
+        ledger_account_id_for(trade.model_copy(update={"sealed_account_id": "PA-TEST"}))
+        == f"paper:{_SID}"
+    )
+    with pytest.raises(RunReplayUnavailableError):
+        ledger_account_id_for(trade.model_copy(update={"mode": "log_only"}))

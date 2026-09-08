@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
     require_real_account_id,
+    require_shadow_account_id,
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
@@ -133,6 +134,9 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
+# The authorities whose fills are synthesized from evidence, so every effect
+# must carry the exact retained decision bar it was priced from.
+_BAR_BOUND_AUTHORITIES: Final = frozenset({"synthetic", "shadow"})
 # An EXIT reduces the program's own position, so its leg is the opposite side.
 _REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
 logger = logging.getLogger(__name__)
@@ -189,7 +193,7 @@ class _PublishedReconciliation:
 class SqliteAlpacaClerkFacade:
     """Narrow live-control surface backed by one account repository."""
 
-    authority_kind: Literal["sqlite", "synthetic"]
+    authority_kind: Literal["sqlite", "synthetic", "shadow"]
     broker_id = "alpaca"
     supports_revision_bound_admission = True
 
@@ -201,7 +205,7 @@ class SqliteAlpacaClerkFacade:
         trade: BrokerTradePort,
         stream_health: StreamHealthGate | None = None,
         intake: ReentrantAsyncLock | None = None,
-        authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
+        authority_kind: Literal["sqlite", "synthetic", "shadow"] = "sqlite",
         account_mode: Literal["paper", "live"],
         program_leg_policy: ProgramLegPolicy | None = None,
     ) -> None:
@@ -209,6 +213,10 @@ class SqliteAlpacaClerkFacade:
             require_synthetic_account_id(repo.account_id)
             if account_mode != "paper":
                 raise AccountAuthorityIdentityError("a synthetic authority is a paper environment")
+        elif authority_kind == "shadow":
+            require_shadow_account_id(repo.account_id)
+            if account_mode != "live":
+                raise AccountAuthorityIdentityError("a shadow authority reads a live account")
         else:
             require_real_account_id(repo.account_id)
         self._repo = repo
@@ -261,6 +269,15 @@ class SqliteAlpacaClerkFacade:
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
         return self._program_leg_policy
+
+    @property
+    def binds_decision_bar(self) -> bool:
+        """Whether every effect on this authority must carry its decision bar.
+
+        True for the two synthesized-custody worlds (``sim:`` and ``shadow:``),
+        whose fills are priced from retained evidence rather than a vendor.
+        """
+        return self.authority_kind in _BAR_BOUND_AUTHORITIES
 
     def channel_health_snapshot(
         self,
@@ -672,11 +689,11 @@ class SqliteAlpacaClerkFacade:
             )
 
         async with self._intake:
-            if self.authority_kind == "synthetic" and retained_source_bar is None:
+            if self.binds_decision_bar and retained_source_bar is None:
                 return rejected(
                     reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
                     explanation=(
-                        "Synthetic custody received no exact retained source bar for this decision."
+                        "Synthesized custody received no exact retained source bar for this decision."
                     ),
                     next_step="Replay or ingest the decision bar, then retry through the sealed program.",
                 )
@@ -886,7 +903,7 @@ class SqliteAlpacaClerkFacade:
                     )
 
         trade: BrokerTradePort
-        if self.authority_kind == "synthetic":
+        if self.binds_decision_bar:
             assert retained_source_bar is not None
             trade = _DecisionBarBoundTradePort(self._trade, retained_source_bar)
         else:

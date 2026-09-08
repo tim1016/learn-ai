@@ -10,7 +10,7 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
-from app.services.bot_binding_authority import RealPaperBindingAuthority
+from app.services.bot_binding_authority import PrimaryAccountBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_lifecycle_projection import AlpacaLifecycleProjector
 
@@ -37,11 +37,12 @@ def test_paper_evidence_account_id_for_strategy_is_instance_scoped() -> None:
 
 
 def test_real_paper_authority_source_bars_opens_instance_scoped_ledger(tmp_path: Path) -> None:
-    authority = RealPaperBindingAuthority(
+    authority = PrimaryAccountBindingAuthority(
         binding=_trade_binding("bot-a"),
         projector=cast(AlpacaLifecycleProjector, object()),
         external_start_guard=None,
         artifacts_root=tmp_path,
+        custody_kind=lambda: "real_paper",
     )
 
     ledger = authority.source_bars()
@@ -51,5 +52,23 @@ def test_real_paper_authority_source_bars_opens_instance_scoped_ledger(tmp_path:
         assert ledger.path == (
             tmp_path / "accounts" / "alpaca" / "paper:bot-a" / "source_bars.sqlite3"
         )
+    finally:
+        ledger.close()
+
+
+def test_primary_authority_on_the_shadow_world_opens_the_shadow_evidence_ledger(
+    tmp_path: Path,
+) -> None:
+    authority = PrimaryAccountBindingAuthority(
+        binding=_trade_binding("bot-a"),
+        projector=cast(AlpacaLifecycleProjector, object()),
+        external_start_guard=None,
+        artifacts_root=tmp_path,
+        custody_kind=lambda: "shadow",
+    )
+
+    ledger = authority.source_bars()
+    try:
+        assert ledger.account_id == "shadow-evidence:bot-a"
     finally:
         ledger.close()

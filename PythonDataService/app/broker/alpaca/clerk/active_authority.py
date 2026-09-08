@@ -17,12 +17,27 @@ from typing import Literal, Protocol
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
     AccountAuthorityKind,
+    AccountBoundBrokerPorts,
     bind_real_alpaca_ports,
+    bind_shadow_ports,
     bind_synthetic_ports,
     require_synthetic_account_id,
+    shadow_account_id_for_live_account,
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.shadow_activation import (
+    ShadowActivationInvalid,
+    ShadowActivationRecord,
+    ShadowActivationStore,
+)
+from app.broker.alpaca.clerk.shadow_broker import (
+    ShadowNamespacePoisoned,
+    ShadowNamespaceUnproven,
+    compose_shadow_ports,
+    verify_shadow_namespace_empty,
+)
+from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -33,7 +48,11 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
+    ReconciliationListener,
+    ReconciliationSweep,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     DEFAULT_LEASE_TTL_MS,
     AlreadyInitialized,
@@ -44,22 +63,33 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.synthetic_activation import (
+    IsolatedActivationRecord,
+    IsolatedActivationStore,
     SyntheticActivationInvalid,
     SyntheticActivationRecord,
     SyntheticActivationStore,
 )
 from app.broker.alpaca.clerk.trade_evidence import (
+    NullTradeUpdateEvidenceSink,
     SqliteTradeUpdateEvidenceSink,
     TradeUpdateEvidenceSink,
 )
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
-from app.broker.contract.errors import BrokerAccountModeDisagreement
+from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-AuthorityKind = Literal["sqlite", "synthetic", "unavailable"]
+AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
+# The authorities whose read model is one account-scoped SQLite database.
+_REPOSITORY_BACKED: frozenset[str] = frozenset({"sqlite", "synthetic", "shadow"})
+_ACCOUNT_KIND_BY_AUTHORITY: dict[str, AccountAuthorityKind] = {
+    "sqlite": "real_paper",
+    "synthetic": "synthetic",
+    "shadow": "shadow",
+}
 DEFAULT_STARTUP_RECOVERY_TIMEOUT_S = 60.0
 DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_LEASE_TTL_MS / 1000 + 5.0
 DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
@@ -115,7 +145,7 @@ class ActiveClerkRuntime:
     @property
     def sqlite_repository(self) -> ClerkSqliteRepository | None:
         """Return the active SQLite read authority, never a latent database."""
-        if self.authority_kind not in {"sqlite", "synthetic"}:
+        if self.authority_kind not in _REPOSITORY_BACKED:
             return None
         return self._sqlite_repository
 
@@ -152,9 +182,7 @@ class ActiveClerkRuntime:
         """Return the closed authority kind used by read-model contracts."""
         if self.account_authority_kind is not None:
             return self.account_authority_kind
-        return "synthetic" if self.authority_kind == "synthetic" else (
-            "real_paper" if self.authority_kind == "sqlite" else None
-        )
+        return _ACCOUNT_KIND_BY_AUTHORITY.get(self.authority_kind)
 
 
 def _open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteRepository:
@@ -184,6 +212,129 @@ async def _open_repository_after_lease_expiry(
             if remaining <= 0:
                 raise
             await asyncio.sleep(min(retry_interval_s, remaining))
+
+
+@dataclass(frozen=True)
+class _ComposedAuthority:
+    repository: ClerkSqliteRepository
+    facade: SqliteAlpacaClerkFacade
+    sweep: ReconciliationSweep
+    hold_sync: StreamHealthHoldSync
+
+
+async def _compose_repository_runtime(
+    *,
+    ports: AccountBoundBrokerPorts,
+    authority_kind: Literal["sqlite", "shadow"],
+    account_mode: Literal["paper", "live"],
+    artifacts_root: Path,
+    verify_activation: Callable[[ControlMetaSnapshot], None],
+    repository_opener: Callable[[str, Path], ClerkSqliteRepository],
+    startup_recovery_timeout_s: float,
+    execution_lease_wait_timeout_s: float,
+    execution_lease_retry_interval_s: float,
+    stream_health_gate: StreamHealthGate | None,
+    roster_symbols: Callable[[], Sequence[str]] | None,
+    sweep_listener: ReconciliationListener | None = None,
+) -> _ComposedAuthority:
+    """Open the account's repository and stand up its Clerk, sweep and hold sync.
+
+    Shared by the real-paper and shadow authorities; on any failure every
+    handle opened here is closed before the exception propagates, so the
+    caller only maps it to a startup refusal.
+    """
+    repository: ClerkSqliteRepository | None = None
+    sweep: ReconciliationSweep | None = None
+    hold_sync: StreamHealthHoldSync | None = None
+    try:
+        repository = await _open_repository_after_lease_expiry(
+            repository_opener,
+            account_id=ports.account_id,
+            artifacts_root=artifacts_root,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
+        )
+        verify_activation(repository.control_meta_snapshot())
+        intake = ReentrantAsyncLock()
+        guarded_read, guarded_trade = guard_broker_ports(
+            read=ports.read,
+            trade=ports.trade,
+            intake=intake,
+        )
+        facade = SqliteAlpacaClerkFacade(
+            repo=repository,
+            read=guarded_read,
+            trade=guarded_trade,
+            stream_health=stream_health_gate,
+            intake=intake,
+            authority_kind=authority_kind,
+            # Proven above from the broker's own account read, not inferred.
+            account_mode=account_mode,
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+        )
+        publish = facade.publish_sweep_reconciliation
+        on_result: ReconciliationListener = (
+            publish if sweep_listener is None else (lambda result: sweep_listener(publish(result)))
+        )
+        # Keep the execution lease alive across the (possibly slow) startup
+        # recovery passes. The reconcile loop still starts after boot recovery
+        # in main.py, but the lease heartbeat must begin now so a clean-account
+        # boot whose recovery only reads from the broker cannot let the lease
+        # expire before the sweep is running.
+        sweep = ReconciliationSweep(
+            repo=repository,
+            read=guarded_read,
+            trade=guarded_trade,
+            intake=intake,
+            # The sweep is the sole automatic reconciler; publishing its
+            # verdict is what lets pure panel reads project real custody
+            # instead of answering `stale` forever (#1776 WP2).
+            on_result=on_result,
+            # Custody first, evidence second: the symbol-validity probe runs
+            # only after a succeeded pass, through the same guarded read port,
+            # and records durably what the read path may then consume (#1795).
+            after_pass=(
+                SymbolValidityProbe(
+                    store=SymbolValidityStore(artifacts_root),
+                    read=guarded_read,
+                    roster_symbols=roster_symbols,
+                ).run_due
+                if roster_symbols is not None
+                else None
+            ),
+        )
+        sweep.start_lease_heartbeat()
+        # #1777 WP4: the stream-health hold runs on its own fixed cadence,
+        # never the reconcile loop's -- a backoff that reaches 300 s on
+        # failure, exactly when a channel is down, must not delay a hold
+        # raise or release.
+        #
+        # Constructed here, but deliberately *not* started: one of its two
+        # providers (the trade_updates consumer) is registered by main.py
+        # only after this function returns, and this function then awaits
+        # startup recovery. Sampling before then reads "consumer is not
+        # running" -- indistinguishable from a real outage -- and would
+        # persist a false account-wide hold on every boot. main.py starts
+        # it via `start_hold_sync()` once the provider exists.
+        hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
+        await asyncio.wait_for(
+            facade.recover(),
+            timeout=startup_recovery_timeout_s,
+        )
+        return _ComposedAuthority(
+            repository=repository,
+            facade=facade,
+            sweep=sweep,
+            hold_sync=hold_sync,
+        )
+    except Exception:
+        if hold_sync is not None:
+            await hold_sync.stop()
+        if sweep is not None:
+            await sweep.stop()
+        if repository is not None:
+            repository.close()
+        raise
 
 
 async def select_active_clerk_runtime(
@@ -229,11 +380,17 @@ async def select_active_clerk_runtime(
             account_id=None,
             recovery=f"Restore the Alpaca account identity probe: {exc}",
         )
-    if account.account_mode != "paper":
-        return _unavailable(
-            "LIVE_ACCOUNT_REFUSED",
-            account_id=account.account_id,
-            recovery="Use the separately supervised paper-account cutover workflow.",
+    if account.account_mode == "live":
+        return await _select_shadow_clerk_runtime(
+            account=account,
+            read=read,
+            artifacts_root=artifacts_root,
+            repository_opener=repository_opener,
+            startup_recovery_timeout_s=startup_recovery_timeout_s,
+            execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+            execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+            stream_health_gate=stream_health_gate,
+            roster_symbols=roster_symbols,
         )
     try:
         ports = bind_real_alpaca_ports(
@@ -288,94 +445,33 @@ async def select_active_clerk_runtime(
             ),
         )
 
-    repository: ClerkSqliteRepository | None = None
-    sweep: ReconciliationSweep | None = None
-    hold_sync: StreamHealthHoldSync | None = None
-    try:
-        repository = await _open_repository_after_lease_expiry(
-            repository_opener,
-            account_id=account.account_id,
-            artifacts_root=artifacts_root,
-            wait_timeout_s=execution_lease_wait_timeout_s,
-            retry_interval_s=execution_lease_retry_interval_s,
-        )
-        meta = repository.control_meta_snapshot()
-        resolved = store.resolve(
-            account.account_id,
-            meta.authority_generation,
-            meta.db_identity_token,
-            artifacts_root,
-        )
-        if resolved is None:
+    def _verify_paper_activation(meta: ControlMetaSnapshot) -> None:
+        if (
+            store.resolve(
+                account.account_id,
+                meta.authority_generation,
+                meta.db_identity_token,
+                artifacts_root,
+            )
+            is None
+        ):
             raise ActivationRecordInvalid("activation record disappeared during SQLite startup")
-        intake = ReentrantAsyncLock()
-        guarded_read, guarded_trade = guard_broker_ports(
-            read=ports.read,
-            trade=ports.trade,
-            intake=intake,
-        )
-        facade = SqliteAlpacaClerkFacade(
-            repo=repository,
-            read=guarded_read,
-            trade=guarded_trade,
-            stream_health=stream_health_gate,
-            intake=intake,
-            # Proven above from the broker's own account read, not inferred.
+
+    try:
+        composed = await _compose_repository_runtime(
+            ports=ports,
+            authority_kind="sqlite",
             account_mode=account.account_mode,
-            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
-        )
-        # Keep the execution lease alive across the (possibly slow) startup
-        # recovery passes. The reconcile loop still starts after boot recovery
-        # in main.py, but the lease heartbeat must begin now so a clean-account
-        # boot whose recovery only reads from the broker cannot let the lease
-        # expire before the sweep is running.
-        sweep = ReconciliationSweep(
-            repo=repository,
-            read=guarded_read,
-            trade=guarded_trade,
-            intake=intake,
-            # The sweep is the sole automatic reconciler; publishing its
-            # verdict is what lets pure panel reads project real custody
-            # instead of answering `stale` forever (#1776 WP2).
-            on_result=facade.publish_sweep_reconciliation,
-            # Custody first, evidence second: the symbol-validity probe runs
-            # only after a succeeded pass, through the same guarded read port,
-            # and records durably what the read path may then consume (#1795).
-            after_pass=(
-                SymbolValidityProbe(
-                    store=SymbolValidityStore(artifacts_root),
-                    read=guarded_read,
-                    roster_symbols=roster_symbols,
-                ).run_due
-                if roster_symbols is not None
-                else None
-            ),
-        )
-        sweep.start_lease_heartbeat()
-        # #1777 WP4: the stream-health hold runs on its own fixed cadence,
-        # never the reconcile loop's -- a backoff that reaches 300 s on
-        # failure, exactly when a channel is down, must not delay a hold
-        # raise or release.
-        #
-        # Constructed here, but deliberately *not* started: one of its two
-        # providers (the trade_updates consumer) is registered by main.py
-        # only after this function returns, and this function then awaits
-        # startup recovery. Sampling before then reads "consumer is not
-        # running" -- indistinguishable from a real outage -- and would
-        # persist a false account-wide hold on every boot. main.py starts
-        # it via `start_hold_sync()` once the provider exists.
-        hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
-        await asyncio.wait_for(
-            facade.recover(),
-            timeout=startup_recovery_timeout_s,
+            artifacts_root=artifacts_root,
+            verify_activation=_verify_paper_activation,
+            repository_opener=repository_opener,
+            startup_recovery_timeout_s=startup_recovery_timeout_s,
+            execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+            execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+            stream_health_gate=stream_health_gate,
+            roster_symbols=roster_symbols,
         )
     except Exception as exc:
-        if hold_sync is not None:
-            await hold_sync.stop()
-        if sweep is not None:
-            await sweep.stop()
-        if repository is not None:
-            repository.close()
         logger.warning(
             "Activated SQLite Alpaca Clerk failed startup; no writer installed",
             extra={
@@ -399,17 +495,131 @@ async def select_active_clerk_runtime(
 
     return ActiveClerkRuntime(
         authority_kind="sqlite",
-        clerk=facade,
-        sweep=sweep,
-        hold_sync=hold_sync,
+        clerk=composed.facade,
+        sweep=composed.sweep,
+        hold_sync=composed.hold_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
-            repo=repository,
-            intake=facade.intake,
-            reconciler=facade,
+            repo=composed.repository,
+            intake=composed.facade.intake,
+            reconciler=composed.facade,
         ),
-        _sqlite_repository=repository,
+        _sqlite_repository=composed.repository,
         account_id=account.account_id,
         account_authority_kind="real_paper",
+    )
+
+
+async def _select_shadow_clerk_runtime(
+    *,
+    account: BrokerAccountSnapshot,
+    read: BrokerReadPort,
+    artifacts_root: Path,
+    repository_opener: Callable[[str, Path], ClerkSqliteRepository],
+    startup_recovery_timeout_s: float,
+    execution_lease_wait_timeout_s: float,
+    execution_lease_retry_interval_s: float,
+    stream_health_gate: StreamHealthGate | None,
+    roster_symbols: Callable[[], Sequence[str]] | None,
+) -> ActiveClerkRuntime:
+    """Compose the Shadow Account Authority for a live account (ADR 0059 D2).
+
+    The live trade port is never bound: the shadow world's trade port is
+    ``NoSubmitAlpacaTradePort``. Real-money custody stays unconstructible
+    until slice 7 admits an armed instance.
+    """
+    try:
+        await verify_shadow_namespace_empty(read)
+    except (ShadowNamespacePoisoned, ShadowNamespaceUnproven) as exc:
+        logger.warning(
+            "live account refused for shadow: order namespace not proven empty",
+            extra={"action": "shadow_namespace_refused", "reason_code": exc.reason_code},
+        )
+        return _unavailable(exc.reason_code, account_id=account.account_id, recovery=str(exc))
+    except BrokerError as exc:
+        return _unavailable(
+            "BROKER_ACCOUNT_UNAVAILABLE",
+            account_id=account.account_id,
+            recovery=f"Restore the live account's order-history read: {exc}",
+        )
+    shadow = compose_shadow_ports(
+        live_read=read,
+        live_account_id=account.account_id,
+        artifacts_root=artifacts_root,
+    )
+    ports = bind_shadow_ports(account_id=shadow.account_id, read=shadow.read, trade=shadow.trade)
+    store = ShadowActivationStore(artifacts_root)
+    try:
+        activation = store.latest(shadow.account_id)
+    except ShadowActivationInvalid as exc:
+        return _unavailable(
+            "SHADOW_ACTIVATION_RECORD_INVALID",
+            account_id=shadow.account_id,
+            recovery=str(exc),
+            activation_detected=True,
+        )
+    if activation is None:
+        return _unavailable(
+            "SHADOW_ACTIVATION_REQUIRED",
+            account_id=shadow.account_id,
+            recovery=(
+                "Explicitly activate the shadow authority for this live account "
+                "(scripts.manage_alpaca_shadow activate) before starting shadow custody."
+            ),
+        )
+
+    def _verify_shadow_activation(meta: ControlMetaSnapshot) -> None:
+        if (
+            meta.authority_generation != activation.authority_generation
+            or meta.db_identity_token != activation.db_identity_token
+        ):
+            raise ShadowActivationInvalid("shadow activation does not match repository identity")
+
+    sessions = ShadowSessionRecorder(
+        ledger=ShadowSessionLedger(artifacts_root=artifacts_root, account_id=shadow.account_id),
+        window=read.capabilities().extended_hours_window,
+    )
+    try:
+        composed = await _compose_repository_runtime(
+            ports=ports,
+            authority_kind="shadow",
+            account_mode=account.account_mode,
+            artifacts_root=artifacts_root,
+            verify_activation=_verify_shadow_activation,
+            repository_opener=repository_opener,
+            startup_recovery_timeout_s=startup_recovery_timeout_s,
+            execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+            execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+            stream_health_gate=stream_health_gate,
+            roster_symbols=roster_symbols,
+            sweep_listener=sessions.record,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Shadow Alpaca Clerk failed startup; no authority installed",
+            extra={"action": "shadow_active_clerk_startup_failed", "account_id": shadow.account_id},
+            exc_info=True,
+        )
+        return _unavailable(
+            (
+                "SHADOW_ACTIVATION_RECORD_INVALID"
+                if isinstance(exc, ShadowActivationInvalid)
+                else "SHADOW_CLERK_STARTUP_FAILED"
+            ),
+            account_id=shadow.account_id,
+            recovery=str(exc),
+            activation_detected=True,
+            authority_generation=activation.authority_generation,
+            db_identity_token=activation.db_identity_token,
+        )
+    return ActiveClerkRuntime(
+        authority_kind="shadow",
+        clerk=composed.facade,
+        sweep=composed.sweep,
+        hold_sync=composed.hold_sync,
+        evidence_sink=NullTradeUpdateEvidenceSink(),
+        _sqlite_repository=composed.repository,
+        account_id=shadow.account_id,
+        account_authority_kind="shadow",
     )
 
 
@@ -438,18 +648,13 @@ def _unavailable(
     )
 
 
-async def activate_synthetic_clerk_authority(
+async def _activate_isolated_authority(
     *,
     account_id: str,
     artifacts_root: Path,
-    activation_store: SyntheticActivationStore | None = None,
-) -> SyntheticActivationRecord:
-    """Explicitly initialize and durably activate one isolated ``sim:`` account.
-
-    No startup path calls this helper.  A synthetic account has no authority
-    until a caller deliberately performs this one-time activation step.
-    """
-    require_synthetic_account_id(account_id)
+    store: IsolatedActivationStore,
+) -> IsolatedActivationRecord:
+    """Initialize (or reopen) one isolated repository and durably activate it exactly once."""
     try:
         repository = ClerkSqliteRepository.initialize(
             account_id=account_id,
@@ -465,7 +670,6 @@ async def activate_synthetic_clerk_authority(
         )
     try:
         meta = repository.control_meta_snapshot()
-        store = activation_store or SyntheticActivationStore(artifacts_root)
         prior = store.latest(account_id)
         if prior is not None:
             if (
@@ -477,10 +681,10 @@ async def activate_synthetic_clerk_authority(
                 # Reusing this exact proof is safe; appending it again would
                 # violate the activation ledger's monotonic generation fence.
                 return prior
-            raise SyntheticActivationInvalid(
-                "synthetic activation does not match repository identity"
+            raise store.record_type.invalid_error(
+                f"{store.record_type.label} does not match repository identity"
             )
-        record = SyntheticActivationRecord.create(
+        record = store.record_type.create(
             account_id=account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
@@ -490,6 +694,48 @@ async def activate_synthetic_clerk_authority(
         return record
     finally:
         repository.close()
+
+
+async def activate_synthetic_clerk_authority(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    activation_store: SyntheticActivationStore | None = None,
+) -> SyntheticActivationRecord:
+    """Explicitly initialize and durably activate one isolated ``sim:`` account.
+
+    No startup path calls this helper.  A synthetic account has no authority
+    until a caller deliberately performs this one-time activation step.
+    """
+    require_synthetic_account_id(account_id)
+    record = await _activate_isolated_authority(
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+        store=activation_store or SyntheticActivationStore(artifacts_root),
+    )
+    assert isinstance(record, SyntheticActivationRecord)
+    return record
+
+
+async def activate_shadow_clerk_authority(
+    *,
+    live_account_id: str,
+    artifacts_root: Path,
+    activation_store: ShadowActivationStore | None = None,
+) -> ShadowActivationRecord:
+    """Explicitly initialize and durably activate the shadow authority for one live account.
+
+    No startup path calls this; the operator does, once, through
+    ``scripts.manage_alpaca_shadow activate``. The custody database it creates
+    is the shadow world's own -- the live account's authority is untouched.
+    """
+    record = await _activate_isolated_authority(
+        account_id=shadow_account_id_for_live_account(live_account_id),
+        artifacts_root=artifacts_root,
+        store=activation_store or ShadowActivationStore(artifacts_root),
+    )
+    assert isinstance(record, ShadowActivationRecord)
+    return record
 
 
 async def select_synthetic_clerk_runtime(
@@ -699,13 +945,15 @@ async def close_synthetic_clerk_runtimes() -> None:
 
 
 def get_alpaca_clerk() -> ActiveAlpacaClerk | None:
-    """Return only the real-paper compatibility authority, if installed.
+    """Return the primary account authority, if installed: real paper, or the shadow of a live account.
 
     New callers that possess an account identity must use
-    :func:`get_clerk_runtime`; this legacy helper must never return a synthetic
-    Clerk to a real-paper caller by accident.
+    :func:`get_clerk_runtime`; this helper must never return a synthetic
+    Clerk to a real-account caller by accident. Paper-only surfaces keep
+    refusing on the facade's ``account_mode`` -- a shadow authority answers
+    ``"live"``.
     """
-    if _runtime is None or _runtime.authority_kind != "sqlite":
+    if _runtime is None or _runtime.authority_kind not in {"sqlite", "shadow"}:
         return None
     return _runtime.clerk
 
@@ -728,6 +976,7 @@ __all__ = [
     "AuthorityKind",
     "ClerkAuthorityRegistry",
     "ClerkStartupFailure",
+    "activate_shadow_clerk_authority",
     "activate_synthetic_clerk_authority",
     "active_program_leg_policy",
     "close_synthetic_clerk_runtimes",

@@ -17,7 +17,7 @@ from app.broker.alpaca.clerk.models import EpochMs
 
 ConfiguredMode = Literal["paper", "live", "unconfigured"]
 ModeAgreement = Literal["agreed", "disagreed", "unobserved"]
-ClerkAuthority = Literal["sqlite", "synthetic", "unavailable", "not_installed"]
+ClerkAuthority = Literal["sqlite", "synthetic", "shadow", "unavailable", "not_installed"]
 EnvelopeState = Literal["not_applicable", "configured_unsealed", "sealed"]
 ShadowState = Literal["not_applicable", "none", "in_progress", "complete"]
 FinalVerdict = Literal["paper", "live-unarmed", "live-armed", "unknown"]

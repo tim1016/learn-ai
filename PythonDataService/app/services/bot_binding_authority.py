@@ -14,12 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import (
-    paper_evidence_account_id_for_strategy,
+    AccountAuthorityKind,
+    evidence_account_id_for,
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_synthetic_clerk_authority,
+    get_active_clerk_runtime,
     get_clerk_runtime,
     register_clerk_runtime,
     select_synthetic_clerk_runtime,
@@ -73,14 +75,30 @@ class BindingAuthority:
         return ()
 
 
+def primary_custody_kind() -> AccountAuthorityKind:
+    """The world the primary authority custodies in; refuses to guess when none is installed."""
+    runtime = get_active_clerk_runtime()
+    kind = None if runtime is None else runtime.selected_account_authority_kind
+    if kind is None:
+        raise StartAdmissionUnavailable(
+            "The account Clerk is not installed.",
+            detail=(
+                "Restore the account Clerk before starting a bot; its world "
+                "decides where evidence is retained."
+            ),
+        )
+    return kind
+
+
 @dataclass(frozen=True)
-class RealPaperBindingAuthority(BindingAuthority):
-    """The active real-paper Clerk remains the sole real custody authority."""
+class PrimaryAccountBindingAuthority(BindingAuthority):
+    """The process's primary account authority -- real paper, or the shadow of a live account -- remains the sole real custody authority."""
 
     binding: BrokerBotBinding
     projector: AlpacaLifecycleProjector
     external_start_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
     artifacts_root: Path
+    custody_kind: Callable[[], AccountAuthorityKind]
     account_id: str = "real_paper"
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
@@ -101,8 +119,10 @@ class RealPaperBindingAuthority(BindingAuthority):
     def source_bars(self) -> SourceBarLedger:
         return SourceBarLedger(
             artifacts_root=self.artifacts_root,
-            account_id=paper_evidence_account_id_for_strategy(
-                self.binding.strategy_instance_id
+            account_id=evidence_account_id_for(
+                mode=self.binding.mode,
+                strategy_instance_id=self.binding.strategy_instance_id,
+                custody_kind=self.custody_kind(),
             ),
         )
 
@@ -245,17 +265,19 @@ class BindingAuthoritySelector:
                 runtime_in_use=self.runtime_in_use,
                 brokers=self.synthetic_brokers,
             )
-        return RealPaperBindingAuthority(
+        return PrimaryAccountBindingAuthority(
             binding=binding,
             projector=self.real_projector,
             external_start_guard=self.external_start_guard,
             artifacts_root=self.artifacts_root,
+            custody_kind=primary_custody_kind,
         )
 
 
 __all__ = [
     "BindingAuthority",
     "BindingAuthoritySelector",
-    "RealPaperBindingAuthority",
+    "PrimaryAccountBindingAuthority",
     "SyntheticBindingAuthority",
+    "primary_custody_kind",
 ]
