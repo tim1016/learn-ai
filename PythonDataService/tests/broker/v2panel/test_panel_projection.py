@@ -1053,6 +1053,13 @@ def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
     assert sqlite_clerk_status(projection).outstanding_intents == 0
 
 
+def test_sqlite_status_names_the_real_paper_authority_for_a_real_account_id() -> None:
+    """The kind is derived from the custody id, so a real account still says ``real_paper``."""
+    projection = _rail_projection(orders=())
+
+    assert sqlite_clerk_status(projection).authority_kind == "real_paper"
+
+
 def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
     projection = _rail_projection(
         orders=(

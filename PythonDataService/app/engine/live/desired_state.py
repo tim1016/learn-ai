@@ -9,7 +9,7 @@ persistent operator intent keyed by ``strategy_instance_id``
 surviving across runs. See plan §16.4 Resolution 7.
 
 Mirrors ``live_state_sidecar.py``'s envelope + repo + atomic-write
-pattern and reuses its ``_file_lock`` / ``_fsync_parent_dir`` helpers
+pattern and reuses its ``_file_lock`` / ``fsync_parent_dir`` helpers
 rather than copying them a fourth time (the shared-helper extraction
 flagged in #367 review is the proper follow-up).
 """
@@ -30,7 +30,7 @@ from app.engine.live.identity import (
     strategy_instance_artifact_dir,
     validate_strategy_instance_id,
 )
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 
 # Re-exported so existing callers can keep importing it from here.
 __all__ = [
@@ -174,7 +174,7 @@ class DesiredStateRepo:
         with _file_lock(path, trusted_root=self._trusted_root):
             with contextlib.suppress(FileNotFoundError):
                 path.unlink()
-            _fsync_parent_dir(path)
+            fsync_parent_dir(path)
 
     def set(
         self,
@@ -238,4 +238,4 @@ class DesiredStateRepo:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(safe_path)
+        fsync_parent_dir(safe_path)

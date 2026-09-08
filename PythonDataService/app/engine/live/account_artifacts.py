@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.schemas.live_runs import GateResult
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -809,7 +809,7 @@ def repair_account_event_sequence(
                 fh.write(raw)
                 fh.flush()
                 os.fsync(fh.fileno())
-            _fsync_parent_dir(backup_path)
+            fsync_parent_dir(backup_path)
 
         rewritten_rows: list[bytes] = []
         for index, event in enumerate(events, start=1):
@@ -1326,7 +1326,7 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
-    _fsync_parent_dir(path)
+    fsync_parent_dir(path)
 
 
 def _atomic_replace_account_event_bytes_locked(path: Path, data: bytes) -> None:
@@ -1338,7 +1338,7 @@ def _atomic_replace_account_event_bytes_locked(path: Path, data: bytes) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
-    _fsync_parent_dir(path)
+    fsync_parent_dir(path)
 
 
 def _append_account_event(

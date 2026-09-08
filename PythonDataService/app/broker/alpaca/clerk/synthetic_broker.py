@@ -249,7 +249,10 @@ class SyntheticBroker:
         symbol: str,
         retained_bar: RetainedSourceBar | None,
     ) -> RetainedSourceBar:
-        assert self._ledger is not None and self._source_bars is not None
+        if self._ledger is None or self._source_bars is None:
+            raise SimulatedPriceUnavailableError(
+                "Synthetic execution requires an authority-scoped retained-bar ledger."
+            )
         bound = self._ledger.consume_bound_bar(client_order_id)
         candidate = retained_bar if retained_bar is not None else bound
         if candidate is not None:

@@ -44,6 +44,7 @@ from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
 
+
 async def select_shadow_clerk_runtime(
     *,
     account: BrokerAccountSnapshot,

@@ -387,6 +387,10 @@ class ShadowOrderBook:
                 f"{bounds.open_ms}-{bounds.close_ms} ms; no resting order can be synthesized from it."
             )
         at_ms = bar.end_ms
+        # Shares ``shape_immediate_order``'s ``BrokerOrder`` field list; only the
+        # outcome half (status, fills, events) differs. A field added to the
+        # contract model needs both. Deliberately not extracted: a shaper taking
+        # every differing field as a keyword is longer than the two call sites.
         order = BrokerOrder(
             broker=SHADOW_BROKER_ID,
             order_id=f"shadow-order:{client_order_id}",

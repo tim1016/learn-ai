@@ -9,7 +9,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from app.engine.live.live_state_sidecar import _fsync_parent_dir
+from app.engine.live.live_state_sidecar import fsync_parent_dir
 
 RecordT = TypeVar("RecordT", bound=BaseModel)
 
@@ -66,6 +66,18 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
             self._next_seq = (self._seq_of(existing[-1]) + 1) if existing else 1
         return self._next_seq
 
+    def reset_seq(self, next_seq: int) -> None:
+        """Point the sequence cache at ``next_seq``, discarding what it cached.
+
+        For a caller that holds the WAL's own cross-process transaction lock
+        and has just read the file: a sibling process may have appended since
+        this instance's last write, so the cached value would otherwise reuse a
+        sequence the file already carries.
+        """
+        if next_seq < 1:
+            raise ValueError(f"next_seq must be >= 1; got {next_seq}")
+        self._next_seq = next_seq
+
     def append(self, record: RecordT) -> None:
         path = self.path
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +94,7 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
             self._next_seq = record_seq + 1
             fh.flush()
             os.fsync(fh.fileno())
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)
 
     def read_all(self) -> list[RecordT]:
         return self.read_from(after_seq=0, limit=None)
@@ -197,4 +209,4 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
             fh.truncate(truncate_at)
             fh.flush()
             os.fsync(fh.fileno())
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)

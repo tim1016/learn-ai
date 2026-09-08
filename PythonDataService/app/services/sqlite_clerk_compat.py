@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from app.broker.alpaca.clerk.account_authority import custody_account_id_for
+from app.broker.alpaca.clerk.account_authority import (
+    authority_kind_for_account,
+    custody_account_id_for,
+)
 from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     get_active_clerk_runtime,
@@ -273,7 +276,12 @@ def sqlite_clerk_status(
         channel_healths=(
             list(channel_healths) if channel_healths is not None else None
         ),
-        authority_kind="real_paper",
+        # Derived from the facade's own custody id, never asserted: under a
+        # shadow authority ``projection.account_id`` is ``shadow:<live id>``,
+        # and a wire saying ``real_paper`` beside it is the same misstatement
+        # ADR 0059 slice 4 exists to remove. ``real_paper`` is the only real
+        # world constructible today, so the id alone decides.
+        authority_kind=authority_kind_for_account(projection.account_id),
         operator_posture=posture,
     )
 
@@ -340,7 +348,7 @@ def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
             if not divergent
             else "Use the SQLite Clerk's typed, evidence-bound recovery actions."
         ),
-        authority_kind="real_paper",
+        authority_kind=authority_kind_for_account(projection.account_id),
         divergences=divergences,
         resolution_plan=(),
     )

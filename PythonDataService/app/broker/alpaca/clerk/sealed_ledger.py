@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from app.engine.live.live_state_sidecar import _fsync_parent_dir
+from app.engine.live.live_state_sidecar import fsync_parent_dir
 
 
 def canonical_sha256(payload: dict[str, Any]) -> str:
@@ -64,7 +64,7 @@ def append_canonical_jsonl_line(
         handle.flush()
         os.fsync(handle.fileno())
     if not existed:
-        _fsync_parent_dir(path)
+        fsync_parent_dir(path)
 
 
 def read_canonical_jsonl_objects(path: Path, *, invalid: type[ValueError], label: str) -> list[Mapping[str, Any]]:
@@ -94,5 +94,4 @@ __all__ = [
     "append_canonical_jsonl_line",
     "canonical_sha256",
     "read_canonical_jsonl_objects",
-    "require_regular_ledger_file",
 ]

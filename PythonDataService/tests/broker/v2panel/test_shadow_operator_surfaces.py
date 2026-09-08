@@ -214,6 +214,8 @@ async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
     assert response.status_code == 200, response.json()
     body = response.json()
     assert body["account_id"] == SHADOW_ACCT
+    # The wire cannot say ``real_paper`` beside a ``shadow:`` custody id.
+    assert body["authority_kind"] == "shadow"
     condition = body["operator_posture"]["condition"]
     condition_id = None if condition is None else condition["id"]
     assert condition_id != "alpaca_account_identity_mismatch"

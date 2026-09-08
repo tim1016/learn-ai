@@ -18,7 +18,7 @@ import logging
 import os
 from pathlib import Path
 
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.operator.notices.schema import OperatorIncident
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ def _atomic_write_locked(path: Path, payload_json: str) -> Path:
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
-    _fsync_parent_dir(path)
+    fsync_parent_dir(path)
     return path
 
 

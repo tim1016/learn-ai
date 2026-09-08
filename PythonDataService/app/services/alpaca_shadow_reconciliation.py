@@ -525,31 +525,33 @@ def _judge_day(
     twin_strategy_instance_id: str,
 ) -> ShadowSessionVerdict:
     calendar_open_ms = session_open_ms_utc(day)
+
+    def verdict(
+        state: SessionState,
+        detail: str,
+        *,
+        run_id: str | None = None,
+        reconciliation: TwinDayReconciliation | None = None,
+    ) -> ShadowSessionVerdict:
+        return ShadowSessionVerdict(
+            session_open_ms=calendar_open_ms,
+            state=state,
+            detail=detail,
+            shadow_run_id=run_id,
+            reconciliation=reconciliation,
+        )
+
     state = session_ledger.day_state(calendar_open_ms)
     if not state.complete:
-        return ShadowSessionVerdict(
-            session_open_ms=calendar_open_ms,
-            state="sweep_not_clean",
-            detail=_sweep_failure(state),
-            shadow_run_id=None,
-            reconciliation=None,
-        )
+        return verdict("sweep_not_clean", _sweep_failure(state))
     if state.opened_at_ms is not None and state.opened_at_ms > open_ms:
-        return ShadowSessionVerdict(
-            session_open_ms=calendar_open_ms,
-            state="sweep_opened_late",
-            detail="the sweep's first pass came after the decision session opened",
-            shadow_run_id=None,
-            reconciliation=None,
+        return verdict(
+            "sweep_opened_late", "the sweep's first pass came after the decision session opened"
         )
     run = _covering_run(runs, open_ms=open_ms, close_ms=close_ms)
     if run is None:
-        return ShadowSessionVerdict(
-            session_open_ms=calendar_open_ms,
-            state="run_not_covering",
-            detail="no run of this instance spanned the whole decision session",
-            shadow_run_id=None,
-            reconciliation=None,
+        return verdict(
+            "run_not_covering", "no run of this instance spanned the whole decision session"
         )
     try:
         shadow_fills = read_twin_fills(
@@ -569,13 +571,7 @@ def _judge_day(
         # destroy every other day's verdict — a fail-closed account-wide read
         # (an external fill, an unresolved coverage conflict) makes *every* day
         # unreadable, and the gate has to say so honestly rather than raise.
-        return ShadowSessionVerdict(
-            session_open_ms=calendar_open_ms,
-            state="not_evaluable",
-            detail=str(exc),
-            shadow_run_id=run.run_id,
-            reconciliation=None,
-        )
+        return verdict("not_evaluable", str(exc), run_id=run.run_id)
     reconciliation = reconcile_twin_day(
         session_open_ms=calendar_open_ms,
         strategy_instance_id=strategy_instance_id,
@@ -584,20 +580,13 @@ def _judge_day(
         twin_fills=twin_fills,
     )
     if not reconciliation.passed:
-        return ShadowSessionVerdict(
-            session_open_ms=calendar_open_ms,
-            state="twin_diverged",
-            detail="; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating),
-            shadow_run_id=run.run_id,
+        return verdict(
+            "twin_diverged",
+            "; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating),
+            run_id=run.run_id,
             reconciliation=reconciliation,
         )
-    return ShadowSessionVerdict(
-        session_open_ms=calendar_open_ms,
-        state="counted",
-        detail="",
-        shadow_run_id=run.run_id,
-        reconciliation=reconciliation,
-    )
+    return verdict("counted", "", run_id=run.run_id, reconciliation=reconciliation)
 
 
 __all__ = [

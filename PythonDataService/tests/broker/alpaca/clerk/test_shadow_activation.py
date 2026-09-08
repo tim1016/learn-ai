@@ -16,7 +16,9 @@ from app.broker.alpaca.clerk.shadow_activation import (
 )
 from app.broker.alpaca.clerk.synthetic_activation import (
     IsolatedActivationInvalid,
+    SyntheticActivationInvalid,
     SyntheticActivationRecord,
+    SyntheticActivationStore,
 )
 
 
@@ -70,3 +72,10 @@ def test_store_refuses_synthetic_rows_and_synthetic_store_refuses_shadow_rows(tm
     )
     with pytest.raises(ShadowActivationInvalid):
         store.append(synthetic)  # type: ignore[arg-type]
+
+    # …and the reverse, which the test's name has always promised.
+    synthetic_store = SyntheticActivationStore(tmp_path)
+    with pytest.raises(ValueError, match="sim: account identity"):
+        synthetic_store.latest("shadow:9LIVE0001")
+    with pytest.raises(SyntheticActivationInvalid):
+        synthetic_store.append(_record())  # type: ignore[arg-type]

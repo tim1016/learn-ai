@@ -19,6 +19,8 @@ Dates are stored as their calendar session open in ``int64 ms UTC``
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -66,8 +68,27 @@ class ShadowDayState:
         return self.opened_at_ms is not None and self.closed_clean and not self.non_clean_verdicts
 
 
+class ShadowSessionBoundsUnavailable(RuntimeError):
+    """A trading day yielded no declared session bounds to close a shadow day against."""
+
+
 def _corrupt(path: Path, detail: str) -> RuntimeError:
     return RuntimeError(f"Shadow session journal corrupt at {path}: {detail}")
+
+
+def _day_state(rows: Iterable[ShadowSessionRow]) -> ShadowDayState:
+    """Fold one ET day's rows into its state; ``rows`` is already that day's."""
+    opened: int | None = None
+    closed_clean = False
+    non_clean: list[str] = []
+    for row in rows:
+        if row.kind == "day_opened":
+            opened = row.observed_at_ms if opened is None else opened
+        elif row.kind == "session_closed_clean":
+            closed_clean = True
+        else:
+            non_clean.append(row.verdict)
+    return ShadowDayState(opened_at_ms=opened, closed_clean=closed_clean, non_clean_verdicts=tuple(non_clean))
 
 
 class ShadowSessionLedger:
@@ -95,31 +116,57 @@ class ShadowSessionLedger:
     def has_rows(self) -> bool:
         return bool(self.rows())
 
-    def append(self, *, kind: RowKind, session_open_ms: int, observed_at_ms: int, verdict: str) -> ShadowSessionRow:
+    @contextmanager
+    def transaction(self) -> Iterator[list[ShadowSessionRow]]:
+        """Hold the journal's file lock across one pass's read and its appends.
+
+        One pass decides from what it read and may append twice; taking the
+        lock per append would let a sibling writer land between the decision
+        and the row it produced.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with advisory_file_lock(self.path):
-            row = ShadowSessionRow(
-                seq=self._rows.allocate_seq(),
+            yield self.rows()
+
+    def append_locked(
+        self,
+        rows: list[ShadowSessionRow],
+        *,
+        kind: RowKind,
+        session_open_ms: int,
+        observed_at_ms: int,
+        verdict: str,
+    ) -> ShadowSessionRow:
+        """Append inside :meth:`transaction`; ``rows`` is that transaction's read."""
+        row = ShadowSessionRow(
+            seq=self._rows.allocate_seq(),
+            kind=kind,
+            session_open_ms=session_open_ms,
+            observed_at_ms=observed_at_ms,
+            verdict=verdict,
+        )
+        self._rows.append(row)
+        rows.append(row)
+        return row
+
+    def append(self, *, kind: RowKind, session_open_ms: int, observed_at_ms: int, verdict: str) -> ShadowSessionRow:
+        with self.transaction() as rows:
+            return self.append_locked(
+                rows,
                 kind=kind,
                 session_open_ms=session_open_ms,
                 observed_at_ms=observed_at_ms,
                 verdict=verdict,
             )
-            self._rows.append(row)
-            return row
 
     def day_state(self, session_open_ms: int) -> ShadowDayState:
-        rows = [row for row in self.rows() if row.session_open_ms == session_open_ms]
-        opened = next((row.observed_at_ms for row in rows if row.kind == "day_opened"), None)
-        return ShadowDayState(
-            opened_at_ms=opened,
-            closed_clean=any(row.kind == "session_closed_clean" for row in rows),
-            non_clean_verdicts=tuple(row.verdict for row in rows if row.kind == "non_clean"),
-        )
+        return _day_state(row for row in self.rows() if row.session_open_ms == session_open_ms)
 
     def completed_session_opens(self) -> tuple[int, ...]:
-        opens = sorted({row.session_open_ms for row in self.rows()})
-        return tuple(open_ms for open_ms in opens if self.day_state(open_ms).complete)
+        by_open: dict[int, list[ShadowSessionRow]] = {}
+        for row in self.rows():
+            by_open.setdefault(row.session_open_ms, []).append(row)
+        return tuple(open_ms for open_ms in sorted(by_open) if _day_state(by_open[open_ms]).complete)
 
 
 class ShadowSessionRecorder:
@@ -142,35 +189,54 @@ class ShadowSessionRecorder:
         if not is_trading_day(day):
             return result
         open_ms = session_open_ms_utc(day)
-        state = self._ledger.day_state(open_ms)
-        if state.opened_at_ms is None:
-            self._ledger.append(kind="day_opened", session_open_ms=open_ms, observed_at_ms=now_ms, verdict=result.verdict)
-        if result.verdict != "clean":
-            last = self._last_row_for(open_ms)
-            if last is None or last.kind != "non_clean" or last.verdict != result.verdict:
-                self._ledger.append(kind="non_clean", session_open_ms=open_ms, observed_at_ms=now_ms, verdict=result.verdict)
-            return result
-        if now_ms >= self._close_ms(day) and not state.closed_clean:
-            self._ledger.append(kind="session_closed_clean", session_open_ms=open_ms, observed_at_ms=now_ms, verdict=result.verdict)
+        # One lock for the whole pass: the day state this pass decides from and
+        # the rows it appends are the same read.
+        with self._ledger.transaction() as rows:
+            state = _day_state(row for row in rows if row.session_open_ms == open_ms)
+            if state.opened_at_ms is None:
+                self._journal(rows, "day_opened", open_ms=open_ms, now_ms=now_ms, result=result)
+            if result.verdict != "clean":
+                last = self._last_row_for(rows, open_ms)
+                if last is None or last.kind != "non_clean" or last.verdict != result.verdict:
+                    self._journal(rows, "non_clean", open_ms=open_ms, now_ms=now_ms, result=result)
+                return result
+            if now_ms >= self._close_ms(day) and not state.closed_clean:
+                self._journal(rows, "session_closed_clean", open_ms=open_ms, now_ms=now_ms, result=result)
         return result
+
+    def _journal(
+        self,
+        rows: list[ShadowSessionRow],
+        kind: RowKind,
+        *,
+        open_ms: int,
+        now_ms: int,
+        result: AccountReconciliationResult,
+    ) -> None:
+        self._ledger.append_locked(
+            rows, kind=kind, session_open_ms=open_ms, observed_at_ms=now_ms, verdict=result.verdict
+        )
 
     def _close_ms(self, day: date) -> int:
         if self._window is None:
             return session_close_ms_utc(day)
         bounds = declared_session_bounds(day, self._window)
-        assert bounds is not None  # a trading day by construction
+        if bounds is None:
+            raise ShadowSessionBoundsUnavailable(
+                f"{day.isoformat()} is a trading day with no declared session bounds; "
+                "a shadow day cannot be closed against a window it has none of."
+            )
         return bounds.close_ms
 
-    def _last_row_for(self, session_open_ms: int) -> ShadowSessionRow | None:
-        return next(
-            (row for row in reversed(self._ledger.rows()) if row.session_open_ms == session_open_ms),
-            None,
-        )
+    @staticmethod
+    def _last_row_for(rows: list[ShadowSessionRow], session_open_ms: int) -> ShadowSessionRow | None:
+        return next((row for row in reversed(rows) if row.session_open_ms == session_open_ms), None)
 
 
 __all__ = [
     "SHADOW_SESSIONS_FILENAME",
     "ShadowDayState",
+    "ShadowSessionBoundsUnavailable",
     "ShadowSessionLedger",
     "ShadowSessionRecorder",
     "ShadowSessionRow",

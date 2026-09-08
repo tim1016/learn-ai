@@ -10,6 +10,7 @@ import pytest
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.shadow_sessions import (
     SHADOW_SESSIONS_FILENAME,
+    ShadowSessionBoundsUnavailable,
     ShadowSessionLedger,
     ShadowSessionRecorder,
 )
@@ -85,6 +86,30 @@ def test_a_non_clean_pass_taints_the_day_and_is_deduplicated_per_verdict(tmp_pat
     assert state.closed_clean is True
     assert ledger.completed_session_opens() == ()
     assert [row.kind for row in ledger.rows()] == ["day_opened", "non_clean", "non_clean", "session_closed_clean"]
+
+
+def test_one_pass_never_journals_both_a_non_clean_and_a_closed_clean(tmp_path: Path) -> None:
+    """A non-clean pass returns before the close check, whatever the clock says."""
+    bounds = declared_session_bounds(DAY, ALPACA_EXTENDED_HOURS_WINDOW)
+    assert bounds is not None
+    clock = _Clock(bounds.close_ms)
+    ledger, recorder = _recorder(tmp_path, clock)
+
+    recorder.record(AccountReconciliationResult(verdict="stale"))
+
+    assert [row.kind for row in ledger.rows()] == ["day_opened", "non_clean"]
+    assert ledger.day_state(session_open_ms_utc(DAY)).closed_clean is False
+
+
+def test_a_trading_day_with_no_declared_bounds_refuses_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock(et_minute_of_day_ms(DAY, 720))
+    _ledger, recorder = _recorder(tmp_path, clock)
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.shadow_sessions.declared_session_bounds",
+        lambda _day, _window: None,
+    )
+    with pytest.raises(ShadowSessionBoundsUnavailable, match="no declared session bounds"):
+        recorder.record(AccountReconciliationResult(verdict="clean"))
 
 
 def test_passes_outside_a_trading_day_write_nothing(tmp_path: Path) -> None:

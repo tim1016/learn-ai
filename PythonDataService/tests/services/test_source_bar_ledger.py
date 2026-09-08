@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
+from app.broker.alpaca.clerk.synthetic_broker import (
+    SimulatedPriceUnavailableError,
+    SyntheticBarBindingError,
+    SyntheticBroker,
+)
 from app.broker.contract.models import BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
 from app.services import source_bar_ledger
@@ -165,6 +169,25 @@ async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_reco
     recovered = await restarted.get_order_by_client_order_id("bot:ema:enter")
     assert recovered == order
     assert (await restarted.list_positions())[0].quantity == 2
+
+
+@pytest.mark.asyncio
+async def test_synthetic_port_refuses_a_submission_with_no_evidence_ledger_by_name(tmp_path: Path) -> None:
+    """The internal invariant leaves by this module's own error, not an ``AssertionError``.
+
+    ``submit`` guards on the order ledger, so only a broker whose evidence
+    ledger went missing behind it reaches ``_submission_bar``'s own guard —
+    which must survive ``python -O``, where an ``assert`` does not.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
+    broker._source_bars = None
+
+    with pytest.raises(SimulatedPriceUnavailableError, match="authority-scoped retained-bar ledger"):
+        await broker.submit(
+            BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+            client_order_id="bot:ema:enter",
+        )
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
     SyntheticActivationRecord,
     SyntheticActivationStore,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _record_payload() -> dict[str, object]:
@@ -73,12 +74,13 @@ def test_synthetic_activation_record_rejects_non_integer_generation(
         SyntheticActivationRecord.from_payload(payload)
 
 
-@pytest.mark.parametrize("activated_at_ms", [2**63, -(2**63) - 1])
+@pytest.mark.parametrize("activated_at_ms", [2**63, -(2**63) - 1, MAX_TIMESTAMP_MS + 1, -1])
 def test_synthetic_activation_record_rejects_out_of_range_timestamp(activated_at_ms: int) -> None:
+    """The bound is the domain ceiling, not the int64 width (temporal-rigor)."""
     payload = _record_payload()
     payload["activated_at_ms"] = activated_at_ms
 
-    with pytest.raises(SyntheticActivationInvalid, match="signed int64"):
+    with pytest.raises(SyntheticActivationInvalid, match="admissible instant range"):
         SyntheticActivationRecord.from_payload(payload)
 
 

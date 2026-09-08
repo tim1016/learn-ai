@@ -17,6 +17,17 @@ import { BrokersService } from '../../../services/brokers.service';
  * missing a newly created) blocker for the rest of the desk's lifetime
  * (2026-08-20 review).
  */
+/**
+ * Clerk authorities whose status names a real account-scoped SQLite projection.
+ *
+ * Mirrors the backend's own closed set (`SQLITE_FACADE_AUTHORITIES` in
+ * `active_runtime.py`). A shadow authority reads a live account through a
+ * `shadow:` custody id and still has a SQLite projection, so gating on
+ * `real_paper` alone would leave the Operator lens dark on exactly the
+ * real-money-adjacent account it most needs to describe (ADR 0059 D2).
+ */
+const SQLITE_PROJECTION_AUTHORITIES: ReadonlySet<string> = new Set(['real_paper', 'shadow']);
+
 @Injectable()
 export class AlpacaOperatorLensDataService {
   private readonly brokers = inject(BrokersService);
@@ -30,8 +41,8 @@ export class AlpacaOperatorLensDataService {
 
   private readonly sqliteAccountId = computed(() => {
     const status = this.status.value();
-    return this.requested() && status?.authority_kind === 'real_paper'
-      ? status.account_id
+    return this.requested() && SQLITE_PROJECTION_AUTHORITIES.has(status?.authority_kind ?? '')
+      ? status?.account_id
       : undefined;
   });
 

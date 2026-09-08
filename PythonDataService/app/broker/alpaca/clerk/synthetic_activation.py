@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sealed_ledger import (
 )
 from app.broker.alpaca.paths import resolve_contained_path
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SYNTHETIC_ACTIVATION_FILENAME = "synthetic_activation.jsonl"
 
@@ -100,8 +101,11 @@ class IsolatedActivationRecord:
         int_fields = ("schema_version", "authority_generation", "activated_at_ms")
         if any(type(payload[field]) is not int for field in int_fields):
             raise cls.invalid_error(f"{cls.label} record has invalid integer facts")
-        if not -(2**63) <= payload["activated_at_ms"] <= 2**63 - 1:
-            raise cls.invalid_error(f"{cls.label} timestamp is outside signed int64 range")
+        # ``MAX_TIMESTAMP_MS``, not ``2**63 - 1``: temporal-rigor makes the
+        # domain ceiling the schema bound and int64 width a representability
+        # guard only. Same bound as the sibling sealed record's ``written_at_ms``.
+        if not 0 <= payload["activated_at_ms"] <= MAX_TIMESTAMP_MS:
+            raise cls.invalid_error(f"{cls.label} timestamp is outside the admissible instant range")
         string_fields = ("account_id", "db_identity_token", "activation_sha256")
         if any(type(payload[field]) is not str for field in string_fields):
             raise cls.invalid_error(f"{cls.label} record has invalid string facts")
@@ -217,5 +221,4 @@ __all__ = [
     "SyntheticActivationInvalid",
     "SyntheticActivationRecord",
     "SyntheticActivationStore",
-    "canonical_sha256",
 ]

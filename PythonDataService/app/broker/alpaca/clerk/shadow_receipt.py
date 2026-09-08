@@ -93,12 +93,15 @@ class ShadowReceipt:
             # been type-checked for, and a type-confused row must still leave
             # by this module's own error, not as a bare ``TypeError``.
             _validate(record)
+            # Inside the guard for the same reason: the digest is taken over the
+            # record's own fields, so a type-confused row must leave by this
+            # module's error here too, not as a bare ``TypeError``.
+            if record.receipt_sha256 != canonical_sha256(_unsigned(record)):
+                raise ShadowReceiptInvalid("shadow receipt digest does not verify")
         except ShadowReceiptInvalid:
             raise
         except (KeyError, TypeError, ValueError) as exc:
             raise ShadowReceiptInvalid("shadow receipt has an invalid shape") from exc
-        if record.receipt_sha256 != canonical_sha256(_unsigned(record)):
-            raise ShadowReceiptInvalid("shadow receipt digest does not verify")
         return record
 
 

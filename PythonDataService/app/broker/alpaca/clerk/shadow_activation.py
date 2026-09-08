@@ -3,7 +3,7 @@
 Modelled on the synthetic fence: a shadow authority has no custody until a
 caller deliberately activates it, and the proof is an append-only,
 sha256-sealed row under ``accounts/shadow/``. No startup path appends here;
-``activate_shadow_clerk_authority`` (active_authority.py) is the one writer.
+``activate_shadow_clerk_authority`` (shadow_authority.py) is the one writer.
 """
 
 from __future__ import annotations

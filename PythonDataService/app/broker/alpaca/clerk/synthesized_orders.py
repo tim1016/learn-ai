@@ -56,6 +56,10 @@ class SynthesizedBarBindingError(RuntimeError):
     """A proposed synthesized fill is not bound to its exact retained source bar."""
 
 
+class SynthesizedLedgerTransactionError(RuntimeError):
+    """An order-ledger append was attempted outside its own transaction."""
+
+
 class SynthesizedAnchor(BaseModel):
     """Where one synthesized order's fill came from (ADR 0002 invariant 3).
 
@@ -139,6 +143,10 @@ class SynthesizedOrderLedger:
         self._verify_bar = verify_bar
         self._bound_bars: dict[str, RetainedSourceBar] = {}
         self._binding_lock = threading.Lock()
+        # Thread-local because the transaction lock is held by one thread at a
+        # time: a sibling thread outside a transaction must not read another
+        # thread's held flag as its own permission to append.
+        self._transaction = threading.local()
         self._orders: JsonlWal[SynthesizedOrderRecord] = JsonlWal(
             path,
             record_model=SynthesizedOrderRecord,
@@ -206,7 +214,11 @@ class SynthesizedOrderLedger:
     def transaction(self) -> Iterator[list[SynthesizedOrderRecord]]:
         """Serialize a full order-ledger read/check/append across threads and processes."""
         with _order_lock(self._orders.path), advisory_file_lock(self._orders.path):
-            yield self._orders.read_all()
+            self._transaction.held = True
+            try:
+                yield self._orders.read_all()
+            finally:
+                self._transaction.held = False
 
     def latest_orders(self) -> list[BrokerOrder]:
         return self.latest_orders_from_records(self._orders.read_all())
@@ -258,11 +270,16 @@ class SynthesizedOrderLedger:
         anchor: SynthesizedAnchor | None = None,
     ) -> SynthesizedOrderRecord:
         """Append inside :meth:`transaction`; ``records`` is that transaction's read."""
+        if not getattr(self._transaction, "held", False):
+            raise SynthesizedLedgerTransactionError(
+                "A synthesized order append must run inside the ledger's transaction(); "
+                "outside it the records list is a stale read and the sequence is unowned."
+            )
         next_seq = records[-1].seq + 1 if records else 1
         # A sibling instance may have appended since this instance's previous
         # write. Refresh the WAL's sequence cache while holding the
         # cross-process transaction lock so it cannot reuse a sequence.
-        self._orders._next_seq = next_seq
+        self._orders.reset_seq(next_seq)
         record = SynthesizedOrderRecord(seq=next_seq, order=order, leg=leg, anchor=anchor)
         self._orders.append(record)
         records.append(record)
@@ -308,6 +325,7 @@ __all__ = [
     "FillModel",
     "SynthesizedAnchor",
     "SynthesizedBarBindingError",
+    "SynthesizedLedgerTransactionError",
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
     "project_positions",

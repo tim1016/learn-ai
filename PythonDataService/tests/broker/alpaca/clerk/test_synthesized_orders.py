@@ -11,6 +11,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SYNTHESIZED_ORDER_LEDGER_FILENAME,
     SynthesizedAnchor,
     SynthesizedBarBindingError,
+    SynthesizedLedgerTransactionError,
     SynthesizedOrderLedger,
     SynthesizedOrderRecord,
     project_positions,
@@ -107,6 +108,19 @@ def test_records_round_trip_with_leg_and_anchor(tmp_path: Path) -> None:
     assert record.leg == leg
     assert record.anchor == anchor
     assert ledger.latest_orders()[0].client_order_id == "learn-ai/ema-1/v1:a"
+
+
+def test_an_append_outside_the_transaction_is_refused(tmp_path: Path) -> None:
+    """The ``records`` list is only the transaction's read while the lock is held."""
+    ledger, _bars = _ledger(tmp_path)
+    with pytest.raises(SynthesizedLedgerTransactionError, match="inside the ledger's transaction"):
+        ledger.append_locked([], order=_order("learn-ai/ema-1/v1:a"))
+
+    with ledger.transaction() as records:
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:a"))
+    # The flag is released with the lock, so the next unguarded append is refused too.
+    with pytest.raises(SynthesizedLedgerTransactionError):
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:b"))
 
 
 def test_pre_anchor_rows_still_parse(tmp_path: Path) -> None:
