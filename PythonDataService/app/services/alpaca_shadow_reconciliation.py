@@ -44,7 +44,6 @@ from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
 from app.broker.alpaca.clerk.shadow_sessions import ShadowDayState, ShadowSessionLedger
-from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionUnavailable,
     SqliteEconomicProjectionReader,
@@ -238,6 +237,9 @@ class FillSource(Protocol):
         Half-open is the convention the SQLite projection already implements
         (``economic_filled_at_ms < to_ms``), so it is the one every
         implementation — the production adapter and any double — must hold to.
+        An implementation that cannot vouch for this instance's fills raises
+        ``EconomicProjectionUnavailable`` rather than returning a partial set;
+        the day is then judged ``not_evaluable``.
         """
         ...
 
@@ -251,6 +253,7 @@ class EconomicFillSource:
 
     def __init__(self, reader: SqliteEconomicProjectionReader) -> None:
         self._reader = reader
+        self._coverage_proven: set[str] = set()
 
     @classmethod
     def from_database_path(cls, db_path: Path) -> EconomicFillSource:
@@ -261,12 +264,28 @@ class EconomicFillSource:
     ) -> tuple[TwinFill, ...]:
         """This instance's fills in ``[from_ms, to_ms)`` — the protocol's half-open window.
 
-        ``account_fill_window`` is account-wide and identifies every fill by its
-        **custody subject**, so the instance filter is on ``bot_subject_id``, not
-        on the bare instance id (a manual fill has no instance id at all).
+        Read per instance, not account-wide. ``account_fill_window`` refuses the
+        whole account whenever *any* filled external order exists — account-wide
+        and time-unbounded — which would fence this gate forever on a real paper
+        twin that once carried one. An external order is by schema definition
+        outside every registered bot namespace and is never a decision of the
+        sealed program under comparison, so its presence is not this
+        comparison's business; whether the Clerk vouches for *this* instance's
+        executions is, and :meth:`_assert_coverage` asserts exactly that.
+
+        Unlike ``account_fill_window``, ``bot_fill_window`` builds its records
+        without the custody-subject identity, so ``FillRecord.sid`` here is the
+        bare instance id — and the rows are already this one instance's, so
+        there is no filter to apply.
         """
-        subject_id = bot_subject_id(strategy_instance_id)
-        records = self._reader.account_fill_window(from_ms=from_ms, to_ms=to_ms)
+        self._assert_coverage(strategy_instance_id)
+        projection = self._reader.bot_fill_window(
+            strategy_instance_id, from_ms=from_ms, to_ms=to_ms
+        )
+        if projection is None:
+            raise EconomicProjectionUnavailable(
+                f"{strategy_instance_id} is unknown to this authority"
+            )
         return tuple(
             TwinFill(
                 symbol=record.symbol,
@@ -276,9 +295,36 @@ class EconomicFillSource:
                 filled_at_ms=record.filled_at_ms,
                 order_ref=record.order_ref,
             )
-            for record in records
-            if record.sid == subject_id
+            for record in projection.fills
         )
+
+    def _assert_coverage(self, strategy_instance_id: str) -> None:
+        """Refuse an instance whose own executions the Clerk will not vouch for.
+
+        ``bot_fill_window`` checks only its row cap, so the per-bot half of what
+        ``account_fill_window`` used to guarantee is asserted here: cumulative-
+        recovery evidence anywhere in the instance's lifetime, or an unresolved
+        ``EXECUTION_COVERAGE_CONFLICT`` naming it, both surface as
+        ``execution_coverage != "complete"``. A quantity or price inferred
+        rather than observed is not something to reconcile a twin against.
+
+        Asked once per instance: the answer is instance-scoped and window-
+        independent, and each call costs a lifetime fill scan plus FIFO.
+        """
+        if strategy_instance_id in self._coverage_proven:
+            return
+        snapshot = self._reader.bot_economic_snapshot(
+            strategy_instance_id, session_window=None
+        )
+        if snapshot is None:
+            raise EconomicProjectionUnavailable(
+                f"{strategy_instance_id} is unknown to this authority"
+            )
+        if snapshot.execution_coverage != "complete":
+            raise EconomicProjectionUnavailable(
+                f"{strategy_instance_id}: execution coverage is {snapshot.execution_coverage}"
+            )
+        self._coverage_proven.add(strategy_instance_id)
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         return self._reader.runs_for_strategy(strategy_instance_id)
