@@ -317,6 +317,71 @@ def test_an_unloadable_live_environment_is_one_json_object_at_exit_two(
     assert _last_object(capsys)["error"] == "LIVE_ENVELOPE_MISSING"
 
 
+def test_a_tampered_plan_file_with_its_original_token_refuses_at_exit_two(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The plan's ids are its own content hash, so editing the file breaks them.
+
+    Quoting the token the ceremony issued is not enough: the token answers a
+    question about the document the plan *was*, and this is a different one.
+    """
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan_file = artifacts_root / "plan.json"
+    assert (
+        main(
+            [*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID, "--plan-out", str(plan_file),
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    token = plan["confirmation_token"]
+    plan_file.write_text(json.dumps({**plan, "max_sessions": plan["max_sessions"] + 1}), encoding="utf-8")
+
+    assert (
+        main(
+            [*_flags(roots), "apply", "--plan-file", str(plan_file), "--confirmation-token", token,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 2
+    )
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == "LIVE_ARMING_TOKEN_INVALID"
+    assert "content hash does not verify" in refusal["detail"]
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_status_for_an_instance_the_ledger_has_never_seen_is_unarmed_at_exit_zero(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Not knowing an instance is an answer, not a refusal."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    _arm(roots, capsys)
+
+    assert (
+        main(
+            [*_flags(roots), "status", "--strategy-instance-id", "never-seen",
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+
+    report = _last_object(capsys)
+    assert report["armed_instance_count"] == 0
+    # The account is still sealed by the arming the other instance holds.
+    assert report["envelope_state"] == "sealed"
+    (instance,) = report["instances"]
+    assert instance["strategy_instance_id"] == "never-seen"
+    assert (instance["state"], instance["reason_code"]) == ("unarmed", None)
+    assert instance["armed_at_ms"] is None
+
+
 def test_a_confirmation_token_that_is_not_ascii_refuses_at_exit_two(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:

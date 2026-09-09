@@ -139,6 +139,30 @@ def test_a_paper_account_is_never_armed(roots: tuple[Path, Path]) -> None:
     assert caught.value.reason_code == LIVE_ENVELOPE_MISSING
 
 
+def test_a_paper_account_with_a_complete_envelope_is_refused(roots: tuple[Path, Path]) -> None:
+    """The mode gate on its own, with every ``ALPACA_LIVE_*`` value present.
+
+    ``paper_settings()`` has no envelope at all, so it cannot tell the mode
+    check from the envelope check. This one can: the envelope is complete and
+    the refusal is still ``LIVE_ENVELOPE_MISSING``, named on the mode.
+    """
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    complete_but_paper = live_settings(mode="paper")
+    assert complete_but_paper.live_loss_usd is not None
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=complete_but_paper,
+        )
+
+    assert caught.value.reason_code == LIVE_ENVELOPE_MISSING
+    assert "ALPACA_MODE=paper" in str(caught.value)
+
+
 def test_an_incomplete_live_envelope_refuses_by_the_same_code(roots: tuple[Path, Path]) -> None:
     """``model_copy`` bypasses the settings validator, which is the only way to
     reach this branch -- ``AlpacaSettings`` itself refuses to construct a live
@@ -519,6 +543,37 @@ def test_disarm_with_nothing_to_revoke_is_refused_rather_than_written(roots: tup
 
     assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
     assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_disarming_twice_refuses_the_second_time_and_writes_one_revocation(
+    roots: tuple[Path, Path],
+) -> None:
+    """The tail of the instance's rows is a revocation, so there is nothing to revoke."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 1))
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 2))
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    records = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records()
+    assert [type(row) for row in records] == [LiveArmingRecord, LiveDisarmRecord]
 
 
 def test_account_statuses_answer_every_instance_with_a_row_and_named_ones_besides(

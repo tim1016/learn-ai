@@ -30,7 +30,7 @@ from app.broker.alpaca.clerk.active_authority import (
     activate_shadow_clerk_authority,
     select_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
+from app.broker.alpaca.clerk.live_arming import LiveArmingRecord, LiveDisarmRecord
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -413,6 +413,43 @@ async def test_a_re_arm_seals_the_new_environment_and_admits_again(
     assert runtime.envelope_sync.envelope.agreement == "agreed"
     admitted = await _enter(runtime, registered_running_bot, quantity=1)
     assert admitted.state.value == "submitted", admitted.explanation
+
+
+async def test_a_disarm_does_not_unseal_the_gate(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+    tmp_path: Path,
+) -> None:
+    """R10: a revocation withdraws one instance's permission, not the account's seal.
+
+    Slice 7 is what reads the per-instance record at admission. Until then the
+    account-level envelope stays sealed by the last *arming* ceremony, and the
+    next ENTER is still judged against it.
+    """
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    record = _arm(tmp_path)
+    assert await runtime.envelope_sync.tick() == "observed"
+
+    LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT).append(
+        LiveDisarmRecord.create(
+            live_account_id=LIVE_ACCT,
+            strategy_instance_id=SID,
+            revokes_record_sha256=record.record_sha256,
+            disarmed_at_ms=NOW_MS + 1,
+        )
+    )
+    assert await runtime.envelope_sync.tick() == "observed"
+
+    assert runtime.envelope_sync.envelope.sealed == TEST_ENVELOPE_VALUES
+    assert runtime.envelope_sync.envelope.agreement == "agreed"
+    admitted = await _enter(runtime, registered_running_bot, quantity=1)
+    assert admitted.state.value == "submitted", admitted.explanation
+
+    # And the seal is still the thing being enforced, not a leftover value.
+    runtime.envelope_sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=4_000.0)
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.agreement == "disagreed"
 
 
 async def test_an_unreadable_arming_ledger_unseals_the_gate_and_is_logged_once(

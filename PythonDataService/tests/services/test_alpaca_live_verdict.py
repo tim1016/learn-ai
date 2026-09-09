@@ -28,6 +28,7 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMING_SID,
     arming_ready,
     live_settings,
+    paper_settings,
 )
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import shadow_runtime  # noqa: F401
@@ -416,14 +417,39 @@ def test_observe_arming_fails_closed_on_an_unreadable_ledger(tmp_path: Path) -> 
     assert "cannot be read" in observation.detail
 
 
+def test_observe_arming_on_a_never_armed_account_claims_nothing(tmp_path: Path) -> None:
+    """The shadow authority is installed and the ledger has no row at all."""
+    artifacts_root, live_state_root = tmp_path / "clerk", tmp_path / "runner"
+
+    observation = observe_arming(
+        _shadow_runtime(),
+        artifacts_root,
+        live_state_root,
+        settings=live_settings(),
+        now_ms=ARMED_AT_MS,
+    )
+
+    assert observation.armed_instance_count == 0
+    assert observation.envelope_state == "configured_unsealed"
+    # No instance is named: there is no row to report as not-armed.
+    assert observation.detail == ""
+
+
 def test_observe_arming_reads_nothing_off_a_paper_or_absent_authority(tmp_path: Path) -> None:
     artifacts_root, live_state_root = tmp_path / "clerk", tmp_path / "runner"
     _arm_on_disk(artifacts_root, live_state_root)
 
-    for runtime in (None, ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001")):
+    for runtime, settings in (
+        (None, live_settings()),
+        (ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001"), live_settings()),
+        # The last of the four gates: the shadow authority *is* installed and
+        # the ledger *is* armed, but the environment says paper -- so no arming
+        # is claimed and no evidence is read.
+        (_shadow_runtime(), paper_settings()),
+    ):
         assert (
             observe_arming(
-                runtime, artifacts_root, live_state_root, settings=live_settings(), now_ms=ARMED_AT_MS
+                runtime, artifacts_root, live_state_root, settings=settings, now_ms=ARMED_AT_MS
             )
             == ArmingObservation.none()
         )

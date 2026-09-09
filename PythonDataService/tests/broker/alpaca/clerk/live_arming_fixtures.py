@@ -208,9 +208,11 @@ def seal_receipt(
         twin_account_id="PA-TWIN-ARM",
         twin_strategy_instance_id=f"{strategy_instance_id}-twin",
         required_sessions=sessions,
+        # Ascending session opens: the oldest rehearsal day first, ending the
+        # day before the receipt was written, exactly as a real gate emits them.
         sessions=tuple(
             ShadowReceiptSession(
-                session_open_ms=written_at_ms - _ONE_DAY_MS * (index + 1),
+                session_open_ms=written_at_ms - _ONE_DAY_MS * (sessions - index),
                 shadow_run_id=f"{strategy_instance_id}-run-1",
                 reconciliation_sha256="e" * 64,
             )

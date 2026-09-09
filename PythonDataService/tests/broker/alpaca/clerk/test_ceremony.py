@@ -33,6 +33,17 @@ def test_the_ttl_must_be_a_whole_millisecond_count_inside_the_bound() -> None:
             require_confirmation_ttl_ms(bad, refused=_Refused)  # type: ignore[arg-type]
 
 
+def test_the_digest_of_a_fixed_payload_is_pinned_to_a_literal() -> None:
+    """The bytes that are hashed are part of the contract, not an implementation detail.
+
+    Every cutover plan token an operator is holding was minted over
+    ``canonical_json_bytes`` -- canonical JSON *with* its trailing newline.
+    Changing what is hashed would invalidate all of them silently, so the
+    digest of one fixed payload is written out here once.
+    """
+    assert plan_content_token(PAYLOAD) == "60b1fa54852b30dab78968a50164f76b33440b658802a704c355b5afa86c32b3"
+
+
 def test_the_token_is_the_payloads_own_canonical_digest_and_is_key_order_free() -> None:
     token = plan_content_token(PAYLOAD)
     assert len(token) == 64
