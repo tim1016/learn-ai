@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -621,4 +621,11 @@ class ClerkSqliteRepositoryReadApi:
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
                 subject_id=subject_id,
+            )
+
+    def reserved_cash_usd(self: ClerkSqliteRepository, *, observed_at_ms: int) -> float:
+        """Cash the accepted ENTERs claim that ``observed_at_ms`` cannot see."""
+        with self._write_lock:
+            return envelope_reservations.reserved_cash_usd(
+                self._conn, observed_at_ms=observed_at_ms
             )

@@ -65,6 +65,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, leg_instruction_payload
@@ -151,6 +152,7 @@ def accept_enter(
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
     decision_receipt: AtomicDecisionReceipt | None = None,
+    envelope_reservation: EnvelopeReservation | None = None,
 ) -> EnterSubmission:
     """Reserve + accept, entirely local (no broker call). R1's fence.
 
@@ -166,6 +168,12 @@ def accept_enter(
     accepted operation" means for recovery: nothing about a broker call is
     durable yet, so there is nothing for recovery to duplicate, only to
     resolve.
+
+    ``envelope_reservation`` is the cash this ENTER claims until its fills are
+    observed (ADR 0059 D4). It rides the ``TransitionInput`` so the row lands
+    in the same transaction as ``ENTER_ACCEPTED``, and never enters the hashed
+    payload. This keyword is a write-path seam only; the envelope slice
+    replaces it with the gate's own ``envelope``/``reference_price`` pair.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
@@ -211,6 +219,7 @@ def accept_enter(
             clerk_observed_at_ms=repo.clock(),
             summary_code="ENTER_ACCEPTED",
             facts_json=facts.to_facts_json(),
+            envelope_reservation=envelope_reservation,
         )
 
     outcome = repo.commit_first_transition(

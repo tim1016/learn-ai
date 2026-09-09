@@ -222,6 +222,36 @@ WHERE reason_code IN ({_HOLD_REASON_CODE_SQL_LIST});
 """
 
 
+ENVELOPE_RESERVATIONS_TABLE_DDL = """\
+-- ============================================================
+-- envelope_reservations — the cash one accepted ENTER claims until its
+-- fills are observed (ADR 0059 D4). Product evidence outside the hash
+-- chain, like decision_receipts: written in ENTER_ACCEPTED's transaction,
+-- never in facts_json, never in the mirror.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS envelope_reservations (
+    effect_operation_id      TEXT PRIMARY KEY REFERENCES effect_operations(effect_operation_id),
+    quantity                 REAL NOT NULL CHECK (quantity > 0),
+    reference_price          REAL NOT NULL CHECK (reference_price > 0),
+    reserved_at_ms           INTEGER NOT NULL
+);
+"""
+
+# v13 re-publishes the ``holds`` view, and that is not redundant. A view
+# definition is *stored text*, baked into a file at the version that created
+# it: a file written at v12 names the two hold causes ``HOLD_REASON_CODES``
+# held then, so the loss hold ADR 0059 added projects there as an uncertainty
+# while projecting as a hold on a fresh file. Re-rendering it from the same
+# ``HOLDS_COMPATIBILITY_VIEW_DDL`` the v12 statements use is what makes a fresh
+# and an upgraded file converge by construction rather than by two hand-kept
+# strings agreeing.
+ENVELOPE_RESERVATIONS_V13_STATEMENTS: tuple[str, ...] = (
+    ENVELOPE_RESERVATIONS_TABLE_DDL,
+    "DROP VIEW IF EXISTS holds",
+    HOLDS_COMPATIBILITY_VIEW_DDL,
+)
+
+
 UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL = """\
 CREATE TRIGGER trg_uncertainties_subject_compatible_insert
 BEFORE INSERT ON uncertainties

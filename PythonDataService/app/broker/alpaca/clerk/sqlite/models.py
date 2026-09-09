@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+
 
 @dataclass(frozen=True)
 class TransitionInput:
@@ -38,6 +40,8 @@ class TransitionInput:
     proof_reference: str | None = None
     source_event_at_ms: int | None = None
     facts_schema_version: int = 1
+    # Not part of the hashed payload — a sibling row, see envelope_reservations.py.
+    envelope_reservation: EnvelopeReservation | None = None
 
 
 @dataclass(frozen=True)

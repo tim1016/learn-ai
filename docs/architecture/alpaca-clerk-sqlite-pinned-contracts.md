@@ -1060,6 +1060,35 @@ SELECT
     evidence_refs_json                                          AS evidence_refs_json
 FROM uncertainties
 WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
+
+
+-- ============================================================
+-- envelope_reservations — the cash one accepted ENTER claims until its
+-- fills are observed (ADR 0059 D4). Product evidence outside the hash
+-- chain, like decision_receipts: written in ENTER_ACCEPTED's transaction,
+-- never in facts_json, never in the mirror.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS envelope_reservations (
+    effect_operation_id      TEXT PRIMARY KEY REFERENCES effect_operations(effect_operation_id),
+    quantity                 REAL NOT NULL CHECK (quantity > 0),
+    reference_price          REAL NOT NULL CHECK (reference_price > 0),
+    reserved_at_ms           INTEGER NOT NULL
+);
+
+DROP VIEW IF EXISTS holds;
+CREATE VIEW holds AS
+SELECT
+    uncertainty_id                                              AS hold_id,
+    scope                                                       AS scope,
+    subject_id                                                  AS subject_id,
+    strategy_instance_id                                        AS strategy_instance_id,
+    reason_code                                                 AS reason_code,
+    CASE WHEN resolved_at_ms IS NULL THEN 'ACTIVE' ELSE 'RESOLVED' END AS state,
+    observed_at_ms                                              AS opened_at_ms,
+    resolved_at_ms                                              AS resolved_at_ms,
+    evidence_refs_json                                          AS evidence_refs_json
+FROM uncertainties
+WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
 ```
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
