@@ -204,6 +204,18 @@ def observe_arming_inputs(
             f"{strategy_instance_id} has no current shadow receipt for this seal over "
             f"{envelope.shadow_sessions} session(s)",
         )
+    # The receipt store filters by instance, signal hash and session count only,
+    # so a receipt sealed on another live account would otherwise prove this
+    # one's gate. Two accounts can carry the same instance id and the same
+    # configured signal; only the account the activation proof named was
+    # actually rehearsed.
+    if receipt.live_account_id != live_account_id:
+        raise LiveArmingRefused(
+            LIVE_SHADOW_INCOMPLETE,
+            f"{strategy_instance_id}'s current shadow receipt was sealed for "
+            f"{receipt.live_account_id}, not {live_account_id}; the shadow gate must "
+            "have run on the account being armed",
+        )
     return ArmingInputs(
         live_account_id=live_account_id,
         strategy_instance_id=strategy_instance_id,

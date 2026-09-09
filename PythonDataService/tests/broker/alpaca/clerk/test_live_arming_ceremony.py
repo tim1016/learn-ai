@@ -265,6 +265,39 @@ def test_no_current_shadow_receipt_is_the_adrs_own_refusal(roots: tuple[Path, Pa
     assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
 
 
+def test_a_receipt_sealed_for_another_live_account_never_arms_this_one(
+    roots: tuple[Path, Path],
+) -> None:
+    """The receipt store filters by instance, seal and count -- not by account.
+
+    Two live accounts can carry the same instance id and the same configured
+    signal, so a receipt proving the gate ran on account A would otherwise arm
+    the same instance bound on account B.
+    """
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    seal = record_sealed_binding(live_state_root)
+    seal_receipt(
+        artifacts_root,
+        configured_signal_hash=seal.configured_signal_hash,
+        live_account_id="9LIVE0002",
+        sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
+    )
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        plan_arming(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+        )
+
+    assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
+    assert "9LIVE0002" in str(caught.value) and LIVE_ACCT in str(caught.value)
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
 def test_plan_writes_nothing_and_its_two_ids_are_its_own_content_hash(roots: tuple[Path, Path]) -> None:
     artifacts_root, live_state_root = roots
     arming_ready(artifacts_root, live_state_root)
