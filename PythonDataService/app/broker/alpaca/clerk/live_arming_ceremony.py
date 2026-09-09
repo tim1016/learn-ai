@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.ceremony import (
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INPUTS_CHANGED,
     LIVE_ARMING_INSTANCE_UNSEALED,
+    LIVE_ARMING_NOT_ARMED,
     LIVE_ARMING_PLAN_EXPIRED,
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
@@ -53,7 +54,7 @@ from app.broker.alpaca.clerk.live_arming import (
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
-from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
+from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid, ShadowActivationStore
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.config import AlpacaSettings
 from app.services.bot_binding_repository import live_state_binding_repository
@@ -349,6 +350,43 @@ def apply_arming(
     return record
 
 
+def _disarm_ledger(*, strategy_instance_id: str, artifacts_root: Path) -> LiveArmingLedger:
+    """The ledger holding this instance's arming -- activation proof or not.
+
+    The activation fence is the ordinary answer: it is the evidence that a
+    shadow gate ran on this account, and it is what every *opening* step reads.
+    But disarming is the closed direction, and that fence can be deleted,
+    damaged or made ambiguous after an arming -- during exactly the incident a
+    revocation exists for. Blocking the revocation then is the wrong failure,
+    and it is avoidable: an arming row already names its own live account, so
+    the arming tree itself can be asked.
+
+    The fallback is taken only when the fence cannot name one account. Any
+    other refusal propagates.
+    """
+    try:
+        return LiveArmingLedger(artifacts_root, live_account_id=live_account_id_for(artifacts_root))
+    except (LiveArmingRefused, ShadowActivationInvalid) as exc:
+        if isinstance(exc, LiveArmingRefused) and exc.reason_code != LIVE_ARMING_INSTANCE_UNSEALED:
+            raise
+        logger.warning(
+            "the shadow activation proof cannot name one live account; disarm is reading "
+            "the arming ledgers themselves",
+            extra={
+                "action": "live_arming_disarm_discovery",
+                "strategy_instance_id": strategy_instance_id,
+                "why": str(exc),
+            },
+        )
+    discovered = LiveArmingLedger.discover(artifacts_root, strategy_instance_id=strategy_instance_id)
+    if discovered is None:
+        raise LiveArmingRefused(
+            LIVE_ARMING_NOT_ARMED,
+            f"no arming ledger under {artifacts_root} names {strategy_instance_id}",
+        )
+    return discovered
+
+
 def disarm(
     *,
     strategy_instance_id: str,
@@ -358,23 +396,21 @@ def disarm(
     """Revoke one instance's arming: one append, no plan, no confirmation (R4).
 
     Disarming is the closed direction, so it reads no settings, no binding and
-    no receipt: an operator must be able to revoke an arming whose evidence has
-    already gone. It needs only the account the shadow gate ran against and the
-    record it revokes.
+    no receipt -- and, when the activation fence cannot answer, no activation
+    proof either: an operator must be able to revoke an arming whose evidence
+    has already gone. It needs only the ledger holding the record it revokes.
     """
-    live_account_id = live_account_id_for(artifacts_root)
+    ledger = _disarm_ledger(strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
     # The ledger owns the read-and-revoke transaction: what is being revoked
     # and the row that revokes it are decided under one lock acquisition, so a
     # concurrent re-arm cannot make ``revokes_record_sha256`` name a stale
-    # record (C6).
-    record = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).revoke_latest(
-        strategy_instance_id, disarmed_at_ms=clock()
-    )
+    # record.
+    record = ledger.revoke_latest(strategy_instance_id, disarmed_at_ms=clock())
     logger.warning(
         "live instance disarmed",
         extra={
             "action": "live_arming_revoked",
-            "account_id": live_account_id,
+            "account_id": ledger.live_account_id,
             "strategy_instance_id": strategy_instance_id,
             "revokes_record_sha256": record.revokes_record_sha256,
         },

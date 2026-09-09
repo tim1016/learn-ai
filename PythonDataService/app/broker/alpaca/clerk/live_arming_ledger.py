@@ -14,12 +14,14 @@ which is the shape those paths already tolerate.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
 from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_INSTANCE_UNSEALED,
     LIVE_ARMING_NOT_ARMED,
     LedgerRecord,
     LiveArmingInvalid,
@@ -36,9 +38,16 @@ from app.broker.alpaca.clerk.sealed_ledger import (
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.utils.advisory_lock import advisory_file_lock
 
+logger = logging.getLogger(__name__)
+
 LIVE_ARMING_FILENAME = "live_arming.jsonl"
 _LABEL = "live arming"
 _ARMING_DIR = "arming"
+
+
+def _arming_root(artifacts_root: Path) -> Path:
+    """The account-rooted arming tree; it need not exist yet."""
+    return resolve_contained_path(artifacts_root, "accounts", _ARMING_DIR)
 
 
 def _verified_payload(record: LedgerRecord) -> dict[str, Any]:
@@ -146,6 +155,61 @@ class LiveArmingLedger:
             if record.live_account_id == self._live_account_id:
                 rows.append(record)
         return tuple(rows)
+
+    @classmethod
+    def discover(cls, artifacts_root: Path, *, strategy_instance_id: str) -> LiveArmingLedger | None:
+        """The one account whose arming ledger names this instance, from the tree alone.
+
+        ``disarm`` is the closed direction, and the shadow activation proof it
+        would normally read can be deleted or damaged after an arming --
+        precisely during the incident a revocation exists for. The arming rows
+        already name their own live account, so the tree can answer the
+        question the fence usually answers.
+
+        A directory whose name is not a real, path-safe account id is not an
+        arming ledger and is skipped; a ledger that will not verify is skipped
+        too, but never quietly -- it is logged at error level with its
+        traceback, because a damaged sibling must be visible and must not hide
+        a readable one. ``None`` means no ledger names the instance. Two
+        ledgers naming it is a refusal: nothing here can choose between two
+        accounts that both armed the same instance id.
+        """
+        found: list[LiveArmingLedger] = []
+        for directory in sorted(_arming_root(artifacts_root).glob("*")):
+            if not (directory / LIVE_ARMING_FILENAME).is_file():
+                continue
+            try:
+                ledger = cls(artifacts_root, live_account_id=require_real_account_id(directory.name))
+            except ValueError:
+                logger.error(
+                    "an arming tree directory does not name a real live account; it is skipped",
+                    extra={"action": "live_arming_ledger_invalid", "account_id": directory.name},
+                    exc_info=True,
+                )
+                continue
+            try:
+                names_instance = bool(ledger.records_for(strategy_instance_id))
+            except LiveArmingInvalid:
+                logger.error(
+                    "an arming ledger will not verify; it cannot answer for this instance",
+                    extra={
+                        "action": "live_arming_ledger_invalid",
+                        "account_id": ledger.live_account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                    },
+                    exc_info=True,
+                )
+                continue
+            if names_instance:
+                found.append(ledger)
+        if len(found) > 1:
+            raise LiveArmingRefused(
+                LIVE_ARMING_INSTANCE_UNSEALED,
+                f"{strategy_instance_id} is armed on more than one live account "
+                f"({', '.join(ledger.live_account_id for ledger in found)}); "
+                "disarm cannot choose between them",
+            )
+        return found[0] if found else None
 
     def records_for(self, strategy_instance_id: str) -> tuple[LedgerRecord, ...]:
         return tuple(row for row in self.records() if row.strategy_instance_id == strategy_instance_id)

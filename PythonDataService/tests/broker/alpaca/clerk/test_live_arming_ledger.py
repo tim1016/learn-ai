@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import date
@@ -13,6 +14,7 @@ import pytest
 
 import app.broker.alpaca.clerk.live_arming_ledger as ledger_module
 from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_INSTANCE_UNSEALED,
     LIVE_ARMING_NOT_ARMED,
     LiveArmingInvalid,
     LiveArmingRecord,
@@ -240,6 +242,57 @@ def test_revoking_an_instance_with_no_arming_row_refuses_and_writes_nothing(tmp_
 
     assert second.value.reason_code == LIVE_ARMING_NOT_ARMED
     assert [type(row) for row in ledger.records()] == [LiveArmingRecord, LiveDisarmRecord]
+
+
+def test_discover_finds_the_one_account_whose_ledger_names_the_instance(tmp_path: Path) -> None:
+    """The arming tree answers without the shadow activation proof."""
+    LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT).append(
+        _armed(account=OTHER_ACCOUNT, instance="somebody-else")
+    )
+    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
+
+    found = LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
+
+    assert found is not None and found.live_account_id == ACCOUNT
+    assert LiveArmingLedger.discover(tmp_path, strategy_instance_id="never-armed") is None
+    assert LiveArmingLedger.discover(tmp_path / "empty", strategy_instance_id=SID) is None
+
+
+def test_discover_skips_an_unreadable_ledger_loudly_rather_than_silently(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A damaged sibling must neither hide a readable ledger nor vanish quietly."""
+    damaged = LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT)
+    damaged.append(_armed(account=OTHER_ACCOUNT))
+    damaged.path.write_text(
+        damaged.path.read_text(encoding="utf-8").replace(
+            f'"armed_at_ms":{FRIDAY_MS}', f'"armed_at_ms":{FRIDAY_MS + 1}'
+        ),
+        encoding="utf-8",
+    )
+    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
+
+    with caplog.at_level(logging.ERROR):
+        found = LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
+
+    assert found is not None and found.live_account_id == ACCOUNT
+    (invalid,) = [
+        record for record in caplog.records if getattr(record, "action", None) == "live_arming_ledger_invalid"
+    ]
+    assert invalid.account_id == OTHER_ACCOUNT  # type: ignore[attr-defined]
+    assert invalid.exc_info is not None, "the traceback names which row will not verify"
+
+
+def test_discover_refuses_when_two_accounts_armed_the_same_instance(tmp_path: Path) -> None:
+    """Nothing in the tree can choose between them, so it does not choose."""
+    LiveArmingLedger(tmp_path, live_account_id=ACCOUNT).append(_armed())
+    LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT).append(_armed(account=OTHER_ACCOUNT))
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        LiveArmingLedger.discover(tmp_path, strategy_instance_id=SID)
+
+    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+    assert ACCOUNT in str(caught.value) and OTHER_ACCOUNT in str(caught.value)
 
 
 def test_the_append_holds_the_advisory_lock_across_the_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

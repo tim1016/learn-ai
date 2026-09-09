@@ -36,7 +36,11 @@ field and a `note`.
   shadow receipts use. Its own tree, deliberately: not `accounts/alpaca/<id>/`
   and not inside a custody namespace directory, so no custody-detection path
   (cutover initialization, the latent-database checks) can mistake an arming
-  ledger for an authority.
+  ledger for an authority. `revoke_latest` reads the instance's latest row and
+  appends the revocation under **one** lock acquisition, so a concurrent
+  re-arm cannot make `revokes_record_sha256` name a stale record;
+  `discover` finds the ledger naming an instance without the activation proof
+  (see Residuals).
 - `PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py` —
   `observe_arming_inputs`, `plan_arming`, `apply_arming`, `disarm`,
   `account_arming`.
@@ -247,9 +251,21 @@ values was already declared in slice 1.
 - **The sealed envelope is account-level under shadow.** Per-instance
   disagreement is reported by `status` and by the verdict; it is enforced per
   instance at admission in slice 7.
-- **One shadowed account per artifacts root.** `live_account_id_for` refuses
-  rather than choosing when the activation fence names two, because arming has
-  no basis to pick one.
+- **One shadowed account per artifacts root — for arming, not for disarm.**
+  `live_account_id_for` refuses rather than choosing when the activation fence
+  names two, because an arming has no basis to pick one. `disarm` does **not**
+  inherit that limit, and no longer needs the activation proof at all: the
+  closed direction must survive the loss of the evidence that opened it, since
+  a deleted or damaged fence is exactly the incident a revocation exists for.
+  When the fence cannot name one account, `LiveArmingLedger.discover` scans
+  `accounts/arming/*/live_arming.jsonl` for the ledger whose rows name the
+  instance — an arming row already carries its own live account — and the
+  revocation is appended there. A directory that is not a real account id, and
+  a ledger that will not verify, are skipped and logged at **error** level
+  (`live_arming_ledger_invalid`, with the traceback), never silently; no ledger
+  naming the instance is `LIVE_ARMING_NOT_ARMED`; two accounts having armed the
+  same instance id is `LIVE_ARMING_INSTANCE_UNSEALED` naming both, because
+  nothing in the tree can choose between them either.
 - **`ALPACA_LIVE_ARMING_MAX_SESSIONS` has no upper bound in code** — the owner
   rejected numbers in code. The plan output shows exactly how many sessions the
   arming buys, so an implausible grant is visible at the moment it is confirmed.

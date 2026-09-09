@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     plan_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -565,6 +566,80 @@ def test_disarm_revokes_the_latest_record_and_needs_no_confirmation(roots: tuple
     ).statuses
     assert statuses[ARMING_SID].state == "disarmed"
     assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_REVOKED"
+
+
+def _arm_for_disarm(roots: tuple[Path, Path]) -> LiveArmingRecord:
+    """One armed instance on the fixture's live account, via the real ceremony."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    return apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+
+def test_disarm_survives_the_loss_of_the_activation_evidence(roots: tuple[Path, Path]) -> None:
+    """The closed direction must not need the proof that opened it.
+
+    An incident is exactly when the durable evidence is damaged, and the arming
+    row already names its own live account -- so the arming tree answers the
+    question the activation fence usually answers.
+    """
+    artifacts_root, _live_state_root = roots
+    armed = _arm_for_disarm(roots)
+    ShadowActivationStore(artifacts_root).path.unlink()
+    with pytest.raises(LiveArmingRefused):
+        live_account_id_for(artifacts_root)
+
+    revocation = disarm(
+        strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 5_000)
+    )
+
+    assert revocation.live_account_id == LIVE_ACCT
+    assert revocation.revokes_record_sha256 == armed.record_sha256
+    assert isinstance(LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).latest(ARMING_SID), LiveDisarmRecord)
+
+
+def test_disarm_resolves_the_account_when_the_activation_fence_is_ambiguous(
+    roots: tuple[Path, Path],
+) -> None:
+    """Two shadowed accounts, one arming ledger naming the instance: no ambiguity."""
+    artifacts_root, _live_state_root = roots
+    armed = _arm_for_disarm(roots)
+    activate_shadow_fence(artifacts_root, live_account_id="9LIVE0002")
+    with pytest.raises(LiveArmingRefused) as fence:
+        live_account_id_for(artifacts_root)
+    assert fence.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+
+    revocation = disarm(
+        strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 5_000)
+    )
+
+    assert revocation.live_account_id == LIVE_ACCT
+    assert revocation.revokes_record_sha256 == armed.record_sha256
+
+
+def test_disarm_refuses_when_no_arming_ledger_names_the_instance(roots: tuple[Path, Path]) -> None:
+    """No activation proof and nothing armed: there is nothing to revoke."""
+    artifacts_root, _live_state_root = roots
+    artifacts_root.mkdir(parents=True)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS))
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    assert ARMING_SID in str(caught.value)
 
 
 def test_disarm_with_nothing_to_revoke_is_refused_rather_than_written(roots: tuple[Path, Path]) -> None:
