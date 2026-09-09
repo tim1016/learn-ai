@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -259,33 +259,23 @@ def plan_arming(
     return replace(draft, plan_id=token, confirmation_token=token)
 
 
-# The facts a plan named and an apply must find unchanged. An allowlist rather
-# than a whole-object comparison, so the two ids, the clock stamps and the
-# expanded envelope values -- every one of which is derived from these -- cannot
-# make a same-input re-observation look like drift.
-_DRIFTABLE: tuple[str, ...] = (
-    "live_account_id",
-    "strategy_instance_id",
-    "seal_hash",
-    "configured_signal_hash",
-    "shadow_receipt_sha256",
-    "envelope_sha256",
-    "max_sessions",
-)
-
-
 def _require_no_drift(plan: LiveArmingPlan, current: ArmingInputs) -> None:
+    """Refuse if any fact the plan named has changed since it was written.
+
+    The compared set is built from ``ArmingInputs`` itself rather than a
+    hand-kept list, so a field added to the observation cannot be missed here
+    at apply time. It is still narrower than a whole-object comparison: the two
+    ids, the clock stamps and the expanded envelope values on the plan are all
+    *derived* from these facts, and comparing them would read a same-input
+    re-observation as drift. The envelope is compared by its sha, which is the
+    one name both sides carry.
+    """
     observed: dict[str, Any] = {
-        "live_account_id": current.live_account_id,
-        "strategy_instance_id": current.strategy_instance_id,
-        "seal_hash": current.seal_hash,
-        "configured_signal_hash": current.configured_signal_hash,
-        "shadow_receipt_sha256": current.shadow_receipt_sha256,
-        "envelope_sha256": current.envelope.sha,
-        "max_sessions": current.max_sessions,
+        name: value for name, value in asdict(current).items() if name != "envelope"
     }
-    for name in _DRIFTABLE:
-        if observed[name] != getattr(plan, name):
+    observed["envelope_sha256"] = current.envelope.sha
+    for name, value in observed.items():
+        if value != getattr(plan, name):
             raise LiveArmingRefused(
                 LIVE_ARMING_INPUTS_CHANGED, f"{name} changed after arming planning"
             )

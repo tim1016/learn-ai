@@ -65,7 +65,11 @@ def verify_sealed_record[RecordT](
             raise invalid(f"{label} record digest does not verify")
     except invalid:
         raise
-    except (KeyError, TypeError, ValueError) as exc:
+    # No ``KeyError``: nothing here indexes the payload -- a missing or extra
+    # key is a ``TypeError`` from ``cls(**payload)``. A ``KeyError`` could only
+    # come from a ``digest_field`` this record has no such field for, which is a
+    # caller bug and must stay loud rather than read as a corrupt row.
+    except (TypeError, ValueError) as exc:
         raise invalid(f"{label} record has an invalid shape") from exc
     return record
 

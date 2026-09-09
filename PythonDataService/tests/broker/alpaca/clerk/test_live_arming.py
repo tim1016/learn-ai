@@ -102,12 +102,35 @@ def test_the_record_seals_every_field_and_round_trips() -> None:
         ("shadow_receipt_sha256", "d" * 64),
         ("armed_at_ms", FRIDAY_MS + 1),
         ("max_sessions", 19),
+        ("kind", "disarmed"),
+        ("schema_version", 2),
+        ("envelope_sha256", "d" * 64),
     ],
 )
-def test_tampering_with_any_sealed_field_breaks_the_digest(field: str, value: object) -> None:
+def test_tampering_with_any_sealed_field_is_refused(field: str, value: object) -> None:
+    """Whichever check fires first, no hand-edited row is ever accepted."""
     payload = {**asdict(_armed()), field: value}
+    with pytest.raises(LiveArmingInvalid):
+        LiveArmingRecord.from_payload(payload)
+
+
+def test_a_tampered_content_field_is_caught_by_the_record_digest() -> None:
+    """The digest is what catches an edit the per-field validators would allow."""
+    payload = {**asdict(_armed()), "max_sessions": 19}
     with pytest.raises(LiveArmingInvalid, match="digest does not verify"):
         LiveArmingRecord.from_payload(payload)
+
+
+def test_a_wrong_kind_or_schema_version_is_named_as_such() -> None:
+    """A row of the wrong shape is not an "integer or identity" problem."""
+    record = _armed()
+    with pytest.raises(LiveArmingInvalid, match="invalid kind or schema version"):
+        LiveArmingRecord.from_payload({**asdict(record), "kind": "disarmed"})
+    with pytest.raises(LiveArmingInvalid, match="invalid kind or schema version"):
+        LiveArmingRecord.from_payload({**asdict(record), "schema_version": 2})
+    disarm = _disarmed(record)
+    with pytest.raises(LiveArmingInvalid, match="invalid kind or schema version"):
+        LiveDisarmRecord.from_payload({**asdict(disarm), "kind": "armed"})
 
 
 def test_a_rewritten_envelope_is_caught_by_the_envelope_sha_before_the_digest() -> None:

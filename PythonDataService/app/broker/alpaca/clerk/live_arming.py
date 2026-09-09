@@ -209,6 +209,12 @@ def _require_real(account_id: str) -> None:
         raise LiveArmingInvalid("live arming record names a reserved account identity as real") from exc
 
 
+def _require_kind(kind: str, expected: str, schema_version: int) -> None:
+    """A row of the wrong shape is named as such, not as a bad number."""
+    if kind != expected or schema_version != 1:
+        raise LiveArmingInvalid("live arming record has an invalid kind or schema version")
+
+
 def _require_hashes(*values: str) -> None:
     if any(not isinstance(value, str) or _SHA256.match(value) is None for value in values):
         raise LiveArmingInvalid("live arming record has invalid hash facts")
@@ -216,10 +222,9 @@ def _require_hashes(*values: str) -> None:
 
 def _validate_armed(record: LiveArmingRecord) -> None:
     _require_real(record.live_account_id)
+    _require_kind(record.kind, "armed", record.schema_version)
     if (
-        record.kind != "armed"
-        or record.schema_version != 1
-        or not record.strategy_instance_id
+        not record.strategy_instance_id
         or record.max_sessions < 1
         or not 0 <= record.armed_at_ms <= MAX_TIMESTAMP_MS
     ):
@@ -240,10 +245,9 @@ def _validate_armed(record: LiveArmingRecord) -> None:
 
 def _validate_disarmed(record: LiveDisarmRecord) -> None:
     _require_real(record.live_account_id)
+    _require_kind(record.kind, "disarmed", record.schema_version)
     if (
-        record.kind != "disarmed"
-        or record.schema_version != 1
-        or not record.strategy_instance_id
+        not record.strategy_instance_id
         or not 0 <= record.disarmed_at_ms <= MAX_TIMESTAMP_MS
     ):
         raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
@@ -267,11 +271,9 @@ def sessions_used(*, armed_at_ms: int, now_ms: int) -> int:
     """
     if now_ms < armed_at_ms:
         raise ValueError("now_ms precedes armed_at_ms; a record dated after the clock is not current")
-    armed_date = et_date_at_ms(armed_at_ms)
-    now_date = et_date_at_ms(now_ms)
-    if now_date < armed_date:
-        raise ValueError("sessions_used refuses a reversed range: now_ms precedes armed_at_ms")
-    return trading_session_count(armed_date, now_date)
+    # No second, date-level guard: ``et_date_at_ms`` is monotonic, so the
+    # millisecond comparison above already excludes every reversed range.
+    return trading_session_count(et_date_at_ms(armed_at_ms), et_date_at_ms(now_ms))
 
 
 @dataclass(frozen=True)

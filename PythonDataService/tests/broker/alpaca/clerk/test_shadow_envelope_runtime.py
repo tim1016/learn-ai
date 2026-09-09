@@ -443,3 +443,59 @@ async def test_an_unreadable_arming_ledger_unseals_the_gate_and_is_logged_once(
         record for record in caplog.records if getattr(record, "action", None) == "live_arming_ledger_invalid"
     ]
     assert len(invalid) == 1, "the fault is logged once per transition, not four times a minute"
+    assert invalid[0].exc_info is not None, "the traceback names which row will not verify"
+
+
+async def test_the_seal_transition_log_names_both_the_custody_and_the_live_account(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Under shadow those are two different accounts, and an operator reads both."""
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert await runtime.envelope_sync.tick() == "observed"
+
+    (sealed,) = [
+        record for record in caplog.records if getattr(record, "action", None) == "live_envelope_sealed"
+    ]
+    assert sealed.account_id == SHADOW_ACCT  # type: ignore[attr-defined]
+    assert sealed.live_account_id == LIVE_ACCT  # type: ignore[attr-defined]
+
+
+async def test_a_repaired_ledger_reseals_and_the_two_dedup_flags_are_independent(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The ledger fault and the seal transition dedup on their own questions.
+
+    One flag must not swallow the other: a ledger that goes bad and is then put
+    back has to log the fault once *and* both envelope transitions.
+    """
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+    assert await runtime.envelope_sync.tick() == "observed"
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    readable = ledger.path.read_text(encoding="utf-8")
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        ledger.path.write_text(readable.replace('"max_sessions":20', '"max_sessions":90'), encoding="utf-8")
+        assert await runtime.envelope_sync.tick() == "observed"
+        assert await runtime.envelope_sync.tick() == "observed"
+        assert runtime.envelope_sync.envelope.sealed is None
+        ledger.path.write_text(readable, encoding="utf-8")
+        assert await runtime.envelope_sync.tick() == "observed"
+
+    assert runtime.envelope_sync.envelope.sealed == TEST_ENVELOPE_VALUES
+    actions = [getattr(record, "action", None) for record in caplog.records]
+    assert actions.count("live_arming_ledger_invalid") == 1
+    assert actions.count("live_envelope_unsealed") == 1
+    assert actions.count("live_envelope_sealed") == 1
+    assert actions.index("live_envelope_unsealed") < actions.index("live_envelope_sealed")

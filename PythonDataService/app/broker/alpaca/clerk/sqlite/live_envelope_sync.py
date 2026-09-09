@@ -289,6 +289,7 @@ class LiveEnvelopeSync:
             if not self._arming_ledger_invalid:
                 logger.error(
                     "live arming ledger cannot be read; the envelope is unsealed",
+                    exc_info=True,
                     extra={
                         "action": "live_arming_ledger_invalid",
                         "account_id": self._repo.account_id,
