@@ -3206,8 +3206,8 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
         label="Live",
         availability="planned",
         explanation=(
-            "Real-money submission requires a completed shadow receipt, the live cutover and the "
-            "arming ceremony (ADR 0059)."
+            "Real-money submission follows the live cutover and the arming ceremony; a shadow "
+            "rehearsal is optional (ADR 0059, amended 2026-09-09)."
             if broker_mode == "shadow"
             else "Live Alpaca execution is planned but is not connected to an admission or execution path."
         ),
@@ -3224,8 +3224,11 @@ In `app/services/broker_v2_panel/panel_deploy.py` (lines 72–82) reword the ref
         raise PanelUnavailableError(
             "Alpaca account deployment is refused.",
             detail=(
-                f"The primary authority custodies the {custody_world} world, which does not admit "
-                f"an account Alpaca reports as {account.account_mode!r} (ADR 0059 D1)."
+                f"No Alpaca authority is installed, so deployment assumes the paper world, which does "
+                f"not admit an account Alpaca reports as {account.account_mode} (ADR 0059 D1)."
+                if installed_world is None
+                else f"The active {broker_mode_for(custody_world)} authority does not admit an account "
+                f"Alpaca reports as {account.account_mode} (ADR 0059 D1)."
             ),
             next_action=(
                 "Reconnect with credentials for the account this authority custodies, or activate "
@@ -3393,7 +3396,7 @@ _LIVE_COPY: dict[LiveSituation, tuple[str, str]] = {
         "LIVE account {account} — real-money authority installed, no instance armed",
         "This is a real-money Alpaca account custodied by its live authority. No sealed instance "
         "is armed, so every ENTER is refused; EXITs and operator reduce-only actions still run. "
-        "Arming requires a completed shadow receipt and the supervised ceremony (ADR 0059).",
+        "Arming is the supervised ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
     ),
     "armed": (
         "LIVE account {account} — {instances} armed under the shadow authority, nothing submitted",
@@ -3404,13 +3407,13 @@ _LIVE_COPY: dict[LiveSituation, tuple[str, str]] = {
     "shadow": (
         "LIVE account {account} — shadow authority active, no instance armed",
         "This is a real-money Alpaca account. Its shadow authority reads it and synthesizes "
-        "every fill; nothing is submitted under the shadow authority. Arming requires a completed "
-        "shadow receipt and the supervised ceremony (ADR 0059).",
+        "every fill; nothing is submitted under the shadow authority. Arming is the supervised "
+        "ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
     ),
     "bare": (
         "LIVE account {account} — real money, no instance armed",
         "This is a real-money Alpaca account. No sealed instance is armed, so every order path "
-        "refuses. Arming requires a completed shadow receipt and the supervised ceremony (ADR 0059).",
+        "refuses. Arming is the supervised ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
     ),
 }
 ```
@@ -3748,10 +3751,12 @@ python -m scripts.manage_alpaca_sqlite_clerk ... cutover-plan  --output plan.jso
 python -m scripts.manage_alpaca_sqlite_clerk ... cutover-apply --plan plan.json --confirmation-token <token> ...
 ```
 
-A never-legacy live account has no legacy JSONL authority to quarantine; its
-shadow receipt stands in for those artifacts (R3). The account must be **flat
-and order-free** to graduate — the shadow authority never submitted, so any
-position is a human's; flatten it by hand first. Stop the shadow instances
+A never-legacy live account has no legacy JSONL authority to quarantine; live
+evidence by itself permits the empty legacy set (R3) — no shadow receipt is
+consulted, because shadow is a mode, not a requirement (owner decision
+2026-09-09). The account must be **flat and order-free** to graduate — nothing
+of ours has ever submitted on it, so any position is a human's; flatten it by
+hand first. Stop the shadow instances
 before the cutover: after it they are sealed on `shadow:<id>` while the
 authority custodies `<id>`, so they are foreign to it — repaired from their own
 lifecycle files at boot, refused `SEALED_ACCOUNT_MISMATCH` on any Start (R15).
