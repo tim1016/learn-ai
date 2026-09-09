@@ -120,7 +120,7 @@ clear's own re-observation).
 but explicitly authorizes every `REDUCE` under it without a per-symbol proof
 — the hold is account-scoped and says nothing about any one position, so
 each program keeps managing its own EXIT. The live verdict (below) projects
-the hold as `loss_hold: "held" | "clear"`, never as a third custody state.
+the hold as a verdict field, never as a third custody state.
 
 ## Clearing it
 
@@ -147,6 +147,34 @@ authority (paper, synthetic, or no runtime at all) is a 503. The route
 requires the `X-Data-Plane-Control-Secret` header, like every other
 data-plane control mutation.
 
+## In the live verdict
+
+Slice 5 fills two fields on `AlpacaLiveVerdict`
+(`PythonDataService/app/schemas/alpaca_live_verdict.py`), both server-authored
+and rendered verbatim by the banner. Neither is a custody state: they describe
+what the envelope *is*, not what custody says. `not_applicable` is the common
+case for both — every paper, unconfigured, disagreeing and unobserved verdict
+carries it.
+
+| Field | Value | Means |
+|---|---|---|
+| `envelope_agreement` | `not_applicable` | No envelope object is installed on the active authority: a paper or synthetic account, or a live boot the composition refused `LIVE_ENVELOPE_MISSING`. |
+| | `unsealed` | An envelope is installed and no arming record has sealed its values yet (slice 6 seals them). |
+| | `agreed` | The sealed values and the current `ALPACA_LIVE_*` environment have the same sha. |
+| | `disagreed` | They differ; every ENTER is refused `LIVE_ENVELOPE_DISAGREEMENT` until the account is re-armed. |
+| `loss_hold` | `not_applicable` | The hold is not observed here: no runtime, or an authority that is not the shadow one (paper, synthetic, unavailable). |
+| | `clear` | The hold is observed and no `LIVE_ENVELOPE_LOSS_HOLD` episode is active. |
+| | `held` | The account-wide loss hold stands: every ENTER is refused, every EXIT still runs, and only the guarded clear above releases it. |
+
+`not_applicable` rather than `unsealed` is the deliberate answer for a missing
+envelope: `unsealed` reads as "configured, not yet sealed", which is a
+different and much less alarming thing than "this live boot installed no
+envelope at all".
+
+Under the current ruling the hold is observed only for a `shadow` authority
+(`alpaca_live_verdict.py::observe_loss_hold`, one predicate); slice 7 widens
+that one line when `real_live` custody becomes constructible.
+
 ## Residuals
 
 - **Market slippage above the decision close.** A market ENTER is bound
@@ -161,6 +189,26 @@ data-plane control mutation.
 - **External orders make the fact unknown.** Any order the Clerk did not
   accept but observes on the account today withdraws day P&L to unknown for
   the rest of that day; nothing after that is inferred back to zero.
+- **A mirror rebuild loses the reservations of still-working ENTERs.** The
+  `envelope_reservations` side table is product evidence *outside* the custody
+  hash chain (plan R9), which is what makes it safe to write inside
+  `ENTER_ACCEPTED`'s transaction — and also means the mirror does not carry it
+  and a rebuild ceremony does not restore it. After a rebuild, `reserved` reads
+  0 while accepted-but-unfilled ENTERs are still working, so the cash bound
+  briefly admits against cash those ENTERs have already claimed. The window is
+  bounded by one sync cadence plus the life of those working orders: the next
+  15 s tick re-observes cash, and any fill recorded by then is already
+  subtracted through `account_net_cash_spent_usd`. An operator running a
+  rebuild while entries are working should expect it rather than discover it.
+- **A downward fill correction under-reserves.** `reserved_cash_usd` ignores
+  correction rows, and that is safe in one direction only. Ignoring an
+  *upward* restatement over-reserves, which errs closed. Ignoring a *downward*
+  one prices the remaining quantity too small, so the envelope believes it has
+  cash it does not — and keeps believing it until the order is dead.
+  Corrections are reachable today (`EXECUTION_SLICE_CORRECTED`), so this is a
+  known bound on the read, not an impossible case; the module docstring at
+  `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
+  states it in the same direction.
 - **No Frontend button yet.** `Frontend/src/app/shell/alpaca-live-banner.component.ts`
   (Task 10) renders a `· loss hold` chip on the banner when
   `loss_hold === 'held'`; it carries no clear action. Clearing the hold is

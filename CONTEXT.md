@@ -510,9 +510,9 @@ so they survive a broker change.
   EXIT still runs until a guarded operator action clears it. It does not clear
   at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
 - **Day P&L** — Clerk-projected realized session P&L plus broker-observed
-  unrealized P&L. It is unknown, not zero, when marks are incomplete. It is
-  unknown, not zero, when an external order was seen today or the broker
-  reports no previous-close equity.
+  unrealized P&L. It is unknown, not zero, when an external order was seen
+  today, when the broker reports no previous-close equity, or when marks are
+  incomplete.
 - **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
   equities. Fees the broker charged are the truth; the schedule predicts them.
   _Avoid_: commission, trading fee, broker fee
