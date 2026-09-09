@@ -96,6 +96,19 @@ def test_invalidate_drops_the_snapshot_and_publish_clears_the_fault() -> None:
     assert gate.invalid_reason_code is None
 
 
+def test_a_standing_hold_survives_a_publish_and_release_admits_it() -> None:
+    """A ``hold`` is a sticky fault: ``publish`` refreshes the cache but the fault stands until ``release``."""
+    gate = ArmingGate()
+    gate.hold(LIVE_MODE_DISAGREEMENT, "the broker answered paper")
+    snapshot = _snapshot([_record()])
+    gate.publish(snapshot)
+    assert gate.fresh_snapshot(NOW) is None
+    assert gate.invalid_reason_code == LIVE_MODE_DISAGREEMENT
+    gate.release()
+    assert gate.fresh_snapshot(NOW) is snapshot
+    assert gate.invalid_reason_code is None
+
+
 def test_a_gate_can_be_invalidated_under_the_mode_disagreement_code() -> None:
     from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
     from app.broker.contract.errors import BrokerAccountModeDisagreement

@@ -142,6 +142,7 @@ def _situation(
         return "live_unarmed"
     return "live_held" if held else "live_armed"
 
+
 # R11 requires each non-armed instance to be named with its reason code, and
 # the banner renders that sentence verbatim in a tooltip. One closed map, here,
 # gives the code a phrase an operator can read without a lookup table -- the

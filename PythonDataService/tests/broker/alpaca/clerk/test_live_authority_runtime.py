@@ -47,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.models import OrderSide
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_arming_fixtures import record_sealed_binding
@@ -481,6 +482,9 @@ async def test_an_armed_live_instances_enter_passes_all_three_gates_and_reaches_
     assert receipt.state != "rejected", receipt.explanation
     assert runtime.sqlite_repository.reserved_cash_usd(observed_at_ms=NOW_MS) > 0
     assert len(broker.submissions) == 1
+    (leg, client_order_id) = broker.submissions[0]
+    assert (leg.symbol, leg.side, leg.quantity) == ("SPY", OrderSide.BUY, 1)
+    assert isinstance(client_order_id, str) and client_order_id
 
 
 async def test_the_gates_snapshot_seals_only_the_live_sealed_instance(
