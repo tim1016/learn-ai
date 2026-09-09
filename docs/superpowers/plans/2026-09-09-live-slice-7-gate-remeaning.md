@@ -2563,7 +2563,8 @@ def _live_evidence_permits_empty_legacy(broker_evidence: BrokerCutoverEvidence) 
     return broker_evidence.account_mode == "live"
 ```
 
-- In `initialize_cutover_authority` (line 222) compute `live_evidence = _live_evidence_permits_empty_legacy(normalized)` right after normalizing and pass it into `_initialize_cutover_authority_locked` as a new keyword `live_evidence: bool`; inside, replace both `allow_empty=reset_authorized` (lines 269 and 278) with `allow_empty=reset_authorized or live_evidence`.
+- In `_initialize_cutover_authority_locked` (line 230) compute `live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)` as its first statement (inside the advisory lock — `initialize_cutover_authority`'s call shape and ordering are unchanged) and replace both `allow_empty=reset_authorized` (lines 269 and 278) with `allow_empty=reset_authorized or live_evidence`.
+- `app/engine/live/account_artifacts.py:63`: `_ACCOUNT_ID_RE` becomes `^[A-Z0-9]{2,}$` (was letter-led, an IBKR-era shape) with a regression test in `tests/engine/live/test_account_artifacts.py` — otherwise `cutover_roster.read_quiescent_alpaca_roster` refuses a never-legacy live account whose id is digit-led (`9LIVE0001`) before `allow_empty` can help (found by Task 5's review; ruled and fixed in its fix round).
 - In `plan_cutover` (line 468) and `apply_cutover` (line 550), right after `normalized_broker = _normalize_broker_evidence(broker_evidence)`, add `live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)`; then in each of the following `_legacy_artifact_evidence(...)` and `_runner_roster_evidence(...)` calls, change `allow_empty=_developer_reset_replaces_activation(...)` to `allow_empty=live_evidence or _developer_reset_replaces_activation(...)` (four sites: two per function).
 
 `_validate_cutover_broker_state` (lines 729–747) is deliberately unchanged: a live account graduates flat and order-free.
@@ -2591,11 +2592,12 @@ Expected: PASS; the paper tests that existed before this task are byte-for-byte 
 
 ```bash
 git add PythonDataService/app/broker/alpaca/clerk/sqlite/cutover.py PythonDataService/scripts/manage_alpaca_sqlite_clerk.py PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover_live.py PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover.py PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover_cli.py
-git commit -m "feat(alpaca): the cutover graduates a shadowed live account (ADR 0059 slice 7, R3)
+git commit -m "feat(alpaca): the cutover graduates a live account (ADR 0059 slice 7, R3)
 
-Live evidence is admitted; a shadow receipt stands in for the legacy
-artifacts a never-legacy live account cannot have; the account must be flat
-and order-free; the CLI refuses live evidence under a non-live ALPACA_MODE.
+Live evidence is admitted and by itself permits the empty legacy-artifact set a
+never-legacy live account cannot fill (shadow is a mode, not a requirement —
+owner decision 2026-09-09); the account must be flat and order-free; the CLI
+refuses live evidence under a non-live ALPACA_MODE.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
