@@ -153,14 +153,14 @@ BrokerExecutionMode = Literal["paper", "shadow", "live"]
 
 DeployExecutionMode = Literal["dry_run", "paper", "shadow", "live"]
 
-_BROKER_MODE_BY_WORLD: dict[str, BrokerExecutionMode] = {
+_BROKER_MODE_BY_WORLD: dict[CustodyWorld, BrokerExecutionMode] = {
     "real_paper": "paper",
     "shadow": "shadow",
     "real_live": "live",
 }
 
 
-def _broker_mode_for(custody_world: CustodyWorld) -> BrokerExecutionMode:
+def broker_mode_for(custody_world: CustodyWorld) -> BrokerExecutionMode:
     """The one broker-contacting mode this custody world can offer (ADR 0059 D2/D11)."""
     return _BROKER_MODE_BY_WORLD[custody_world]
 
@@ -308,6 +308,20 @@ _OVERRIDE_RECEIPT_NEXT_ACTION = (
 )
 
 
+def _override_receipt_copy(copy: _ReceiptCopy) -> _ReceiptCopy:
+    """The override's sentences beside the mode's own — an override records a risk; it never hides what the mode does.
+
+    A live launch under an override must still say that every ENTER is refused
+    until the instance is armed (ADR 0059 D11); a shadow one must still say it
+    submits nothing (D2).
+    """
+    return _ReceiptCopy(
+        duty=copy.duty,
+        explanation=f"{_OVERRIDE_RECEIPT_EXPLANATION} {copy.explanation}",
+        next_action=f"{copy.next_action} {_OVERRIDE_RECEIPT_NEXT_ACTION}",
+    )
+
+
 def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecutionMode, ...]:
     """Author the mode cards this custody world offers.
 
@@ -359,8 +373,8 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
         label="Live",
         availability="planned",
         explanation=(
-            "Real-money submission requires a completed shadow receipt, the live cutover and the "
-            "arming ceremony (ADR 0059)."
+            "Real-money submission follows the live cutover and the arming ceremony; a shadow "
+            "rehearsal is optional (ADR 0059, amended 2026-09-09)."
             if broker_mode == "shadow"
             else "Live Alpaca execution is planned but is not connected to an admission or execution path."
         ),
@@ -373,7 +387,7 @@ def _admissible_modes(
 ) -> tuple[Literal["dry_run", "paper", "shadow", "live"], ...]:
     """Derive the wire-facing mode set from the catalog's own launch facts (#1702, #1703)."""
     if selectable:
-        return ("dry_run", _broker_mode_for(custody_world))
+        return ("dry_run", broker_mode_for(custody_world))
     if has_runtime:
         return ("dry_run",)
     return ()
@@ -463,8 +477,8 @@ def _readiness_checks(
     blocked_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "blocked")
     selectable_strategies = tuple(strategy for strategy in strategies if strategy.selectable)
     account_ready = (
-        # The shadow world reads a live account by design (ADR 0059 D2), so
-        # a live mode is only wrong outside it.
+        # The shadow and live worlds both read a live account by design (ADR 0059 D2/D11);
+        # a live account is only wrong on the paper world.
         world_admits_account_mode(custody_world, account.account_mode)
         and account.account_status.upper() == "ACTIVE"
         and not account.trading_blocked
@@ -498,8 +512,8 @@ def _readiness_checks(
             explanation=(
                 (
                     "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
-                    "strategies are Paper-selectable on the human-validated flag alone; their behavioral "
-                    "verdict remains displayed but does not gate Paper. Blocked strategies are shown but "
+                    "strategies are selectable on the human-validated flag alone; their behavioral "
+                    "verdict remains displayed but does not gate deployment. Blocked strategies are shown but "
                     "not selectable — either their proof no longer verifies, or they have no registered "
                     "live-decision runtime yet."
                 )
@@ -747,7 +761,9 @@ def build_alpaca_paper_deploy_view(
     ``custody_world`` is the world the primary authority custodies in. It
     decides the one broker-contacting mode this account can offer: a shadow
     authority offers ``shadow`` and never ``paper``, because nothing it
-    accepts is submitted to the live account it reads (ADR 0059 D2).
+    accepts is submitted to the live account it reads (ADR 0059 D2). A live
+    authority offers ``live`` and never ``paper`` or ``shadow``: it custodies
+    real money (D11).
     """
     evaluated_at_ms = now_ms_utc()
     strategies = _strategy_views(
@@ -767,7 +783,7 @@ def build_alpaca_paper_deploy_view(
     dry_run_eligibility = _dry_run_eligibility(
         strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
     )
-    broker_mode = _broker_mode_for(custody_world)
+    broker_mode = broker_mode_for(custody_world)
     return AlpacaPaperDeployView(
         broker="alpaca",
         account_id=account.account_id,
@@ -825,11 +841,15 @@ def build_alpaca_paper_deploy_receipt(
 
     The three operator sentences are derived once from the mode's own copy
     row, so a shadow deployment on a live account never inherits paper
-    prose (ADR 0059 D2). ``receipt_id``'s prefix is an opaque audit token
-    and is deliberately not world-scoped.
+    prose (ADR 0059 D2). When an evidence override is present, its sentences
+    are prepended/appended to the mode's own rather than replacing them, so
+    an override never hides what the mode itself does (e.g. that every ENTER
+    is refused until a live instance is armed). ``receipt_id``'s prefix is an
+    opaque audit token and is deliberately not world-scoped.
     """
     copy = _RECEIPT_COPY[request.execution_mode]
-    overridden = request.evidence_override is not None
+    if request.evidence_override is not None:
+        copy = _override_receipt_copy(copy)
     return AlpacaPaperDeployReceipt(
         status="deployed",
         receipt_id=(
@@ -837,8 +857,8 @@ def build_alpaca_paper_deploy_receipt(
         ),
         recorded_at_ms=bot.binding_created_at_ms,
         message=f"{request.strategy_instance_id} is on duty in {copy.duty}.",
-        explanation=_OVERRIDE_RECEIPT_EXPLANATION if overridden else copy.explanation,
-        next_action=_OVERRIDE_RECEIPT_NEXT_ACTION if overridden else copy.next_action,
+        explanation=copy.explanation,
+        next_action=copy.next_action,
         panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{request.strategy_instance_id}"),
         account_id=view.account_id,
         execution_mode=request.execution_mode,
