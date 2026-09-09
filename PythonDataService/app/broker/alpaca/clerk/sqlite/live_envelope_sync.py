@@ -311,13 +311,14 @@ class LiveEnvelopeSync:
             else "live envelope is no longer sealed by any arming record",
             extra={
                 "action": "live_envelope_sealed" if sealed is not None else "live_envelope_unsealed",
-                # Three ids, because under shadow they are three different
+                # Two ids, because under shadow they are two different
                 # accounts: the custody namespace the hold is written against,
-                # the live account the ledger is rooted on, and the broker
-                # account the figures were read from.
+                # and the live account the ledger is rooted on. The broker
+                # account is deliberately absent -- this refresh is the first
+                # statement of ``tick()`` and ``observe()`` has not run yet, so
+                # on the first transition after boot it would always be null.
                 "account_id": self._repo.account_id,
                 "live_account_id": self._arming_ledger.live_account_id,
-                "observed_account_id": self._observed_account_id,
                 "agreement": self.envelope.agreement,
             },
         )

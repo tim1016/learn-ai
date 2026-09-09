@@ -7,6 +7,12 @@ re-checks both before it re-observes anything. Slice 6's arming ceremony (ADR
 instead of being copied -- a correction to any of them then lands in one place
 rather than protecting only one ceremony.
 
+There is a third, and it is deliberately not here: ``app/services/
+canary_admission.py`` is a plan/apply ceremony with its own bound, and its
+token is a ``semantic_payload_hash`` rather than a digest of
+``canonical_json_bytes``. Migrating it would change every token it has ever
+issued, so it is not a mechanical move and this module is not exhaustive.
+
 Each caller keeps what is genuinely its own: its plan dataclass, the payload it
 hashes, and the error it refuses with, passed in as ``refused`` and ``label``.
 ``refused`` is a callable rather than an exception class because the arming
