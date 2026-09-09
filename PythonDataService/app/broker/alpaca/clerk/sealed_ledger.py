@@ -8,9 +8,11 @@ durable-append recipe live here once, so a correction to any of them -- adding
 ``O_NOFOLLOW``, changing when the parent directory is fsynced -- lands in one
 place instead of protecting only one ledger.
 
-Each caller keeps what is genuinely its own: its record type, its
-``from_payload`` and its error semantics, passed in as ``invalid`` and
-``label``.
+Each caller keeps what is genuinely its own: its record type, its validator
+and its error semantics, passed in as ``validate``, ``invalid`` and ``label``.
+The read side of a row -- construct, validate, re-derive the digest, compare --
+is ``verify_sealed_record`` below; a caller's ``from_payload`` is the one line
+that names its own record type and validator.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,40 @@ def canonical_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()
+
+
+def verify_sealed_record[RecordT](
+    cls: type[RecordT],
+    payload: Mapping[str, Any],
+    *,
+    validate: Callable[[RecordT], None],
+    digest_field: str,
+    invalid: type[ValueError],
+    label: str,
+) -> RecordT:
+    """Build, validate and digest-verify one sealed row, or leave by ``invalid``.
+
+    Everything is inside the guard: a hand-edited row whose integer became a
+    string must leave as the caller's own error, not as a bare ``TypeError``
+    from a comparison inside a validator.
+
+    ``shadow_receipt.py`` and ``synthetic_activation.py`` still carry their own
+    copies of this recipe. They are slice-4 code whose rows are already in
+    operators' ledgers, so they migrate on next touch rather than as a drive-by
+    edit here.
+    """
+    try:
+        record = cls(**payload)
+        validate(record)
+        unsigned = asdict(record)
+        del unsigned[digest_field]
+        if getattr(record, digest_field) != canonical_sha256(unsigned):
+            raise invalid(f"{label} record digest does not verify")
+    except invalid:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise invalid(f"{label} record has an invalid shape") from exc
+    return record
 
 
 def require_regular_ledger_file(path: Path, *, invalid: type[ValueError], label: str) -> None:
@@ -94,4 +131,5 @@ __all__ = [
     "append_canonical_jsonl_line",
     "canonical_sha256",
     "read_canonical_jsonl_objects",
+    "verify_sealed_record",
 ]

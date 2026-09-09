@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
     LiveEnvelopeValues,
 )
-from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256, verify_sealed_record
 from app.lean_sidecar.trading_calendar import trading_session_count
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
@@ -75,6 +75,7 @@ ARMING_REASON_CODES: frozenset[str] = frozenset(
 ArmingState = Literal["unarmed", "armed", "lapsed", "disarmed"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_LABEL = "live arming"
 
 
 class LiveArmingInvalid(ValueError):
@@ -138,7 +139,7 @@ class LiveArmingRecord:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> LiveArmingRecord:
-        return _from_payload(cls, payload, _validate_armed)
+        return _verified(cls, payload, _validate_armed)
 
     @property
     def envelope(self) -> LiveEnvelopeValues:
@@ -181,37 +182,24 @@ class LiveDisarmRecord:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> LiveDisarmRecord:
-        return _from_payload(cls, payload, _validate_disarmed)
+        return _verified(cls, payload, _validate_disarmed)
 
 
 LedgerRecord = LiveArmingRecord | LiveDisarmRecord
 
 
-def _unsigned(record: LedgerRecord) -> dict[str, Any]:
-    payload = asdict(record)
-    del payload["record_sha256"]
-    return payload
-
-
-def _from_payload[RecordT: LedgerRecord](
+def _verified[RecordT: LedgerRecord](
     cls: type[RecordT], payload: Mapping[str, Any], validate: Callable[[RecordT], None]
 ) -> RecordT:
-    """Build, validate and verify one row, or leave by this module's error.
-
-    Everything is inside the guard for the reason ``shadow_receipt.from_payload``
-    states: a hand-edited row whose integer became a string must leave as
-    ``LiveArmingInvalid``, not as a bare ``TypeError`` from a comparison.
-    """
-    try:
-        record = cls(**payload)
-        validate(record)
-        if record.record_sha256 != canonical_sha256(_unsigned(record)):
-            raise LiveArmingInvalid("live arming record digest does not verify")
-    except LiveArmingInvalid:
-        raise
-    except (KeyError, TypeError, ValueError) as exc:
-        raise LiveArmingInvalid("live arming record has an invalid shape") from exc
-    return record
+    """One row of this ledger, on the shared sealed-record reading discipline."""
+    return verify_sealed_record(
+        cls,
+        payload,
+        validate=validate,
+        digest_field="record_sha256",
+        invalid=LiveArmingInvalid,
+        label=_LABEL,
+    )
 
 
 def _require_real(account_id: str) -> None:
