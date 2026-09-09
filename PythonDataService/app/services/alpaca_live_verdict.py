@@ -8,11 +8,17 @@ it only reads.
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import SHADOW_ACCOUNT_PREFIX
-from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
+from app.broker.alpaca.clerk.active_authority import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
+from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
+from app.broker.alpaca.clerk.live_arming_ceremony import account_arming_statuses
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
@@ -21,10 +27,13 @@ from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     ClerkAuthority,
     EnvelopeAgreement,
+    EnvelopeState,
     LossHoldState,
     ModeAgreement,
     ShadowState,
 )
+
+logger = logging.getLogger(__name__)
 
 _DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
 _UNOBSERVED_REASONS = frozenset({"BROKER_ACCOUNT_UNAVAILABLE"})
@@ -84,6 +93,92 @@ def observe_loss_hold(runtime: ActiveClerkRuntime | None) -> LossHoldState:
     return "held" if active is not None else "clear"
 
 
+@dataclass(frozen=True)
+class ArmingObservation:
+    """What the durable arming ledger says for one live account (read-only).
+
+    ``detail`` is a fragment of backend-authored operator prose, appended to
+    the verdict's detail sentence. It names every instance the ledger knows
+    that is *not* armed, with its reason code, because "0 armed" and "0
+    armed, and here is the one that lapsed last Tuesday" are different
+    operator situations.
+    """
+
+    armed_instance_count: int
+    envelope_state: EnvelopeState
+    detail: str
+
+    @classmethod
+    def none(cls) -> ArmingObservation:
+        """No arming evidence was consulted, and none is claimed."""
+        return cls(armed_instance_count=0, envelope_state="configured_unsealed", detail="")
+
+
+def observe_arming(
+    runtime: ActiveClerkRuntime | None,
+    artifacts_root: Path,
+    live_state_root: Path,
+    *,
+    settings: AlpacaSettings,
+    now_ms: int,
+) -> ArmingObservation:
+    """Count this live account's armed instances from durable evidence (read-only).
+
+    No database is opened and the broker is never contacted: the arming
+    ledger, the runner's sealed bindings and the configured envelope are the
+    only inputs. Fails closed -- a ledger that will not verify counts no
+    instance and says so in the detail, rather than reporting an account as
+    unarmed for a reason nobody can see.
+    """
+    if (
+        runtime is None
+        # This slice's only custody path is the shadow authority; slice 7's
+        # real ``sqlite`` live authority is the widening point that lets this
+        # gate open for a genuinely live account, not just a rehearsing one.
+        or runtime.authority_kind != "shadow"
+        or runtime.selected_account_id is None
+        or settings.is_paper
+    ):
+        return ArmingObservation.none()
+    live_account_id = runtime.selected_account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
+    try:
+        statuses = account_arming_statuses(
+            live_account_id=live_account_id,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            configured_envelope=LiveEnvelopeValues.from_settings(settings),
+            now_ms=now_ms,
+        )
+        # A second read of the same small file, deliberately: "the ledger
+        # holds an arming record" is not "some instance is currently armed",
+        # and a disarmed account is still a sealed one.
+        sealed = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).latest_arming()
+    except (LiveArmingInvalid, LiveEnvelopeIncomplete) as exc:
+        logger.error(
+            "the arming ledger cannot be read; the verdict counts no armed instance",
+            extra={
+                "action": "live_arming_ledger_invalid",
+                "account_id": live_account_id,
+                "why": str(exc),
+            },
+        )
+        return ArmingObservation(
+            armed_instance_count=0,
+            envelope_state="configured_unsealed",
+            detail=f" The arming ledger cannot be read ({exc}); no instance is counted as armed.",
+        )
+    not_armed = [
+        f"{strategy_instance_id} ({status.reason_code})"
+        for strategy_instance_id, status in sorted(statuses.items())
+        if status.state != "armed" and status.reason_code is not None
+    ]
+    return ArmingObservation(
+        armed_instance_count=sum(1 for status in statuses.values() if status.state == "armed"),
+        envelope_state="configured_unsealed" if sealed is None else "sealed",
+        detail="" if not not_armed else f" Not armed: {'; '.join(not_armed)}.",
+    )
+
+
 def alpaca_live_verdict(
     *,
     settings: AlpacaSettings | None,
@@ -91,6 +186,7 @@ def alpaca_live_verdict(
     now_ms: int,
     shadow_state: ShadowState | None = None,
     loss_hold: LossHoldState | None = None,
+    arming: ArmingObservation | None = None,
 ) -> AlpacaLiveVerdict:
     """Return the verdict for the current process state.
 
@@ -98,6 +194,10 @@ def alpaca_live_verdict(
     evidence. It is reported only where shadow can exist — an agreed live
     account; paper stays ``not_applicable`` and an unknown verdict keeps the
     empty state it already published.
+
+    ``arming`` is the caller's observation of the durable arming ledger. It is
+    read only on an agreed live account; paper and unknown verdicts keep the
+    empty count they already published.
     """
     if settings is None:
         return AlpacaLiveVerdict(
@@ -170,7 +270,6 @@ def alpaca_live_verdict(
             observed_at_ms=now_ms,
         )
 
-    # Slice 1: no arming exists, so an agreed live account is always unarmed.
     observed_shadow: ShadowState = shadow_state if shadow_state is not None else "none"
     shadow_active = authority == "shadow"
     # The copy names the LIVE account a human recognises. ``shadow:`` is the
@@ -187,26 +286,41 @@ def alpaca_live_verdict(
     )
     observed_loss_hold: LossHoldState = loss_hold if loss_hold is not None else "not_applicable"
     held = observed_loss_hold == "held"
+    # ADR 0059 D8 / design R11: ``armed`` is a fact about durable arming
+    # records, and ``live-armed`` additionally requires a Clerk that could hold
+    # custody at all -- an armed record under a refused authority is a
+    # permission nothing can act on, and must not read as the loudest state.
+    observed_arming = arming if arming is not None else ArmingObservation.none()
+    armed = observed_arming.armed_instance_count
+    live_armed = armed >= 1 and authority in SQLITE_FACADE_AUTHORITIES
+    instances = f"{armed} instance{'' if armed == 1 else 's'}"
     return AlpacaLiveVerdict(
         configured_mode="live",
         observed_account_id=account_id,
         mode_agreement="agreed",
         clerk_authority=authority,
         clerk_refusal_reason_code=refusal,
-        armed_instance_count=0,
-        envelope_state="configured_unsealed",
+        armed_instance_count=armed,
+        envelope_state=observed_arming.envelope_state,
         envelope_agreement=envelope_agreement,
         loss_hold=observed_loss_hold,
         shadow_state=observed_shadow,
-        final_verdict="live-unarmed",
+        final_verdict="live-armed" if live_armed else "live-unarmed",
         headline=(
-            f"LIVE account {named_account_id} — shadow authority active, no instance armed"
+            f"LIVE account {named_account_id} — {instances} armed, nothing submitted yet"
+            if live_armed
+            else f"LIVE account {named_account_id} — shadow authority active, no instance armed"
             if shadow_active
             else f"LIVE account {named_account_id} — real money, no instance armed"
         )
         + (" — loss hold" if held else ""),
         detail=(
-            "This is a real-money Alpaca account. Its shadow authority reads it and "
+            "This is a real-money Alpaca account and an operator has armed "
+            f"{instances} on it. No path submits a real-money order in this slice: the "
+            "shadow authority still synthesizes every fill, and ADR 0059 slice 7 is what "
+            "opens submission."
+            if live_armed
+            else "This is a real-money Alpaca account. Its shadow authority reads it and "
             "synthesizes every fill; nothing is submitted. Arming requires a completed "
             "shadow receipt and the supervised ceremony (ADR 0059)."
             if shadow_active
@@ -214,6 +328,7 @@ def alpaca_live_verdict(
             "every order path refuses. Arming requires a completed shadow receipt "
             "and the supervised ceremony (ADR 0059)."
         )
+        + observed_arming.detail
         + (
             " The account is in loss hold: every ENTER is refused until an operator "
             "clears it with POST /api/brokers/alpaca/live-envelope/loss-hold/clear; "

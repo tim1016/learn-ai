@@ -61,6 +61,7 @@ from app.broker.contract.models import (
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
+from app.broker.ibkr.config import live_artifacts_root
 from app.config import settings
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
@@ -94,6 +95,7 @@ from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
 from app.services.alpaca_live_verdict import (
     alpaca_live_verdict,
+    observe_arming,
     observe_loss_hold,
     observe_shadow_state,
 )
@@ -724,14 +726,28 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
         # Invalid settings are a verdict input ("unconfigured"), not a 500.
         alpaca_settings = None
     runtime = get_active_clerk_runtime()
+    # One instant for the whole verdict: the lapse count and the stamp the
+    # banner shows must describe the same moment.
+    observed_at_ms = now_ms_utc()
     return alpaca_live_verdict(
         settings=alpaca_settings,
         runtime=runtime,
-        now_ms=now_ms_utc(),
+        now_ms=observed_at_ms,
         shadow_state=(
             None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
         ),
         loss_hold=observe_loss_hold(runtime),
+        arming=(
+            None
+            if alpaca_settings is None
+            else observe_arming(
+                runtime,
+                alpaca_settings.clerk_dir,
+                live_artifacts_root(),
+                settings=alpaca_settings,
+                now_ms=observed_at_ms,
+            )
+        ),
     )
 
 

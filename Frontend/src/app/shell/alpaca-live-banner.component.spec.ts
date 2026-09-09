@@ -131,4 +131,24 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-unknown');
     expect(status.textContent).toContain('unavailable');
   });
+
+  it('renders a live-armed account in the loudest treatment with the armed count', async () => {
+    await renderWith(
+      verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        armed_instance_count: 1,
+        envelope_state: 'sealed',
+        envelope_agreement: 'agreed',
+        shadow_state: 'complete',
+        final_verdict: 'live-armed',
+        headline: 'LIVE account 9LIVE0001 — 1 instance armed, nothing submitted yet',
+        detail: 'No path submits a real-money order in this slice.',
+      }),
+    );
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-live-armed');
+    expect(status.textContent).toContain('1 instance armed');
+    expect(status.textContent).toContain('1 armed');
+  });
 });
