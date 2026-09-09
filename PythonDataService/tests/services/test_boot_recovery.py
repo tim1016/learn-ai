@@ -103,6 +103,102 @@ async def test_boot_without_sqlite_authority_uses_empty_candidates(
     assert report.interrupted_instances == ()
 
 
+async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected(
+    tmp_path: Path,
+) -> None:
+    """A stale ON_DUTY binding must not turn a Clerk-less boot into a crash loop.
+
+    2026-09-09: ``ALPACA_MODE=live`` without the ``ALPACA_LIVE_*`` values
+    installs no Clerk, and the sweep's SQLite projection raised
+    ``AlpacaLifecycleAuthorityUnavailableError`` for every pre-existing
+    Alpaca binding -- FastAPI startup aborted and ``restart: always`` looped.
+    The sweep must degrade instead: leave the binding's durable evidence
+    untouched (no caller-authored terminal outcome), name the bot in the
+    report, and keep the start gate closed.
+    """
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    registry._bots[_SID].finalized = True
+    registry._bots[_SID].task.cancel()
+    await asyncio.sleep(0)
+    stale = _lifecycle_json(_artifacts_root(tmp_path), _SID)
+    assert stale["phase"] == "ON_DUTY"
+
+    set_alpaca_clerk(None)
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    report = await rebooted.run_boot_recovery()
+
+    assert report.interrupted_instances == ()
+    assert report.authority_unavailable_instances == (_SID,)
+    assert _lifecycle_json(_artifacts_root(tmp_path), _SID) == stale
+    view = rebooted.status("alpaca", _SID)
+    assert view.running is False
+    assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
+    assert view.duty_outcome is None
+    with pytest.raises(BootRecoveryIncompleteError, match="lifecycle authority"):
+        await rebooted.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+
+async def test_boot_sweep_records_why_a_binding_was_left_unprojected(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    lifecycle_repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="pre-crash",
+        active_run_id="run-orphaned",
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+    set_alpaca_clerk(None)
+    caplog.set_level("WARNING", logger="app.services.bot_boot_recovery")
+
+    report = await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=_projector_for(lifecycle_repo),
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-orphaned", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 2,
+    ).run()
+
+    assert report.authority_unavailable_instances == (_SID,)
+    assert desired_repo.read() is None
+    record = lifecycle_repo.read()
+    assert record is not None
+    assert record.phase is BotLifecyclePhase.ON_DUTY
+    assert record.duty_outcome is None
+    skipped = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "boot_sweep_authority_unavailable"
+    ]
+    assert [
+        (record.strategy_instance_id, record.run_id, record.reason_code)
+        for record in skipped
+    ] == [(_SID, "run-orphaned", "LIFECYCLE_AUTHORITY_UNAVAILABLE")]
+
+
 async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 

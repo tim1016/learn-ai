@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
@@ -42,6 +42,9 @@ from app.services.signal_program_admission import (
     prove_running_program_build,
 )
 from app.services.strategy_validation_admission import current_strategy_validation_fact
+
+if TYPE_CHECKING:
+    from app.services.bot_boot_recovery import BootRecoveryReport
 
 logger = logging.getLogger(__name__)
 
@@ -215,25 +218,60 @@ def _sweep_still_evaluating(
     return last_pass is None or observed_at_ms - last_pass <= RECOVERY_SWEEP_LIVENESS_BOUND_MS
 
 
+# How many unprojected bots the start-gate refusal names before it counts
+# the rest; a 150-bot roster must not turn one operator-facing line into a
+# wall of identifiers.
+_UNPROJECTED_NAMED_INSTANCES = 5
+
+
+def _unprojected_explanation(unprojected: tuple[str, ...]) -> str:
+    named = ", ".join(unprojected[:_UNPROJECTED_NAMED_INSTANCES])
+    overflow = len(unprojected) - _UNPROJECTED_NAMED_INSTANCES
+    if overflow > 0:
+        named = f"{named}, and {overflow} more"
+    return (
+        "No Alpaca lifecycle authority was installed at boot, so boot "
+        f"recovery left {len(unprojected)} bot(s) unprojected: {named}."
+    )
+
+
 async def resolve_start_runtime_fact(
     *,
     strategy_instance_id: str,
     observed_at_ms: int,
     boot_recovery_required: bool,
-    boot_recovery_complete: bool,
+    boot_recovery_report: BootRecoveryReport | None,
     unresolved_intents_probe: UnresolvedIntentsProbe | None,
     projected_start_count: int,
     restart_threshold: int,
     restart_window_ms: int,
     recovery_evaluation: RecoveryEvaluationProbe | None = None,
 ) -> StartRuntimeAdmissionFact:
-    """Project recovery and restart intensity without mutating runner state."""
-    if boot_recovery_required and not boot_recovery_complete:
+    """Project recovery and restart intensity without mutating runner state.
+
+    ``boot_recovery_report`` is the boot sweep's report: absent while the
+    sweep has not run; degraded when it names bots no lifecycle authority
+    could project, which closes the gate until the authority is restored.
+    """
+    if boot_recovery_required and boot_recovery_report is None:
         return StartRuntimeAdmissionFact(
             state="BOOT_RECOVERY_INCOMPLETE",
             observed_at_ms=observed_at_ms,
             explanation="Bot runner recovery has not completed after process startup.",
             next_step="Wait for the boot recovery sweep before Start.",
+        )
+    if boot_recovery_required and boot_recovery_report.authority_unavailable_instances:
+        # The sweep ran and finished degraded; waiting for it cannot help.
+        return StartRuntimeAdmissionFact(
+            state="BOOT_RECOVERY_INCOMPLETE",
+            observed_at_ms=observed_at_ms,
+            explanation=_unprojected_explanation(
+                boot_recovery_report.authority_unavailable_instances
+            ),
+            next_step=(
+                "Restore the account Clerk, then restart the service so "
+                "boot recovery can project this bot."
+            ),
         )
     if unresolved_intents_probe is not None:
         try:

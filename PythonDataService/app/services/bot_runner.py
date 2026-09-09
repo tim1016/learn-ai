@@ -272,10 +272,13 @@ class BotTaskRegistry:
         # S5 (#1263) fail-closed start gate: no bot starts until the boot
         # recovery sweep has run, and none while recovery left an uncertain
         # outcome (the probe re-evaluates per deploy, so a later resolution
-        # unblocks without a restart). Tests that do not exercise recovery
-        # opt out explicitly with ``boot_recovery_required=False``.
+        # unblocks without a restart). The sweep's report is the gate fact:
+        # absent means pending; present means complete, or degraded when it
+        # names bots no lifecycle authority could project. Tests that do not
+        # exercise recovery opt out explicitly with
+        # ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
-        self._boot_recovery_complete = False
+        self._boot_recovery_report: BootRecoveryReport | None = None
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
         self._recovery_evaluation: RecoveryEvaluationProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
@@ -724,7 +727,7 @@ class BotTaskRegistry:
             strategy_instance_id=strategy_instance_id,
             observed_at_ms=observed_at_ms,
             boot_recovery_required=self._boot_recovery_required,
-            boot_recovery_complete=self._boot_recovery_complete,
+            boot_recovery_report=self._boot_recovery_report,
             unresolved_intents_probe=self._unresolved_intents_probe,
             recovery_evaluation=self._recovery_evaluation,
             projected_start_count=self._projected_start_count(strategy_instance_id, observed_at_ms),
@@ -1205,7 +1208,10 @@ class BotTaskRegistry:
         restoration candidate with no live task is then projected from that
         authority and, when interrupted, receives typed durable evidence
         (``EXITED_UNVERIFIED`` / ``INTERRUPTED_BY_RESTART``). Nothing is
-        auto-restarted. A failed authority step leaves the boot gate closed.
+        auto-restarted. A failed authority step leaves the boot gate closed,
+        and so does a sweep that finished without a lifecycle authority to
+        project against: the service still boots and serves its read
+        surface, but Start stays refused with the sweep's reason.
         """
         await self._recover_synthetic_authorities_for_boot()
         report = await self._boot_recovery.run(
@@ -1215,7 +1221,7 @@ class BotTaskRegistry:
         )
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
-        self._boot_recovery_complete = True
+        self._boot_recovery_report = report
         # Direction 2: heal replay receipts a dead process owed (orphaned
         # `pending` or a terminal run that never scheduled). After the sweep so
         # `_is_running` reflects the recovered fleet.
@@ -1234,6 +1240,9 @@ class BotTaskRegistry:
         STOPs for runs whose tasks died on the dead handle. Deliberately
         skips the boot-only steps (synthetic-authority recovery, replay
         receipts) — those belong to a fresh process, not a revived lease.
+        Its report is diagnostic only: the start gate keeps the report from
+        ``run_boot_recovery`` (a revived lease implies the authority is
+        installed, so this pass cannot leave a bot unprojected).
         """
         return await self._boot_recovery.run(
             reconcile=reconcile,
