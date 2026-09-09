@@ -311,17 +311,20 @@ def test_the_stream_health_hold_sync_is_started_by_the_real_authority() -> None:
     source = _authority_selector_source()
     main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
-    constructions = source.count("StreamHealthHoldSync(")
-    stops = source.count("await hold_sync.stop()")
-
-    assert constructions > 0, "no hold sync construction found; update this guard"
-    assert main_source.count("start_hold_sync()") == 1, (
-        "exactly one startup site must start the hold sync; an unstarted "
-        "sync never raises or releases the hold"
+    assert source.count("StreamHealthHoldSync(") > 0, (
+        "no hold sync construction found; update this guard"
     )
-    assert stops >= constructions, (
-        "every constructed hold sync must be stopped on shutdown and on a "
-        "failed startup, or its task outlives the repository it writes to"
+    assert main_source.count("start_background_taps()") == 1, (
+        "exactly one startup site must start the background taps; an "
+        "unstarted hold sync never raises or releases the hold, and an "
+        "unstarted envelope sync never observes the account (ADR 0059 D4)"
+    )
+    # Two stop sites, each one loop over ``_ordered_taps``: the runtime's own
+    # ``close()`` and ``compose_repository_runtime``'s failed-startup cleanup.
+    # A tap left running by either outlives the repository it writes to.
+    assert source.count("await tap.stop()") == 2, (
+        "every constructed tap must be stopped on shutdown AND on a failed "
+        "startup, or its task outlives the repository it writes to"
     )
 
 
@@ -342,18 +345,26 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     source = _authority_selector_source()
     main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
-    assert source.count("hold_sync.start()") == 1, (
-        "the authority selector must not start the hold sync: it awaits "
-        "startup recovery before its execution provider is installed, so "
-        "the only start call belongs in `start_hold_sync`"
+    assert source.count("tap.start()") == 1, (
+        "the authority selector must not start any tap: it awaits startup "
+        "recovery before the hold sync's execution provider is installed, so "
+        "the only start call belongs in `start_background_taps`"
     )
-    assert source.index("def start_hold_sync") < source.index("hold_sync.start()"), (
-        "the one start call must be the explicit `start_hold_sync` entry "
-        "point, not the selector"
+    assert source.index("def start_background_taps") < source.index("tap.start()"), (
+        "the one start call must be the explicit `start_background_taps` "
+        "entry point, not the selector"
     )
     assert main_source.index("set_trade_updates_consumer(alpaca_trade_updates)") < (
-        main_source.index("start_hold_sync()")
-    ), "the hold sync must start after the trade_updates consumer is registered"
+        main_source.index("start_background_taps()")
+    ), "the taps must start after the trade_updates consumer is registered"
+    # ADR 0059 D4: the envelope sync joined the hold sync and the sweep behind
+    # this seam, and its start/stop order is semantic -- it holds a second
+    # projection handle on the repository, so it starts first and stops first.
+    # Stated exactly once, in `_ordered_taps`, and read by all three sites.
+    assert source.count("(envelope_sync, hold_sync, sweep)") == 1, (
+        "the tap order belongs in one tuple; three hand-kept branch orders is "
+        "what `_ordered_taps` exists to retire"
+    )
 
 
 def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:

@@ -19,6 +19,11 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+
+# ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
+# that declares every cause the Clerk can record, and it imports nothing from
+# the Clerk itself. It is re-exported below so the admission set can be stated
+# once, here, beside the three refusals this module does own.
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
