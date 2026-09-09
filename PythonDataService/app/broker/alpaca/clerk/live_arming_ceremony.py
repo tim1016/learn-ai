@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.alpaca.clerk.ceremony import (
     DEFAULT_CONFIRMATION_TTL_MS,
     plan_content_token,
+    plan_payload,
     require_confirmation_ttl_ms,
     require_plan_token,
     require_unexpired,
@@ -215,10 +216,9 @@ def observe_arming_inputs(
 
 
 def _plan_payload(plan: LiveArmingPlan) -> dict[str, Any]:
-    """The plan's content, from which its two ids are derived."""
-    payload = asdict(plan)
-    del payload["plan_id"], payload["confirmation_token"]
-    return payload
+    return plan_payload(
+        plan, schema_version=1, refused=_refused(LIVE_ARMING_TOKEN_INVALID), label=_LABEL
+    )
 
 
 def plan_arming(
@@ -303,8 +303,6 @@ def apply_arming(
 ) -> LiveArmingRecord:
     """Recheck the plan, re-observe every input, then append the sealed record."""
     now = clock()
-    if plan.schema_version != 1:
-        raise LiveArmingRefused(LIVE_ARMING_TOKEN_INVALID, f"{_LABEL} plan content hash does not verify")
     require_plan_token(
         _plan_payload(plan),
         plan_id=plan.plan_id,

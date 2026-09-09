@@ -19,6 +19,7 @@ from typing import Any, Literal
 from app.broker.alpaca.clerk.ceremony import (
     DEFAULT_CONFIRMATION_TTL_MS,
     plan_content_token,
+    plan_payload,
     require_confirmation_ttl_ms,
     require_plan_token,
     require_unexpired,
@@ -506,7 +507,7 @@ def plan_cutover(
         runner_roster=runner_roster,
         legacy_artifacts=legacy,
     )
-    token = plan_content_token(_plan_payload(draft))
+    token = plan_content_token(_cutover_plan_payload(draft))
     return replace(draft, plan_id=token, confirmation_token=token)
 
 
@@ -918,24 +919,13 @@ def _require_checkpointed_database(account_dir: Path) -> None:
             )
 
 
-def _plan_payload(plan: CutoverPlan) -> dict[str, Any]:
-    """The plan's content, from which its two ids are derived.
-
-    ``asdict`` reproduces the hand-written payload exactly: it recurses into
-    the three nested evidence dataclasses and maps each tuple field to a
-    sequence the canonical encoder writes as the same JSON array. The two ids
-    are removed because they *are* the digest of what remains.
-    """
-    payload = asdict(plan)
-    del payload["plan_id"], payload["confirmation_token"]
-    return payload
+def _cutover_plan_payload(plan: CutoverPlan) -> dict[str, Any]:
+    return plan_payload(plan, schema_version=3, refused=CutoverRefused, label="cutover")
 
 
 def _validate_plan_token(plan: CutoverPlan, supplied_token: str) -> None:
-    if plan.schema_version != 3:
-        raise CutoverRefused("cutover plan content hash does not verify")
     require_plan_token(
-        _plan_payload(plan),
+        _cutover_plan_payload(plan),
         plan_id=plan.plan_id,
         confirmation_token=plan.confirmation_token,
         supplied_token=supplied_token,

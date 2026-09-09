@@ -25,7 +25,8 @@ import hashlib
 import re
 import secrets
 from collections.abc import Callable, Mapping
-from typing import Any
+from dataclasses import asdict
+from typing import Any, ClassVar, Protocol
 
 from app.broker.alpaca.clerk.sqlite.operational_files import canonical_json_bytes
 
@@ -49,6 +50,35 @@ def require_confirmation_ttl_ms(confirmation_ttl_ms: int, *, refused: Refusal) -
     if type(confirmation_ttl_ms) is not int or not 1 <= confirmation_ttl_ms <= MAX_CONFIRMATION_TTL_MS:
         raise refused(f"confirmation TTL must be within 1..{MAX_CONFIRMATION_TTL_MS} ms")
     return confirmation_ttl_ms
+
+
+class ConfirmablePlan(Protocol):
+    """A ceremony's plan: two derived ids over a versioned content shape."""
+
+    __dataclass_fields__: ClassVar[dict[str, Any]]
+    schema_version: int
+    plan_id: str
+    confirmation_token: str
+
+
+def plan_payload(
+    plan: ConfirmablePlan, *, schema_version: int, refused: Refusal, label: str
+) -> dict[str, Any]:
+    """The plan's content, from which its two ids are derived.
+
+    ``asdict`` recurses into nested evidence dataclasses and maps each tuple
+    field to a sequence the canonical encoder writes as the same JSON array.
+    The two ids are removed because they *are* the digest of what remains.
+
+    A plan carrying an unknown schema version is refused before it is hashed,
+    under the same sentence a failed self-hash gets: the digest of a shape this
+    code cannot read says nothing true about it either way.
+    """
+    if plan.schema_version != schema_version:
+        raise refused(f"{label} plan content hash does not verify")
+    payload = asdict(plan)
+    del payload["plan_id"], payload["confirmation_token"]
+    return payload
 
 
 def plan_content_token(payload: Mapping[str, Any]) -> str:
@@ -94,8 +124,10 @@ def require_unexpired(*, now_ms: int, expires_at_ms: int, refused: Refusal, labe
 __all__ = [
     "DEFAULT_CONFIRMATION_TTL_MS",
     "MAX_CONFIRMATION_TTL_MS",
+    "ConfirmablePlan",
     "Refusal",
     "plan_content_token",
+    "plan_payload",
     "require_confirmation_ttl_ms",
     "require_plan_token",
     "require_unexpired",
