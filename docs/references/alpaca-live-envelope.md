@@ -66,6 +66,12 @@ notional cap, no symbol allowlist, no session restriction.
   `LIVE_ENVELOPE_DISAGREEMENT` was unreachable. It is now the live rule: an
   `ALPACA_LIVE_*` edit after an arming refuses every ENTER until a re-arm. See
   [alpaca-live-arming](alpaca-live-arming.md).
+  Read the sealed record precisely: the runtime computes the loss limit from
+  the *configured* values (`self.envelope.values`) and uses the sealed record
+  as an equality gate, not as the source of the numbers. The two are equivalent
+  while a disagreement refuses every ENTER — which it does — but the sealed
+  numbers do not themselves bound the money, and a future change that let a
+  disagreement admit anything would have to move the bound as well.
 
 ## The facts
 

@@ -140,13 +140,14 @@ sessions_used = trading_session_count(ET date of armed_at_ms, ET date of now_ms)
 lapsed        = sessions_used > max_sessions
 ```
 
-Both ET dates are inclusive and both come from the canonical calendar
-(`app/lean_sidecar/trading_calendar.py`) and nowhere else, so there is no
-session literal anywhere on this path. The arming session counts as one — an
+Both ET dates are inclusive. `trading_session_count` is the canonical calendar
+(`app/lean_sidecar/trading_calendar.py`) and `et_date_at_ms` is the canonical ET
+anchor (`app/utils/session_anchors.py`); nothing on this path computes either
+itself, so there is no session literal anywhere on it. The arming session counts as one — an
 arming at 15:59 ET spends a whole session on a minute, which is why `status`
 reports `sessions_remaining` rather than a wall-clock expiry.
 
-Worked, with `ALPACA_LIVE_ARMING_MAX_SESSIONS=2`, armed **Friday 2026-09-11 at
+Worked, with `max_sessions` = 2 for the example, armed **Friday 2026-09-11 at
 10:00 ET**:
 
 | ET date | A session? | `sessions_used` | `sessions_remaining` | State |
@@ -257,6 +258,13 @@ values was already declared in slice 1.
   `shadow` — including the real `sqlite` live authority slice 7 installs —
   until that gate is widened. Slice 7 owns the widening; this slice does not
   pre-empt it.
+- **An unreadable ledger *unseals* the gate — the one place a ledger fault
+  relaxes rather than tightens.** `_refresh_sealed_envelope` returns the
+  envelope to unsealed when the ledger will not verify, which is harmless in
+  this slice because nothing submits and the verdict counts zero armed. Slice 7
+  must make a `LiveArmingInvalid` at ENTER admission a *refusal*, not an absent
+  arming: otherwise one corrupt ledger would drop the disagreement fence and
+  the per-instance check at the same moment.
 - **A record dated after the clock disarms; it never extends.** `now_ms`
   behind a record's `armed_at_ms` reports `disarmed` / `LIVE_ARMING_FUTURE_DATED`
   rather than deferring the lapse count: a rolled-back clock must never buy an
