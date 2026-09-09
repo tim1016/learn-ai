@@ -70,14 +70,14 @@ async def get_alpaca_paper_deploy_view(
     custody_world = custody_world_or_paper(primary_custody_world())
     if not world_admits_account_mode(custody_world, account.account_mode):
         raise PanelUnavailableError(
-            "Alpaca live-account deployment is refused.",
+            "Alpaca account deployment is refused.",
             detail=(
-                "Real-money custody is not constructible until an armed instance exists "
-                "(ADR 0059 slice 7); a live account deploys only through its shadow authority."
+                f"The primary authority custodies the {custody_world} world, which does not admit "
+                f"an account Alpaca reports as {account.account_mode!r} (ADR 0059 D1)."
             ),
             next_action=(
-                "Activate the shadow authority for this account, or reconnect with "
-                "Alpaca paper credentials, then refresh."
+                "Reconnect with credentials for the account this authority custodies, or activate "
+                "the authority for this account, then refresh."
             ),
         )
     registry = get_bot_task_registry()

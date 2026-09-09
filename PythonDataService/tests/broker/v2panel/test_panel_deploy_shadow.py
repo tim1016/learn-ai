@@ -313,7 +313,7 @@ async def test_live_account_with_no_shadow_world_is_still_refused(
     monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "account", _live_account())
     monkeypatch.setattr(panel_deploy, "primary_custody_world", lambda: None)
 
-    with pytest.raises(PanelUnavailableError, match=r"Alpaca live-account deployment is refused\."):
+    with pytest.raises(PanelUnavailableError, match=r"Alpaca account deployment is refused\."):
         await panel_deploy.get_alpaca_paper_deploy_view("alpaca", LIVE_ACCT)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:

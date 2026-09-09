@@ -149,14 +149,20 @@ def _deploy_params_schema(strategy_key: str) -> StrategyParamsSchema:
     return StrategyParamsSchema.model_validate(schema)
 
 
-BrokerExecutionMode = Literal["paper", "shadow"]
+BrokerExecutionMode = Literal["paper", "shadow", "live"]
 
-DeployExecutionMode = Literal["dry_run", "paper", "shadow"]
+DeployExecutionMode = Literal["dry_run", "paper", "shadow", "live"]
+
+_BROKER_MODE_BY_WORLD: dict[str, BrokerExecutionMode] = {
+    "real_paper": "paper",
+    "shadow": "shadow",
+    "real_live": "live",
+}
 
 
 def _broker_mode_for(custody_world: CustodyWorld) -> BrokerExecutionMode:
-    """The one broker-contacting mode this custody world can offer."""
-    return "shadow" if custody_world == "shadow" else "paper"
+    """The one broker-contacting mode this custody world can offer (ADR 0059 D2/D11)."""
+    return _BROKER_MODE_BY_WORLD[custody_world]
 
 
 @dataclass(frozen=True)
@@ -204,6 +210,29 @@ def _deploy_view_copy(account: BrokerAccountSnapshot, custody_world: CustodyWorl
                 "The operator may choose Clerk-governed shadow execution — every fill synthesized "
                 "against this live account's real reads, nothing submitted — or a zero-broker-write "
                 "Dry Run before launch."
+            ),
+        )
+    if custody_world == "real_live":
+        return _DeployViewCopy(
+            posture_label="Live account posture",
+            posture_ready_headline="The Alpaca live account is active and tradable.",
+            posture_blocked_headline="Deployment is blocked by the Alpaca live account posture.",
+            posture_ready_explanation=(
+                "The server resolved the real-money account this live authority custodies and "
+                "found no broker trading block."
+            ),
+            posture_evidence_summary=(
+                f"Alpaca live account {account.account_id}, custodied by its live authority, "
+                f"reports status {account.account_status}."
+            ),
+            posture_recovery=(
+                f"Restore live account {account.account_id} to ACTIVE and unblocked, then refresh."
+            ),
+            eligible_headline="This Alpaca live account is eligible for a Clerk-governed live deployment.",
+            eligible_explanation=(
+                "The operator may choose Clerk-governed live execution — real-money submission for an "
+                "armed instance only; every ENTER of an unarmed instance is refused — or a "
+                "zero-broker-write Dry Run before launch."
             ),
         )
     return _DeployViewCopy(
@@ -257,6 +286,17 @@ _RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
         ),
         next_action="Open the bot panel and verify the first synthesized shadow receipt.",
     ),
+    "live": _ReceiptCopy(
+        duty="Alpaca live",
+        explanation=(
+            "The deployment binding is durable and sealed on the real-money account; every ENTER "
+            "is refused until an operator arms this instance (ADR 0059 D11)."
+        ),
+        next_action=(
+            "Arm the instance with scripts.manage_alpaca_arming plan, then apply; then open the bot "
+            "panel and verify the first Clerk receipt."
+        ),
+    ),
 }
 
 _OVERRIDE_RECEIPT_EXPLANATION = (
@@ -269,59 +309,68 @@ _OVERRIDE_RECEIPT_NEXT_ACTION = (
 
 
 def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecutionMode, ...]:
-    """Author the three mode cards this custody world offers.
+    """Author the mode cards this custody world offers.
 
     Dry Run is offered in every world. The one broker-contacting card is the
-    world's own — a shadow authority offers ``shadow`` and never ``paper``,
-    because nothing it accepts reaches the live account it reads (ADR 0059
-    D2). ``live`` is `planned` in both worlds; only its explanation differs,
-    because the shadow world is the step that precedes it.
+    world's own — ``paper``, ``shadow``, or ``live`` on the real-live
+    authority (ADR 0059 D2/D11). The paper and shadow worlds also show the
+    ``live`` card as `planned`, because graduation is the step that follows
+    them; on the live world that card *is* the broker card.
     """
-    return (
-        AlpacaPaperExecutionMode(
-            mode="dry_run",
-            label="Dry Run",
-            availability="available",
-            explanation=(
-                "Real market data and strategy decisions produce clearly simulated fills; "
-                "the runner never calls the Clerk's broker-effect boundary."
-            ),
-        ),
-        (
-            AlpacaPaperExecutionMode(
-                mode="shadow",
-                label="Shadow",
-                availability="available",
-                explanation=(
-                    "Decisions run against this live account's real reads; every fill is "
-                    "synthesized by the shadow Clerk and nothing is submitted (ADR 0059 D2)."
-                ),
-            )
-            if broker_mode == "shadow"
-            else AlpacaPaperExecutionMode(
-                mode="paper",
-                label="Paper",
-                availability="available",
-                explanation="Orders route only to the selected Alpaca paper account through the Clerk.",
-            )
-        ),
-        AlpacaPaperExecutionMode(
-            mode="live",
-            label="Live",
-            availability="planned",
-            explanation=(
-                "Real-money submission requires a completed shadow receipt and the arming "
-                "ceremony (ADR 0059 slices 6-7)."
-                if broker_mode == "shadow"
-                else "Live Alpaca execution is planned but is not connected to an admission or execution path."
-            ),
+    dry_run = AlpacaPaperExecutionMode(
+        mode="dry_run",
+        label="Dry Run",
+        availability="available",
+        explanation=(
+            "Real market data and strategy decisions produce clearly simulated fills; "
+            "the runner never calls the Clerk's broker-effect boundary."
         ),
     )
+    broker_cards: dict[BrokerExecutionMode, AlpacaPaperExecutionMode] = {
+        "paper": AlpacaPaperExecutionMode(
+            mode="paper",
+            label="Paper",
+            availability="available",
+            explanation="Orders route only to the selected Alpaca paper account through the Clerk.",
+        ),
+        "shadow": AlpacaPaperExecutionMode(
+            mode="shadow",
+            label="Shadow",
+            availability="available",
+            explanation=(
+                "Decisions run against this live account's real reads; every fill is "
+                "synthesized by the shadow Clerk and nothing is submitted (ADR 0059 D2)."
+            ),
+        ),
+        "live": AlpacaPaperExecutionMode(
+            mode="live",
+            label="Live",
+            availability="available",
+            explanation=(
+                "Orders submit real-money trades through the live Clerk for an armed instance only; "
+                "every ENTER of an unarmed instance is refused until an operator arms it (ADR 0059 D11)."
+            ),
+        ),
+    }
+    if broker_mode == "live":
+        return (dry_run, broker_cards["live"])
+    planned_live = AlpacaPaperExecutionMode(
+        mode="live",
+        label="Live",
+        availability="planned",
+        explanation=(
+            "Real-money submission requires a completed shadow receipt, the live cutover and the "
+            "arming ceremony (ADR 0059)."
+            if broker_mode == "shadow"
+            else "Live Alpaca execution is planned but is not connected to an admission or execution path."
+        ),
+    )
+    return (dry_run, broker_cards[broker_mode], planned_live)
 
 
 def _admissible_modes(
     *, selectable: bool, has_runtime: bool, custody_world: CustodyWorld
-) -> tuple[Literal["dry_run", "paper", "shadow"], ...]:
+) -> tuple[Literal["dry_run", "paper", "shadow", "live"], ...]:
     """Derive the wire-facing mode set from the catalog's own launch facts (#1702, #1703)."""
     if selectable:
         return ("dry_run", _broker_mode_for(custody_world))
@@ -723,7 +772,7 @@ def build_alpaca_paper_deploy_view(
         broker="alpaca",
         account_id=account.account_id,
         account_mode=account.account_mode,
-        account_label=f"Alpaca {'shadow' if broker_mode == 'shadow' else 'paper'} · {account.account_id}",
+        account_label=f"Alpaca {broker_mode} · {account.account_id}",
         evaluated_at_ms=evaluated_at_ms,
         eligibility=eligibility,
         dry_run_eligibility=dry_run_eligibility,
