@@ -6,6 +6,10 @@ it through ``accept_enter`` and read it back through the repository, and pin
 the two properties the rest of the envelope depends on: adding a reservation
 changes no ``custody_transitions.row_hash`` (plan R9), and reserved cash
 prices only the part of an ENTER the named observation cannot already see.
+
+An ENTER is reserved by passing the envelope gate, never a hand-built
+reservation: what gets written is whatever ``require_envelope_admission``
+admitted, so these tests exercise the same seam production does.
 """
 
 from __future__ import annotations
@@ -17,7 +21,11 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+from app.broker.alpaca.clerk.live_envelope import (
+    AccountObservation,
+    LiveEnvelopeGate,
+    LiveEnvelopeValues,
+)
 from app.broker.alpaca.clerk.sqlite import enter as enter_module
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -53,6 +61,15 @@ T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
 T1_TERMINAL_ACK = T0 + 1_000
 T2_OBSERVATION = T0 + 2_000
 T3_TRAILING_FILL = T0 + 3_000
+
+ENVELOPE_VALUES = LiveEnvelopeValues(
+    loss_fraction=0.05,
+    loss_usd=5_000.0,
+    shadow_sessions=1,
+    arming_max_sessions=20,
+    xh_entry_bps=10.0,
+    xh_exit_bps=10.0,
+)
 
 _CAUSE = LossHoldCause(
     day_start_ms=1_788_000_000_000,
@@ -124,6 +141,22 @@ def _leg(**overrides: Any) -> BrokerOrderLeg:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(overrides)
     return BrokerOrderLeg(**base)
+
+
+def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
+    """A gate holding one observation fresh at ``T0`` — enough cash to admit."""
+    gate = LiveEnvelopeGate(values=ENVELOPE_VALUES, custody_is_simulated=True)
+    gate.publish(
+        AccountObservation(
+            observed_at_ms=T0,
+            broker_cash_usd=cash,
+            cash_available_usd=cash,
+            last_equity_usd=cash,
+            unrealized_pl_usd=0.0,
+            position_count=0,
+        )
+    )
+    return gate
 
 
 def _observed_order(
@@ -275,7 +308,6 @@ def test_accepting_an_enter_with_a_reservation_writes_the_row_in_the_same_commit
     repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
-    reservation = EnvelopeReservation(quantity=10, reference_price=100.0)
     accepted = accept_enter(
         repo,
         account_id=repo.account_id,
@@ -283,7 +315,8 @@ def test_accepting_an_enter_with_a_reservation_writes_the_row_in_the_same_commit
         decision_id="d1",
         lifecycle_run_id=run_id,
         leg=_leg(quantity=10),
-        envelope_reservation=reservation,
+        envelope=_gate(),
+        reference_price=100.0,
     )
     row = repo._conn.execute(
         "SELECT quantity, reference_price, reserved_at_ms FROM envelope_reservations "
@@ -300,10 +333,7 @@ def test_the_reservation_never_enters_the_hash_chain(
     monkeypatch.setattr(enter_module, "mint_intent_id", lambda: "intent-1")
 
     row_hashes: list[str] = []
-    for name, reservation in (
-        ("with", EnvelopeReservation(quantity=10, reference_price=100.0)),
-        ("without", None),
-    ):
+    for name, envelope in (("with", _gate()), ("without", None)):
         clock = _clock_at(T0)
         clerk = ClerkSqliteRepository.initialize(
             account_id=ACCOUNT_ID, artifacts_root=tmp_path / name, clock=clock
@@ -317,7 +347,8 @@ def test_the_reservation_never_enters_the_hash_chain(
                 decision_id="d1",
                 lifecycle_run_id=RUN_ID,
                 leg=_leg(quantity=10),
-                envelope_reservation=reservation,
+                envelope=envelope,
+                reference_price=100.0,
             )
             row_hashes.append(
                 clerk._conn.execute(
@@ -360,7 +391,8 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
         decision_id="d1",
         lifecycle_run_id=run_id,
         leg=_leg(quantity=10),
-        envelope_reservation=EnvelopeReservation(quantity=10, reference_price=100.0),
+        envelope=_gate(),
+        reference_price=100.0,
     )
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
 
@@ -427,7 +459,8 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
         decision_id="d1",
         lifecycle_run_id=run_id,
         leg=_leg(quantity=10),
-        envelope_reservation=EnvelopeReservation(quantity=10, reference_price=100.0),
+        envelope=_gate(),
+        reference_price=100.0,
     )
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
 
@@ -508,6 +541,7 @@ def test_reservations_sum_across_instances(
     repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
     (sid_a, run_a), (sid_b, run_b) = two_active_instances
+    gate = _gate()
     for sid, run_id, symbol, quantity in ((sid_a, run_a, "SPY", 6), (sid_b, run_b, "QQQ", 4)):
         accept_enter(
             repo,
@@ -516,9 +550,8 @@ def test_reservations_sum_across_instances(
             decision_id="d1",
             lifecycle_run_id=run_id,
             leg=_leg(symbol=symbol, quantity=quantity),
-            envelope_reservation=EnvelopeReservation(
-                quantity=quantity, reference_price=100.0
-            ),
+            envelope=gate,
+            reference_price=100.0,
         )
 
     assert repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(1_000.0)

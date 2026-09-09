@@ -57,7 +57,9 @@ R6 admission gating against open holds/uncertainties (#1380) is implemented
 in :func:`accept_enter` via :func:`~.uncertainty.require_admission` — see
 that function's own docstring for the policy (an ``ACCOUNT_CLERK``-scoped
 block applies to every bot; a ``CUSTODY_SUBJECT``-scoped block applies only
-to the matching subject).
+to the matching subject). The ADR 0059 envelope (cash bound; the loss hold
+arrives as an account hold) is checked here too, after admission, and its
+reservation commits with the same transition.
 """
 
 from __future__ import annotations
@@ -65,9 +67,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
+from app.broker.alpaca.clerk.sqlite.envelope_admission import require_envelope_admission
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, leg_instruction_payload
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
@@ -152,7 +155,8 @@ def accept_enter(
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
     decision_receipt: AtomicDecisionReceipt | None = None,
-    envelope_reservation: EnvelopeReservation | None = None,
+    envelope: LiveEnvelopeGate | None = None,
+    reference_price: float | None = None,
 ) -> EnterSubmission:
     """Reserve + accept, entirely local (no broker call). R1's fence.
 
@@ -169,11 +173,15 @@ def accept_enter(
     durable yet, so there is nothing for recovery to duplicate, only to
     resolve.
 
-    ``envelope_reservation`` is the cash this ENTER claims until its fills are
-    observed (ADR 0059 D4). It rides the ``TransitionInput`` so the row lands
-    in the same transaction as ``ENTER_ACCEPTED``, and never enters the hashed
-    payload. This keyword is a write-path seam only; the envelope slice
-    replaces it with the gate's own ``envelope``/``reference_price`` pair.
+    ``envelope`` is the ADR 0059 risk envelope (see
+    :func:`~.envelope_admission.require_envelope_admission`). When supplied it
+    bounds this ENTER against observed cash and yields the reservation that
+    cash claims until the fills are observed; the reservation rides the
+    ``TransitionInput`` so its row lands in the same transaction as
+    ``ENTER_ACCEPTED``, and never enters the hashed payload. ``None`` means no
+    envelope is configured for this authority and no envelope check runs.
+    ``reference_price`` is the decision-bar price a market leg is priced at; a
+    limit leg is priced at its own limit and ignores it.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
@@ -192,6 +200,17 @@ def accept_enter(
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         require_admission(repo, strategy_instance_id=strategy_instance_id)
+        reservation = (
+            None
+            if envelope is None
+            else require_envelope_admission(
+                repo,
+                envelope=envelope,
+                leg=leg,
+                reference_price=reference_price,
+                now_ms=repo.clock(),
+            )
+        )
         effect_operation_id = f"effect:{idempotency_key}"
         namespace = build_bot_order_namespace(strategy_instance_id)
         order_ref = build_order_ref(namespace, mint_intent_id())
@@ -219,7 +238,7 @@ def accept_enter(
             clerk_observed_at_ms=repo.clock(),
             summary_code="ENTER_ACCEPTED",
             facts_json=facts.to_facts_json(),
-            envelope_reservation=envelope_reservation,
+            envelope_reservation=reservation,
         )
 
     outcome = repo.commit_first_transition(
@@ -264,6 +283,8 @@ async def submit_enter(
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
     decision_receipt: AtomicDecisionReceipt | None = None,
+    envelope: LiveEnvelopeGate | None = None,
+    reference_price: float | None = None,
 ) -> EnterSubmission:
     """Accept, then (only for a fresh reservation) call the broker.
 
@@ -281,6 +302,10 @@ async def submit_enter(
     shared-resolver call still resolves it correctly by
     asking the broker whether ``order_ref`` landed, using the accept
     transition's own timestamp as the grace-window anchor.
+
+    ``envelope``/``reference_price`` are handed straight to
+    :func:`accept_enter`; an ENTER the envelope refuses never reaches the
+    broker, because the refusal happens before this function's accept returns.
     """
     accepted = accept_enter(
         repo,
@@ -290,6 +315,8 @@ async def submit_enter(
         lifecycle_run_id=lifecycle_run_id,
         leg=leg,
         decision_receipt=decision_receipt,
+        envelope=envelope,
+        reference_price=reference_price,
     )
     return await submit_accepted_enter(repo, accepted=accepted, leg=leg, trade=trade)
 
