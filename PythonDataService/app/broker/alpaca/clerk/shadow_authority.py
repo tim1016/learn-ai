@@ -172,6 +172,9 @@ async def select_shadow_clerk_runtime(
             live_envelope=LiveEnvelopeGate(
                 values=live_envelope_values, custody_is_simulated=True
             ),
+            # The envelope observes the live account's cash and positions
+            # (plan: unrealized is the live account's).
+            envelope_read=read,
         )
     except Exception as exc:
         logger.warning(

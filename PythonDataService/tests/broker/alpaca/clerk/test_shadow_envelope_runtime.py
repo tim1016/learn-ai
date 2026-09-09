@@ -31,6 +31,9 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+)
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.services.session_authority import et_minute_of_day_ms
@@ -59,8 +62,9 @@ class _LiveBroker:
 
     broker_id = "alpaca"
 
-    def __init__(self, *, cash: float = 100_000.0) -> None:
+    def __init__(self, *, cash: float = 100_000.0, unrealized: float = 0.0) -> None:
         self.cash = cash
+        self.unrealized = unrealized
 
     def capabilities(self) -> BrokerCapabilities:
         return ALPACA_LIVE_CAPABILITIES
@@ -92,7 +96,25 @@ class _LiveBroker:
         return []
 
     async def list_positions(self) -> list[BrokerPosition]:
-        return []
+        if self.unrealized == 0.0:
+            return []
+        return [
+            BrokerPosition(
+                broker="alpaca",
+                symbol="SPY",
+                asset_id=None,
+                asset_class=None,
+                quantity=10,
+                side="long",
+                average_entry_price=100.0,
+                market_value=1_000.0 + self.unrealized,
+                cost_basis=1_000.0,
+                current_price=None,
+                unrealized_pl=self.unrealized,
+                unrealized_plpc=None,
+                observed_at_ms=NOW_MS,
+            )
+        ]
 
     async def list_activities(self, **_kwargs: Any) -> list:
         return []
@@ -310,3 +332,24 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_the_first_o
     assert second.state.value == "rejected"
     assert second.explanation.startswith("LIVE_ENVELOPE_CASH_EXCEEDED:")
     assert "5000.00 USD reserved by working entries" in second.explanation, second.explanation
+
+
+async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_synthesized_book(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+) -> None:
+    """Day P&L under shadow carries the live account's unrealized P&L (plan residual), so a live loss raises the hold."""
+    runtime, broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    assert runtime.sqlite_repository is not None
+
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.latest_observation().unrealized_pl_usd == 0.0
+
+    broker.unrealized = -5_000.0  # limit = min(0.05 × 100,000, 5,000) = 5,000; P&L −5,000 breaches
+    assert await runtime.envelope_sync.tick() == "hold_raised"
+    hold = runtime.sqlite_repository.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        strategy_instance_id=None,
+    )
+    assert hold is not None

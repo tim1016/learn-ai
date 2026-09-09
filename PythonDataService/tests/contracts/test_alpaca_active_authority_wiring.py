@@ -375,3 +375,20 @@ def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:
         "runtime.py raises an account hold again; the stream-health hold "
         "belongs to StreamHealthHoldSync, not to ENTER (#1777 WP4/S10)"
     )
+
+
+def test_the_shadow_composition_hands_the_envelope_the_live_read_port() -> None:
+    """The shadow envelope's unrealized P&L must be the live account's, not
+    the synthesized book's (ADR 0059 slice 5, Task 11 "Residuals"). The
+    Clerk, the sweep and the symbol probe keep the shadow read port; only the
+    envelope sync is handed the live one, via ``envelope_read``.
+    """
+    shadow_source = (
+        APPLICATION_ROOT / "broker/alpaca/clerk/shadow_authority.py"
+    ).read_text(encoding="utf-8")
+
+    assert "envelope_read=read," in shadow_source, (
+        "shadow_authority.py no longer passes envelope_read=read to "
+        "compose_repository_runtime; the shadow envelope would fall back to "
+        "the synthesized read port and its unrealized P&L would always be 0"
+    )

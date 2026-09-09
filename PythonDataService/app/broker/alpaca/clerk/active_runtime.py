@@ -20,7 +20,10 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    guard_broker_ports,
+    guard_broker_read_port,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -43,6 +46,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
+from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -212,12 +216,18 @@ async def compose_repository_runtime(
     roster_symbols: Callable[[], Sequence[str]] | None,
     sweep_listener: ReconciliationListener | None = None,
     live_envelope: LiveEnvelopeGate | None = None,
+    envelope_read: BrokerReadPort | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
     Shared by the real-paper and shadow authorities; on any failure every
     handle opened here is closed before the exception propagates, so the
     caller only maps it to a startup refusal.
+
+    ``envelope_read`` is the port the envelope observes when it is not the
+    Clerk's own read port -- the shadow authority passes the live account's
+    read so cash and positions are the real account's while custody stays
+    synthesized.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -299,10 +309,21 @@ async def compose_repository_runtime(
         # the hold sync has one -- the reconcile loop's backoff reaches 300 s
         # on failure, and a losing day must not wait that long to be judged.
         # Unstarted here too: `start_hold_sync()` is the one start seam.
+        # The envelope judges the account the money is in. Under shadow that
+        # is the live account (cash and positions), not the synthesized
+        # book, whose positions never mark to market.
         envelope_sync = (
             None
             if live_envelope is None
-            else LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=live_envelope)
+            else LiveEnvelopeSync(
+                repo=repository,
+                read=(
+                    guarded_read
+                    if envelope_read is None
+                    else guard_broker_read_port(envelope_read, intake=intake)
+                ),
+                envelope=live_envelope,
+            )
         )
         await asyncio.wait_for(
             facade.recover(),
