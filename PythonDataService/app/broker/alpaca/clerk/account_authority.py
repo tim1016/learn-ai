@@ -141,6 +141,28 @@ def custody_account_id_for(world: CustodyWorld, observed_account_id: str) -> str
     return observed_account_id
 
 
+def live_account_id_for_shadow_account(account_id: str) -> str:
+    """The live account a ``shadow:`` custody id observes; a real id is itself.
+
+    The inverse of ``shadow_account_id_for_live_account``. The module that
+    defines a namespace prefix is the only one that should add or strip it, so
+    no feature module has to import ``SHADOW_ACCOUNT_PREFIX`` to do string
+    surgery on an identity.
+    """
+    return account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
+
+
+def custody_account_ids_for(live_account_id: str) -> frozenset[str]:
+    """Every custody id an authority over this live account may hold.
+
+    The set form of ``custody_account_id_for``: under the Shadow Account
+    Authority custody is ``shadow:<live_account_id>``, so an instance
+    rehearsing on this account seals the shadow id, while a ``real_live``
+    custody seals the live id itself. Both are the same account to an operator.
+    """
+    return frozenset({live_account_id, custody_account_id_for("shadow", live_account_id)})
+
+
 def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
     """Return the isolated real-paper source-bar namespace for one instance."""
     from app.engine.live.identity import validate_strategy_instance_id
@@ -264,10 +286,12 @@ __all__ = [
     "bind_shadow_ports",
     "bind_synthetic_ports",
     "custody_account_id_for",
+    "custody_account_ids_for",
     "evidence_account_id_for",
     "is_shadow_account_id",
     "is_shadow_evidence_account_id",
     "is_synthetic_account_id",
+    "live_account_id_for_shadow_account",
     "paper_evidence_account_id_for_strategy",
     "require_real_account_id",
     "require_shadow_account_id",

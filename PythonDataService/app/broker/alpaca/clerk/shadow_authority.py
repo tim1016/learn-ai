@@ -22,7 +22,12 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     unavailable_runtime,
 )
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate, LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.live_envelope import (
+    LIVE_ENVELOPE_MISSING,
+    LiveEnvelopeGate,
+    LiveEnvelopeValues,
+)
 from app.broker.alpaca.clerk.shadow_activation import (
     ShadowActivationInvalid,
     ShadowActivationRecord,
@@ -72,7 +77,7 @@ async def select_shadow_clerk_runtime(
     """
     if live_envelope_values is None:
         return unavailable_runtime(
-            "LIVE_ENVELOPE_MISSING",
+            LIVE_ENVELOPE_MISSING,
             account_id=shadow_account_id_for_live_account(account.account_id),
             recovery=(
                 "Set every ALPACA_LIVE_* value; the shadow authority rehearses the "
@@ -175,6 +180,10 @@ async def select_shadow_clerk_runtime(
             # The envelope observes the live account's cash and positions
             # (plan: unrealized is the live account's).
             envelope_read=read,
+            # ADR 0059 D3/R10: the sealed envelope comes from this account's
+            # arming ledger, which is rooted on the LIVE account id -- not the
+            # ``shadow:`` custody namespace the rest of this composition uses.
+            arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id),
         )
     except Exception as exc:
         logger.warning(

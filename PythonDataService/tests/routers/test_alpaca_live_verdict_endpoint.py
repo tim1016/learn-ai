@@ -8,6 +8,7 @@ from typing import NoReturn
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import app.routers.brokers as brokers_router
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
@@ -63,6 +64,33 @@ async def test_paper_settings_serve_a_paper_verdict(monkeypatch: pytest.MonkeyPa
     assert body["configured_mode"] == "paper"
     assert body["final_verdict"] == "paper"
     assert body["headline"]
+
+
+async def test_a_paper_verdict_never_resolves_the_legacy_ibkr_bindings_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``live_artifacts_root()`` constructs ``IbkrSettings``, which can refuse.
+
+    A paper verdict reads no arming evidence at all, so an invalid legacy IBKR
+    environment -- ``IBKR_MODE=paper`` with a live port, say -- must not turn
+    this endpoint into a 500 for a perfectly valid Alpaca configuration. The
+    root is an argument, and arguments are evaluated before the observation can
+    take its paper early return.
+    """
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "s")
+    monkeypatch.setenv("ALPACA_MODE", "paper")
+
+    def _refuses() -> NoReturn:
+        raise ValueError("legacy IBKR settings are invalid")
+
+    monkeypatch.setattr(brokers_router, "live_artifacts_root", _refuses)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/live-verdict", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["final_verdict"] == "paper"
 
 
 async def test_live_settings_with_refused_clerk_serve_live_unarmed(

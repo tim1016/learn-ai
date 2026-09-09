@@ -60,8 +60,8 @@ from app.services.alpaca_shadow_reconciliation import (
     evaluate_shadow_gate,
 )
 from app.services.bot_binding_repository import live_state_binding_repository
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
+from scripts._operator_cli import timestamp_ms
 
 ShadowGateEvaluator = Callable[..., ShadowGateEvaluation]
 
@@ -79,16 +79,6 @@ def _required_session_count(raw: str) -> int:
     value = int(raw)
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1 session, not {value}")
-    return value
-
-
-def _timestamp_ms(raw: str) -> int:
-    """One instant, ``int64 ms UTC``, inside the domain's admissible range."""
-    value = int(raw)
-    if not 0 <= value <= MAX_TIMESTAMP_MS:
-        raise argparse.ArgumentTypeError(
-            f"must be between 0 and {MAX_TIMESTAMP_MS} milliseconds since epoch UTC, not {value}"
-        )
     return value
 
 
@@ -121,7 +111,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         gate.add_argument("--twin-strategy-instance-id", required=True)
         gate.add_argument("--twin-artifacts-root", type=Path)
         gate.add_argument("--required-sessions", type=_required_session_count)
-        gate.add_argument("--now-ms", type=_timestamp_ms)
+        gate.add_argument("--now-ms", type=timestamp_ms)
     return parser.parse_args(argv)
 
 

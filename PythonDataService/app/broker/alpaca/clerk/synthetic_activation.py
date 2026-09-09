@@ -160,6 +160,15 @@ class IsolatedActivationStore:
             latest = record
         return latest
 
+    def account_ids(self) -> tuple[str, ...]:
+        """Every account with an activation row here, in first-appearance order.
+
+        The arming ceremony *observes* the account it arms rather than being
+        told it (ADR 0059 D3 R8), and this fence is the evidence that a shadow
+        gate was ever run against one.
+        """
+        return tuple(dict.fromkeys(record.account_id for record in self._read_all()))
+
     def append(self, record: IsolatedActivationRecord) -> None:
         canonical = self.record_type.from_payload(asdict(record))
         # The prior-generation check and durable append form one transaction.

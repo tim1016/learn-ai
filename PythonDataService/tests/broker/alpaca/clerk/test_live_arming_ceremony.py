@@ -1,0 +1,806 @@
+"""The supervised arming ceremony: observe, plan, apply, disarm (ADR 0059 D3)."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+import app.broker.alpaca.clerk.live_arming_ceremony as ceremony_module
+from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_INPUTS_CHANGED,
+    LIVE_ARMING_INSTANCE_UNSEALED,
+    LIVE_ARMING_NOT_ARMED,
+    LIVE_ARMING_PLAN_EXPIRED,
+    LIVE_ARMING_TOKEN_INVALID,
+    LIVE_ARMING_TTL_INVALID,
+    LIVE_ENVELOPE_MISSING,
+    LIVE_SHADOW_INCOMPLETE,
+    LiveArmingRecord,
+    LiveArmingRefused,
+    LiveDisarmRecord,
+)
+from app.broker.alpaca.clerk.live_arming_ceremony import (
+    ArmingInputs,
+    ArmingObserver,
+    LiveArmingPlan,
+    account_arming,
+    apply_arming,
+    disarm,
+    instance_seal_hashes,
+    live_account_id_for,
+    observe_arming_inputs,
+    plan_arming,
+)
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
+from tests.broker.alpaca.clerk.live_arming_fixtures import (
+    ARMED_AT_MS,
+    ARMING_SID,
+    activate_shadow_fence,
+    arming_ready,
+    live_settings,
+    paper_settings,
+    record_sealed_binding,
+    seal_receipt,
+)
+from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
+
+TTL_MS = 120_000
+
+
+class _Clock:
+    def __init__(self, now_ms: int) -> None:
+        self.now_ms = now_ms
+
+    def __call__(self) -> int:
+        return self.now_ms
+
+
+@pytest.fixture()
+def roots(tmp_path: Path) -> tuple[Path, Path]:
+    """The Clerk artifacts root and the runner ``live_state`` root, kept apart."""
+    return tmp_path / "clerk", tmp_path / "runner"
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _inputs(**overrides: object) -> ArmingInputs:
+    values: dict[str, object] = {
+        "live_account_id": LIVE_ACCT,
+        "strategy_instance_id": ARMING_SID,
+        "seal_hash": "a" * 64,
+        "configured_signal_hash": "b" * 64,
+        "shadow_receipt_sha256": "c" * 64,
+        "envelope": TEST_ENVELOPE_VALUES,
+        "max_sessions": TEST_ENVELOPE_VALUES.arming_max_sessions,
+    }
+    values.update(overrides)
+    return ArmingInputs(**values)  # type: ignore[arg-type]
+
+
+def _observer(inputs: ArmingInputs) -> ArmingObserver:
+    def _observe(**_kwargs: object) -> ArmingInputs:
+        return inputs
+
+    return _observe
+
+
+def _plan_with(inputs: ArmingInputs, artifacts_root: Path, *, now_ms: int = ARMED_AT_MS) -> LiveArmingPlan:
+    return plan_arming(
+        strategy_instance_id=inputs.strategy_instance_id,
+        artifacts_root=artifacts_root,
+        live_state_root=artifacts_root,
+        settings=live_settings(),
+        clock=_Clock(now_ms),
+        observe=_observer(inputs),
+    )
+
+
+def test_the_observer_reads_the_four_inputs_off_disk(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    seal = arming_ready(artifacts_root, live_state_root)
+
+    inputs = observe_arming_inputs(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+    )
+
+    assert inputs.live_account_id == LIVE_ACCT
+    # R2: arming binds to the whole sealed program, not the signal-only hash.
+    assert inputs.seal_hash == seal.bot_configuration_hash
+    assert inputs.configured_signal_hash == seal.configured_signal_hash
+    assert inputs.seal_hash != inputs.configured_signal_hash
+    assert len(inputs.shadow_receipt_sha256) == 64
+    assert inputs.envelope == TEST_ENVELOPE_VALUES
+    assert inputs.max_sessions == TEST_ENVELOPE_VALUES.arming_max_sessions
+
+
+def test_a_paper_account_is_never_armed(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=paper_settings(),
+        )
+
+    assert caught.value.reason_code == LIVE_ENVELOPE_MISSING
+
+
+def test_a_paper_account_with_a_complete_envelope_is_refused(roots: tuple[Path, Path]) -> None:
+    """The mode gate on its own, with every ``ALPACA_LIVE_*`` value present.
+
+    ``paper_settings()`` has no envelope at all, so it cannot tell the mode
+    check from the envelope check. This one can: the envelope is complete and
+    the refusal is still ``LIVE_ENVELOPE_MISSING``, named on the mode.
+    """
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    complete_but_paper = live_settings(mode="paper")
+    assert complete_but_paper.live_loss_usd is not None
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=complete_but_paper,
+        )
+
+    assert caught.value.reason_code == LIVE_ENVELOPE_MISSING
+    assert "ALPACA_MODE=paper" in str(caught.value)
+
+
+def test_an_incomplete_live_envelope_refuses_by_the_same_code(roots: tuple[Path, Path]) -> None:
+    """``model_copy`` bypasses the settings validator, which is the only way to
+    reach this branch -- ``AlpacaSettings`` itself refuses to construct a live
+    mode with a missing value, so this is the defence behind that door."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    incomplete = live_settings().model_copy(update={"live_loss_usd": None})
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=incomplete,
+        )
+
+    assert caught.value.reason_code == LIVE_ENVELOPE_MISSING
+    assert "live_loss_usd" in str(caught.value)
+
+
+def test_no_shadow_activation_proof_refuses_before_any_binding_is_read(roots: tuple[Path, Path]) -> None:
+    artifacts_root, _live_state_root = roots
+    artifacts_root.mkdir(parents=True)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        live_account_id_for(artifacts_root)
+
+    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "manage_alpaca_shadow activate" in str(caught.value)
+
+
+def test_two_shadowed_accounts_refuse_rather_than_choosing_one(roots: tuple[Path, Path]) -> None:
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root, live_account_id=LIVE_ACCT)
+    activate_shadow_fence(artifacts_root, live_account_id="9LIVE0002")
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        live_account_id_for(artifacts_root)
+
+    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "more than one shadowed live account" in str(caught.value)
+
+
+def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[Path, Path]) -> None:
+    from app.services.bot_binding_repository import (
+        BrokerBotBinding,
+        alpaca_v1_action_plan,
+        live_state_binding_repository,
+    )
+
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    # A legacy binding with no v2 seal: skipped, never refused, so it cannot
+    # stop a sealed sibling from arming.
+    live_state_binding_repository(live_state_root).record_launch(
+        BrokerBotBinding(
+            strategy_instance_id="legacy",
+            broker="alpaca",
+            symbol="SPY",
+            mode="trade",
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id="legacy-run-1",
+            created_at_ms=1_757_000_000_000,
+        ),
+        launch_reason="deploy",
+    )
+    record_sealed_binding(live_state_root, strategy_instance_id="elsewhere", sealed_account_id="PA-OTHER")
+    sealed = record_sealed_binding(live_state_root, strategy_instance_id=ARMING_SID)
+
+    seals = instance_seal_hashes(live_account_id=LIVE_ACCT, live_state_root=live_state_root)
+
+    assert set(seals) == {ARMING_SID}
+    assert seals[ARMING_SID].seal_hash == sealed.bot_configuration_hash
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id="legacy",
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+        )
+    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+
+
+def test_no_current_shadow_receipt_is_the_adrs_own_refusal(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    record_sealed_binding(live_state_root)
+    # A receipt for a different configured signal is not this seal's proof.
+    seal_receipt(artifacts_root, configured_signal_hash="f" * 64)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        observe_arming_inputs(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+        )
+
+    assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
+
+
+def test_a_receipt_sealed_for_another_live_account_never_arms_this_one(
+    roots: tuple[Path, Path],
+) -> None:
+    """The receipt store filters by instance, seal and count -- not by account.
+
+    Two live accounts can carry the same instance id and the same configured
+    signal, so a receipt proving the gate ran on account A would otherwise arm
+    the same instance bound on account B.
+    """
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    seal = record_sealed_binding(live_state_root)
+    seal_receipt(
+        artifacts_root,
+        configured_signal_hash=seal.configured_signal_hash,
+        live_account_id="9LIVE0002",
+        sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
+    )
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        plan_arming(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+        )
+
+    assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
+    assert "9LIVE0002" in str(caught.value) and LIVE_ACCT in str(caught.value)
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_plan_writes_nothing_and_its_two_ids_are_its_own_content_hash(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    before = _snapshot(artifacts_root)
+
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        confirmation_ttl_ms=TTL_MS,
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    assert _snapshot(artifacts_root) == before
+    assert plan.schema_version == 1
+    assert plan.plan_id == plan.confirmation_token and len(plan.plan_id) == 64
+    assert (plan.created_at_ms, plan.expires_at_ms) == (ARMED_AT_MS, ARMED_AT_MS + TTL_MS)
+    assert plan.live_account_id == LIVE_ACCT
+    assert plan.envelope_sha256 == TEST_ENVELOPE_VALUES.sha
+    assert plan.envelope_values == TEST_ENVELOPE_VALUES.to_mapping()
+    assert plan.max_sessions == TEST_ENVELOPE_VALUES.arming_max_sessions
+
+
+@pytest.mark.parametrize("ttl", [0, -1, 300_001])
+def test_a_confirmation_window_outside_the_bound_is_refused(roots: tuple[Path, Path], ttl: int) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        plan_arming(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            confirmation_ttl_ms=ttl,
+            clock=_Clock(ARMED_AT_MS),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_TTL_INVALID
+
+
+def test_apply_arms_the_instance_and_appends_exactly_one_sealed_record(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    seal = arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    record = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 1_000),
+    )
+
+    assert isinstance(record, LiveArmingRecord)
+    assert record.armed_at_ms == ARMED_AT_MS + 1_000
+    assert record.seal_hash == seal.bot_configuration_hash
+    assert record.envelope_sha256 == TEST_ENVELOPE_VALUES.sha
+    ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
+    assert ledger.records() == (record,)
+    assert ledger.sealed_envelope() == TEST_ENVELOPE_VALUES
+
+
+def test_apply_refuses_a_token_that_is_not_the_plans(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = _plan_with(_inputs(), artifacts_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        apply_arming(
+            plan=plan,
+            confirmation_token="0" * 64,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+            observe=_observer(_inputs()),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_TOKEN_INVALID
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_apply_refuses_a_plan_whose_content_was_edited(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = _plan_with(_inputs(), artifacts_root)
+    forged = replace(plan, max_sessions=999)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        apply_arming(
+            plan=forged,
+            confirmation_token=forged.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+            observe=_observer(_inputs()),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_TOKEN_INVALID
+    assert "content hash does not verify" in str(caught.value)
+
+
+def test_apply_refuses_once_the_confirmation_window_has_closed(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        confirmation_ttl_ms=10,
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    # The last admissible millisecond still applies.
+    on_the_edge = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 10),
+    )
+    assert on_the_edge.armed_at_ms == ARMED_AT_MS + 10
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + 11),
+        )
+    assert caught.value.reason_code == LIVE_ARMING_PLAN_EXPIRED
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("live_account_id", "9LIVE0002"),
+        ("strategy_instance_id", "someone-else"),
+        ("seal_hash", "d" * 64),
+        ("configured_signal_hash", "d" * 64),
+        ("shadow_receipt_sha256", "d" * 64),
+        ("max_sessions", 5),
+    ],
+)
+def test_apply_refuses_every_input_that_drifted_between_plan_and_apply(
+    roots: tuple[Path, Path], field: str, value: object
+) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    planned = _inputs()
+    plan = _plan_with(planned, artifacts_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+            observe=_observer(replace(planned, **{field: value})),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_INPUTS_CHANGED
+    assert field in str(caught.value)
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_apply_refuses_an_envelope_that_changed_between_plan_and_apply(roots: tuple[Path, Path]) -> None:
+    """The envelope drifts by its sha, not by its seven-field object identity."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    planned = _inputs()
+    plan = _plan_with(planned, artifacts_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+            observe=_observer(replace(planned, envelope=replace(TEST_ENVELOPE_VALUES, loss_usd=4_000.0))),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_INPUTS_CHANGED
+    assert "envelope_sha256" in str(caught.value)
+
+
+def test_re_arming_while_armed_supersedes_with_no_already_armed_refusal(roots: tuple[Path, Path]) -> None:
+    """R7: renewal before lapse is the same ceremony, run again."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+
+    for offset in (0, 60_000):
+        plan = plan_arming(
+            strategy_instance_id=ARMING_SID,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + offset),
+        )
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + offset),
+        )
+
+    ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
+    assert len(ledger.records()) == 2
+    latest = ledger.latest(ARMING_SID)
+    assert isinstance(latest, LiveArmingRecord) and latest.armed_at_ms == ARMED_AT_MS + 60_000
+
+
+def test_disarm_revokes_the_latest_record_and_needs_no_confirmation(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    armed = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    revocation = disarm(
+        strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 5_000)
+    )
+
+    assert isinstance(revocation, LiveDisarmRecord)
+    assert revocation.revokes_record_sha256 == armed.record_sha256
+    assert revocation.disarmed_at_ms == ARMED_AT_MS + 5_000
+    statuses = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS + 5_000,
+    ).statuses
+    assert statuses[ARMING_SID].state == "disarmed"
+    assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_REVOKED"
+
+
+def _arm_for_disarm(roots: tuple[Path, Path]) -> LiveArmingRecord:
+    """One armed instance on the fixture's live account, via the real ceremony."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    return apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+
+def test_disarm_survives_the_loss_of_the_activation_evidence(roots: tuple[Path, Path]) -> None:
+    """The closed direction must not need the proof that opened it.
+
+    An incident is exactly when the durable evidence is damaged, and the arming
+    row already names its own live account -- so the arming tree answers the
+    question the activation fence usually answers.
+    """
+    artifacts_root, _live_state_root = roots
+    armed = _arm_for_disarm(roots)
+    ShadowActivationStore(artifacts_root).path.unlink()
+    with pytest.raises(LiveArmingRefused):
+        live_account_id_for(artifacts_root)
+
+    revocation = disarm(
+        strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 5_000)
+    )
+
+    assert revocation.live_account_id == LIVE_ACCT
+    assert revocation.revokes_record_sha256 == armed.record_sha256
+    assert isinstance(LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).latest(ARMING_SID), LiveDisarmRecord)
+
+
+def test_disarm_resolves_the_account_when_the_activation_fence_is_ambiguous(
+    roots: tuple[Path, Path],
+) -> None:
+    """Two shadowed accounts, one arming ledger naming the instance: no ambiguity."""
+    artifacts_root, _live_state_root = roots
+    armed = _arm_for_disarm(roots)
+    activate_shadow_fence(artifacts_root, live_account_id="9LIVE0002")
+    with pytest.raises(LiveArmingRefused) as fence:
+        live_account_id_for(artifacts_root)
+    assert fence.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
+
+    revocation = disarm(
+        strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 5_000)
+    )
+
+    assert revocation.live_account_id == LIVE_ACCT
+    assert revocation.revokes_record_sha256 == armed.record_sha256
+
+
+def test_disarm_refuses_when_no_arming_ledger_names_the_instance(roots: tuple[Path, Path]) -> None:
+    """No activation proof and nothing armed: there is nothing to revoke."""
+    artifacts_root, _live_state_root = roots
+    artifacts_root.mkdir(parents=True)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS))
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    assert ARMING_SID in str(caught.value)
+
+
+def test_disarm_with_nothing_to_revoke_is_refused_rather_than_written(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS))
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
+def test_disarming_twice_refuses_the_second_time_and_writes_one_revocation(
+    roots: tuple[Path, Path],
+) -> None:
+    """The tail of the instance's rows is a revocation, so there is nothing to revoke."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 1))
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        disarm(strategy_instance_id=ARMING_SID, artifacts_root=artifacts_root, clock=_Clock(ARMED_AT_MS + 2))
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    records = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records()
+    assert [type(row) for row in records] == [LiveArmingRecord, LiveDisarmRecord]
+
+
+def test_account_statuses_answer_every_instance_with_a_row_and_named_ones_besides(
+    roots: tuple[Path, Path],
+) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    every = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+    ).statuses
+    assert set(every) == {ARMING_SID}
+    assert every[ARMING_SID].state == "armed"
+    assert (every[ARMING_SID].sessions_used, every[ARMING_SID].sessions_remaining) == (1, 19)
+
+    named = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+        strategy_instance_ids=["never-armed"],
+    ).statuses
+    assert named["never-armed"].state == "unarmed"
+
+
+def test_a_never_armed_account_is_answered_without_reading_the_bindings_root(
+    roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing under ``live_state_root`` can change an unarmed answer.
+
+    A fresh installation may have no runner root at all, so a ``status`` on an
+    account nobody has armed must neither depend on one nor fail for its
+    absence.
+    """
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    monkeypatch.setattr(
+        ceremony_module,
+        "instance_seal_hashes",
+        lambda **_kwargs: pytest.fail("the bindings root was read for a never-armed account"),
+    )
+    absent_root = artifacts_root / "no-runner-root-here"
+
+    every = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=absent_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+    )
+    named = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=absent_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+        strategy_instance_ids=[ARMING_SID],
+    )
+
+    assert every.statuses == {}
+    assert (every.armed_instance_count, every.envelope_state) == (0, "configured_unsealed")
+    assert named.statuses[ARMING_SID].state == "unarmed"
+    assert (named.armed_instance_count, named.envelope_state) == (0, "configured_unsealed")
+    assert not absent_root.exists()
+
+
+def test_a_size_change_alone_disarms_because_arming_binds_the_whole_seal(
+    roots: tuple[Path, Path],
+) -> None:
+    """R2's whole point, end to end: quantity is inside ``bot_configuration_hash``."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+    resized = record_sealed_binding(
+        live_state_root / "resized", strategy_instance_id=ARMING_SID, quantity=7
+    )
+    assert resized.bot_configuration_hash != plan.seal_hash
+
+    statuses = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root / "resized",
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+    ).statuses
+
+    assert statuses[ARMING_SID].state == "disarmed"
+    assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_SEAL_CHANGED"

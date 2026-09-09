@@ -491,8 +491,18 @@ so they survive a broker change.
 - **Arming** — the supervised ceremony that permits real-money submission for
   one sealed instance under one envelope. It is bound to the seal and the
   envelope it named and lapses after the operator-configured number of
-  sessions. Operator intent (PAUSE / STOP) is orthogonal to it. _Avoid_: enabling live, going
+  sessions. An instance is in exactly one of four states: `unarmed` (no
+  record), `armed`, `lapsed` (its sessions are spent), or `disarmed` (an
+  operator revoked it, or its seal or its envelope changed). Operator intent
+  (PAUSE / STOP) is orthogonal to it. _Avoid_: enabling live, going
   live, turning on live
+- **Arming lapse** — the expiry of an arming after the operator-configured
+  number of *calendar NYSE trading sessions*, counted inclusively from the ET
+  date it was armed, the arming session included. A weekend and a market
+  holiday spend nothing; a half day that traded spends one. It is a "come back
+  and look" fence rather than a failure: renewing is the same ceremony run
+  again. _Avoid_: expiry, timeout, TTL (the confirmation window is the TTL;
+  this is not)
 - **Risk envelope** — the account-scoped pair of bounds every live ENTER is
   admitted against: the cash bound and the daily loss limit. Its values are
   operator environment settings, required when live and sealed at arming; a

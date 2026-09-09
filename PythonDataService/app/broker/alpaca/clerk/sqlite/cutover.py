@@ -11,12 +11,19 @@ import hashlib
 import json
 import math
 import os
-import secrets
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from app.broker.alpaca.clerk.ceremony import (
+    DEFAULT_CONFIRMATION_TTL_MS,
+    plan_content_token,
+    plan_payload,
+    require_confirmation_ttl_ms,
+    require_plan_token,
+    require_unexpired,
+)
 from app.broker.alpaca.clerk.sqlite import writes
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord, ActivationStore
 from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
@@ -74,8 +81,6 @@ from app.engine.live.identity import validate_strategy_instance_id
 from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import Clock, now_ms_utc
 
-DEFAULT_CONFIRMATION_TTL_MS = 120_000
-MAX_CONFIRMATION_TTL_MS = 300_000
 LEGACY_ARTIFACT_NAMES: tuple[str, ...] = (
     "order_inbox.jsonl",
     "order_journal.jsonl",
@@ -437,8 +442,7 @@ def plan_cutover(
 ) -> CutoverPlan:
     """Read and content-address every prerequisite without writing anything."""
     now = clock()
-    if type(confirmation_ttl_ms) is not int or not 1 <= confirmation_ttl_ms <= MAX_CONFIRMATION_TTL_MS:
-        raise CutoverRefused("confirmation TTL must be within 1..300000 ms")
+    require_confirmation_ttl_ms(confirmation_ttl_ms, refused=CutoverRefused)
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     _require_no_unreset_activation(
         accounts_root=accounts_root,
@@ -490,22 +494,10 @@ def plan_cutover(
             artifacts_root=artifacts_root,
         ),
     )
-    payload = {
-        "schema_version": 3,
-        "account_id": account_id,
-        "created_at_ms": now,
-        "expires_at_ms": now + confirmation_ttl_ms,
-        "initialization": asdict(initialization),
-        "database": asdict(database),
-        "broker_evidence": asdict(normalized_broker),
-        "runner_roster": [asdict(item) for item in runner_roster],
-        "legacy_artifacts": [asdict(item) for item in legacy],
-    }
-    token = hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
-    return CutoverPlan(
+    draft = CutoverPlan(
         schema_version=3,
-        plan_id=token,
-        confirmation_token=token,
+        plan_id="",
+        confirmation_token="",
         account_id=account_id,
         created_at_ms=now,
         expires_at_ms=now + confirmation_ttl_ms,
@@ -515,6 +507,8 @@ def plan_cutover(
         runner_roster=runner_roster,
         legacy_artifacts=legacy,
     )
+    token = plan_content_token(_cutover_plan_payload(draft))
+    return replace(draft, plan_id=token, confirmation_token=token)
 
 
 def apply_cutover(
@@ -530,8 +524,7 @@ def apply_cutover(
     """Recheck the plan, quarantine legacy state, then fsync activation."""
     now = clock()
     _validate_plan_token(plan, confirmation_token)
-    if now > plan.expires_at_ms:
-        raise CutoverRefused("cutover confirmation token has expired")
+    require_unexpired(now_ms=now, expires_at_ms=plan.expires_at_ms, refused=CutoverRefused, label="cutover")
     accounts_root, account_dir = writes.account_paths(artifacts_root, plan.account_id)
     _require_no_unreset_activation(
         accounts_root=accounts_root,
@@ -926,23 +919,19 @@ def _require_checkpointed_database(account_dir: Path) -> None:
             )
 
 
+def _cutover_plan_payload(plan: CutoverPlan) -> dict[str, Any]:
+    return plan_payload(plan, schema_version=3, refused=CutoverRefused, label="cutover")
+
+
 def _validate_plan_token(plan: CutoverPlan, supplied_token: str) -> None:
-    payload = {
-        "schema_version": plan.schema_version,
-        "account_id": plan.account_id,
-        "created_at_ms": plan.created_at_ms,
-        "expires_at_ms": plan.expires_at_ms,
-        "initialization": asdict(plan.initialization),
-        "database": asdict(plan.database),
-        "broker_evidence": asdict(plan.broker_evidence),
-        "runner_roster": [asdict(item) for item in plan.runner_roster],
-        "legacy_artifacts": [asdict(item) for item in plan.legacy_artifacts],
-    }
-    expected = hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
-    if plan.schema_version != 3 or plan.plan_id != expected or plan.confirmation_token != expected:
-        raise CutoverRefused("cutover plan content hash does not verify")
-    if not secrets.compare_digest(supplied_token, expected):
-        raise CutoverRefused("cutover confirmation token does not match the plan")
+    require_plan_token(
+        _cutover_plan_payload(plan),
+        plan_id=plan.plan_id,
+        confirmation_token=plan.confirmation_token,
+        supplied_token=supplied_token,
+        refused=CutoverRefused,
+        label="cutover",
+    )
 
 
 def _rollback_quarantine(moved: list[tuple[Path, Path]]) -> None:
