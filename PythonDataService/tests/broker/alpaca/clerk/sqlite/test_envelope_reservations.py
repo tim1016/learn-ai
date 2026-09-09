@@ -25,7 +25,12 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_acknowledgement,
+    fold_order_evidence,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -43,6 +48,11 @@ RUN_ID = "run-1"
 RUN_ID_B = "run-2"
 
 T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
+# The trailing-fill timeline: terminal ack, then the cash observation, then the
+# websocket execution slice that observation cannot possibly have seen.
+T1_TERMINAL_ACK = T0 + 1_000
+T2_OBSERVATION = T0 + 2_000
+T3_TRAILING_FILL = T0 + 3_000
 
 _CAUSE = LossHoldCause(
     day_start_ms=1_788_000_000_000,
@@ -354,6 +364,10 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
     )
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
 
+    # The "filled before the observation" cases wind the fixture clock back
+    # past the acceptance for brevity; that is harmless here because
+    # ``reserved_cash_usd`` never reads ``reserved_at_ms`` — only the fill's
+    # ``recorded_at_ms`` against the observation.
     if fills:
         for index, (cumulative_qty, recorded_at_ms) in enumerate(fills, start=1):
             clock.value = recorded_at_ms
@@ -383,6 +397,111 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
         )
 
     assert repo.reserved_cash_usd(observed_at_ms=observed_at_ms) == pytest.approx(expected)
+
+
+def _refuse_coverage_conflict() -> TransitionInput:
+    raise AssertionError("a first exact execution has nothing to conflict with")
+
+
+def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
+    repo: ClerkSqliteRepository,
+    clock: _TestClock,
+    active_instance: tuple[str, str],
+) -> None:
+    """A terminal order's ``updated_at_ms`` cannot bound its unobserved fills.
+
+    ``SqliteTradeUpdateEvidenceSink.record_lifecycle_event`` folds a websocket
+    frame as ``EXECUTION_SLICE_FILLED`` — which writes a ``fills`` row and
+    touches nothing on ``orders`` — and then calls
+    ``fold_order_acknowledgement(append_stale_ack=False)``, which appends
+    nothing when the snapshot has not moved. So an order that went terminal at
+    T1 can record a fill at T3 with ``orders.updated_at_ms`` still at T1, and
+    an observation taken at T2 in between has seen neither. Pricing that fill
+    is the whole point of the reservation.
+    """
+    sid, run_id = active_instance
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid,
+        decision_id="d1",
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10),
+        envelope_reservation=EnvelopeReservation(quantity=10, reference_price=100.0),
+    )
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+
+    clock.value = T1_TERMINAL_ACK
+    fold_order_acknowledgement(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_observed_order(
+            accepted.order_ref,
+            status="filled",
+            filled_quantity=10.0,
+            filled_avg_price=100.0,
+            source_event_at_ms=T1_TERMINAL_ACK,
+        ),
+        append_stale_ack=False,
+    )
+    order_before = repo._conn.execute(
+        "SELECT broker_state, updated_at_ms FROM orders WHERE order_ref = ?",
+        (accepted.order_ref,),
+    ).fetchone()
+    assert (order_before["broker_state"], order_before["updated_at_ms"]) == (
+        "filled",
+        T1_TERMINAL_ACK,
+    )
+
+    clock.value = T3_TRAILING_FILL
+    facts = ExecutionSliceFilledFacts(
+        execution_id="exec-trailing-1",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=10.0,
+        slice_price=100.0,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=T3_TRAILING_FILL,
+    )
+    assert (
+        repo.append_execution_slice_if_absent(
+            execution_id=facts.execution_id,
+            order_ref=accepted.order_ref,
+            build_transition=lambda: TransitionInput(
+                strategy_instance_id=accepted.command.strategy_instance_id,
+                run_id=accepted.command.run_id,
+                command_id=accepted.command.command_id,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                transition_kind="EXECUTION_SLICE_FILLED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="in_progress",
+                source_event_at_ms=facts.source_event_at_ms,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="EXECUTION_SLICE_FILLED",
+                facts_json=facts.to_facts_json(),
+            ),
+            build_coverage_conflict=_refuse_coverage_conflict,
+        )
+        == "appended"
+    )
+
+    # The order row is exactly what it was before the fill: this is why a
+    # prefilter on ``updated_at_ms`` dropped the reservation entirely.
+    order_after = repo._conn.execute(
+        "SELECT broker_state, updated_at_ms FROM orders WHERE order_ref = ?",
+        (accepted.order_ref,),
+    ).fetchone()
+    assert (order_after["broker_state"], order_after["updated_at_ms"]) == (
+        "filled",
+        T1_TERMINAL_ACK,
+    )
+    assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
+
+    assert repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
 
 
 def test_reservations_sum_across_instances(

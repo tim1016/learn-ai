@@ -10,9 +10,14 @@ connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+if TYPE_CHECKING:
+    # Typing-only: ``from __future__ import annotations`` keeps every
+    # annotation a string and nothing here resolves them at runtime, so a
+    # shapes module does not need to import the live-envelope chain
+    # (``live_envelope`` → ``sealed_ledger`` → the live state sidecar).
+    from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 
 
 @dataclass(frozen=True)

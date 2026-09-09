@@ -57,6 +57,21 @@
   distinct indices for every historical ticket, adds the per-ticket uniqueness fence, and
   replaces the leg-identity trigger so an operator cannot reorder a reserved
   ticket after confirmation.
+- Schema-v12 folds `holds` into `uncertainties` (ADR 0048 Decision 2): the
+  hold table is retired and its name survives only as a read-only view over
+  the uncertainty rows whose `reason_code` is a registered hold cause. The
+  registered v11 → v12 migration drops the table with its indexes and
+  subject-compatibility triggers and creates the view in the same
+  transaction, so one vocabulary — the registry — decides what a hold is.
+- Schema-v13 adds `envelope_reservations`, the cash one accepted ENTER
+  claims until its fills are observed (ADR 0059 Decision 4). It is product
+  evidence outside the hash chain, like `decision_receipts`: written inside
+  `ENTER_ACCEPTED`'s transaction, never in `facts_json`, never in the mirror.
+  The registered v12 → v13 migration is the same statement list the fresh
+  block renders, so it also re-publishes the `holds` view — a view's SQL is
+  stored text fixed at the version that created it, and only re-rendering it
+  from `HOLD_REASON_CODES` makes an upgraded file project the new
+  loss-hold cause exactly as a fresh one does.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1090,6 +1105,12 @@ SELECT
 FROM uncertainties
 WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
 ```
+
+The `holds` view appears **twice** on purpose: v12 creates it, and the v13
+step drops and recreates it so an upgraded file re-renders it from the live
+`HOLD_REASON_CODES` set rather than keeping the two-code text a v12 file
+baked in. `SCHEMA_DDL` is the same statement list a fresh database applies,
+so byte-parity with it requires both occurrences here.
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
 `command_id`, `effect_operation_id`, `order_ref`) are `DEFERRABLE INITIALLY
