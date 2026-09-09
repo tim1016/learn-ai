@@ -22,8 +22,9 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.config import settings
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
+from tests.broker.alpaca.clerk.live_envelope_fixtures import _LiveBroker
 from tests.broker.v2panel.test_shadow_operator_surfaces import (
-    shadow_app,  # noqa: F401 — the composed-shadow ASGI app fixture
+    shadow_app_and_broker,  # noqa: F401 — the composed-shadow ASGI app fixture
 )
 
 _CLEAR_PATH = "/api/brokers/alpaca/live-envelope/loss-hold/clear"
@@ -35,9 +36,9 @@ async def _post(app: FastAPI, path: str, **kwargs: Any) -> httpx.Response:
 
 
 async def test_the_clear_reports_no_hold_over_http(
-    shadow_app: tuple[FastAPI, ActiveClerkRuntime],  # noqa: F811 — the imported fixture
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],  # noqa: F811
 ) -> None:
-    app, _runtime = shadow_app
+    app, _runtime, _broker = shadow_app_and_broker
 
     response = await _post(app, _CLEAR_PATH)
 
@@ -46,9 +47,9 @@ async def test_the_clear_reports_no_hold_over_http(
 
 
 async def test_an_unsupported_broker_is_404(
-    shadow_app: tuple[FastAPI, ActiveClerkRuntime],  # noqa: F811 — the imported fixture
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],  # noqa: F811
 ) -> None:
-    app, _runtime = shadow_app
+    app, _runtime, _broker = shadow_app_and_broker
 
     response = await _post(app, "/api/brokers/ibkr/live-envelope/loss-hold/clear")
 
@@ -57,9 +58,9 @@ async def test_an_unsupported_broker_is_404(
 
 
 async def test_no_installed_runtime_is_503(
-    shadow_app: tuple[FastAPI, ActiveClerkRuntime],  # noqa: F811 — the imported fixture
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],  # noqa: F811
 ) -> None:
-    app, _runtime = shadow_app
+    app, _runtime, _broker = shadow_app_and_broker
     # The fixture's own ``finally`` resets the active runtime to ``None``
     # anyway; clearing it here mid-test is what exercises the 503 path.
     set_active_clerk_runtime(None)
@@ -71,11 +72,11 @@ async def test_no_installed_runtime_is_503(
 
 
 async def test_the_clear_is_refused_without_the_control_secret(
-    shadow_app: tuple[FastAPI, ActiveClerkRuntime],  # noqa: F811 — the imported fixture
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The same guard every mutating data-plane control route carries."""
-    app, _runtime = shadow_app
+    app, _runtime, _broker = shadow_app_and_broker
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 

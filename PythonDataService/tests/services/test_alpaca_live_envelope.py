@@ -28,12 +28,14 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
-from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
-from tests.broker.alpaca.clerk.sqlite.test_day_pnl import TODAY_OPEN, _observe_foreign_order
+from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    TEST_ENVELOPE_VALUES,
+    _LiveBroker,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import TODAY_OPEN, _observe_foreign_order
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _ActivationStore, _Broker
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import (
     NOW_MS,
-    _LiveBroker,
     shadow_runtime,  # noqa: F401 — the composed-shadow fixture, reused as-is
 )
 

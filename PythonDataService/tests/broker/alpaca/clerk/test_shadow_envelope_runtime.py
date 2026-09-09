@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
 from app.broker.alpaca.clerk.account_authority import (
     shadow_evidence_account_id_for_strategy,
 )
@@ -34,11 +33,14 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
-from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
-from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    LIVE_ACCT,
+    SHADOW_ACCT,
+    TEST_ENVELOPE_VALUES,
+    _LiveBroker,
+)
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, SID, _binding
 from tests.broker.alpaca.clerk.test_active_authority import (
     _activation,
@@ -47,86 +49,12 @@ from tests.broker.alpaca.clerk.test_active_authority import (
 )
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _retain
 
-LIVE_ACCT = "9LIVE0001"
-SHADOW_ACCT = "shadow:9LIVE0001"
 DECISION_MINUTE = 600  # 10:00 ET on a full NYSE session
 BAR_CLOSE = "100"
 # The Clerk stamps every fact from its repository clock; pinning it to the
 # decision bar's close is what makes the observation, its freshness and the
 # ET day window deterministic.
 NOW_MS = et_minute_of_day_ms(DAY, DECISION_MINUTE) + 60_000
-
-
-class _LiveBroker:
-    """The live account: real reads the test steers, writes that must never be reached."""
-
-    broker_id = "alpaca"
-
-    def __init__(self, *, cash: float = 100_000.0, unrealized: float = 0.0) -> None:
-        self.cash = cash
-        self.unrealized = unrealized
-
-    def capabilities(self) -> BrokerCapabilities:
-        return ALPACA_LIVE_CAPABILITIES
-
-    async def get_account(self) -> BrokerAccountSnapshot:
-        return BrokerAccountSnapshot(
-            broker="alpaca",
-            account_id=LIVE_ACCT,
-            account_mode="live",
-            account_status="ACTIVE",
-            currency="USD",
-            cash=self.cash,
-            equity=self.cash,
-            buying_power=self.cash,
-            portfolio_value=self.cash,
-            long_market_value=0.0,
-            short_market_value=0.0,
-            # A judgeable account: with no last equity the sync answers
-            # "unknown" and withdraws the observation instead of publishing.
-            last_equity=self.cash,
-            pattern_day_trader=False,
-            trading_blocked=False,
-            account_blocked=False,
-            created_at_ms=NOW_MS - 1_000,
-            observed_at_ms=NOW_MS,
-        )
-
-    async def list_orders(self, **_kwargs: Any) -> list:
-        return []
-
-    async def list_positions(self) -> list[BrokerPosition]:
-        if self.unrealized == 0.0:
-            return []
-        return [
-            BrokerPosition(
-                broker="alpaca",
-                symbol="SPY",
-                asset_id=None,
-                asset_class=None,
-                quantity=10,
-                side="long",
-                average_entry_price=100.0,
-                market_value=1_000.0 + self.unrealized,
-                cost_basis=1_000.0,
-                current_price=None,
-                unrealized_pl=self.unrealized,
-                unrealized_plpc=None,
-                observed_at_ms=NOW_MS,
-            )
-        ]
-
-    async def list_activities(self, **_kwargs: Any) -> list:
-        return []
-
-    async def submit(self, *_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("LIVE TRADE PORT WAS REACHED")
-
-    async def cancel(self, _order_id: str) -> None:
-        raise AssertionError("LIVE CANCEL WAS REACHED")
-
-    async def get_order_by_client_order_id(self, _client_order_id: str) -> None:
-        return None
 
 
 def _pinned_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteRepository:
@@ -157,7 +85,7 @@ async def shadow_runtime(
     tmp_path: Path,
 ) -> AsyncIterator[tuple[ActiveClerkRuntime, _LiveBroker]]:
     """One composed shadow authority, envelope included."""
-    broker = _LiveBroker()
+    broker = _LiveBroker(now_ms=NOW_MS)
     runtime = await _compose_shadow(tmp_path, broker)
     assert runtime.authority_kind == "shadow", runtime.startup_failure
     try:
@@ -215,7 +143,7 @@ async def test_a_shadow_authority_without_envelope_values_is_unavailable(
     await activate_shadow_clerk_authority(
         live_account_id=LIVE_ACCT, artifacts_root=tmp_path
     )
-    broker = _LiveBroker()
+    broker = _LiveBroker(now_ms=NOW_MS)
 
     runtime = await select_active_clerk_runtime(
         read=broker,

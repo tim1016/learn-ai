@@ -6,9 +6,9 @@ broker. The whole decision is one ``tick``, so these tests drive it directly
 rather than over a running loop: every stamp is the repository clock, pinned
 at ``NOON``, and nothing here sleeps or reads a wall clock.
 
-The seeding fixtures are the day-P&L suite's own. The two files judge the
-same ledger, and a second copy of ``seeded_open_buy`` would be a second
-thing to keep true.
+The seeded ledger (``day_pnl_repo``, ``seeded_open_buy``,
+``seeded_external_order_today``) comes from ``conftest``: the day-P&L suite
+judges the same one, and a second copy would be a second thing to keep true.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import pytest
 from app.broker.alpaca.clerk.live_envelope import (
     OBSERVATION_MAX_AGE_MS,
     LiveEnvelopeGate,
-    LiveEnvelopeValues,
 )
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -33,24 +32,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
-from tests.broker.alpaca.clerk.sqlite.test_day_pnl import (
-    NOON,
-    clock,  # noqa: F401 — the day-P&L suite's clock, pinned at NOON
-    repo,  # noqa: F401 — the day-P&L suite's authority fixture
-    seeded_external_order_today,  # noqa: F401 — one order the Clerk did not place
-    seeded_open_buy,  # noqa: F401 — one effective BUY fill, 10 @ 100, before NOON
-)
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 
 SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
-
-VALUES = LiveEnvelopeValues(
-    loss_fraction=0.05,
-    loss_usd=5_000.0,
-    shadow_sessions=1,
-    arming_max_sessions=20,
-    xh_entry_bps=10.0,
-    xh_exit_bps=10.0,
-)
 
 
 class _Read:
@@ -131,7 +116,7 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
         sync = LiveEnvelopeSync(
             repo=repository,
             read=read,
-            envelope=LiveEnvelopeGate(values=VALUES, custody_is_simulated=simulated),
+            envelope=LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=simulated),
             **loop,
         )
         built.append(sync)
@@ -155,10 +140,10 @@ def _sync_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 
 
 async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    sync = make_sync(repo, _Read())
+    sync = make_sync(day_pnl_repo, _Read())
     assert await sync.tick() == "observed"
     observation = sync.envelope.fresh_observation(NOON)
     assert observation is not None and observation.observed_at_ms == NOON
@@ -167,18 +152,18 @@ async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
 
 
 async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_spent(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
-    seeded_open_buy: None,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
+    seeded_open_buy: None,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """Under simulated custody the broker's cash never moved (plan R2)."""
-    sync = make_sync(repo, _Read(), simulated=True)
+    sync = make_sync(day_pnl_repo, _Read(), simulated=True)
     await sync.tick()
     shadow = sync.envelope.latest_observation()
     assert shadow is not None and shadow.cash_available_usd == pytest.approx(99_000.0)
     assert shadow.broker_cash_usd == pytest.approx(100_000.0)
 
-    real = make_sync(repo, _Read(), simulated=False)
+    real = make_sync(day_pnl_repo, _Read(), simulated=False)
     await real.tick()
     observation = real.envelope.latest_observation()
     assert observation is not None
@@ -186,14 +171,14 @@ async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_
 
 
 async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """Only the guarded operator action clears the hold (plan R6, R12)."""
     read = _Read(unrealized=-5_000.0)
-    sync = make_sync(repo, read)
+    sync = make_sync(day_pnl_repo, read)
     assert await sync.tick() == "hold_raised"
-    hold = _hold(repo)
+    hold = _hold(day_pnl_repo)
     assert hold is not None
     cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
     assert cause.day_pnl_usd == pytest.approx(-5_000.0)
@@ -201,16 +186,16 @@ async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
     assert cause.last_equity_usd == pytest.approx(100_000.0)
     assert cause.observed_at_ms == NOON
 
-    revision = repo.control_meta_snapshot().control_revision
+    revision = day_pnl_repo.control_meta_snapshot().control_revision
     read.unrealized = -6_000.0
     assert await sync.tick() == "hold_stands"
     read.unrealized = 0.0
     assert await sync.tick() == "hold_stands"
-    assert repo.control_meta_snapshot().control_revision == revision
+    assert day_pnl_repo.control_meta_snapshot().control_revision == revision
 
 
 async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """Ruling R-A′: publish only when the reading is judgeable AND not breached.
@@ -220,7 +205,7 @@ async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     ``raise_account_hold`` succeeds would leave the gate admitting ENTERs on
     the cash bound alone if that raise threw.
     """
-    sync = make_sync(repo, _Read(unrealized=-5_000.0))
+    sync = make_sync(day_pnl_repo, _Read(unrealized=-5_000.0))
     assert await sync.tick() == "hold_raised"
     assert sync.envelope.fresh_observation(NOON) is None
     assert await sync.tick() == "hold_stands"
@@ -228,16 +213,16 @@ async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
 
 
 async def test_an_unknown_fact_raises_nothing(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
-    seeded_external_order_today: None,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
+    seeded_external_order_today: None,
     make_sync: Callable[..., LiveEnvelopeSync],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An external order observed today leaves the day's P&L unknowable (plan R5)."""
-    sync = make_sync(repo, _Read(unrealized=-50_000.0))
+    sync = make_sync(day_pnl_repo, _Read(unrealized=-50_000.0))
     with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
         assert await sync.tick() == "unknown"
-    assert _hold(repo) is None
+    assert _hold(day_pnl_repo) is None
     assert sync.envelope.fresh_observation(NOON) is None
 
     (record,) = _sync_records(caplog)
@@ -249,18 +234,18 @@ async def test_an_unknown_fact_raises_nothing(
 
 
 async def test_a_missing_last_equity_is_unknown(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """No ``last_equity`` is no loss limit, so the account cannot be judged (plan R3)."""
-    sync = make_sync(repo, _Read(last_equity=None, unrealized=-50_000.0))
+    sync = make_sync(day_pnl_repo, _Read(last_equity=None, unrealized=-50_000.0))
     assert await sync.tick() == "unknown"
-    assert _hold(repo) is None
+    assert _hold(day_pnl_repo) is None
     assert sync.envelope.fresh_observation(NOON) is None
 
 
 async def test_an_unknown_tick_withdraws_the_previous_observation_at_once(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """An unjudgeable account refuses every ENTER now, not in 45 seconds.
@@ -270,7 +255,7 @@ async def test_an_unknown_tick_withdraws_the_previous_observation_at_once(
     withdrawn rather than left to age out.
     """
     read = _Read()
-    sync = make_sync(repo, read)
+    sync = make_sync(day_pnl_repo, read)
     assert await sync.tick() == "observed"
     assert sync.envelope.fresh_observation(NOON) is not None
 
@@ -281,12 +266,12 @@ async def test_an_unknown_tick_withdraws_the_previous_observation_at_once(
 
 
 async def test_a_failed_read_keeps_the_loop_alive_and_lets_the_observation_age_out(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     """A broker outage is not a verdict on the account: the last read stands until it is stale."""
     read = _Read()
-    sync = make_sync(repo, read)
+    sync = make_sync(day_pnl_repo, read)
     await sync.tick()
     read.fail = True
     assert await sync.tick() == "read_failed"
@@ -295,13 +280,13 @@ async def test_a_failed_read_keeps_the_loop_alive_and_lets_the_observation_age_o
 
 
 async def test_only_a_change_of_verdict_is_logged(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A 15 s cadence must never spam: an unchanged verdict says nothing."""
     read = _Read(fail=True)
-    sync = make_sync(repo, read)
+    sync = make_sync(day_pnl_repo, read)
     with caplog.at_level(logging.INFO, logger=SYNC_LOGGER):
         assert await sync.tick() == "read_failed"
         assert await sync.tick() == "read_failed"
@@ -315,7 +300,7 @@ async def test_only_a_change_of_verdict_is_logged(
 
 
 async def test_the_loop_survives_a_failing_tick(
-    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
     slept: list[float] = []
@@ -323,6 +308,6 @@ async def test_the_loop_survives_a_failing_tick(
     async def sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    sync = make_sync(repo, _Read(fail=True), interval_s=15.0, sleep=sleep, max_ticks=3)
+    sync = make_sync(day_pnl_repo, _Read(fail=True), interval_s=15.0, sleep=sleep, max_ticks=3)
     await sync.run()
     assert slept == [15.0, 15.0, 15.0]

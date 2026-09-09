@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import date
+from pathlib import Path
 from typing import Any
 
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+import pytest
+
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.facts import (
+    AccountHoldRaisedFacts,
+    ExecutionSliceFilledFacts,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
@@ -17,6 +27,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.services.session_authority import et_minute_of_day_ms
 
 
 class _TestClock:
@@ -246,3 +257,340 @@ async def _make_held_position(
         recovery_window_limit=None,
     )
     return submission.order_ref
+
+
+# ── The live-envelope admission harness (ADR 0059 D4) ─────────────────────────
+# One authority, one pinned clock, and the registered instances the envelope's
+# two SQLite suites drive ``accept_enter`` through. Both files judge the same
+# seam, so a second copy of this block is a second thing to keep true.
+
+ENVELOPE_ACCOUNT_ID = "PA-ENVELOPE"
+ENVELOPE_SID = "spy-bot"
+ENVELOPE_SID_B = "qqq-bot"
+ENVELOPE_RUN_ID = "run-1"
+ENVELOPE_RUN_ID_B = "run-2"
+ENVELOPE_T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
+
+
+@pytest.fixture
+def envelope_clock() -> _TestClock:
+    return _clock_at(ENVELOPE_T0)
+
+
+@pytest.fixture
+def envelope_repo(
+    tmp_path: Path, envelope_clock: _TestClock
+) -> Iterator[ClerkSqliteRepository]:
+    clerk = ClerkSqliteRepository.initialize(
+        account_id=ENVELOPE_ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
+    )
+    yield clerk
+    clerk.close()
+
+
+def _register_active(
+    repo: ClerkSqliteRepository,
+    clock: _TestClock,
+    *,
+    strategy_instance_id: str,
+    symbol: str,
+    run_id: str,
+) -> None:
+    """Register one instance and start its run — every stamp from ``clock``."""
+    repo.register_strategy_instance(
+        strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
+    )
+    submit_start_run(
+        repo,
+        account_id=ENVELOPE_ACCOUNT_ID,
+        strategy_instance_id=strategy_instance_id,
+        lifecycle_run_id=run_id,
+        clock=clock,
+    )
+
+
+@pytest.fixture
+def active_instance(
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
+) -> tuple[str, str]:
+    _register_active(
+        envelope_repo,
+        envelope_clock,
+        strategy_instance_id=ENVELOPE_SID,
+        symbol="SPY",
+        run_id=ENVELOPE_RUN_ID,
+    )
+    return ENVELOPE_SID, ENVELOPE_RUN_ID
+
+
+@pytest.fixture
+def two_active_instances(
+    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
+) -> tuple[tuple[str, str], tuple[str, str]]:
+    _register_active(
+        envelope_repo,
+        envelope_clock,
+        strategy_instance_id=ENVELOPE_SID,
+        symbol="SPY",
+        run_id=ENVELOPE_RUN_ID,
+    )
+    _register_active(
+        envelope_repo,
+        envelope_clock,
+        strategy_instance_id=ENVELOPE_SID_B,
+        symbol="QQQ",
+        run_id=ENVELOPE_RUN_ID_B,
+    )
+    return (ENVELOPE_SID, ENVELOPE_RUN_ID), (ENVELOPE_SID_B, ENVELOPE_RUN_ID_B)
+
+
+# ── The day-P&L ledger harness (ADR 0059 D4) ──────────────────────────────────
+# The seeded ledger the day-P&L rule and the envelope sync are both judged
+# against. Every stamp is an explicit ``int64 ms UTC`` built from
+# ``et_minute_of_day_ms``; the repository clock is fixed at ``NOON``.
+
+DAY_PNL_ACCOUNT_ID = "PA-DAY-PNL"
+DAY_PNL_SID = "day-pnl-bot"
+DAY_PNL_RUN_ID = "run-day-pnl"
+DAY_PNL_SYMBOL = "SPY"
+
+# 2026-09-08 is a Tuesday; the 7th is Labor Day, so "yesterday" is Friday the 4th.
+NOON = et_minute_of_day_ms(date(2026, 9, 8), 12 * 60)
+TODAY_OPEN = et_minute_of_day_ms(date(2026, 9, 8), 9 * 60 + 30)
+YESTERDAY_NOON = et_minute_of_day_ms(date(2026, 9, 4), 12 * 60)
+YESTERDAY_OPEN = et_minute_of_day_ms(date(2026, 9, 4), 9 * 60 + 30)
+
+
+@pytest.fixture
+def day_pnl_clock() -> _TestClock:
+    return _clock_at(NOON)
+
+
+@pytest.fixture
+def day_pnl_repo(
+    tmp_path: Path, day_pnl_clock: _TestClock
+) -> Iterator[ClerkSqliteRepository]:
+    """One authority with a registered, running instance — every stamp from the clock."""
+    clerk = ClerkSqliteRepository.initialize(
+        account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=tmp_path, clock=day_pnl_clock
+    )
+    clerk.register_strategy_instance(
+        strategy_instance_id=DAY_PNL_SID, symbol=DAY_PNL_SYMBOL, config_hash="day-pnl-config"
+    )
+    submit_start_run(
+        clerk,
+        account_id=DAY_PNL_ACCOUNT_ID,
+        strategy_instance_id=DAY_PNL_SID,
+        lifecycle_run_id=DAY_PNL_RUN_ID,
+        clock=day_pnl_clock,
+    )
+    yield clerk
+    clerk.close()
+
+
+def _accept_day_pnl_enter(
+    repo: ClerkSqliteRepository, *, decision_id: str
+) -> EnterSubmission:
+    accepted = accept_enter(
+        repo,
+        account_id=DAY_PNL_ACCOUNT_ID,
+        strategy_instance_id=DAY_PNL_SID,
+        decision_id=decision_id,
+        lifecycle_run_id=DAY_PNL_RUN_ID,
+        leg=BrokerOrderLeg(symbol=DAY_PNL_SYMBOL, side="buy", quantity=10),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.order_ref is not None
+    return accepted
+
+
+def _append_day_pnl_slice(
+    repo: ClerkSqliteRepository,
+    accepted: EnterSubmission,
+    *,
+    execution_id: str,
+    side: str,
+    quantity: float,
+    price: float,
+    occurred_at_ms: int,
+    fee: float | None = None,
+    fee_fidelity: str = "not_reported",
+) -> None:
+    """Fold one websocket execution slice at an explicit economic time.
+
+    ``source_event_at_ms`` is the fill's economic time — what FIFO orders by
+    and what the day window filters on — so it, not the fixed repository
+    clock, is what puts a fill on Friday or on Tuesday.
+    """
+    facts = ExecutionSliceFilledFacts(
+        execution_id=execution_id,
+        symbol=DAY_PNL_SYMBOL,
+        side=side,
+        slice_qty=quantity,
+        slice_price=price,
+        fee=fee,
+        fee_fidelity=fee_fidelity,
+        evidence_source="websocket",
+        source_event_at_ms=occurred_at_ms,
+    )
+    result = repo.append_execution_slice_if_absent(
+        execution_id=execution_id,
+        order_ref=accepted.order_ref or "",
+        build_transition=lambda: TransitionInput(
+            strategy_instance_id=DAY_PNL_SID,
+            run_id=accepted.command.run_id,
+            command_id=accepted.command.command_id,
+            effect_operation_id=accepted.effect_operation_id,
+            order_ref=accepted.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=facts.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=facts.to_facts_json(),
+        ),
+        build_coverage_conflict=lambda: (_ for _ in ()).throw(
+            AssertionError("an exact first execution has nothing to conflict with")
+        ),
+    )
+    assert result == "appended"
+
+
+def _observe_foreign_order(repo: ClerkSqliteRepository, *, observed_at_ms: int) -> None:
+    """Record one order the Clerk did not place, observed at an explicit instant."""
+    observe_external_order(
+        repo,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="external-order-1",
+            client_order_id="alpaca-console:external-1",
+            symbol="MSFT",
+            asset_class="us_equity",
+            side="buy",
+            order_type="market",
+            time_in_force="day",
+            quantity=3.0,
+            filled_quantity=3.0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=50.0,
+            status="filled",
+            submitted_at_ms=observed_at_ms,
+            created_at_ms=observed_at_ms,
+            updated_at_ms=observed_at_ms,
+            filled_at_ms=observed_at_ms,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            events=[],
+            observed_at_ms=observed_at_ms,
+        ),
+    )
+
+
+@pytest.fixture
+def seeded_round_trip(day_pnl_repo: ClerkSqliteRepository) -> None:
+    """BUY 10 @ 100 on Friday, SELL 10 @ 110 today at noon with a $0.05 fee."""
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-round-trip")
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-buy-friday",
+        side="BUY",
+        quantity=10.0,
+        price=100.0,
+        occurred_at_ms=YESTERDAY_NOON,
+        fee=0.0,
+        fee_fidelity="reported",
+    )
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-sell-today",
+        side="SELL",
+        quantity=10.0,
+        price=110.0,
+        occurred_at_ms=NOON,
+        fee=0.05,
+        fee_fidelity="reported",
+    )
+
+
+@pytest.fixture
+def seeded_round_trip_without_fees(day_pnl_repo: ClerkSqliteRepository) -> None:
+    """The same round trip, with no commission data on the closing fill."""
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-round-trip-no-fees")
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-buy-friday",
+        side="BUY",
+        quantity=10.0,
+        price=100.0,
+        occurred_at_ms=YESTERDAY_NOON,
+    )
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-sell-today",
+        side="SELL",
+        quantity=10.0,
+        price=110.0,
+        occurred_at_ms=NOON,
+    )
+
+
+@pytest.fixture
+def seeded_round_trip_closed_yesterday(day_pnl_repo: ClerkSqliteRepository) -> None:
+    """A whole round trip that opened and closed on Friday — none of it is today's."""
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-closed-yesterday")
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-buy-friday-open",
+        side="BUY",
+        quantity=10.0,
+        price=100.0,
+        occurred_at_ms=YESTERDAY_OPEN,
+        fee=0.0,
+        fee_fidelity="reported",
+    )
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-sell-friday-noon",
+        side="SELL",
+        quantity=10.0,
+        price=110.0,
+        occurred_at_ms=YESTERDAY_NOON,
+        fee=0.0,
+        fee_fidelity="reported",
+    )
+
+
+@pytest.fixture
+def seeded_open_buy(day_pnl_repo: ClerkSqliteRepository) -> None:
+    """BUY 10 @ 100 at today's open, still held — nothing realized yet."""
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-open-buy")
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-buy-today",
+        side="BUY",
+        quantity=10.0,
+        price=100.0,
+        occurred_at_ms=TODAY_OPEN,
+        fee=0.0,
+        fee_fidelity="reported",
+    )
+
+
+@pytest.fixture
+def seeded_external_order_today(day_pnl_repo: ClerkSqliteRepository) -> None:
+    _observe_foreign_order(day_pnl_repo, observed_at_ms=TODAY_OPEN)
+
+
+@pytest.fixture
+def seeded_external_order_yesterday(day_pnl_repo: ClerkSqliteRepository) -> None:
+    _observe_foreign_order(day_pnl_repo, observed_at_ms=YESTERDAY_NOON)

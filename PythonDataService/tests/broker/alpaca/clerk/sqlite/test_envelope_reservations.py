@@ -15,7 +15,6 @@ admitted, so these tests exercise the same seam production does.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +23,9 @@ import pytest
 from app.broker.alpaca.clerk.live_envelope import (
     AccountObservation,
     LiveEnvelopeGate,
-    LiveEnvelopeValues,
 )
 from app.broker.alpaca.clerk.sqlite import enter as enter_module
 from app.broker.alpaca.clerk.sqlite import schema
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
@@ -47,29 +44,31 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LossHoldCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _TestClock
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_ACCOUNT_ID as ACCOUNT_ID,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_RUN_ID as RUN_ID,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_SID as SID,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_T0 as T0,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    _clock_at,
+    _register_active,
+    _TestClock,
+)
 
-ACCOUNT_ID = "PA-ENVELOPE"
-SID = "spy-bot"
-SID_B = "qqq-bot"
-RUN_ID = "run-1"
-RUN_ID_B = "run-2"
-
-T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
 # The trailing-fill timeline: terminal ack, then the cash observation, then the
 # websocket execution slice that observation cannot possibly have seen.
 T1_TERMINAL_ACK = T0 + 1_000
 T2_OBSERVATION = T0 + 2_000
 T3_TRAILING_FILL = T0 + 3_000
 
-ENVELOPE_VALUES = LiveEnvelopeValues(
-    loss_fraction=0.05,
-    loss_usd=5_000.0,
-    shadow_sessions=1,
-    arming_max_sessions=20,
-    xh_entry_bps=10.0,
-    xh_exit_bps=10.0,
-)
 
 _CAUSE = LossHoldCause(
     day_start_ms=1_788_000_000_000,
@@ -87,56 +86,6 @@ _V12_HOLDS_VIEW_DDL = HOLDS_COMPATIBILITY_VIEW_DDL.replace(
 )
 
 
-@pytest.fixture
-def clock() -> _TestClock:
-    return _clock_at(T0)
-
-
-@pytest.fixture
-def repo(tmp_path: Path, clock: _TestClock) -> Iterator[ClerkSqliteRepository]:
-    clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-    )
-    yield clerk
-    clerk.close()
-
-
-@pytest.fixture
-def active_instance(repo: ClerkSqliteRepository, clock: _TestClock) -> tuple[str, str]:
-    _register_active(repo, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    return SID, RUN_ID
-
-
-@pytest.fixture
-def two_active_instances(
-    repo: ClerkSqliteRepository, clock: _TestClock
-) -> tuple[tuple[str, str], tuple[str, str]]:
-    _register_active(repo, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    _register_active(repo, clock, strategy_instance_id=SID_B, symbol="QQQ", run_id=RUN_ID_B)
-    return (SID, RUN_ID), (SID_B, RUN_ID_B)
-
-
-def _register_active(
-    repo: ClerkSqliteRepository,
-    clock: _TestClock,
-    *,
-    strategy_instance_id: str,
-    symbol: str,
-    run_id: str,
-) -> None:
-    """Register one instance and start its run — every stamp from ``clock``."""
-    repo.register_strategy_instance(
-        strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
-    )
-    submit_start_run(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=run_id,
-        clock=clock,
-    )
-
-
 def _leg(**overrides: Any) -> BrokerOrderLeg:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(overrides)
@@ -145,7 +94,7 @@ def _leg(**overrides: Any) -> BrokerOrderLeg:
 
 def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
     """A gate holding one observation fresh at ``T0`` — enough cash to admit."""
-    gate = LiveEnvelopeGate(values=ENVELOPE_VALUES, custody_is_simulated=True)
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
     gate.publish(
         AccountObservation(
             observed_at_ms=T0,
@@ -218,19 +167,19 @@ def _rewind_to_v12(db_path: Path) -> None:
 
 
 def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
-    repo: ClerkSqliteRepository,
+    envelope_repo: ClerkSqliteRepository,
 ) -> None:
     assert schema.SCHEMA_VERSION == 13
-    assert repo.control_meta_snapshot().schema_version == 13
+    assert envelope_repo.control_meta_snapshot().schema_version == 13
     assert (
-        repo._conn.execute(
+        envelope_repo._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
         ).fetchone()
         is not None
     )
 
 
-def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, clock: _TestClock) -> None:
+def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clock: _TestClock) -> None:
     """The upgrade adds the table and re-publishes the view from live code.
 
     A view definition is stored text, baked in at the version that created it,
@@ -241,9 +190,9 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, clock: _Test
     assert _V12_HOLDS_VIEW_DDL != HOLDS_COMPATIBILITY_VIEW_DDL
 
     clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
-    _register_active(clerk, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+    _register_active(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
     accept_enter(
         clerk,
         account_id=ACCOUNT_ID,
@@ -263,7 +212,7 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, clock: _Test
     _rewind_to_v12(_db_path(tmp_path))
 
     reopened = ClerkSqliteRepository.open(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
     try:
         assert reopened.control_meta_snapshot().schema_version == 13
@@ -305,12 +254,12 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, clock: _Test
 
 
 def test_accepting_an_enter_with_a_reservation_writes_the_row_in_the_same_commit(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
     accepted = accept_enter(
-        repo,
-        account_id=repo.account_id,
+        envelope_repo,
+        account_id=envelope_repo.account_id,
         strategy_instance_id=sid,
         decision_id="d1",
         lifecycle_run_id=run_id,
@@ -318,7 +267,7 @@ def test_accepting_an_enter_with_a_reservation_writes_the_row_in_the_same_commit
         envelope=_gate(),
         reference_price=100.0,
     )
-    row = repo._conn.execute(
+    row = envelope_repo._conn.execute(
         "SELECT quantity, reference_price, reserved_at_ms FROM envelope_reservations "
         "WHERE effect_operation_id = ?",
         (accepted.effect_operation_id,),
@@ -334,12 +283,12 @@ def test_the_reservation_never_enters_the_hash_chain(
 
     row_hashes: list[str] = []
     for name, envelope in (("with", _gate()), ("without", None)):
-        clock = _clock_at(T0)
+        envelope_clock = _clock_at(T0)
         clerk = ClerkSqliteRepository.initialize(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path / name, clock=clock
+            account_id=ACCOUNT_ID, artifacts_root=tmp_path / name, clock=envelope_clock
         )
         try:
-            _register_active(clerk, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
+            _register_active(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
             accept_enter(
                 clerk,
                 account_id=ACCOUNT_ID,
@@ -379,8 +328,8 @@ def test_the_reservation_never_enters_the_hash_chain(
     ],
 )
 def test_reserved_cash_prices_only_what_the_observation_cannot_see(
-    repo: ClerkSqliteRepository,
-    clock: _TestClock,
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
     active_instance: tuple[str, str],
     broker_state: str | None,
     fills: list[tuple[float, int]],
@@ -389,7 +338,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
 ) -> None:
     sid, run_id = active_instance
     accepted = accept_enter(
-        repo,
+        envelope_repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=sid,
         decision_id="d1",
@@ -406,9 +355,9 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
     # ``recorded_at_ms`` against the observation.
     if fills:
         for index, (cumulative_qty, recorded_at_ms) in enumerate(fills, start=1):
-            clock.value = recorded_at_ms
+            envelope_clock.value = recorded_at_ms
             fold_order_evidence(
-                repo,
+                envelope_repo,
                 effect_operation_id=accepted.effect_operation_id,
                 order=_observed_order(
                     accepted.order_ref,
@@ -419,9 +368,9 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
                 ),
             )
     elif broker_state is not None:
-        clock.value = T0
+        envelope_clock.value = T0
         fold_order_evidence(
-            repo,
+            envelope_repo,
             effect_operation_id=accepted.effect_operation_id,
             order=_observed_order(
                 accepted.order_ref,
@@ -432,7 +381,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
             ),
         )
 
-    assert repo.reserved_cash_usd(observed_at_ms=observed_at_ms) == pytest.approx(expected)
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=observed_at_ms) == pytest.approx(expected)
 
 
 def _refuse_coverage_conflict() -> TransitionInput:
@@ -440,8 +389,8 @@ def _refuse_coverage_conflict() -> TransitionInput:
 
 
 def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
-    repo: ClerkSqliteRepository,
-    clock: _TestClock,
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
     active_instance: tuple[str, str],
 ) -> None:
     """A terminal order's ``updated_at_ms`` cannot bound its unobserved fills.
@@ -457,7 +406,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     """
     sid, run_id = active_instance
     accepted = accept_enter(
-        repo,
+        envelope_repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=sid,
         decision_id="d1",
@@ -468,9 +417,9 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     )
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
 
-    clock.value = T1_TERMINAL_ACK
+    envelope_clock.value = T1_TERMINAL_ACK
     fold_order_acknowledgement(
-        repo,
+        envelope_repo,
         effect_operation_id=accepted.effect_operation_id,
         order=_observed_order(
             accepted.order_ref,
@@ -481,7 +430,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
         ),
         append_stale_ack=False,
     )
-    order_before = repo._conn.execute(
+    order_before = envelope_repo._conn.execute(
         "SELECT broker_state, updated_at_ms FROM orders WHERE order_ref = ?",
         (accepted.order_ref,),
     ).fetchone()
@@ -490,7 +439,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
         T1_TERMINAL_ACK,
     )
 
-    clock.value = T3_TRAILING_FILL
+    envelope_clock.value = T3_TRAILING_FILL
     facts = ExecutionSliceFilledFacts(
         execution_id="exec-trailing-1",
         symbol="SPY",
@@ -503,7 +452,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
         source_event_at_ms=T3_TRAILING_FILL,
     )
     assert (
-        repo.append_execution_slice_if_absent(
+        envelope_repo.append_execution_slice_if_absent(
             execution_id=facts.execution_id,
             order_ref=accepted.order_ref,
             build_transition=lambda: TransitionInput(
@@ -517,7 +466,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
                 execution_authority="ACCOUNT_CLERK",
                 operation_state="in_progress",
                 source_event_at_ms=facts.source_event_at_ms,
-                clerk_observed_at_ms=repo.clock(),
+                clerk_observed_at_ms=envelope_repo.clock(),
                 summary_code="EXECUTION_SLICE_FILLED",
                 facts_json=facts.to_facts_json(),
             ),
@@ -528,7 +477,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
 
     # The order row is exactly what it was before the fill: this is why a
     # prefilter on ``updated_at_ms`` dropped the reservation entirely.
-    order_after = repo._conn.execute(
+    order_after = envelope_repo._conn.execute(
         "SELECT broker_state, updated_at_ms FROM orders WHERE order_ref = ?",
         (accepted.order_ref,),
     ).fetchone()
@@ -538,17 +487,17 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     )
     assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
 
-    assert repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
 
 
 def test_reservations_sum_across_instances(
-    repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
+    envelope_repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
     (sid_a, run_a), (sid_b, run_b) = two_active_instances
     gate = _gate()
     for sid, run_id, symbol, quantity in ((sid_a, run_a, "SPY", 6), (sid_b, run_b, "QQQ", 4)):
         accept_enter(
-            repo,
+            envelope_repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=sid,
             decision_id="d1",
@@ -558,4 +507,4 @@ def test_reservations_sum_across_instances(
             reference_price=100.0,
         )
 
-    assert repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(1_000.0)

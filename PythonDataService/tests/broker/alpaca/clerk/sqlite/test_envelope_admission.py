@@ -13,8 +13,6 @@ rather than of when the suite happens to run.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,28 +26,14 @@ from app.broker.alpaca.clerk.live_envelope import (
     LiveEnvelopeGate,
     LiveEnvelopeValues,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _TestClock
-
-ACCOUNT_ID = "PA-ENVELOPE-ADMISSION"
-SID = "spy-bot"
-SID_B = "qqq-bot"
-RUN_ID = "run-1"
-RUN_ID_B = "run-2"
-
-VALUES = LiveEnvelopeValues(
-    loss_fraction=0.05,
-    loss_usd=5_000.0,
-    shadow_sessions=1,
-    arming_max_sessions=20,
-    xh_entry_bps=10.0,
-    xh_exit_bps=10.0,
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    ENVELOPE_T0 as T0,
 )
-T0 = 1_788_040_000_000  # a fixed int64 ms UTC; every stamp is repo.clock()
 
 
 def _gate(
@@ -58,7 +42,7 @@ def _gate(
     observed_at_ms: int = T0,
     sealed: LiveEnvelopeValues | None = None,
 ) -> LiveEnvelopeGate:
-    gate = LiveEnvelopeGate(values=VALUES, sealed=sealed, custody_is_simulated=True)
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=sealed, custody_is_simulated=True)
     gate.publish(
         AccountObservation(
             observed_at_ms=observed_at_ms,
@@ -72,56 +56,6 @@ def _gate(
     return gate
 
 
-@pytest.fixture
-def clock() -> _TestClock:
-    return _clock_at(T0)
-
-
-@pytest.fixture
-def repo(tmp_path: Path, clock: _TestClock) -> Iterator[ClerkSqliteRepository]:
-    clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-    )
-    yield clerk
-    clerk.close()
-
-
-@pytest.fixture
-def active_instance(repo: ClerkSqliteRepository, clock: _TestClock) -> tuple[str, str]:
-    _register_active(repo, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    return SID, RUN_ID
-
-
-@pytest.fixture
-def two_active_instances(
-    repo: ClerkSqliteRepository, clock: _TestClock
-) -> tuple[tuple[str, str], tuple[str, str]]:
-    _register_active(repo, clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    _register_active(repo, clock, strategy_instance_id=SID_B, symbol="QQQ", run_id=RUN_ID_B)
-    return (SID, RUN_ID), (SID_B, RUN_ID_B)
-
-
-def _register_active(
-    repo: ClerkSqliteRepository,
-    clock: _TestClock,
-    *,
-    strategy_instance_id: str,
-    symbol: str,
-    run_id: str,
-) -> None:
-    """Register one instance and start its run — every stamp from ``clock``."""
-    repo.register_strategy_instance(
-        strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
-    )
-    submit_start_run(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=run_id,
-        clock=clock,
-    )
-
-
 def _leg(**overrides: Any) -> BrokerOrderLeg:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(overrides)
@@ -129,7 +63,7 @@ def _leg(**overrides: Any) -> BrokerOrderLeg:
 
 
 def _accept(
-    repo: ClerkSqliteRepository,
+    envelope_repo: ClerkSqliteRepository,
     sid: str,
     run_id: str,
     *,
@@ -139,8 +73,8 @@ def _accept(
     reference_price: float | None = 100.0,
 ) -> EnterSubmission:
     return accept_enter(
-        repo,
-        account_id=repo.account_id,
+        envelope_repo,
+        account_id=envelope_repo.account_id,
         strategy_instance_id=sid,
         decision_id=decision_id,
         lifecycle_run_id=run_id,
@@ -155,41 +89,41 @@ def _refusal(exc_info: pytest.ExceptionInfo[AdmissionBlockedError]) -> str | Non
 
 
 def test_an_affordable_market_enter_is_admitted_and_reserved(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
-    accepted = _accept(repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate())
+    accepted = _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate())
     assert accepted.created
-    assert repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(10_000.0)
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(10_000.0)
 
 
 def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
-    before = repo.control_meta_snapshot().control_revision
+    before = envelope_repo.control_meta_snapshot().control_revision
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        _accept(repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1_001), envelope=_gate())
+        _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1_001), envelope=_gate())
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
     assert "100100.00 USD" in (exc_info.value.decision.why or "")
-    assert repo.control_meta_snapshot().control_revision == before
-    assert repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
+    assert envelope_repo.control_meta_snapshot().control_revision == before
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
 
 
 def test_two_instances_cannot_spend_the_same_cash(
-    repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
+    envelope_repo: ClerkSqliteRepository, two_active_instances: tuple[tuple[str, str], tuple[str, str]]
 ) -> None:
     (a, run_a), (b, run_b) = two_active_instances
     gate = _gate()
-    _accept(repo, a, run_a, decision_id="d1", leg=_leg(quantity=600), envelope=gate)
+    _accept(envelope_repo, a, run_a, decision_id="d1", leg=_leg(quantity=600), envelope=gate)
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        _accept(repo, b, run_b, decision_id="d2", leg=_leg(quantity=600), envelope=gate)
+        _accept(envelope_repo, b, run_b, decision_id="d2", leg=_leg(quantity=600), envelope=gate)
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
-    _accept(repo, b, run_b, decision_id="d3", leg=_leg(quantity=400), envelope=gate)
+    _accept(envelope_repo, b, run_b, decision_id="d3", leg=_leg(quantity=400), envelope=gate)
 
 
 def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
     leg = _leg(
@@ -197,7 +131,7 @@ def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
     )
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(
-            repo, sid, run_id, decision_id="d1", leg=leg, envelope=_gate(), reference_price=1.0
+            envelope_repo, sid, run_id, decision_id="d1", leg=leg, envelope=_gate(), reference_price=1.0
         )
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
 
@@ -206,7 +140,7 @@ def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
     ("gate", "reference_price"),
     [
         pytest.param(
-            LiveEnvelopeGate(values=VALUES, custody_is_simulated=True),
+            LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True),
             100.0,
             id="never-observed",
         ),
@@ -217,7 +151,7 @@ def test_a_limit_leg_is_priced_at_its_limit_not_the_reference(
     ],
 )
 def test_unobservable_facts_refuse_closed(
-    repo: ClerkSqliteRepository,
+    envelope_repo: ClerkSqliteRepository,
     active_instance: tuple[str, str],
     gate: LiveEnvelopeGate,
     reference_price: float | None,
@@ -225,7 +159,7 @@ def test_unobservable_facts_refuse_closed(
     sid, run_id = active_instance
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(
-            repo,
+            envelope_repo,
             sid,
             run_id,
             decision_id="d1",
@@ -237,19 +171,19 @@ def test_unobservable_facts_refuse_closed(
 
 
 def test_a_sealed_envelope_that_disagrees_with_the_environment_refuses(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
-    other = LiveEnvelopeValues(**{**VALUES.to_mapping(), "loss_usd": 4_999.0})
+    other = LiveEnvelopeValues(**{**TEST_ENVELOPE_VALUES.to_mapping(), "loss_usd": 4_999.0})
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(
-            repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=_gate(sealed=other)
+            envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=_gate(sealed=other)
         )
     assert _refusal(exc_info) == LIVE_ENVELOPE_DISAGREEMENT
 
 
 def test_a_disagreement_is_named_even_when_nothing_has_been_observed(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     """The ordering is load-bearing: a disagreed envelope is not 'unobserved'.
 
@@ -257,21 +191,21 @@ def test_a_disagreement_is_named_even_when_nothing_has_been_observed(
     to do — re-arm, rather than wait for the sync to catch up.
     """
     sid, run_id = active_instance
-    other = LiveEnvelopeValues(**{**VALUES.to_mapping(), "loss_usd": 4_999.0})
-    never_observed = LiveEnvelopeGate(values=VALUES, sealed=other, custody_is_simulated=True)
+    other = LiveEnvelopeValues(**{**TEST_ENVELOPE_VALUES.to_mapping(), "loss_usd": 4_999.0})
+    never_observed = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, sealed=other, custody_is_simulated=True)
     with pytest.raises(AdmissionBlockedError) as exc_info:
         _accept(
-            repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=never_observed
+            envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=1), envelope=never_observed
         )
     assert _refusal(exc_info) == LIVE_ENVELOPE_DISAGREEMENT
 
 
 def test_no_envelope_means_no_envelope_check(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
     accepted = _accept(
-        repo,
+        envelope_repo,
         sid,
         run_id,
         decision_id="d1",
@@ -280,16 +214,16 @@ def test_no_envelope_means_no_envelope_check(
         reference_price=None,
     )
     assert accepted.created
-    assert repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
 
 
 def test_a_sell_leg_cannot_be_an_envelope_enter(
-    repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
 ) -> None:
     sid, run_id = active_instance
     with pytest.raises(ValueError, match="BUY"):
         _accept(
-            repo,
+            envelope_repo,
             sid,
             run_id,
             decision_id="d1",

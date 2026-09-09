@@ -19,14 +19,12 @@ import json
 from collections.abc import AsyncIterator
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_shadow_clerk_authority,
@@ -34,8 +32,6 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
-from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerAsset, BrokerPosition
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -61,96 +57,21 @@ from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     custody_account_id_for_route,
 )
-from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    LIVE_ACCT,
+    SHADOW_ACCT,
+    TEST_ENVELOPE_VALUES,
+    _LiveBroker,
+)
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import fill_entry
 from tests.broker.v2panel.test_panel_projection import _MARKET_PULSE
 
-LIVE_ACCT = "9LIVE0001"
-SHADOW_ACCT = "shadow:9LIVE0001"
 SID = "ema-shadow-1"
 # A calendar-derived instant, never a wall-clock read: 10:00 ET on a known
 # trading day, so the session window the panel reads is deterministic.
 DAY = date(2026, 9, 8)
 NOW_MS = et_minute_of_day_ms(DAY, 600)
-
-
-class _LiveBroker:
-    """The live account: real reads, and writes that must never be reached."""
-
-    broker_id = "alpaca"
-
-    def __init__(self) -> None:
-        self.unrealized: float = 0.0
-
-    def capabilities(self) -> BrokerCapabilities:
-        return ALPACA_LIVE_CAPABILITIES
-
-    async def get_account(self) -> BrokerAccountSnapshot:
-        return BrokerAccountSnapshot(
-            broker="alpaca",
-            account_id=LIVE_ACCT,
-            account_mode="live",
-            account_status="ACTIVE",
-            currency="USD",
-            cash=100_000.0,
-            equity=100_000.0,
-            buying_power=200_000.0,
-            portfolio_value=100_000.0,
-            long_market_value=0.0,
-            short_market_value=0.0,
-            last_equity=100_000.0,
-            pattern_day_trader=False,
-            trading_blocked=False,
-            account_blocked=False,
-            created_at_ms=NOW_MS - 1_000,
-            observed_at_ms=NOW_MS,
-        )
-
-    async def list_orders(self, **_kwargs: Any) -> list:
-        return []
-
-    async def list_positions(self) -> list[BrokerPosition]:
-        if self.unrealized == 0.0:
-            return []
-        return [
-            BrokerPosition(
-                broker="alpaca",
-                symbol="SPY",
-                asset_id=None,
-                asset_class=None,
-                quantity=10,
-                side="long",
-                average_entry_price=100.0,
-                market_value=1_000.0 + self.unrealized,
-                cost_basis=1_000.0,
-                current_price=None,
-                unrealized_pl=self.unrealized,
-                unrealized_plpc=None,
-                observed_at_ms=NOW_MS,
-            )
-        ]
-
-    async def get_asset(self, symbol: str) -> BrokerAsset:
-        return BrokerAsset(
-            broker="alpaca",
-            symbol=symbol,
-            asset_class="us_equity",
-            tradable=True,
-            fractionable=False,
-            shortable=False,
-            easy_to_borrow=False,
-            observed_at_ms=NOW_MS,
-        )
-
-    async def submit(self, leg: object, *, client_order_id: str) -> None:
-        raise AssertionError("LIVE TRADE PORT WAS REACHED")
-
-    async def cancel(self, order_id: str) -> None:
-        raise AssertionError("LIVE CANCEL WAS REACHED")
-
-    async def get_order_by_client_order_id(self, client_order_id: str) -> None:
-        return None
 
 
 def _binding(mode: str = "trade") -> BrokerBotBinding:
@@ -185,53 +106,19 @@ def _register_instance(facade: object) -> None:
 
 
 @pytest.fixture()
-async def shadow_app(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[tuple[FastAPI, ActiveClerkRuntime]]:
-    """One composed shadow authority, installed as the process's active runtime."""
-    await activate_shadow_clerk_authority(
-        live_account_id=LIVE_ACCT, artifacts_root=tmp_path
-    )
-    broker = _LiveBroker()
-    runtime = await select_active_clerk_runtime(
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-        live_envelope_values=TEST_ENVELOPE_VALUES,
-    )
-    assert runtime.authority_kind == "shadow", runtime.startup_failure
-    set_active_clerk_runtime(runtime)
-    clear_broker_account_snapshot_cache_for_testing()
-    reset_broker_registry_for_testing()
-    get_broker_registry().register(broker)  # type: ignore[arg-type]
-    set_bot_task_registry(_FakeDeployRegistry())  # type: ignore[arg-type]
-    app = FastAPI()
-    app.include_router(panel_router)
-    app.include_router(brokers_router)
-    try:
-        yield app, runtime
-    finally:
-        set_bot_task_registry(None)
-        set_active_clerk_runtime(None)
-        clear_broker_account_snapshot_cache_for_testing()
-        reset_broker_registry_for_testing()
-        await runtime.close()
-
-
-@pytest.fixture()
 async def shadow_app_and_broker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> AsyncIterator[tuple[FastAPI, ActiveClerkRuntime, _LiveBroker]]:
-    """Same composed shadow authority as ``shadow_app``, with its broker double reachable.
+    """One composed shadow authority, installed as the process's active runtime.
 
-    A sibling of ``shadow_app`` rather than a widened version of it: this is
-    the only test that needs to steer the live account's reported P&L after
-    boot, and ``shadow_app``'s many existing consumers unpack a 2-tuple.
+    Yields the broker double as well, because a test that steers the live
+    account's reported P&L after boot needs it. ``shadow_app`` below is this
+    same fixture with the third element dropped.
     """
     await activate_shadow_clerk_authority(
         live_account_id=LIVE_ACCT, artifacts_root=tmp_path
     )
-    broker = _LiveBroker()
+    broker = _LiveBroker(now_ms=NOW_MS)
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
@@ -255,6 +142,15 @@ async def shadow_app_and_broker(
         clear_broker_account_snapshot_cache_for_testing()
         reset_broker_registry_for_testing()
         await runtime.close()
+
+
+@pytest.fixture()
+async def shadow_app(
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],
+) -> tuple[FastAPI, ActiveClerkRuntime]:
+    """The same composed authority, for the many consumers that unpack a 2-tuple."""
+    app, runtime, _broker = shadow_app_and_broker
+    return app, runtime
 
 
 async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(
