@@ -22,6 +22,7 @@ operator is holding.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -30,6 +31,11 @@ from app.broker.alpaca.clerk.sqlite.operational_files import canonical_json_byte
 
 DEFAULT_CONFIRMATION_TTL_MS = 120_000
 MAX_CONFIRMATION_TTL_MS = 300_000
+
+# Every token this module mints is a sha256 hexdigest, so anything else an
+# operator quotes is refused by shape before it is compared -- see the guard in
+# ``require_plan_token`` for why the shape check cannot be left to the compare.
+_TOKEN = re.compile(r"^[0-9a-f]{64}$")
 
 type Refusal = Callable[[str], Exception]
 
@@ -64,11 +70,18 @@ def require_plan_token(
     The self-hash check comes first: a plan whose content no longer matches its
     ids is a forged or mutated plan, and comparing a token against it would
     answer a question about the wrong document.
+
+    A token that is not 64 lowercase hex characters is refused by shape before
+    the compare, under the same sentence: ``secrets.compare_digest`` raises
+    ``TypeError`` on a non-ASCII ``str``, so an operator who typed an accented
+    character would otherwise get a traceback out of a CLI whose contract is one
+    JSON object per invocation. Refusing by shape leaks nothing the mismatch
+    sentence does not already say.
     """
     expected = plan_content_token(payload)
     if plan_id != expected or confirmation_token != expected:
         raise refused(f"{label} plan content hash does not verify")
-    if not secrets.compare_digest(supplied_token, expected):
+    if _TOKEN.match(supplied_token) is None or not secrets.compare_digest(supplied_token, expected):
         raise refused(f"{label} confirmation token does not match the plan")
 
 

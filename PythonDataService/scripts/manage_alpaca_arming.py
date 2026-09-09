@@ -33,6 +33,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.ceremony import DEFAULT_CONFIRMATION_TTL_MS, MAX_CONFIRMATION_TTL_MS
 from app.broker.alpaca.clerk.live_arming import (
@@ -45,16 +47,20 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
     account_arming_statuses,
     apply_arming,
+    configured_envelope,
     disarm,
     live_account_id_for,
     plan_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.config import (
+    AlpacaSettings,
+    alpaca_configuration_error_detail,
+    get_alpaca_settings,
+)
 from app.broker.ibkr.config import live_artifacts_root
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
@@ -154,17 +160,26 @@ def _clock(now_ms: int | None) -> Clock:
     return now_ms_utc if now_ms is None else (lambda: now_ms)
 
 
-def _configured_envelope(settings: AlpacaSettings) -> LiveEnvelopeValues:
-    """The environment's current envelope, refused by the ceremony's own code."""
-    if settings.mode != "live":
+def _resolved_settings(supplied: AlpacaSettings | None) -> AlpacaSettings:
+    """The environment's Alpaca settings, refused by the ceremony's own code.
+
+    ``AlpacaSettings`` refuses to construct at all when ``ALPACA_MODE=live`` and
+    any ``ALPACA_LIVE_*`` value is absent -- the single most likely real
+    misconfiguration on a live account. Letting that ``ValidationError`` escape
+    would break this module's contract (one JSON object per invocation) exactly
+    where its named refusal was supposed to fire, so it is translated here into
+    the ceremony's own ``LIVE_ENVELOPE_MISSING``.
+    """
+    if supplied is not None:
+        return supplied
+    try:
+        return get_alpaca_settings()
+    except ValidationError as exc:
         raise LiveArmingRefused(
             LIVE_ENVELOPE_MISSING,
-            f"ALPACA_MODE={settings.mode}; arming is a live-account question (ADR 0059 D3).",
-        )
-    try:
-        return LiveEnvelopeValues.from_settings(settings)
-    except LiveEnvelopeIncomplete as exc:
-        raise LiveArmingRefused(LIVE_ENVELOPE_MISSING, str(exc)) from exc
+            f"{alpaca_configuration_error_detail(exc)} Pass --artifacts-root to run "
+            "disarm without a loadable environment.",
+        ) from exc
 
 
 def _read_plan(path: Path) -> LiveArmingPlan:
@@ -212,7 +227,7 @@ def _status(
         live_account_id=live_account_id,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
-        configured_envelope=_configured_envelope(settings),
+        configured_envelope=configured_envelope(settings),
         now_ms=now_ms,
         strategy_instance_ids=(
             None if args.strategy_instance_id is None else [args.strategy_instance_id]
@@ -282,7 +297,18 @@ def _disarm(args: argparse.Namespace, *, artifacts_root: Path) -> int:
 def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = None) -> int:
     try:
         args = _parse_args(argv)
-        resolved = get_alpaca_settings() if settings is None else settings
+        # Settings are resolved per subcommand, never before dispatch: ``disarm``
+        # is the closed direction and reads no settings, no binding and no
+        # receipt (R4), so an operator can revoke an arming whose environment
+        # has since been half-edited -- which is the same incident. Only the
+        # default artifacts root needs the environment, and ``--artifacts-root``
+        # supplies it.
+        if args.operation == "disarm":
+            return _disarm(
+                args,
+                artifacts_root=args.artifacts_root or _resolved_settings(settings).clerk_dir,
+            )
+        resolved = _resolved_settings(settings)
         artifacts_root = args.artifacts_root or resolved.clerk_dir
         live_state_root = args.live_state_root or live_artifacts_root()
         if args.operation == "status":
@@ -293,11 +319,9 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
             return _plan(
                 args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
             )
-        if args.operation == "apply":
-            return _apply(
-                args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
-            )
-        return _disarm(args, artifacts_root=artifacts_root)
+        return _apply(
+            args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
+        )
     except LiveArmingRefused as exc:
         _write({"error": exc.reason_code, "detail": str(exc)})
         return 2

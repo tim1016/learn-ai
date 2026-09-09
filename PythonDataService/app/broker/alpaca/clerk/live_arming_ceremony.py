@@ -163,6 +163,26 @@ def instance_seal_hashes(*, live_account_id: str, live_state_root: Path) -> dict
     return seals
 
 
+def configured_envelope(settings: AlpacaSettings) -> LiveEnvelopeValues:
+    """The environment's current envelope, or this ceremony's own refusal.
+
+    Both the mode gate and the completeness gate answer ``LIVE_ENVELOPE_MISSING``
+    because they are the same question to an operator: the environment does not
+    describe a live account this ceremony could arm. The operator CLI calls this
+    rather than restating the rule -- a transport module deciding an admission
+    policy is how the two sentences drift apart.
+    """
+    if settings.mode != "live":
+        raise LiveArmingRefused(
+            LIVE_ENVELOPE_MISSING,
+            f"ALPACA_MODE={settings.mode}; only a live account can be armed (ADR 0059 D3).",
+        )
+    try:
+        return LiveEnvelopeValues.from_settings(settings)
+    except LiveEnvelopeIncomplete as exc:
+        raise LiveArmingRefused(LIVE_ENVELOPE_MISSING, str(exc)) from exc
+
+
 def observe_arming_inputs(
     *,
     strategy_instance_id: str,
@@ -171,15 +191,7 @@ def observe_arming_inputs(
     settings: AlpacaSettings,
 ) -> ArmingInputs:
     """Read the four inputs R8 names, refusing by code when any one is absent."""
-    if settings.mode != "live":
-        raise LiveArmingRefused(
-            LIVE_ENVELOPE_MISSING,
-            f"ALPACA_MODE={settings.mode}; only a live account can be armed (ADR 0059 D3).",
-        )
-    try:
-        envelope = LiveEnvelopeValues.from_settings(settings)
-    except LiveEnvelopeIncomplete as exc:
-        raise LiveArmingRefused(LIVE_ENVELOPE_MISSING, str(exc)) from exc
+    envelope = configured_envelope(settings)
     live_account_id = live_account_id_for(artifacts_root)
     seal = instance_seal_hashes(
         live_account_id=live_account_id, live_state_root=live_state_root
@@ -428,6 +440,7 @@ __all__ = [
     "LiveArmingPlan",
     "account_arming_statuses",
     "apply_arming",
+    "configured_envelope",
     "custody_account_ids_for",
     "disarm",
     "instance_seal_hashes",

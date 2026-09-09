@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from scripts.manage_alpaca_arming import main
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
@@ -26,6 +28,31 @@ SETTINGS = live_settings()
 @pytest.fixture()
 def roots(tmp_path: Path) -> tuple[Path, Path]:
     return tmp_path / "clerk", tmp_path / "runner"
+
+
+@pytest.fixture()
+def incomplete_live_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """``ALPACA_MODE=live`` with no envelope values -- a half-edited live ``.env``.
+
+    ``AlpacaSettings`` refuses to construct in this state, so every test using
+    this fixture calls ``main`` with no injected ``settings`` and exercises the
+    real ``get_alpaca_settings()`` boundary the CLI's contract depends on.
+    """
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_MODE", "live")
+    for suffix in (
+        "LOSS_FRACTION",
+        "LOSS_USD",
+        "SHADOW_SESSIONS",
+        "ARMING_MAX_SESSIONS",
+        "XH_ENTRY_BPS",
+        "XH_EXIT_BPS",
+    ):
+        monkeypatch.delenv(f"ALPACA_LIVE_{suffix}", raising=False)
+    reset_alpaca_settings_for_testing()
+    yield
+    reset_alpaca_settings_for_testing()
 
 
 def _flags(roots: tuple[Path, Path]) -> list[str]:
@@ -246,6 +273,77 @@ def test_disarming_something_that_was_never_armed_refuses_at_exit_two(
     )
 
     assert _last_object(capsys)["error"] == "LIVE_ARMING_NOT_ARMED"
+
+
+def test_disarm_still_runs_when_the_live_environment_will_not_load(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], incomplete_live_environment: None
+) -> None:
+    """R4's closed direction survives the configuration it exists to revoke.
+
+    ``main`` is called with no ``settings=``: the arming happened while the
+    environment was whole, and the operator now has to revoke it with an
+    ``.env`` that no longer loads.
+    """
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    armed = _arm(roots, capsys)
+
+    assert (
+        main([*_flags(roots), "disarm", "--strategy-instance-id", ARMING_SID,
+              "--now-ms", str(ARMED_AT_MS + 1)])
+        == 0
+    )
+
+    revocation = _last_object(capsys)
+    assert revocation["kind"] == "disarmed"
+    assert revocation["revokes_record_sha256"] == armed["record_sha256"]
+
+
+def test_an_unloadable_live_environment_is_one_json_object_at_exit_two(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], incomplete_live_environment: None
+) -> None:
+    """The commands that genuinely need settings refuse by name, never by traceback."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+
+    assert main([*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID,
+                 "--now-ms", str(ARMED_AT_MS)]) == 2
+    plan_refusal = _last_object(capsys)
+    assert plan_refusal["error"] == "LIVE_ENVELOPE_MISSING"
+    assert "ALPACA_MODE=live requires" in plan_refusal["detail"]
+    assert plan_refusal["submission_admitted"] is False
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)]) == 2
+    assert _last_object(capsys)["error"] == "LIVE_ENVELOPE_MISSING"
+
+
+def test_a_confirmation_token_that_is_not_ascii_refuses_at_exit_two(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``secrets.compare_digest`` raises on a non-ASCII string; the ceremony refuses first."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    plan_file = artifacts_root / "plan.json"
+    assert (
+        main(
+            [*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID, "--plan-out", str(plan_file),
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [*_flags(roots), "apply", "--plan-file", str(plan_file), "--confirmation-token", "töken",
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 2
+    )
+
+    assert _last_object(capsys)["error"] == "LIVE_ARMING_TOKEN_INVALID"
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
 
 
 def test_a_plan_file_that_is_not_a_plan_is_an_operator_error_at_exit_one(

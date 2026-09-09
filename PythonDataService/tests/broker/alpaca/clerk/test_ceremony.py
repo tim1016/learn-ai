@@ -78,6 +78,35 @@ def test_a_quoted_token_that_is_not_the_plans_is_refused_by_name() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        pytest.param("töken", id="non-ascii"),
+        pytest.param("0" * 63, id="too-short"),
+        pytest.param("0" * 65, id="too-long"),
+        pytest.param("A" * 64, id="uppercase-hex"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_a_token_that_cannot_be_a_digest_is_refused_by_shape_not_by_traceback(supplied: str) -> None:
+    """``secrets.compare_digest`` raises ``TypeError`` on a non-ASCII ``str``.
+
+    An operator's mistyped token must leave as the caller's refusal, so both
+    CLIs sharing this helper keep their "one JSON object per invocation"
+    contract.
+    """
+    token = plan_content_token(PAYLOAD)
+    with pytest.raises(_Refused, match="cutover confirmation token does not match the plan"):
+        require_plan_token(
+            PAYLOAD,
+            plan_id=token,
+            confirmation_token=token,
+            supplied_token=supplied,
+            refused=_Refused,
+            label="cutover",
+        )
+
+
 def test_expiry_is_inclusive_of_the_last_admissible_millisecond() -> None:
     require_unexpired(now_ms=20, expires_at_ms=20, refused=_Refused, label="cutover")
     with pytest.raises(_Refused, match="cutover confirmation token has expired"):
