@@ -276,6 +276,45 @@ async def test_a_missing_last_equity_is_unknown(
     assert sync.envelope.fresh_observation(NOON) is None
 
 
+@pytest.mark.parametrize(
+    ("knobs", "fields"),
+    [
+        ({"last_equity": float("nan")}, ["last_equity"]),
+        ({"unrealized": float("inf")}, ["unrealized_pl"]),
+        ({"cash": float("nan")}, ["cash"]),
+    ],
+)
+async def test_a_non_finite_risk_figure_withdraws_the_observation(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+    knobs: dict[str, float],
+    fields: list[str],
+) -> None:
+    """Alpaca can answer ``"NaN"``, and ``opt_float`` is a bare ``float(value)``.
+
+    A NaN anywhere in the loss inputs makes ``loss_breached`` evaluate False —
+    indistinguishable from "nothing breached" — so the account would keep
+    admitting ENTERs on the cash bound while the loss rule cannot be judged at
+    all. The reading is unjudgeable instead: no observation, no hold, and the
+    fault named on its own line.
+    """
+    sync = make_sync(day_pnl_repo, _Read(**knobs))
+    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
+        assert await sync.tick() == "unknown"
+
+    assert sync.envelope.fresh_observation(NOON) is None
+    assert sync.envelope.latest_observation() is None
+    assert _hold(day_pnl_repo) is None
+
+    (record,) = [
+        record for record in _sync_records(caplog) if record.action == "live_envelope_read_non_finite"
+    ]
+    assert record.levelno == logging.WARNING
+    assert record.fields == fields
+    assert record.account_id == day_pnl_repo.account_id
+
+
 async def test_an_unknown_tick_withdraws_the_previous_observation_at_once(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],

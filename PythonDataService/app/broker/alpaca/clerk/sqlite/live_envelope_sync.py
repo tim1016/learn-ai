@@ -8,10 +8,11 @@ backoff reaches 300 s on failure — exactly when a loss hold matters most.
 The sync raises the loss hold and never releases it: only the guarded
 operator action does (plan R6, R12).
 
-Two facts leave the account *unjudgeable* rather than merely unlucky: a
+Three facts leave the account *unjudgeable* rather than merely unlucky: a
 broker snapshot with no ``last_equity`` has no loss limit to judge against
-(plan R3), and an external order observed today makes the day's P&L
-unknowable (plan R5). Neither may be read as "nothing breached", so an
+(plan R3), an external order observed today makes the day's P&L unknowable
+(plan R5), and a non-finite cash, equity or unrealized figure makes every
+loss comparison meaningless. None may be read as "nothing breached", so an
 unjudgeable tick withdraws the gate's observation and every ENTER refuses
 ``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one arrives.
 """
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -101,6 +103,28 @@ def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
     )
 
 
+def _non_finite_risk_fields(
+    *, cash: float, last_equity: float | None, unrealized_pl: float
+) -> tuple[str, ...]:
+    """Which risk inputs the broker reported as NaN or infinity.
+
+    ``adapter.opt_float`` is a bare ``float(value)``, so an Alpaca string like
+    ``"NaN"`` arrives here as a genuine non-finite float. A NaN makes every
+    loss comparison ``False``, which is indistinguishable from "nothing
+    breached" — so a non-finite input is unjudgeable in exactly the way a
+    missing ``last_equity`` is, and rides the same withdrawal.
+    """
+    return tuple(
+        name
+        for name, value in (
+            ("cash", cash),
+            ("last_equity", last_equity),
+            ("unrealized_pl", unrealized_pl),
+        )
+        if value is not None and not math.isfinite(value)
+    )
+
+
 def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     """Which fact left the account unjudgeable — the operator's whole diagnosis."""
     day_pnl = reading.day_pnl
@@ -149,6 +173,8 @@ class LiveEnvelopeSync:
         self._reader = SqliteEconomicProjectionReader.from_repository(repo)
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
+        # The previous tick's non-finite risk fields, deduplicated the same way.
+        self._last_non_finite: tuple[str, ...] = ()
         self._task: asyncio.Task[None] | None = None
         self._stopped = False
         # The broker account the last successful read described. Under shadow
@@ -161,11 +187,12 @@ class LiveEnvelopeSync:
         """One broker read → the day-P&L reading, and the gate's observation.
 
         The observation is published only when the reading can be *judged*
-        AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3)
-        or an external order observed today (plan R5) leaves the account
-        unjudgeable, and an unjudgeable account must refuse every ENTER at
-        once rather than let one be bounded against a cash figure nothing can
-        vouch for — so such a tick withdraws whatever the last one published
+        AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3),
+        an external order observed today (plan R5), or a non-finite figure in
+        cash, equity or unrealized P&L leaves the account unjudgeable, and an
+        unjudgeable account must refuse every ENTER at once rather than let one
+        be bounded against a cash figure nothing can vouch for — so such a tick
+        withdraws whatever the last one published
         instead of republishing it. A *breached* reading withdraws for the
         same reason: nothing may take new exposure while the account is over
         its loss limit, so a fresh observation buys nothing, and publishing
@@ -188,22 +215,37 @@ class LiveEnvelopeSync:
             if self.envelope.custody_is_simulated
             else 0.0
         )
+        unrealized_pl_usd = float(sum(position.unrealized_pl for position in positions))
         observation = AccountObservation(
             observed_at_ms=observed_at_ms,
             broker_cash_usd=account.cash,
             cash_available_usd=account.cash - spent,
             last_equity_usd=account.last_equity,
-            unrealized_pl_usd=float(sum(position.unrealized_pl for position in positions)),
+            unrealized_pl_usd=unrealized_pl_usd,
             position_count=len(positions),
+        )
+        # Withholding both loss inputs is the whole treatment: ``breached`` is
+        # then None, the tick withdraws on the existing path, and no new
+        # refusal code has to exist for a broker that reported a NaN.
+        unjudgeable = self._noted_non_finite(
+            _non_finite_risk_fields(
+                cash=account.cash,
+                last_equity=account.last_equity,
+                unrealized_pl=unrealized_pl_usd,
+            )
         )
         reading = EnvelopeReading(
             observation=observation,
-            day_pnl=day_pnl_at(
-                self._reader, self._repo, observation=observation, now_ms=observed_at_ms
+            day_pnl=(
+                None
+                if unjudgeable
+                else day_pnl_at(
+                    self._reader, self._repo, observation=observation, now_ms=observed_at_ms
+                )
             ),
             loss_limit_usd=(
                 None
-                if account.last_equity is None
+                if unjudgeable or account.last_equity is None
                 else loss_limit_usd(self.envelope.values, last_equity_usd=account.last_equity)
             ),
         )
@@ -249,6 +291,28 @@ class LiveEnvelopeSync:
             cause_facts=cause.to_mapping(),
         )
         return self._acted("hold_raised", {"outcome": outcome, **cause.to_mapping()})
+
+    def _noted_non_finite(self, fields: tuple[str, ...]) -> bool:
+        """Log a changed non-finite verdict, and say whether one stands.
+
+        Deduplicated like ``_acted``: at a 15 s cadence a persistently bad
+        feed would write four identical lines a minute and bury the tick that
+        changed what the account accepts. The line is separate from the
+        ``unknown`` verdict's because it names a fault in the broker's
+        numbers, not a fact the Clerk cannot know.
+        """
+        if fields and fields != self._last_non_finite:
+            logger.warning(
+                "live envelope read a non-finite risk figure; the account cannot be judged",
+                extra={
+                    "action": "live_envelope_read_non_finite",
+                    "fields": list(fields),
+                    "account_id": self._repo.account_id,
+                    "observed_account_id": self._observed_account_id,
+                },
+            )
+        self._last_non_finite = fields
+        return bool(fields)
 
     def _hold_stands(self) -> bool:
         return (
