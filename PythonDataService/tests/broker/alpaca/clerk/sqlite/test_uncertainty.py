@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
+import app.broker.alpaca.clerk.sqlite.uncertainty as uncertainty
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -560,3 +561,18 @@ def test_submit_absence_receipt_code_is_the_declared_summary_code() -> None:
     """
     declared = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter)
     assert declared.summary_code == order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE
+
+
+def test_every_reduction_admitting_policy_registers_a_proof() -> None:
+    """Exhaustive in both directions: the policy table and the proof registry
+    must agree on exactly which reason codes admit a reduction, so a newly
+    registered ``allows_reduction`` code cannot fall through to the
+    fail-closed default unnoticed."""
+    for reason_code, policy in _REASON_POLICIES.items():
+        if policy.allows_reduction:
+            assert reason_code in uncertainty._REDUCTION_PROOFS, reason_code
+
+    for reason_code in uncertainty._REDUCTION_PROOFS:
+        policy = _REASON_POLICIES.get(reason_code)
+        assert policy is not None, reason_code
+        assert policy.allows_reduction, reason_code

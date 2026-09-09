@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
     HOLD_REASON_CODES,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -550,24 +551,43 @@ def _no_per_symbol_proof(
     """The proof an account-scoped reduction-admitting cause needs: none.
 
     A cause that says nothing about any one position -- ADR 0059 D4's loss
-    hold is the first -- cannot be asked for a per-symbol proof, and the
-    absence of a registered one *is* the answer. Fail-closed is unaffected:
-    the caller has already required ``policy.allows_reduction``, which only
-    the registry can grant, so an unregistered or reduction-forbidding cause
+    hold is the first -- cannot be asked for a per-symbol proof. Registering
+    this function against a reason code is how that cause declares it has
+    nothing per-symbol to prove; a reduction-admitting code with no
+    registration is refused, not admitted. Fail-closed is unaffected: the
+    caller has already required ``policy.allows_reduction``, which only the
+    registry can grant, so an unregistered or reduction-forbidding cause
     never reaches here.
     """
     return True
 
 
+def _unregistered_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    """The proof dispatch falls back to when a reason code has none registered.
+
+    An ``allows_reduction`` code with no proof here is refused, not admitted.
+    """
+    return False
+
+
 type ReductionProof = Callable[..., bool]
 # Dispatch on the reason code, once. Registering a proof here is how a cause
 # says "authorize this reduction only if my own evidence bears it out";
-# declaring ``allows_reduction`` in ``uncertainty_policies`` without one says
-# the cause is account-scoped and has nothing per-symbol to prove.
+# registering ``_no_per_symbol_proof`` is how an account-scoped cause
+# declares it has nothing per-symbol to prove instead. A reduction-admitting
+# code with no registration here is refused, not admitted.
 _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     POSITION_DRIFT_REASON_CODE: _position_drift_proof,
     EXIT_NOT_FLAT_REASON_CODE: _exit_not_flat_proof,
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
 }
 
 
@@ -651,7 +671,7 @@ def decide_capability(
                 and policy is not None
                 and policy.allows_reduction
                 and uncertainty["allows_reduction"]
-                and _REDUCTION_PROOFS.get(reason_code, _no_per_symbol_proof)(
+                and _REDUCTION_PROOFS.get(reason_code, _unregistered_proof)(
                     repo,
                     uncertainty=uncertainty,
                     facts=facts,
