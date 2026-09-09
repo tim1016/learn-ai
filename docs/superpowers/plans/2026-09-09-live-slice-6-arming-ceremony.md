@@ -40,7 +40,7 @@ Copied verbatim from the design document. Where the ADR decides, it decides; eve
 - Explicit-path staging only: `git add <paths>` (never `git add -A`, never `git add .`, never `git stash` — this is a shared checkout). Never self-review. Pushing is allowed at the end; merging `origin/master` is the owner's.
 - No silent exception handlers (`except: pass`, `except Exception: pass`). Structured logging only, `logger.<level>(message, extra={"action": "...", ...})`; no `print()` in `app/` (the CLI in `scripts/` writes its single JSON object through `sys.stdout.write`, exactly as `manage_alpaca_shadow.py` does).
 - Temporal rigor: every temporal value is `int64 ms UTC`; every stamp comes from the injected `clock` / `repo.clock()` / the caller's `now_ms`, never a wall clock in a test; ET dates and session counts come only from `app/utils/session_anchors.py::et_date_at_ms` and `app/lean_sidecar/trading_calendar.py::trading_session_count`; `MAX_TIMESTAMP_MS` (not `2**63 - 1`) is the timestamp ceiling in every validator.
-- **No file may cross 1,000 lines**, and `app/broker/alpaca/clerk/sqlite/cutover.py` (954 lines today) **must shrink** in Task 1 and must never grow. Each new module stays under ~300 lines.
+- **No file may cross 1,000 lines**, and `app/broker/alpaca/clerk/sqlite/cutover.py` (954 lines today) **must shrink** in Task 1 and must never grow. Each new module stays well under 1,000 lines and near the size this plan's code specifies (`ceremony.py` ~90, `live_arming.py` ~370, `live_arming_ledger.py` ~135, `live_arming_ceremony.py` ~440, `manage_alpaca_arming.py` ~320); a module materially larger than its figure means code landed in the wrong one — report it, do not split modules on your own.
 - Reason codes are SCREAMING_SNAKE and prefixed `LIVE_ARMING_`, plus the three reused (`LIVE_SHADOW_INCOMPLETE`, `LIVE_ENVELOPE_DISAGREEMENT`, `LIVE_ENVELOPE_MISSING`).
 - Python commands run from `cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/PythonDataService`:
   - tests: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest <paths> -q -p no:cacheprovider`
@@ -81,7 +81,7 @@ Copied verbatim from the design document. Where the ADR decides, it decides; eve
 
 **Files:**
 - Create: `PythonDataService/app/broker/alpaca/clerk/ceremony.py`
-- Modify: `PythonDataService/app/broker/alpaca/clerk/sqlite/cutover.py` (lines 9–18 imports, 53–56 the `operational_files` import block, 77–78 the constants, 440–441 the TTL bound, 493–517 the plan payload/token/return, 533–535 the expiry check, 929–945 `_validate_plan_token`)
+- Modify: `PythonDataService/app/broker/alpaca/clerk/sqlite/cutover.py` (lines 10–18 imports, 51–57 the `operational_files` import block, 77–78 the constants, 440–441 the TTL bound, 493–517 the plan payload/token/return, 534–535 the expiry check, 929–945 `_validate_plan_token`)
 - Test: `PythonDataService/tests/broker/alpaca/clerk/test_ceremony.py`
 
 **Interfaces:**
@@ -317,7 +317,7 @@ Expected: 7 passed.
 
 - [ ] **Step 6: Shrink `cutover.py` onto it — five exact edits**
 
-**Edit A — imports.** In the `from dataclasses import ...` line (line 15), add `replace`:
+**Edit A — imports.** In the `from dataclasses import ...` line (line 16), add `replace`:
 
 before: `from dataclasses import asdict, dataclass`
 after: `from dataclasses import asdict, dataclass, replace`
@@ -378,7 +378,7 @@ with one:
     return replace(draft, plan_id=token, confirmation_token=token)
 ```
 
-**Edit D — the expiry check.** In `apply_cutover`, replace these two lines (533–535, immediately after `_validate_plan_token(plan, confirmation_token)`):
+**Edit D — the expiry check.** In `apply_cutover`, replace these two lines (534–535, immediately after `_validate_plan_token(plan, confirmation_token)`):
 
 ```python
     if now > plan.expires_at_ms:
@@ -426,14 +426,14 @@ Run:
 ```bash
 cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/PythonDataService && git diff --stat -- app/broker/alpaca/clerk/sqlite/cutover.py tests/ && wc -l app/broker/alpaca/clerk/sqlite/cutover.py && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/test_ceremony.py tests/broker/alpaca/clerk/sqlite/test_cutover.py tests/broker/alpaca/clerk/sqlite/test_cutover_cli.py -q -p no:cacheprovider && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -c "import app.main" && .venv/bin/ruff check app/ tests/ scripts/
 ```
-Expected: `git diff --stat` shows **no test file changed** (the 39 cutover tests are untouched — that is the proof the digest and every message are byte-identical); `wc -l` reports **946** (or anything below 954 — it must be lower than the number you wrote down in Step 1; if it is not, you skipped Edit C or E); 46 tests pass; `import app.main` clean; ruff clean.
+Expected: `git diff --stat` shows **no test file changed** (the 39 cutover tests are untouched — that is the proof the digest and every message are byte-identical); `wc -l` reports **953** (or anything below 954 — it must be lower than the number you wrote down in Step 1; if it is not, you skipped Edit C or E); 46 tests pass; `import app.main` clean; ruff clean.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 cd /Users/inkant/learn-ai/.claude/worktrees/slice-6 && git add PythonDataService/app/broker/alpaca/clerk/ceremony.py PythonDataService/app/broker/alpaca/clerk/sqlite/cutover.py PythonDataService/tests/broker/alpaca/clerk/test_ceremony.py && git commit -m "refactor(arming): lift the confirmation ceremony out of cutover so arming can share it
 
-cutover.py shrinks from 954 to 946 lines and its 39 tests are untouched:
+cutover.py shrinks from 954 to 953 lines and its 39 tests are untouched:
 the plan digest, the TTL bound and every refusal message are byte-identical.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
@@ -1847,7 +1847,7 @@ __all__ = [
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -2951,7 +2951,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes (Task 1): `DEFAULT_CONFIRMATION_TTL_MS`, `MAX_CONFIRMATION_TTL_MS`.
 - Consumes (Task 2): `LiveArmingInvalid`, `LiveArmingRefused(reason_code, message)` with attribute `reason_code`, `ArmingStatus(state, reason_code, record, sessions_used, sessions_remaining)`, `LIVE_ENVELOPE_MISSING`.
 - Consumes (Task 3): `LiveArmingLedger(artifacts_root, live_account_id=...)` with `latest_arming()`.
-- Consumes (Task 4): `LiveArmingPlan`, `account_arming_statuses(...)`, `apply_arming(...)`, `disarm(...)`, `live_account_id_for(artifacts_root)`, `plan_arming(...)`.
+- Consumes (Task 4): `LiveArmingPlan`, `account_arming_statuses(...)`, `apply_arming(...)`, `disarm(...)`, `live_account_id_for(artifacts_root)`, `plan_arming(...)`; and from `tests/broker/alpaca/clerk/live_arming_fixtures.py` (created by Task 4): `ARMED_AT_MS`, `ARMING_SID`, `activate_shadow_fence`, `arming_ready`, `live_settings`, `record_sealed_binding`.
 - Consumes from the repo: `app.broker.alpaca.clerk.account_authority.AccountAuthorityIdentityError`; `app.broker.alpaca.clerk.shadow_activation.ShadowActivationInvalid`; `app.broker.alpaca.clerk.shadow_receipt.ShadowReceiptInvalid`; `app.broker.alpaca.clerk.live_envelope.{LiveEnvelopeIncomplete, LiveEnvelopeValues}`; `app.broker.alpaca.clerk.sqlite.operational_files.atomic_write_json(path, payload) -> str`; `app.broker.alpaca.config.{AlpacaSettings, get_alpaca_settings}`; `app.broker.ibkr.config.live_artifacts_root() -> Path`; `app.utils.session_anchors.MAX_TIMESTAMP_MS`; `app.utils.timestamps.{Clock, now_ms_utc}`.
 - Produces (Task 9 runs it; nothing imports it):
   - `SUBMISSION_NOTE: str`
@@ -3061,7 +3061,7 @@ def test_status_on_an_account_with_no_records_answers_unarmed(
     assert report["envelope_state"] == "configured_unsealed"
     assert report["instances"] == []
     assert report["submission_admitted"] is False
-    assert "slice 7" in report["note"]
+    assert "Slice 7" in report["note"]
 
 
 def test_plan_writes_only_the_plan_file_and_apply_writes_the_sealed_record(
@@ -4022,7 +4022,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes (Task 2): `LiveArmingInvalid`, `ArmingStatus(state, reason_code, record, sessions_used, sessions_remaining)`, `LiveArmingRecord.create(...)`.
 - Consumes (Task 3): `LiveArmingLedger(artifacts_root, live_account_id=...)` with `latest_arming()`.
-- Consumes (Task 4): `account_arming_statuses(*, live_account_id, artifacts_root, live_state_root, configured_envelope, now_ms, strategy_instance_ids=None) -> dict[str, ArmingStatus]`.
+- Consumes (Task 4): `account_arming_statuses(*, live_account_id, artifacts_root, live_state_root, configured_envelope, now_ms, strategy_instance_ids=None) -> dict[str, ArmingStatus]`; and from `tests/broker/alpaca/clerk/live_arming_fixtures.py` (created by Task 4): `ARMED_AT_MS`, `ARMING_SID`, `arming_ready`, `live_settings`.
 - Consumes from the repo: `LiveEnvelopeValues.from_settings(settings)`, `LiveEnvelopeIncomplete`, `SHADOW_ACCOUNT_PREFIX`, `SQLITE_FACADE_AUTHORITIES: frozenset[str]` (`{"sqlite", "shadow"}`, re-exported by `active_authority`), `EnvelopeState = Literal["not_applicable", "configured_unsealed", "sealed"]`, `live_artifacts_root() -> Path`.
 - Produces:
   - `@dataclass(frozen=True) class ArmingObservation(armed_instance_count: int, envelope_state: EnvelopeState, detail: str)` with `@classmethod none() -> ArmingObservation`
@@ -4264,7 +4264,7 @@ Run: `cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/PythonDataService && D
 Expected: FAIL — `ImportError: cannot import name 'ArmingObservation' from 'app.services.alpaca_live_verdict'`.
 
 Run: `cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/Frontend && npx ng test --include='src/app/shell/alpaca-live-banner.component.spec.ts'`
-Expected: the new case fails on `expect(status.className).toContain('is-live-armed')` only if the component were wrong — it is not, the class already exists; this case fails today because nothing produced a `live-armed` verdict, so run it to confirm it **passes** immediately. That is the point: the rendering exists and was unreachable, and this case is what makes it reachable evidence.
+Expected: run it and confirm the new case **passes** immediately. This case is not red-first: the `is-live-armed` rendering already exists in the component and was unreachable only because nothing produced a `live-armed` verdict. The case is what makes it reachable evidence; Step 3's Python change is what makes the verdict real.
 
 - [ ] **Step 3: Add the arming observation to the verdict service**
 
@@ -4507,7 +4507,7 @@ Run:
 ```bash
 cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/Frontend && npx ng test --include='src/app/shell/alpaca-live-banner.component.spec.ts' && npx eslint src/ --max-warnings 0
 ```
-Expected: all banner cases pass (7 now); eslint clean.
+Expected: all banner cases pass (8 now); eslint clean.
 
 - [ ] **Step 7: Commit**
 
@@ -4961,7 +4961,7 @@ Run:
 ```bash
 cd /Users/inkant/learn-ai/.claude/worktrees/slice-6/Frontend && npx ng test --include='src/app/shell/alpaca-live-banner.component.spec.ts'
 ```
-Expected: 7 passing cases, including `renders a live-armed account in the loudest treatment with the armed count`. Never a directory glob: the frontend container runs out of memory on a broad include.
+Expected: 8 passing cases, including `renders a live-armed account in the loudest treatment with the armed count`. Never a directory glob: the frontend container runs out of memory on a broad include.
 
 - [ ] **Step 6: Check every touched file's size**
 
@@ -4984,8 +4984,8 @@ cd /Users/inkant/learn-ai/.claude/worktrees/slice-6 && wc -l \
 ```
 Expected, and each one is a hard gate:
 - **No file at 1,000 lines or more.** `app/routers/brokers.py` is the one to watch — check its number against `git show origin/master:PythonDataService/app/routers/brokers.py | wc -l`; this slice adds about six lines to it.
-- **`cutover.py` is below 954.** Task 1 took it to ~946. If it is 954 or higher, Task 1's Edit C or Edit E was skipped or reverted; go back and finish it. `cutover.py` may never grow.
-- **Every new module is under ~300 lines.** If `live_arming.py` or `live_arming_ceremony.py` has drifted past that, the extra almost certainly belongs in one of the other two.
+- **`cutover.py` is below 954.** Task 1 took it to 953. If it is 954 or higher, Task 1's Edit C or Edit E was skipped or reverted; go back and finish it. `cutover.py` may never grow.
+- **Every new module is well under 1,000 lines and none has grown past the size this plan's code implies:** `ceremony.py` ~90, `live_arming.py` ~370, `live_arming_ledger.py` ~135, `live_arming_ceremony.py` ~440, `manage_alpaca_arming.py` ~320. A module materially larger than its figure means code landed in the wrong one — report it; do not split modules in this task.
 
 Confirm the whole-repo picture with:
 ```bash
@@ -5048,6 +5048,9 @@ The design's **Testing** paragraph asks for eleven things; each is present: sha 
 - `SHADOW_ACCOUNT_PREFIX`, `shadow_account_id_for_live_account`, `require_real_account_id`, `safe_path_component`, `resolve_contained_path`, `advisory_file_lock`, `append_canonical_jsonl_line`, `read_canonical_jsonl_objects`, `canonical_sha256`, `canonical_json_bytes`, `et_date_at_ms`, `trading_session_count`, `MAX_TIMESTAMP_MS`, `Clock`, `now_ms_utc`, `live_state_binding_repository`, `live_artifacts_root`, `atomic_write_json`, `SQLITE_FACADE_AUTHORITIES` were each read in the source before being used here; their module paths and signatures in this plan are the ones on disk at `master`.
 
 ## Plan notes for the controller
+
+- **`--live-state-root` is a fourth CLI flag R13 does not name.** The runner's `live_state` root is where sealed bindings live and is a different tree from the Clerk artifacts root, so `status`, `plan` and `apply` cannot find a seal without it. It defaults to `live_artifacts_root()`. (Added at the pre-flight scan; accepted by the controller.)
+- **Controller ruling after the scan (Task 2):** a record dated after the clock (`now_ms < armed_at_ms`) is `disarmed` with a thirteenth code `LIVE_ARMING_FUTURE_DATED`, checked before the lapse arithmetic; `sessions_used` raises on a reversed range instead of returning 0. Carried in `task-2-controller-notes.md`; every count of "twelve codes" in this plan is thirteen in the implementation.
 
 Ambiguities resolved while writing the plan, and the two places I think the design is wrong. Nothing here was silently deviated from — each is a decision the controller can reverse cheaply.
 
