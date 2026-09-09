@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -21,6 +22,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
 )
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleAuthorityUnavailableError,
     AlpacaLifecycleProjectionResult,
@@ -44,6 +46,14 @@ class BootRecoveryReport(BaseModel):
     # process wrote it; start admission keeps the gate closed while this is
     # non-empty (``resolve_start_runtime_fact``).
     authority_unavailable_instances: tuple[str, ...]
+    # Bindings sealed on a custody account the installed authority does not
+    # custody -- after graduation, the rehearsal's ``shadow:<live_account_id>``
+    # bindings under the live primary (ADR 0059 slice 7, R15); left as their
+    # own files say; Start refuses them ``SEALED_ACCOUNT_MISMATCH``. Unlike
+    # ``authority_unavailable_instances`` this never closes the start gate:
+    # a foreign binding is refused one at a time, and the instances the
+    # installed authority does custody stay startable.
+    foreign_instances: tuple[str, ...] = ()
 
 
 class BootAuthorityPreparationError(RuntimeError):
@@ -57,6 +67,15 @@ class BotRecoveryCandidate:
     strategy_instance_id: str
     run_id: str
     sqlite_active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ForeignBinding:
+    """A binding the installed primary authority does not custody."""
+
+    strategy_instance_id: str
+    sealed_account_id: str
+    installed_account_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +124,7 @@ class BotBootRecovery:
         manages_instance: Callable[[str], bool],
         is_running: Callable[[str], bool],
         now_ms: Callable[[], int],
+        binding_for: Callable[[str], BrokerBotBinding | None] | None = None,
     ) -> None:
         del artifacts_root
         self._lifecycle_repo_for = lifecycle_repo_for
@@ -118,6 +138,11 @@ class BotBootRecovery:
         self._manages_instance = manages_instance
         self._is_running = is_running
         self._now_ms = now_ms
+        # The binding plane's reader, so the sweep can tell a binding this
+        # authority custodies from one it does not. Absent in the collaborator
+        # tests that drive the sweep from hand-built candidates: with no
+        # binding to read, no candidate can be judged foreign.
+        self._binding_for = binding_for
 
     async def run(
         self,
@@ -141,7 +166,7 @@ class BotBootRecovery:
                 raise BootAuthorityPreparationError(
                     f"SQLite boot authority step {step_name!r} failed"
                 ) from exc
-        interrupted, authority_unavailable = await self._repair_lifecycle_artifacts(
+        interrupted, authority_unavailable, foreign = await self._repair_lifecycle_artifacts(
             provenance
         )
         # Account-wide on purpose: this is a boot summary of the whole
@@ -154,6 +179,7 @@ class BotBootRecovery:
             unresolved_intents=unresolved,
             completed_at_ms=self._now_ms(),
             authority_unavailable_instances=tuple(authority_unavailable),
+            foreign_instances=tuple(foreign),
         )
         logger.info(
             "Boot recovery sweep complete",
@@ -162,20 +188,24 @@ class BotBootRecovery:
                 "interrupted": list(report.interrupted_instances),
                 "unresolved_intents": report.unresolved_intents,
                 "authority_unavailable": list(report.authority_unavailable_instances),
+                "foreign": list(report.foreign_instances),
             },
         )
         return report
 
     async def _repair_lifecycle_artifacts(
         self, provenance: RecoverySweepProvenance
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str]]:
         """Repair every managed candidate.
 
-        Returns the bots that received interrupted evidence and, separately,
-        the bots left unprojected because no lifecycle authority was installed.
+        Returns the bots that received interrupted evidence; the bots left
+        unprojected because no lifecycle authority was installed; and the
+        bots left as their own files say because the installed authority
+        does not custody the account they are sealed on.
         """
         interrupted: list[str] = []
         authority_unavailable: list[str] = []
+        foreign: list[str] = []
         try:
             candidates = sorted(
                 set(self._recovery_candidates()),
@@ -190,6 +220,23 @@ class BotBootRecovery:
             ) from exc
         for candidate in candidates:
             if not self._manages_instance(candidate.strategy_instance_id):
+                continue
+            foreign_binding = self._foreign_binding(candidate.strategy_instance_id)
+            if foreign_binding is not None:
+                # Same posture as ``authority_unavailable`` below and for the
+                # same ADR 0050 reason: this authority has never seen the
+                # instance, so any duty state written from here would be
+                # caller-authored. The binding's own lifecycle files stand.
+                logger.warning(
+                    "boot sweep leaves a foreign binding as its files say",
+                    extra={
+                        "action": "boot_recovery_foreign_binding",
+                        "strategy_instance_id": foreign_binding.strategy_instance_id,
+                        "sealed_account_id": foreign_binding.sealed_account_id,
+                        "installed_account_id": foreign_binding.installed_account_id,
+                    },
+                )
+                foreign.append(candidate.strategy_instance_id)
                 continue
             try:
                 recorded_interruption = await self._repair_candidate(candidate, provenance)
@@ -216,7 +263,53 @@ class BotBootRecovery:
                 continue
             if recorded_interruption:
                 interrupted.append(candidate.strategy_instance_id)
-        return interrupted, authority_unavailable
+        return interrupted, authority_unavailable, foreign
+
+    def _foreign_binding(self, strategy_instance_id: str) -> _ForeignBinding | None:
+        """Why the installed primary authority does not custody this binding, if so.
+
+        Foreignness is the boot-side half of Start's ``SEALED_ACCOUNT_MISMATCH``
+        (``run_admission``) and is decided by the same comparison: the
+        immutable binding names a custody account this Clerk does not hold.
+        After a real-money account graduates, every instance that rehearsed
+        under the Shadow Account Authority is sealed on
+        ``shadow:<live_account_id>`` while the primary custodies
+        ``<live_account_id>`` -- foreign to it, and refused rather than
+        repaired (ADR 0059 slice 7, R15).
+
+        A Dry Run binding is never foreign, however its ``sim:`` custody id
+        compares: the registry routes it to its own per-instance authority,
+        so the projector that would repair it is not the primary one. That
+        routing is *read* here through ``lifecycle_projector_for``, never
+        re-derived, so this predicate cannot drift from the selector that
+        owns it -- and a ``sim:`` binding is excluded because of where it
+        routes, not because of how its id is spelled.
+
+        Corruption is not foreignness: an unreadable binding, a non-Alpaca
+        identity, and a historical IBKR binding keep raising exactly as they
+        do today.
+        """
+        if self._binding_for is None:
+            return None
+        binding = self._binding_for(strategy_instance_id)
+        if binding is None or binding.sealed_account_id is None:
+            return None
+        # The custody id the installed primary authority holds -- the same
+        # ``account_id`` a ``ClerkCustodySnapshot`` carries into Start
+        # admission. Read by name, as the sweep already reads this Clerk's
+        # other optional capabilities: with no authority installed there is
+        # no custody to compare against, and that case is already the
+        # ``authority_unavailable`` branch's to report.
+        installed_account_id = getattr(get_alpaca_clerk(), "account_id", None)
+        if installed_account_id is None or binding.sealed_account_id == installed_account_id:
+            return None
+        if self._lifecycle_projector_for(strategy_instance_id) is not self._lifecycle_projector:
+            return None
+        return _ForeignBinding(
+            strategy_instance_id=strategy_instance_id,
+            sealed_account_id=binding.sealed_account_id,
+            installed_account_id=installed_account_id,
+        )
 
     async def _repair_candidate(
         self,

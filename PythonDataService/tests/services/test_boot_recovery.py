@@ -18,6 +18,10 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import (
+    shadow_account_id_for_live_account,
+    synthetic_account_id_for_strategy,
+)
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -870,7 +874,10 @@ async def test_lease_recovery_pass_stamps_revival_provenance(
     assert desired.updated_by == "bot_runner_lease_revival"
 
 
-async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(tmp_path: Path) -> None:
+async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """R15: after graduation the rehearsal's bindings are foreign, not fatal."""
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
@@ -881,6 +888,7 @@ async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(tmp_path
 
     proof = _custody_proof(exposure={}).model_copy(update={"account_id": f"live-of-{shadow_sealed}"})
     set_alpaca_clerk(_CustodyClerk(proof))
+    caplog.set_level("WARNING", logger="app.services.bot_boot_recovery")
     rebooted = BotTaskRegistry(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: feed,
@@ -892,3 +900,133 @@ async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(tmp_path
 
     assert report.authority_unavailable_instances == ()
     assert rebooted.status("alpaca", _SID).running is False
+    assert report.foreign_instances == (_SID,)
+    foreign_logs = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "boot_recovery_foreign_binding"
+    ]
+    assert len(foreign_logs) == 1
+    assert foreign_logs[0].levelname == "WARNING"
+    assert foreign_logs[0].strategy_instance_id == _SID
+    assert foreign_logs[0].sealed_account_id == shadow_sealed
+    assert foreign_logs[0].installed_account_id == f"live-of-{shadow_sealed}"
+
+
+async def test_boot_leaves_a_shadow_sealed_binding_as_its_files_say_under_its_live_account(
+    tmp_path: Path,
+) -> None:
+    """R15 on the literal graduation shape: ``shadow:<id>`` sealed, ``<id>`` custodied.
+
+    The pin above proves the mechanism on whatever account the deploy sealed;
+    this one spells out the pair the design names -- the rehearsal's custody
+    id and the live account it observed -- so the skip stays tied to the
+    namespace helpers rather than to any one test's account string.
+    """
+    feed = _FakeFeed([], mode="hold")
+    live_account_id = "LIVE-ACCOUNT-1"
+    registry = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+    registry._bindings.record_launch(
+        BrokerBotBinding(
+            strategy_instance_id=_SID,
+            broker="alpaca",
+            symbol="SPY",
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id="rehearsal-run",
+            created_at_ms=_T0,
+            sealed_account_id=shadow_account_id_for_live_account(live_account_id),
+        ),
+        launch_reason="deploy",
+    )
+    registry._lifecycle_repo(_SID).set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="rehearsal",
+        active_run_id="rehearsal-run",
+    )
+
+    set_alpaca_clerk(
+        _CustodyClerk(
+            _custody_proof(exposure={}).model_copy(update={"account_id": live_account_id})
+        )
+    )
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    report = await rebooted.run_boot_recovery()
+
+    assert report.foreign_instances == (_SID,)
+    assert report.interrupted_instances == ()
+    assert report.authority_unavailable_instances == ()
+    # Its durable evidence is exactly what the rehearsal wrote: the sweep
+    # never authored duty state for an authority that has never seen it.
+    assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
+
+
+async def test_boot_projects_a_binding_the_installed_authority_still_custodies(
+    tmp_path: Path,
+) -> None:
+    """The R15 skip is about a changed custody account, not about every reboot."""
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    registry._bots[_SID].finalized = True
+    registry._bots[_SID].task.cancel()
+    await asyncio.sleep(0)
+
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    report = await rebooted.run_boot_recovery()
+
+    assert report.foreign_instances == ()
+    assert report.interrupted_instances == (_SID,)
+    lifecycle = _lifecycle_json(_artifacts_root(tmp_path), _SID)
+    assert lifecycle["duty_outcome"]["reason_code"] == "INTERRUPTED_BY_RESTART"
+
+
+async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path) -> None:
+    """A ``sim:`` binding is excluded by where it routes, not by how its id reads.
+
+    Its custody id never equals the primary's, so an account comparison alone
+    would call every Dry Run bot foreign. The registry routes it to its own
+    per-instance authority, and that is what decides.
+    """
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        mode="dry_run",
+    )
+    sealed = registry._bots[_SID].binding.sealed_account_id
+    assert sealed == synthetic_account_id_for_strategy(_SID)
+    assert sealed != _custody_proof(exposure={}).account_id
+
+    # A second sweep over the live Dry Run binding. Its isolated authority
+    # holds the execution lease, so this stays in one process rather than
+    # rebooting -- what is under test is the routing, not a restart.
+    report = await registry.run_boot_recovery()
+
+    assert report.foreign_instances == ()
+    assert report.interrupted_instances == ()
+    # Projected against its own synthetic authority exactly as today: still
+    # on duty, and no interrupted evidence authored over a live run.
+    assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
+    await registry.stop("alpaca", _SID, updated_by="test")

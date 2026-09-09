@@ -321,6 +321,7 @@ class BotTaskRegistry:
             manages_instance=self._manages_boot_recovery,
             is_running=self._is_running,
             now_ms=self._now_ms,
+            binding_for=self._read_binding,
         )
         self._start_admission = BotStartAdmission(
             now_ms=self._now_ms,

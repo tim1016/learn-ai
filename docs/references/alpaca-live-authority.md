@@ -167,17 +167,22 @@ install the authority; the second is already refused by `injection_permitted`).
 - A human trading the live account withdraws day P&L to unknown for the day
   (slice 5 R5), so every program ENTER refuses `LIVE_ENVELOPE_UNOBSERVED` — E7.
 - `StrategySpec.submit_mode` is not stamped at deploy — E8.
-- **R15's "repaired from their own lifecycle files at boot" is unverified for
-  the boot sweep itself.** The pinned regression
-  `tests/services/test_boot_recovery.py::test_a_live_primary_boots_with_shadow_sealed_bindings_present`
-  is red on this branch: a foreign shadow-sealed binding whose local file
-  survives graduation raises `AlpacaBotIdentityRefusedError` (uncaught) from
-  `_repair_candidate`'s non-interrupted branch — the existing
-  `AlpacaLifecycleAuthorityUnavailableError` handler in
-  `bot_boot_recovery.py::_repair_lifecycle_artifacts` does not catch it, so it
-  would abort the whole sweep rather than leaving this one instance's evidence
-  untouched. Only the **Start** path's `SEALED_ACCOUNT_MISMATCH`
-  (`run_admission.py`) is confirmed. Filed for follow-up 2026-09-09.
+- **R15's boot half (both paths now confirmed).** A binding sealed on a custody
+  account the installed primary authority does not custody — after graduation,
+  the rehearsal's `shadow:<live_account_id>` bindings under the live primary —
+  is *foreign* to that authority, not corrupt. `bot_boot_recovery.py` decides
+  that from the registry's own routing (the binding's authority is the primary
+  lifecycle authority) plus the same comparison Start makes
+  (`binding.sealed_account_id != <installed Clerk account id>`), so a `sim:`
+  Dry Run binding — routed to its own per-instance authority — is never
+  foreign. Such a binding is named in the boot report's `foreign_instances`,
+  logged once (`action=boot_recovery_foreign_binding`), and **left exactly as
+  its own lifecycle files say**: never projected against an authority that has
+  never seen it, no duty state authored from the sweep (ADR 0050), and the
+  sweep never aborts. Unlike `authority_unavailable_instances` this does not
+  close the Start gate — foreign bindings are refused one at a time on Start
+  with `SEALED_ACCOUNT_MISMATCH` (`run_admission.py`), and native instances
+  stay startable.
 
 ## Decision record
 
