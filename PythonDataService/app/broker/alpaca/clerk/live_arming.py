@@ -1,0 +1,400 @@
+"""The sealed arming record, its revocation, and the pure status rule (ADR 0059 D3).
+
+Formula: ``sessions_used = trading_session_count(ET date of armed_at_ms, ET date
+  of now_ms)`` over the canonical NYSE calendar, inclusive of both dates;
+  lapsed iff ``sessions_used > max_sessions``. A record dated after the caller's
+  clock (``now_ms < armed_at_ms``) never reaches that formula: it fails closed
+  under its own reason code before the calendar is ever asked (controller
+  ruling, ADR 0059 D3 addendum).
+Reference: ADR 0059 Decision 3; design rulings R1, R2, R4, R5, R6, R12 in
+  ``docs/superpowers/specs/2026-09-09-live-slice-6-arming-ceremony-design.md``.
+Canonical implementation: this file. The ledger that stores these records is
+  ``live_arming_ledger.py``; the ceremony that mints them is
+  ``live_arming_ceremony.py``; the calendar is ``app/lean_sidecar/trading_calendar.py``.
+Validated against: ``tests/broker/alpaca/clerk/test_live_arming.py``.
+
+Nothing here touches a broker, a database, a file or a clock: every function is
+a pure fact about records the caller already read, judged at the caller's
+``now_ms``. Arming binds to the instance's *whole* sealed-program hash (R2), so
+a change to its size, action plan or account disarms it just as a change to its
+signal would.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
+
+from app.broker.alpaca.clerk.account_authority import require_real_account_id
+from app.broker.alpaca.clerk.live_envelope import (
+    LIVE_ENVELOPE_DISAGREEMENT,
+    LIVE_ENVELOPE_MISSING,
+    LiveEnvelopeValues,
+)
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.lean_sidecar.trading_calendar import trading_session_count
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
+
+LIVE_ARMING_LAPSED = "LIVE_ARMING_LAPSED"
+LIVE_ARMING_REVOKED = "LIVE_ARMING_REVOKED"
+LIVE_ARMING_SEAL_CHANGED = "LIVE_ARMING_SEAL_CHANGED"
+LIVE_ARMING_INSTANCE_UNSEALED = "LIVE_ARMING_INSTANCE_UNSEALED"
+LIVE_ARMING_TOKEN_INVALID = "LIVE_ARMING_TOKEN_INVALID"
+LIVE_ARMING_PLAN_EXPIRED = "LIVE_ARMING_PLAN_EXPIRED"
+LIVE_ARMING_INPUTS_CHANGED = "LIVE_ARMING_INPUTS_CHANGED"
+LIVE_ARMING_NOT_ARMED = "LIVE_ARMING_NOT_ARMED"
+LIVE_ARMING_TTL_INVALID = "LIVE_ARMING_TTL_INVALID"
+# A record dated after the caller's clock fails closed under its own code
+# (controller ruling): the calendar never sees a reversed range, and no
+# caller can silently extend an arming by rolling its own clock back.
+LIVE_ARMING_FUTURE_DATED = "LIVE_ARMING_FUTURE_DATED"
+# ADR 0059 D2 names this refusal; slice 4 could only write it in prose because
+# nothing read the receipt yet. This is the first code that does.
+LIVE_SHADOW_INCOMPLETE = "LIVE_SHADOW_INCOMPLETE"
+
+ARMING_REASON_CODES: frozenset[str] = frozenset(
+    {
+        LIVE_ARMING_LAPSED,
+        LIVE_ARMING_REVOKED,
+        LIVE_ARMING_SEAL_CHANGED,
+        LIVE_ARMING_INSTANCE_UNSEALED,
+        LIVE_ARMING_TOKEN_INVALID,
+        LIVE_ARMING_PLAN_EXPIRED,
+        LIVE_ARMING_INPUTS_CHANGED,
+        LIVE_ARMING_NOT_ARMED,
+        LIVE_ARMING_TTL_INVALID,
+        LIVE_ARMING_FUTURE_DATED,
+        LIVE_SHADOW_INCOMPLETE,
+        LIVE_ENVELOPE_DISAGREEMENT,
+        LIVE_ENVELOPE_MISSING,
+    }
+)
+
+ArmingState = Literal["unarmed", "armed", "lapsed", "disarmed"]
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class LiveArmingInvalid(ValueError):
+    """An arming or disarm row cannot be trusted."""
+
+
+class LiveArmingRefused(ValueError):
+    """The ceremony refused, under one named reason code."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+@dataclass(frozen=True)
+class LiveArmingRecord:
+    """One instance armed on one live account, under one sealed envelope (R1)."""
+
+    kind: Literal["armed"]
+    schema_version: int
+    live_account_id: str
+    strategy_instance_id: str
+    seal_hash: str
+    configured_signal_hash: str
+    shadow_receipt_sha256: str
+    envelope_values: dict[str, float | int]
+    envelope_sha256: str
+    armed_at_ms: int
+    max_sessions: int
+    record_sha256: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        live_account_id: str,
+        strategy_instance_id: str,
+        seal_hash: str,
+        configured_signal_hash: str,
+        shadow_receipt_sha256: str,
+        envelope: LiveEnvelopeValues,
+        armed_at_ms: int,
+        max_sessions: int,
+    ) -> LiveArmingRecord:
+        unsigned: dict[str, Any] = {
+            "kind": "armed",
+            "schema_version": 1,
+            "live_account_id": live_account_id,
+            "strategy_instance_id": strategy_instance_id,
+            "seal_hash": seal_hash,
+            "configured_signal_hash": configured_signal_hash,
+            "shadow_receipt_sha256": shadow_receipt_sha256,
+            "envelope_values": envelope.to_mapping(),
+            "envelope_sha256": envelope.sha,
+            "armed_at_ms": armed_at_ms,
+            "max_sessions": max_sessions,
+        }
+        record = cls(**unsigned, record_sha256=canonical_sha256(unsigned))
+        _validate_armed(record)
+        return record
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> LiveArmingRecord:
+        return _from_payload(cls, payload, _validate_armed)
+
+    @property
+    def envelope(self) -> LiveEnvelopeValues:
+        """The envelope this record sealed, rebuilt from its own values."""
+        return LiveEnvelopeValues(**self.envelope_values)
+
+
+@dataclass(frozen=True)
+class LiveDisarmRecord:
+    """One operator revocation, the closed direction of the ceremony (R4)."""
+
+    kind: Literal["disarmed"]
+    schema_version: int
+    live_account_id: str
+    strategy_instance_id: str
+    revokes_record_sha256: str
+    disarmed_at_ms: int
+    record_sha256: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        live_account_id: str,
+        strategy_instance_id: str,
+        revokes_record_sha256: str,
+        disarmed_at_ms: int,
+    ) -> LiveDisarmRecord:
+        unsigned: dict[str, Any] = {
+            "kind": "disarmed",
+            "schema_version": 1,
+            "live_account_id": live_account_id,
+            "strategy_instance_id": strategy_instance_id,
+            "revokes_record_sha256": revokes_record_sha256,
+            "disarmed_at_ms": disarmed_at_ms,
+        }
+        record = cls(**unsigned, record_sha256=canonical_sha256(unsigned))
+        _validate_disarmed(record)
+        return record
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> LiveDisarmRecord:
+        return _from_payload(cls, payload, _validate_disarmed)
+
+
+LedgerRecord = LiveArmingRecord | LiveDisarmRecord
+
+
+def _unsigned(record: LedgerRecord) -> dict[str, Any]:
+    payload = asdict(record)
+    del payload["record_sha256"]
+    return payload
+
+
+def _from_payload(cls, payload: Mapping[str, Any], validate) -> Any:
+    """Build, validate and verify one row, or leave by this module's error.
+
+    Everything is inside the guard for the reason ``shadow_receipt.from_payload``
+    states: a hand-edited row whose integer became a string must leave as
+    ``LiveArmingInvalid``, not as a bare ``TypeError`` from a comparison.
+    """
+    try:
+        record = cls(**payload)
+        validate(record)
+        if record.record_sha256 != canonical_sha256(_unsigned(record)):
+            raise LiveArmingInvalid("live arming record digest does not verify")
+    except LiveArmingInvalid:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LiveArmingInvalid("live arming record has an invalid shape") from exc
+    return record
+
+
+def _require_real(account_id: str) -> None:
+    try:
+        require_real_account_id(account_id)
+    except ValueError as exc:
+        raise LiveArmingInvalid("live arming record names a reserved account identity as real") from exc
+
+
+def _require_hashes(*values: str) -> None:
+    if any(not isinstance(value, str) or _SHA256.match(value) is None for value in values):
+        raise LiveArmingInvalid("live arming record has invalid hash facts")
+
+
+def _validate_armed(record: LiveArmingRecord) -> None:
+    _require_real(record.live_account_id)
+    if (
+        record.kind != "armed"
+        or record.schema_version != 1
+        or not record.strategy_instance_id
+        or record.max_sessions < 1
+        or not 0 <= record.armed_at_ms <= MAX_TIMESTAMP_MS
+    ):
+        raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
+    _require_hashes(
+        record.seal_hash,
+        record.configured_signal_hash,
+        record.shadow_receipt_sha256,
+        record.envelope_sha256,
+    )
+    try:
+        sealed = LiveEnvelopeValues(**record.envelope_values)
+    except TypeError as exc:
+        raise LiveArmingInvalid("live arming record's sealed envelope has an invalid shape") from exc
+    if sealed.sha != record.envelope_sha256:
+        raise LiveArmingInvalid("live arming record's envelope sha does not match its sealed values")
+
+
+def _validate_disarmed(record: LiveDisarmRecord) -> None:
+    _require_real(record.live_account_id)
+    if (
+        record.kind != "disarmed"
+        or record.schema_version != 1
+        or not record.strategy_instance_id
+        or not 0 <= record.disarmed_at_ms <= MAX_TIMESTAMP_MS
+    ):
+        raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
+    _require_hashes(record.revokes_record_sha256)
+
+
+def sessions_used(*, armed_at_ms: int, now_ms: int) -> int:
+    """Calendar NYSE sessions spent since the arming, both ET dates inclusive (R6).
+
+    The arming session counts as one, so an arming at 15:59 ET spends a whole
+    session on a minute -- disclosed, and what ``sessions_remaining`` is for. An
+    arming on a non-trading ET date starts counting at the next session, which
+    is exactly what the inclusive count over the calendar already says.
+
+    A ``now_ms`` behind the arming is refused, not absorbed: this raises
+    ``ValueError`` rather than returning 0, so the calendar is never asked to
+    evaluate a reversed range and no caller can silently extend an arming by
+    rolling its own clock back (controller ruling). ``arming_status`` checks
+    for this case itself before ever calling here, and reports it under
+    ``LIVE_ARMING_FUTURE_DATED``.
+    """
+    armed_date = et_date_at_ms(armed_at_ms)
+    now_date = et_date_at_ms(now_ms)
+    if now_date < armed_date:
+        raise ValueError("sessions_used refuses a reversed range: now_ms precedes armed_at_ms")
+    return trading_session_count(armed_date, now_date)
+
+
+@dataclass(frozen=True)
+class ArmingStatus:
+    """One instance's arming state and the evidence behind it."""
+
+    state: ArmingState
+    reason_code: str | None
+    record: LiveArmingRecord | None
+    sessions_used: int
+    sessions_remaining: int
+
+
+def arming_status(
+    records: Sequence[LedgerRecord],
+    *,
+    live_account_id: str,
+    strategy_instance_id: str,
+    seal_hash: str | None,
+    configured_envelope: LiveEnvelopeValues,
+    now_ms: int,
+) -> ArmingStatus:
+    """This instance's arming state, decided by its latest record alone (R5).
+
+    The checks run in order -- ``REVOKED`` -> ``SEAL_CHANGED`` ->
+    ``LIVE_ENVELOPE_DISAGREEMENT`` -> ``LIVE_ARMING_FUTURE_DATED`` -> ``LAPSED``
+    -- and the first failure names the state. Order is meaning, not
+    optimisation: an instance whose seal changed *and* whose arming has lapsed
+    is reported as seal-changed, because re-sealing is what its operator has
+    to do first. ``LIVE_ARMING_FUTURE_DATED`` is checked as a plain comparison
+    before ``sessions_used`` is ever called, so a record dated after ``now_ms``
+    can still be reported as seal-changed or in envelope disagreement without
+    the calendar seeing a reversed range (controller ruling).
+
+    ``seal_hash=None`` means no sealed binding for this instance exists on this
+    account any more, which is a change from whatever was armed -- so it is
+    ``LIVE_ARMING_SEAL_CHANGED``, never ``armed``.
+    """
+    latest: LedgerRecord | None = None
+    for record in records:
+        if record.live_account_id == live_account_id and record.strategy_instance_id == strategy_instance_id:
+            latest = record
+    if latest is None:
+        return ArmingStatus(state="unarmed", reason_code=None, record=None, sessions_used=0, sessions_remaining=0)
+    if isinstance(latest, LiveDisarmRecord):
+        return ArmingStatus(
+            state="disarmed", reason_code=LIVE_ARMING_REVOKED, record=None, sessions_used=0, sessions_remaining=0
+        )
+
+    future_dated = now_ms < latest.armed_at_ms
+    if future_dated:
+        used, remaining = 0, latest.max_sessions
+    else:
+        used = sessions_used(armed_at_ms=latest.armed_at_ms, now_ms=now_ms)
+        remaining = max(0, latest.max_sessions - used)
+
+    if seal_hash is None or seal_hash != latest.seal_hash:
+        return ArmingStatus(
+            state="disarmed",
+            reason_code=LIVE_ARMING_SEAL_CHANGED,
+            record=latest,
+            sessions_used=used,
+            sessions_remaining=remaining,
+        )
+    if latest.envelope_sha256 != configured_envelope.sha:
+        return ArmingStatus(
+            state="disarmed",
+            reason_code=LIVE_ENVELOPE_DISAGREEMENT,
+            record=latest,
+            sessions_used=used,
+            sessions_remaining=remaining,
+        )
+    if future_dated:
+        return ArmingStatus(
+            state="disarmed",
+            reason_code=LIVE_ARMING_FUTURE_DATED,
+            record=latest,
+            sessions_used=used,
+            sessions_remaining=remaining,
+        )
+    if used > latest.max_sessions:
+        return ArmingStatus(
+            state="lapsed",
+            reason_code=LIVE_ARMING_LAPSED,
+            record=latest,
+            sessions_used=used,
+            sessions_remaining=0,
+        )
+    return ArmingStatus(
+        state="armed", reason_code=None, record=latest, sessions_used=used, sessions_remaining=remaining
+    )
+
+
+__all__ = [
+    "ARMING_REASON_CODES",
+    "LIVE_ARMING_FUTURE_DATED",
+    "LIVE_ARMING_INPUTS_CHANGED",
+    "LIVE_ARMING_INSTANCE_UNSEALED",
+    "LIVE_ARMING_LAPSED",
+    "LIVE_ARMING_NOT_ARMED",
+    "LIVE_ARMING_PLAN_EXPIRED",
+    "LIVE_ARMING_REVOKED",
+    "LIVE_ARMING_SEAL_CHANGED",
+    "LIVE_ARMING_TOKEN_INVALID",
+    "LIVE_ARMING_TTL_INVALID",
+    "LIVE_ENVELOPE_DISAGREEMENT",
+    "LIVE_ENVELOPE_MISSING",
+    "LIVE_SHADOW_INCOMPLETE",
+    "ArmingState",
+    "ArmingStatus",
+    "LedgerRecord",
+    "LiveArmingInvalid",
+    "LiveArmingRecord",
+    "LiveArmingRefused",
+    "LiveDisarmRecord",
+    "arming_status",
+    "sessions_used",
+]
