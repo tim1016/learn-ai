@@ -8,8 +8,11 @@ path. ``disarm`` appends a revocation; it is the closed direction and takes no
 plan.
 
 The live account is never supplied on the command line: it is observed from the
-shadow activation fence under ``--artifacts-root``, so an arming can only name an
-account a shadow gate was actually run against.
+shadow activation fence under ``--artifacts-root`` (and, for ``disarm`` alone
+when that fence is gone or ambiguous, from the arming ledger that already
+names the instance), so an arming can only name an account a shadow gate was
+actually run against. ``plan``, ``apply`` and ``status`` still observe only
+the fence.
 
 Exit codes: ``0`` the command answered; ``1`` the command cannot be run as asked
 -- a plan file that is not one, a ledger row that will not verify, or a usage

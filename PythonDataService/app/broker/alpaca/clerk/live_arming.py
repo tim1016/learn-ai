@@ -254,6 +254,12 @@ def _validate_armed(record: LiveArmingRecord) -> None:
         sealed = LiveEnvelopeValues(**record.envelope_values)
     except TypeError as exc:
         raise LiveArmingInvalid("live arming record's sealed envelope has an invalid shape") from exc
+    # ``LiveEnvelopeValues`` is a plain frozen dataclass with no field validation
+    # of its own, so a re-sealed row can carry ``1.0`` or ``True`` for either
+    # integer field and still verify -- the same gap ``_is_int`` closed above
+    # for the record's own four integers.
+    if not _is_int(sealed.shadow_sessions) or not _is_int(sealed.arming_max_sessions):
+        raise LiveArmingInvalid("live arming record's sealed envelope has invalid integer facts")
     if sealed.sha != record.envelope_sha256:
         raise LiveArmingInvalid("live arming record's envelope sha does not match its sealed values")
     # The lapse count is the sealed envelope's, not a second number beside it.

@@ -213,6 +213,29 @@ def test_an_integer_fact_that_is_a_float_or_a_bool_is_refused(value: object) -> 
         LiveDisarmRecord.from_payload({**asdict(_disarmed(record)), "schema_version": value})
 
 
+@pytest.mark.parametrize("key", ["shadow_sessions", "arming_max_sessions"])
+@pytest.mark.parametrize("value", [1.0, True])
+def test_a_resealed_envelope_integer_that_is_a_float_or_a_bool_is_refused(key: str, value: object) -> None:
+    """``LiveEnvelopeValues`` is a plain dataclass with no field validation of its
+    own, unlike the record's own four integers. A row re-sealed over a
+    tampered ``envelope_values`` entry verifies both its own digest and its
+    envelope sha, so only a type check by name catches ``1.0`` or ``True``
+    where ``shadow_sessions`` or ``arming_max_sessions`` promises an integer.
+    """
+    record = _armed()
+    tampered_envelope = {**record.envelope_values, key: value}
+    unsigned = {name: field_value for name, field_value in asdict(record).items() if name != "record_sha256"}
+    widened = {
+        **unsigned,
+        "envelope_values": tampered_envelope,
+        "envelope_sha256": canonical_sha256(tampered_envelope),
+    }
+    resealed = {**widened, "record_sha256": canonical_sha256(widened)}
+
+    with pytest.raises(LiveArmingInvalid, match="invalid integer facts"):
+        LiveArmingRecord.from_payload(resealed)
+
+
 def test_a_type_confused_row_leaves_by_this_modules_own_error() -> None:
     payload = {**asdict(_armed()), "armed_at_ms": str(FRIDAY_MS)}
     with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):

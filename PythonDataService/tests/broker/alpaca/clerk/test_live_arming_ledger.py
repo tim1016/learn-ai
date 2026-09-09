@@ -244,6 +244,24 @@ def test_revoking_an_instance_with_no_arming_row_refuses_and_writes_nothing(tmp_
     assert [type(row) for row in ledger.records()] == [LiveArmingRecord, LiveDisarmRecord]
 
 
+def test_a_refused_revoke_on_a_fresh_root_creates_no_arming_directory(tmp_path: Path) -> None:
+    """A refusal must precede the lock, so it leaves no trace on disk.
+
+    ``advisory_file_lock`` mkdirs the ledger's parent directory (and would
+    create the sibling ``.live_arming.jsonl.lock`` file) before any guard
+    inside the ``with`` block can run. A ledger file that does not exist yet
+    cannot hold an arming row to revoke, so ``revoke_latest`` must refuse
+    before taking the lock at all -- not just before writing a row.
+    """
+    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        ledger.revoke_latest(SID, disarmed_at_ms=FRIDAY_MS)
+
+    assert caught.value.reason_code == LIVE_ARMING_NOT_ARMED
+    assert not (tmp_path / "accounts" / "arming").exists()
+
+
 def test_discover_finds_the_one_account_whose_ledger_names_the_instance(tmp_path: Path) -> None:
     """The arming tree answers without the shadow activation proof."""
     LiveArmingLedger(tmp_path, live_account_id=OTHER_ACCOUNT).append(

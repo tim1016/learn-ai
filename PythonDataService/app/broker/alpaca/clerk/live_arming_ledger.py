@@ -117,7 +117,20 @@ class LiveArmingLedger:
         The refusal is the ceremony's own ``LIVE_ARMING_NOT_ARMED``: there is
         nothing to revoke when the instance's last row is a revocation, or when
         it has no row at all.
+
+        A ledger file that does not exist yet is refused before the lock is
+        taken: ``advisory_file_lock`` would ``mkdir`` the account directory and
+        create the sibling lock file as a side effect of merely checking, and a
+        ledger that does not exist cannot hold an arming row to revoke. The
+        under-lock check below still runs for the existing-file case, so the
+        race protection against a concurrent re-arm or double-disarm is
+        unchanged.
         """
+        if not self._path.exists():
+            raise LiveArmingRefused(
+                LIVE_ARMING_NOT_ARMED,
+                f"{strategy_instance_id} has no arming record to revoke on {self._live_account_id}",
+            )
         with advisory_file_lock(self._path):
             latest = self.latest(strategy_instance_id)
             if not isinstance(latest, LiveArmingRecord):
