@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -1221,25 +1222,35 @@ def _arming(state: str, *, reason_code: str | None = None, observed_at_ms: int =
 
 def test_an_unreadable_arming_ledger_refuses_a_live_launch_after_the_corpus_gate() -> None:
     decision = evaluate_run_admission(
-        _bot(arming=_arming("UNREADABLE", reason_code="LIVE_ARMING_LEDGER_INVALID")),
+        _bot(arming=_arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID)),
         _clerk(account_mode="live"),
         evaluated_at_ms=_NOW,
     )
     assert decision.allowed is False
-    assert decision.reason_code == "LIVE_ARMING_LEDGER_INVALID"
+    assert decision.reason_code == LIVE_ARMING_LEDGER_INVALID
     assert "does not verify" in decision.explanation
 
 
-def test_the_corpus_gate_still_comes_first() -> None:
-    bot = _bot(arming=_arming("UNREADABLE", reason_code="LIVE_ARMING_LEDGER_INVALID"))
+def test_the_build_proof_gate_still_comes_first() -> None:
+    bot = _bot(arming=_arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID))
     bot = bot.model_copy(update={"program_build": _program_build(_NOW - 1_000, state="UNPROVEN")})
     decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
     assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
 
 
+def test_the_corpus_gate_still_comes_first() -> None:
+    """R6: an uncovered corpus refuses before the arming ledger is even consulted."""
+    bot = _uncovered_bot(mode="dry_run").model_copy(
+        update={"arming": _arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID)}
+    )
+    decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+
+
 def test_a_not_armed_live_launch_is_admitted_and_says_every_enter_will_refuse() -> None:
     decision = evaluate_run_admission(
-        _bot(arming=_arming("NOT_ARMED", reason_code="LIVE_ARMING_REQUIRED")),
+        _bot(arming=_arming("NOT_ARMED", reason_code=LIVE_ARMING_REQUIRED)),
         _clerk(account_mode="live"),
         evaluated_at_ms=_NOW,
     )
@@ -1254,3 +1265,4 @@ def test_an_armed_or_not_applicable_launch_carries_no_arming_note() -> None:
         decision = evaluate_run_admission(_bot(arming=arming), _clerk(), evaluated_at_ms=_NOW)
         assert decision.allowed is True
         assert ARMING_REQUIRED_ADMITTED_NOTE not in decision.explanation
+        assert decision.next_step is None

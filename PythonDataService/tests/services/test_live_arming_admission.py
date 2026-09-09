@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED, LiveArmingRecord
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
@@ -13,6 +16,8 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.schemas.account_authority import CustodyWorld
+from app.schemas.run_admission import ArmingAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.live_arming_admission import live_arming_admission_fact
 from tests.broker.alpaca.clerk.live_arming_fixtures import ARMED_AT_MS, live_settings, record_sealed_binding
@@ -62,7 +67,13 @@ def _custody(account_id: str = LIVE_ACCT, account_mode: str = "live") -> ClerkCu
     )
 
 
-def _fact(tmp_path: Path, live_state_root: Path, *, custody=None, custody_world: str = "real_live"):
+def _fact(
+    tmp_path: Path,
+    live_state_root: Path,
+    *,
+    custody: ClerkCustodySnapshot | None = None,
+    custody_world: CustodyWorld = "real_live",
+) -> ArmingAdmissionFact | None:
     return live_arming_admission_fact(
         _binding(),
         custody or _custody(),
@@ -74,11 +85,35 @@ def _fact(tmp_path: Path, live_state_root: Path, *, custody=None, custody_world:
     )
 
 
-def test_paper_shadow_and_dry_run_launches_get_no_fact(tmp_path: Path) -> None:
-    assert _fact(tmp_path, tmp_path / "runner", custody=_custody("PA-TEST", "paper"), custody_world="real_paper") is None
-    assert _fact(tmp_path, tmp_path / "runner", custody_world="shadow") is None
-    dry = _binding().model_copy(update={"mode": "dry_run", "sealed_account_id": f"sim:{SID}"})
-    assert live_arming_admission_fact(dry, _custody(), NOW, custody_world="real_live", settings=live_settings(), artifacts_root=tmp_path, live_state_root=tmp_path / "runner") is None
+@pytest.mark.parametrize(
+    ("binding", "custody", "custody_world"),
+    [
+        pytest.param(_binding(), _custody("PA-TEST", "paper"), "real_paper", id="paper_custody_on_real_paper"),
+        pytest.param(_binding(), _custody(), "shadow", id="live_custody_on_shadow"),
+        pytest.param(
+            _binding().model_copy(update={"mode": "dry_run", "sealed_account_id": f"sim:{SID}"}),
+            _custody(),
+            "real_live",
+            id="dry_run_binding_on_real_live",
+        ),
+    ],
+)
+def test_paper_shadow_and_dry_run_launches_get_no_fact(
+    tmp_path: Path,
+    binding: BrokerBotBinding,
+    custody: ClerkCustodySnapshot,
+    custody_world: CustodyWorld,
+) -> None:
+    fact = live_arming_admission_fact(
+        binding,
+        custody,
+        NOW,
+        custody_world=custody_world,
+        settings=live_settings(),
+        artifacts_root=tmp_path,
+        live_state_root=tmp_path / "runner",
+    )
+    assert fact is None
 
 
 def test_a_never_armed_live_instance_is_not_armed_and_names_the_ceremony(tmp_path: Path) -> None:
@@ -110,10 +145,34 @@ def test_an_armed_live_instance_is_armed(tmp_path: Path) -> None:
     assert (fact.state, fact.reason_code) == ("ARMED", None)
 
 
-def test_an_unreadable_ledger_is_unreadable_not_unarmed(tmp_path: Path) -> None:
+def test_another_accounts_arming_record_does_not_arm_this_account(tmp_path: Path) -> None:
+    """The resolver reads the ledger of the account being launched, not any ledger it finds."""
+    live_state_root = tmp_path / "runner"
+    seal = record_sealed_binding(live_state_root, strategy_instance_id=SID, sealed_account_id=LIVE_ACCT)
+    other = "9LIVE0002"
+    LiveArmingLedger(tmp_path, live_account_id=other).append(
+        LiveArmingRecord.create(
+            live_account_id=other,
+            strategy_instance_id=SID,
+            seal_hash=seal.bot_configuration_hash,
+            configured_signal_hash=seal.configured_signal_hash,
+            shadow_receipt_sha256=None,
+            envelope=TEST_ENVELOPE_VALUES,
+            armed_at_ms=ARMED_AT_MS,
+            max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
+        )
+    )
+    fact = _fact(tmp_path, live_state_root)
+    assert fact is not None
+    assert (fact.state, fact.reason_code) == ("NOT_ARMED", LIVE_ARMING_REQUIRED)
+
+
+def test_an_unreadable_ledger_is_unreadable_not_unarmed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
     ledger.path.parent.mkdir(parents=True, exist_ok=True)
     ledger.path.write_text('{"kind":"armed","schema_version":1}\n', encoding="utf-8")
-    fact = _fact(tmp_path, tmp_path / "runner")
+    with caplog.at_level(logging.WARNING):
+        fact = _fact(tmp_path, tmp_path / "runner")
     assert fact is not None
     assert (fact.state, fact.reason_code) == ("UNREADABLE", LIVE_ARMING_LEDGER_INVALID)
+    assert any(record.action == "live_arming_admission_unreadable" for record in caplog.records)

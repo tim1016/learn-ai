@@ -49,6 +49,11 @@ _EXTENDED_HOURS_REFUSALS: dict[str, LegRefusal] = {
 }
 
 
+def _not_armed(bot: RunAdmissionFacts) -> bool:
+    """Whether the admitted launch must say that every ENTER refuses until it is armed (R6)."""
+    return bot.arming is not None and bot.arming.state == "NOT_ARMED"
+
+
 def _exposure_matches(
     checkpoint: dict[str, float],
     observed: dict[str, float] | None,
@@ -487,7 +492,7 @@ def evaluate_run_admission(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
         explanation=_admitted_explanation(bot),
-        next_step=ARMING_NEXT_STEP if bot.arming is not None and bot.arming.state == "NOT_ARMED" else None,
+        next_step=ARMING_NEXT_STEP if _not_armed(bot) else None,
     )
 
 
@@ -500,6 +505,6 @@ def _admitted_explanation(bot: RunAdmissionFacts) -> str:
     )
     if bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
-    if bot.arming is not None and bot.arming.state == "NOT_ARMED":
+    if _not_armed(bot):
         admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
     return admitted

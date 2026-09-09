@@ -8,6 +8,7 @@ byte-for-byte what they were.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.account_authority import CustodyWorld
 from app.schemas.run_admission import ARMING_NEXT_STEP, ArmingAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding
+
+logger = logging.getLogger(__name__)
 
 ArmingFactResolver = Callable[[BrokerBotBinding, ClerkCustodySnapshot, int], ArmingAdmissionFact | None]
 
@@ -56,10 +59,23 @@ def live_arming_admission_fact(
             strategy_instance_ids=(binding.strategy_instance_id,),
         )
     except (LiveArmingInvalid, LiveEnvelopeIncomplete, ValidationError) as exc:
+        logger.warning(
+            "live arming evidence unreadable; the launch is refused",
+            extra={
+                "action": "live_arming_admission_unreadable",
+                "live_account_id": custody.account_id,
+                "strategy_instance_id": binding.strategy_instance_id,
+                "reason_code": LIVE_ARMING_LEDGER_INVALID,
+                "error": str(exc),
+            },
+        )
         return ArmingAdmissionFact(
             state="UNREADABLE",
             reason_code=LIVE_ARMING_LEDGER_INVALID,
-            explanation=f"The arming evidence cannot be judged: {exc}",
+            explanation=(
+                "The arming ledger or the ALPACA_LIVE_* environment for this account does not "
+                "verify; the detail is in the service log."
+            ),
             next_step="Restore the arming ledger and the ALPACA_LIVE_* environment, then retry.",
             observed_at_ms=observed_at_ms,
         )
