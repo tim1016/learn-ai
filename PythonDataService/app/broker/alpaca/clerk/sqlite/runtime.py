@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -217,6 +218,7 @@ class SqliteAlpacaClerkFacade:
         account_mode: Literal["paper", "live"],
         program_leg_policy: ProgramLegPolicy | None = None,
         live_envelope: LiveEnvelopeGate | None = None,
+        live_arming: ArmingGate | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -228,6 +230,13 @@ class SqliteAlpacaClerkFacade:
                 raise AccountAuthorityIdentityError("a shadow authority reads a live account")
         else:
             require_real_account_id(repo.account_id)
+            # ADR 0059 D11 (slice 7): a real-money facade is never a permissive
+            # default. Both gates are composed by the live selector; a live
+            # facade with either missing is a composition bug, refused here.
+            if account_mode == "live" and (live_envelope is None or live_arming is None):
+                raise AccountAuthorityIdentityError(
+                    "a live sqlite authority requires a risk envelope and an arming gate"
+                )
         self._repo = repo
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
@@ -245,6 +254,9 @@ class SqliteAlpacaClerkFacade:
         # or ``None`` where no envelope is configured (paper, synthetic).
         # Composed by the authority selector, never built here.
         self._live_envelope = live_envelope
+        # ADR 0059 D11: per-instance arming, consulted at ENTER on the live
+        # authority only; ``None`` on paper and under shadow.
+        self._live_arming = live_arming
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -279,6 +291,16 @@ class SqliteAlpacaClerkFacade:
     def live_envelope(self) -> LiveEnvelopeGate | None:
         """The envelope this authority admits ENTERs against, if it has one."""
         return self._live_envelope
+
+    @property
+    def live_arming(self) -> ArmingGate | None:
+        """The per-instance arming gate this authority admits ENTERs against, if it has one."""
+        return self._live_arming
+
+    @property
+    def account_mode(self) -> Literal["paper", "live"]:
+        """The environment every custody answer names (ADR 0054), learned at activation."""
+        return self._account_mode
 
     @property
     def intake(self) -> ReentrantAsyncLock:
@@ -841,6 +863,7 @@ class SqliteAlpacaClerkFacade:
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
+                        arming=self._live_arming,
                         # The bar's close is a ``Decimal``; the envelope's money
                         # is float end to end (``BrokerAccountSnapshot.cash``,
                         # the REAL columns the reservation is stored in, and

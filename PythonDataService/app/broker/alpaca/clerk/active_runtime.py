@@ -62,8 +62,10 @@ if TYPE_CHECKING:
     # sort order, is the thing to fix, and it is not this slice's to fix.
     # ``live_arming_ledger`` imports ``live_envelope``, so it is here for
     # exactly the same reason.
+    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
     from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
     from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+    from app.broker.alpaca.clerk.sqlite.live_envelope_sync import InstanceSeals
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
@@ -257,6 +259,8 @@ async def compose_repository_runtime(
     live_envelope: LiveEnvelopeGate | None = None,
     envelope_read: BrokerReadPort | None = None,
     arming_ledger: LiveArmingLedger | None = None,
+    arming_gate: ArmingGate | None = None,
+    instance_seals: InstanceSeals | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -272,6 +276,12 @@ async def compose_repository_runtime(
     ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
     envelope sync re-reads it every tick so an arming performed by the
     out-of-process CLI reaches the running gate within one cadence.
+
+    ``arming_gate`` and ``instance_seals`` exist only on the live authority
+    (ADR 0059 D11, slice 7): the gate the facade admits ENTERs against, and
+    the runner's sealed bindings the sync reads beside the ledger every tick
+    — injected as a callable, the ``roster_symbols`` pattern, so the clerk
+    layer never learns the runner's root.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -303,6 +313,7 @@ async def compose_repository_runtime(
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
+            live_arming=arming_gate,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -368,6 +379,8 @@ async def compose_repository_runtime(
                 ),
                 envelope=live_envelope,
                 arming_ledger=arming_ledger,
+                arming_gate=arming_gate,
+                instance_seals=instance_seals,
             )
         )
         await asyncio.wait_for(
