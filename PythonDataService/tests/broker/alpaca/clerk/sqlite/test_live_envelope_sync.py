@@ -48,10 +48,16 @@ class _Read:
         last_equity: float | None = 100_000.0,
         unrealized: float = 0.0,
         fail: bool = False,
+        fail_unexpectedly: bool = False,
     ) -> None:
         self.cash, self.last_equity, self.unrealized, self.fail = cash, last_equity, unrealized, fail
+        # Not a ``BrokerError``: ``tick`` has no verdict for this, so it is
+        # what reaches ``run``'s own guard.
+        self.fail_unexpectedly = fail_unexpectedly
 
     async def get_account(self) -> BrokerAccountSnapshot:
+        if self.fail_unexpectedly:
+            raise RuntimeError("the read port raised something tick does not classify")
         if self.fail:
             raise BrokerUnavailable("account read timed out")
         return BrokerAccountSnapshot(
@@ -212,6 +218,32 @@ async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     assert sync.envelope.fresh_observation(NOON) is None
 
 
+async def test_a_hold_that_stands_over_an_unjudgeable_account_says_so(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Same verdict, different situation: the diagnosis rides on the line.
+
+    A hold over a judgeable account clears on the operator's next guarded
+    attempt; a hold over an unjudgeable one cannot be attempted at all,
+    because the clear re-observes and refuses UNOBSERVED.
+    """
+    read = _Read(unrealized=-5_000.0)
+    sync = make_sync(day_pnl_repo, read)
+    assert await sync.tick() == "hold_raised"
+
+    read.last_equity = None
+    caplog.clear()  # the raise above is already captured; this asserts the next line
+    with caplog.at_level(logging.INFO, logger=SYNC_LOGGER):
+        assert await sync.tick() == "hold_stands"
+
+    (record,) = _sync_records(caplog)
+    assert record.action == "live_envelope_hold_stands"
+    assert record.why == "the account is also unjudgeable"
+    assert record.last_equity_known is False
+
+
 async def test_an_unknown_fact_raises_nothing(
     day_pnl_repo: ClerkSqliteRepository,
     seeded_external_order_today: None,
@@ -302,12 +334,43 @@ async def test_only_a_change_of_verdict_is_logged(
 async def test_the_loop_survives_a_failing_tick(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """An unattended dead sync is how the envelope goes blind to a losing day.
+
+    The fault is deliberately *not* a ``BrokerError``: ``tick`` classifies
+    those into ``read_failed`` and never reaches ``run``'s guard, so a test
+    injecting one would leave the guard unexercised.
+    """
     slept: list[float] = []
 
     async def sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    sync = make_sync(day_pnl_repo, _Read(fail=True), interval_s=15.0, sleep=sleep, max_ticks=3)
-    await sync.run()
+    sync = make_sync(
+        day_pnl_repo,
+        _Read(fail_unexpectedly=True),
+        interval_s=15.0,
+        sleep=sleep,
+        max_ticks=3,
+    )
+    with caplog.at_level(logging.ERROR, logger=SYNC_LOGGER):
+        await sync.run()
+
     assert slept == [15.0, 15.0, 15.0]
+    records = _sync_records(caplog)
+    assert len(records) == 3
+    assert {record.action for record in records} == {"live_envelope_sync_failed"}
+    assert records[0].exc_info is not None
+
+
+async def test_a_stopped_sync_refuses_to_start_again(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """``stop()`` closes the projection reader, and nothing reopens it."""
+    sync = make_sync(day_pnl_repo, _Read())
+    await sync.stop()
+
+    with pytest.raises(RuntimeError, match="terminal after stop"):
+        sync.start()

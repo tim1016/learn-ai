@@ -67,6 +67,9 @@
   claims until its fills are observed (ADR 0059 Decision 4). It is product
   evidence outside the hash chain, like `decision_receipts`: written inside
   `ENTER_ACCEPTED`'s transaction, never in `facts_json`, never in the mirror.
+  It also indexes `external_orders.observed_at_ms`: the day-P&L rule asks
+  that column one question on every 15 s envelope tick and the table's only
+  index was on `broker_order_id`.
   The registered v12 → v13 migration is the same statement list the fresh
   block renders, so it also re-publishes the `holds` view — a view's SQL is
   stored text fixed at the version that created it, and only re-rendering it
@@ -1090,6 +1093,7 @@ CREATE TABLE IF NOT EXISTS envelope_reservations (
     reserved_at_ms           INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS ix_external_orders_observed_at_ms ON external_orders(observed_at_ms);
 DROP VIEW IF EXISTS holds;
 CREATE VIEW holds AS
 SELECT

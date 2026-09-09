@@ -150,6 +150,7 @@ class LiveEnvelopeSync:
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
         self._task: asyncio.Task[None] | None = None
+        self._stopped = False
 
     async def observe(self) -> EnvelopeReading:
         """One broker read → the day-P&L reading, and the gate's observation.
@@ -219,7 +220,17 @@ class LiveEnvelopeSync:
         except BrokerError as exc:
             return self._acted("read_failed", {"why": str(exc)})
         if self._hold_stands():
-            return self._acted("hold_stands", {})
+            # A hold standing over an account that *also* cannot be judged is a
+            # different operator situation from one over a judgeable account:
+            # the second clears on the next guarded attempt, the first cannot
+            # be attempted at all. Same verdict, so the same action -- but the
+            # diagnosis rides along rather than being invisible.
+            return self._acted(
+                "hold_stands",
+                {}
+                if reading.breached is not None
+                else {"why": "the account is also unjudgeable", **_unknown_detail(reading)},
+            )
         if reading.breached is None:
             return self._acted("unknown", _unknown_detail(reading))
         cause = _breach_cause(reading)
@@ -279,10 +290,20 @@ class LiveEnvelopeSync:
             await self._sleep(self._interval_s)
 
     def start(self) -> None:
+        """Begin the loop, unless this sync has already been stopped.
+
+        ``stop()`` closes the projection reader the constructor opened, and a
+        reader is never reopened -- so a restarted loop would tick against a
+        closed connection and fail every 15 s. Refusing here names the
+        programming error instead of burying it in the swallowed-tick log.
+        """
+        if self._stopped:
+            raise RuntimeError("LiveEnvelopeSync is terminal after stop()")
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self.run(), name="alpaca-live-envelope-sync")
 
     async def stop(self) -> None:
+        self._stopped = True
         task, self._task = self._task, None
         if task is not None:
             task.cancel()

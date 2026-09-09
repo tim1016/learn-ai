@@ -245,8 +245,19 @@ CREATE TABLE IF NOT EXISTS envelope_reservations (
 # ``HOLDS_COMPATIBILITY_VIEW_DDL`` the v12 statements use is what makes a fresh
 # and an upgraded file converge by construction rather than by two hand-kept
 # strings agreeing.
-ENVELOPE_RESERVATIONS_V13_STATEMENTS: tuple[str, ...] = (
+# The day-P&L rule asks ``external_orders`` one question on every 15 s envelope
+# tick -- "was any order the Clerk did not place observed since the ET day
+# opened?" (plan R5) -- and the table's only index is on ``broker_order_id``,
+# so that question was a full scan. Additive, and in the same statement list,
+# so fresh and upgraded files converge exactly as the view above does.
+EXTERNAL_ORDERS_OBSERVED_AT_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS ix_external_orders_observed_at_ms "
+    "ON external_orders(observed_at_ms)"
+)
+
+SCHEMA_V13_STATEMENTS: tuple[str, ...] = (
     ENVELOPE_RESERVATIONS_TABLE_DDL,
+    EXTERNAL_ORDERS_OBSERVED_AT_INDEX_DDL,
     "DROP VIEW IF EXISTS holds",
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )

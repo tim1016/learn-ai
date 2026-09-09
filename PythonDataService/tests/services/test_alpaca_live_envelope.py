@@ -53,19 +53,25 @@ async def paper_runtime(tmp_path: Path) -> AsyncIterator[ActiveClerkRuntime]:
     """A real-paper authority, which composes no envelope at all (Task 7)."""
     broker = _Broker()
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    runtime = await select_active_clerk_runtime(
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-        activation_store=_ActivationStore(_activation()),
-        repository_opener=lambda _account_id, _root: repo,
-        live_envelope_values=TEST_ENVELOPE_VALUES,
-    )
-    assert runtime.authority_kind == "sqlite"
+    runtime: ActiveClerkRuntime | None = None
     try:
+        runtime = await select_active_clerk_runtime(
+            read=broker,
+            trade=broker,
+            artifacts_root=tmp_path,
+            activation_store=_ActivationStore(_activation()),
+            repository_opener=lambda _account_id, _root: repo,
+            live_envelope_values=TEST_ENVELOPE_VALUES,
+        )
+        assert runtime.authority_kind == "sqlite"
         yield runtime
     finally:
-        await runtime.close()
+        # A composed runtime owns this handle; a refused selection leaves it
+        # to the fixture, execution lease and all.
+        if runtime is None:
+            repo.close()
+        else:
+            await runtime.close()
 
 
 async def test_the_clear_refuses_while_the_breach_stands_then_clears_once_it_has_lifted(

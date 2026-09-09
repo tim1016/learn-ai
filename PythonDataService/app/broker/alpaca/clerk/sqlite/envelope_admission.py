@@ -51,6 +51,9 @@ def require_envelope_admission(
 ) -> EnvelopeReservation:
     """Admit one ENTER against the envelope, or raise; returns what it reserves."""
     if leg.side is not OrderSide.BUY:
+        # Long-only engine invariant, not a refusal: a short program would need
+        # a named LIVE_ENVELOPE_* code of its own, which is a fifth code beyond
+        # the plan's four and an owner decision (follow-up).
         raise ValueError("the envelope admits BUY legs only; every program ENTER is a BUY")
     if envelope.agreement == "disagreed":
         raise _refuse(
@@ -71,18 +74,21 @@ def require_envelope_admission(
             "A market ENTER has no decision-bar price to bound it against cash.",
         )
     reserved = repo.reserved_cash_usd(observed_at_ms=observation.observed_at_ms)
-    notional = leg.quantity * price
+    # Built before the bound is asked, so the notional the refusal names and
+    # the notional the reservation will claim are the same one property.
+    reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=price)
     if not cash_bound_admits(
         cash_available_usd=observation.cash_available_usd,
         reserved_usd=reserved,
-        notional_usd=notional,
+        notional_usd=reservation.notional_usd,
     ):
         raise _refuse(
             LIVE_ENVELOPE_CASH_EXCEEDED,
-            f"ENTER needs {notional:.2f} USD; {observation.cash_available_usd:.2f} USD cash "
+            f"ENTER needs {reservation.notional_usd:.2f} USD; "
+            f"{observation.cash_available_usd:.2f} USD cash "
             f"with {reserved:.2f} USD reserved by working entries.",
         )
-    return EnvelopeReservation(quantity=leg.quantity, reference_price=price)
+    return reservation
 
 
 __all__ = ["require_envelope_admission"]

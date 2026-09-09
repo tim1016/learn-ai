@@ -325,6 +325,7 @@ def test_the_reservation_never_enters_the_hash_chain(
         ("canceled", [(3, T0 + 1)], T0, 300.0),  # dead with a fill after the observation
         ("expired", [], T0, 0.0),  # dead, nothing recorded: nothing
         ("rejected", [], T0, 0.0),  # dead: nothing
+        ("replaced", [], T0, 0.0),  # dead: the fourth state, pinned like its siblings
     ],
 )
 def test_reserved_cash_prices_only_what_the_observation_cannot_see(

@@ -64,7 +64,7 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
     fill contributes its whole notional. Nothing is pruned on
     ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill without
     touching ``orders``, and the websocket's acknowledgement is skipped when
-    the snapshot has not moved, so a terminal order's ``updated_at_ms`` can
+    the snapshot has not moved, so a dead order's ``updated_at_ms`` can
     sit *before* an observation that has not seen its fills. Only a fill's own
     ``recorded_at_ms`` can say what an observation could have seen.
     """

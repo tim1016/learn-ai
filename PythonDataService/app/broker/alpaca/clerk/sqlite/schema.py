@@ -22,7 +22,6 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     CUSTODY_SUBJECT_IDENTITY_DDL,
     EFFECT_SUBJECT_COMPATIBILITY_DDL,
     EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
-    ENVELOPE_RESERVATIONS_V13_STATEMENTS,
     HOLD_SUBJECT_COMPATIBILITY_DDL,
     HOLDS_COMPATIBILITY_VIEW_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
@@ -31,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
     POSITION_SUBJECT_COMPATIBILITY_DDL,
+    SCHEMA_V13_STATEMENTS,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
@@ -669,11 +669,13 @@ SCHEMA_V12_DDL = "\n".join(
 )
 
 # v13 adds the durable cash reservation one accepted ENTER claims until its
-# fills are observed (ADR 0059 D4), and re-publishes the ``holds`` view for the
-# reason the fragment module states. Same statements as ``SCHEMA_MIGRATIONS[12]``.
+# fills are observed (ADR 0059 D4), indexes the ``external_orders`` column the
+# day-P&L rule filters on every tick, and re-publishes the ``holds`` view for
+# the reason the fragment module states. Same statements as
+# ``SCHEMA_MIGRATIONS[12]``.
 SCHEMA_V13_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
-    for statement in ENVELOPE_RESERVATIONS_V13_STATEMENTS
+    for statement in SCHEMA_V13_STATEMENTS
 )
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
@@ -899,7 +901,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     11: _V11_TO_V12_STATEMENTS,
     # v12 -> v13: the cash an accepted ENTER claims becomes durable (ADR 0059
     # D4). Same statements as the fresh v13 block above.
-    12: ENVELOPE_RESERVATIONS_V13_STATEMENTS,
+    12: SCHEMA_V13_STATEMENTS,
 }
 
 

@@ -841,6 +841,12 @@ class SqliteAlpacaClerkFacade:
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
+                        # The bar's close is a ``Decimal``; the envelope's money
+                        # is float end to end (``BrokerAccountSnapshot.cash``,
+                        # the REAL columns the reservation is stored in, and
+                        # ``cash_bound_admits``' own epsilon). Converting here
+                        # keeps the boundary at one line instead of leaking a
+                        # Decimal into arithmetic that would silently promote.
                         reference_price=(
                             None
                             if retained_source_bar is None

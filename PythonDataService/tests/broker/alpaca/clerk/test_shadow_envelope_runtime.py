@@ -224,23 +224,29 @@ async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offere
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST", artifacts_root=tmp_path
     )
-
-    runtime = await select_active_clerk_runtime(
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-        activation_store=_ActivationStore(_activation()),
-        repository_opener=lambda _account_id, _root: repo,
-        live_envelope_values=TEST_ENVELOPE_VALUES,
-    )
-
+    runtime: ActiveClerkRuntime | None = None
     try:
+        runtime = await select_active_clerk_runtime(
+            read=broker,
+            trade=broker,
+            artifacts_root=tmp_path,
+            activation_store=_ActivationStore(_activation()),
+            repository_opener=lambda _account_id, _root: repo,
+            live_envelope_values=TEST_ENVELOPE_VALUES,
+        )
+
         assert runtime.authority_kind == "sqlite"
         assert runtime.envelope_sync is None
         assert runtime.clerk is not None
         assert runtime.clerk.live_envelope is None
     finally:
-        await runtime.close()
+        # A composed runtime owns this handle and closes it; if the selector
+        # never returned one, the repository was opened before it and its
+        # execution lease would otherwise outlive the test.
+        if runtime is None:
+            repo.close()
+        else:
+            await runtime.close()
 
 
 async def test_a_second_enter_inside_one_sync_interval_is_refused_by_the_first_ones_unrecorded_fill(
