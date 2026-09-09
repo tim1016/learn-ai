@@ -88,6 +88,16 @@ class ActivationResolver(Protocol):
     ) -> ActivationRecord | None: ...
 
 
+def _activation_record_invalid(account_id: str, exc: ActivationRecordInvalid) -> ActiveClerkRuntime:
+    """The one refusal for an unreadable cutover record, on either side of the live fork."""
+    return unavailable_runtime(
+        "ACTIVATION_RECORD_INVALID",
+        account_id=account_id,
+        recovery=str(exc),
+        activation_detected=True,
+    )
+
+
 async def select_active_clerk_runtime(
     *,
     read: BrokerReadPort,
@@ -153,12 +163,7 @@ async def select_active_clerk_runtime(
         try:
             live_activation = store.latest(account.account_id)
         except ActivationRecordInvalid as exc:
-            return unavailable_runtime(
-                "ACTIVATION_RECORD_INVALID",
-                account_id=account.account_id,
-                recovery=str(exc),
-                activation_detected=True,
-            )
+            return _activation_record_invalid(account.account_id, exc)
         if live_activation is None:
             return await select_shadow_clerk_runtime(
                 account=account,
@@ -206,12 +211,7 @@ async def select_active_clerk_runtime(
     try:
         activation = store.latest(account.account_id)
     except ActivationRecordInvalid as exc:
-        return unavailable_runtime(
-            "ACTIVATION_RECORD_INVALID",
-            account_id=account.account_id,
-            recovery=str(exc),
-            activation_detected=True,
-        )
+        return _activation_record_invalid(account.account_id, exc)
 
     if activation is not None and DeveloperCleanSlateResetRegistry(
         artifacts_root / "accounts" / "alpaca"

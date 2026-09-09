@@ -141,9 +141,10 @@ async def _enter(runtime: ActiveClerkRuntime, bar: RetainedSourceBar, *, decisio
 async def test_a_live_account_with_no_activation_still_boots_the_shadow_authority(tmp_path: Path) -> None:
     """R1: absent the cutover's record, every live boot is exactly what slice 4 built."""
     await activate_shadow_clerk_authority(live_account_id=LIVE_ACCT, artifacts_root=tmp_path)
+    broker = _LiveBroker(now_ms=NOW_MS)
     runtime = await select_active_clerk_runtime(
-        read=_LiveBroker(now_ms=NOW_MS),
-        trade=_LiveBroker(now_ms=NOW_MS),
+        read=broker,
+        trade=broker,
         artifacts_root=tmp_path,
         repository_opener=pinned_repository(NOW_MS),
         live_envelope_values=TEST_ENVELOPE_VALUES,
@@ -227,6 +228,55 @@ async def test_an_activation_naming_another_account_is_a_mode_disagreement(tmp_p
     assert runtime.authority_kind == "unavailable"
     assert runtime.startup_failure is not None
     assert runtime.startup_failure.reason_code == LIVE_MODE_DISAGREEMENT
+
+
+async def test_a_paper_mode_account_reaching_the_live_selector_is_a_mode_disagreement(
+    tmp_path: Path,
+) -> None:
+    """R2: the live selector's first mode-agreement leg refuses a non-live broker-observed account."""
+    broker = _LiveBroker(now_ms=NOW_MS)
+    account = (await broker.get_account()).model_copy(update={"account_mode": "paper"})
+    activation = live_activation()
+    runtime = await select_live_clerk_runtime(
+        account=account,
+        activation=activation,
+        activation_store=_ActivationStore(activation),
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        repository_opener=pinned_repository(NOW_MS),
+        startup_recovery_timeout_s=5.0,
+        execution_lease_wait_timeout_s=0.0,
+        execution_lease_retry_interval_s=0.1,
+        stream_health_gate=None,
+        roster_symbols=None,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
+        live_state_root=None,
+        control_unauthenticated=False,
+    )
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == LIVE_MODE_DISAGREEMENT
+
+
+async def test_an_unreadable_activation_record_refuses_the_live_boot(
+    tmp_path: Path, live_state_root: Path
+) -> None:
+    """Finding 1: the live fork's refusal for a tampered cutover record, through the real selector."""
+    broker = _RecordingLiveBroker(now_ms=NOW_MS)
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        activation_store=_ActivationStore(None, invalid=True),
+        repository_opener=pinned_repository(NOW_MS),
+        live_envelope_values=TEST_ENVELOPE_VALUES,
+        live_state_root=lambda: live_state_root,
+    )
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "ACTIVATION_RECORD_INVALID"
+    assert broker.submissions == []
 
 
 async def test_before_the_first_tick_every_live_enter_is_unobserved(
