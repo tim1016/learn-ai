@@ -92,7 +92,11 @@ from app.security.data_plane_control import (
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
-from app.services.alpaca_live_verdict import alpaca_live_verdict, observe_shadow_state
+from app.services.alpaca_live_verdict import (
+    alpaca_live_verdict,
+    observe_loss_hold,
+    observe_shadow_state,
+)
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
@@ -714,6 +718,7 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
         shadow_state=(
             None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
         ),
+        loss_hold=observe_loss_hold(runtime),
     )
 
 

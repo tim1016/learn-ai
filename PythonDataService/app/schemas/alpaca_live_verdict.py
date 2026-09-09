@@ -6,6 +6,8 @@ read, never composed by the Frontend, never a guess. Slice 1 renders the
 verdict; arming, shadow and the envelope (slices 4-6) fill the fields that
 this slice fixes at their empty values. Slice 4 fills ``shadow_state`` from
 the durable shadow evidence and widens ``clerk_authority`` to ``"shadow"``.
+Slice 5 fills ``envelope_agreement`` and ``loss_hold`` from the live envelope
+and the durable loss hold.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ ConfiguredMode = Literal["paper", "live", "unconfigured"]
 ModeAgreement = Literal["agreed", "disagreed", "unobserved"]
 ClerkAuthority = Literal["sqlite", "synthetic", "shadow", "unavailable", "not_installed"]
 EnvelopeState = Literal["not_applicable", "configured_unsealed", "sealed"]
+EnvelopeAgreement = Literal["not_applicable", "unsealed", "agreed", "disagreed"]
+LossHoldState = Literal["not_applicable", "clear", "held"]
 ShadowState = Literal["not_applicable", "none", "in_progress", "complete"]
 FinalVerdict = Literal["paper", "live-unarmed", "live-armed", "unknown"]
 
@@ -41,6 +45,8 @@ class AlpacaLiveVerdict(BaseModel):
     clerk_refusal_reason_code: str | None
     armed_instance_count: int = Field(ge=0)
     envelope_state: EnvelopeState
+    envelope_agreement: EnvelopeAgreement
+    loss_hold: LossHoldState
     shadow_state: ShadowState
     final_verdict: FinalVerdict
     # Operator copy is authored here, not in the client (CLAUDE.md hard rule).

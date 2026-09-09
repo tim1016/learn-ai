@@ -641,6 +641,16 @@
             "title": "Detail",
             "type": "string"
           },
+          "envelope_agreement": {
+            "enum": [
+              "not_applicable",
+              "unsealed",
+              "agreed",
+              "disagreed"
+            ],
+            "title": "Envelope Agreement",
+            "type": "string"
+          },
           "envelope_state": {
             "enum": [
               "not_applicable",
@@ -663,6 +673,15 @@
           "headline": {
             "minLength": 1,
             "title": "Headline",
+            "type": "string"
+          },
+          "loss_hold": {
+            "enum": [
+              "not_applicable",
+              "clear",
+              "held"
+            ],
+            "title": "Loss Hold",
             "type": "string"
           },
           "mode_agreement": {
@@ -711,6 +730,8 @@
           "clerk_refusal_reason_code",
           "armed_instance_count",
           "envelope_state",
+          "envelope_agreement",
+          "loss_hold",
           "shadow_state",
           "final_verdict",
           "headline",

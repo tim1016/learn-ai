@@ -5289,6 +5289,11 @@ export interface components {
             /** Detail */
             detail: string;
             /**
+             * Envelope Agreement
+             * @enum {string}
+             */
+            envelope_agreement: "not_applicable" | "unsealed" | "agreed" | "disagreed";
+            /**
              * Envelope State
              * @enum {string}
              */
@@ -5300,6 +5305,11 @@ export interface components {
             final_verdict: "paper" | "live-unarmed" | "live-armed" | "unknown";
             /** Headline */
             headline: string;
+            /**
+             * Loss Hold
+             * @enum {string}
+             */
+            loss_hold: "not_applicable" | "clear" | "held";
             /**
              * Mode Agreement
              * @enum {string}

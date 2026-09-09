@@ -33,8 +33,9 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerAsset
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerAsset, BrokerPosition
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -79,6 +80,9 @@ class _LiveBroker:
 
     broker_id = "alpaca"
 
+    def __init__(self) -> None:
+        self.unrealized: float = 0.0
+
     def capabilities(self) -> BrokerCapabilities:
         return ALPACA_LIVE_CAPABILITIES
 
@@ -95,6 +99,7 @@ class _LiveBroker:
             portfolio_value=100_000.0,
             long_market_value=0.0,
             short_market_value=0.0,
+            last_equity=100_000.0,
             pattern_day_trader=False,
             trading_blocked=False,
             account_blocked=False,
@@ -105,8 +110,26 @@ class _LiveBroker:
     async def list_orders(self, **_kwargs: Any) -> list:
         return []
 
-    async def list_positions(self) -> list:
-        return []
+    async def list_positions(self) -> list[BrokerPosition]:
+        if self.unrealized == 0.0:
+            return []
+        return [
+            BrokerPosition(
+                broker="alpaca",
+                symbol="SPY",
+                asset_id=None,
+                asset_class=None,
+                quantity=10,
+                side="long",
+                average_entry_price=100.0,
+                market_value=1_000.0 + self.unrealized,
+                cost_basis=1_000.0,
+                current_price=None,
+                unrealized_pl=self.unrealized,
+                unrealized_plpc=None,
+                observed_at_ms=NOW_MS,
+            )
+        ]
 
     async def get_asset(self, symbol: str) -> BrokerAsset:
         return BrokerAsset(
@@ -187,6 +210,45 @@ async def shadow_app(
     app.include_router(brokers_router)
     try:
         yield app, runtime
+    finally:
+        set_bot_task_registry(None)
+        set_active_clerk_runtime(None)
+        clear_broker_account_snapshot_cache_for_testing()
+        reset_broker_registry_for_testing()
+        await runtime.close()
+
+
+@pytest.fixture()
+async def shadow_app_and_broker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[tuple[FastAPI, ActiveClerkRuntime, _LiveBroker]]:
+    """Same composed shadow authority as ``shadow_app``, with its broker double reachable.
+
+    A sibling of ``shadow_app`` rather than a widened version of it: this is
+    the only test that needs to steer the live account's reported P&L after
+    boot, and ``shadow_app``'s many existing consumers unpack a 2-tuple.
+    """
+    await activate_shadow_clerk_authority(
+        live_account_id=LIVE_ACCT, artifacts_root=tmp_path
+    )
+    broker = _LiveBroker()
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
+    )
+    assert runtime.authority_kind == "shadow", runtime.startup_failure
+    set_active_clerk_runtime(runtime)
+    clear_broker_account_snapshot_cache_for_testing()
+    reset_broker_registry_for_testing()
+    get_broker_registry().register(broker)  # type: ignore[arg-type]
+    set_bot_task_registry(_FakeDeployRegistry())  # type: ignore[arg-type]
+    app = FastAPI()
+    app.include_router(panel_router)
+    app.include_router(brokers_router)
+    try:
+        yield app, runtime, broker
     finally:
         set_bot_task_registry(None)
         set_active_clerk_runtime(None)
@@ -467,3 +529,36 @@ async def test_a_foreign_route_account_is_still_refused_under_shadow(
     assert facade is not None
     assert custody_account_id_for_route("alpaca", LIVE_ACCT) == facade.account_id
     assert custody_account_id_for_route("alpaca", "9LIVE9999") != facade.account_id
+
+
+async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shadow_authority(
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(j) A live loss on the composed shadow authority reaches the verdict endpoint."""
+    for name, value in {
+        "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s", "ALPACA_MODE": "live",
+        "ALPACA_LIVE_LOSS_FRACTION": "0.02", "ALPACA_LIVE_LOSS_USD": "500",
+        "ALPACA_LIVE_SHADOW_SESSIONS": "5", "ALPACA_LIVE_ARMING_MAX_SESSIONS": "20",
+        "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
+    }.items():
+        monkeypatch.setenv(name, value)
+    reset_alpaca_settings_for_testing()
+    try:
+        app, runtime, broker = shadow_app_and_broker
+        broker.unrealized = -5_000.0
+        assert runtime.envelope_sync is not None
+        assert await runtime.envelope_sync.tick() == "hold_raised"
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/brokers/alpaca/live-verdict")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["loss_hold"] == "held"
+        assert body["envelope_agreement"] == "unsealed"
+        assert body["final_verdict"] == "live-unarmed"
+    finally:
+        reset_alpaca_settings_for_testing()
