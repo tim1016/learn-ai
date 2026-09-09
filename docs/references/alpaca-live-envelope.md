@@ -191,6 +191,15 @@ that one line when `real_live` custody becomes constructible.
   `unrealized_pl_usd` (and the cash and position facts it derives from)
   describe the live account net of what the Clerk's own synthesized fills
   would have spent — never the synthesized positions' own marks.
+- **A live external order is invisible to the shadow rehearsal.** Under shadow
+  the sweep reconciles the synthesized book (`ShadowAccountReadPort.list_orders`),
+  so an order a human works on the *live* account today is never recorded as an
+  external order: R5 does not withdraw day P&L to unknown for it, and its
+  realized P&L is absent from the rehearsal's day P&L. Under live composition
+  the sweep reads the live account and R5 applies unchanged. Whether the shadow
+  sync should consult the live port's orders instead — which would refuse every
+  rehearsal ENTER for the whole day a human trades that account — is an owner
+  decision deferred to the arming ceremony (slice 6).
 - **External orders make the fact unknown.** Any order the Clerk did not
   accept but observes on the account today withdraws day P&L to unknown for
   the rest of that day; nothing after that is inferred back to zero.
