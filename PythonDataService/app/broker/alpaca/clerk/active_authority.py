@@ -151,6 +151,7 @@ async def select_active_clerk_runtime(
             account_id=account.account_id,
             read=read,
             trade=trade,
+            account_mode="paper",
         )
     except AccountAuthorityIdentityError as exc:
         return unavailable_runtime(
@@ -457,7 +458,7 @@ def primary_custody_world() -> CustodyWorld | None:
     """
     runtime = get_active_clerk_runtime()
     kind = None if runtime is None else runtime.selected_account_authority_kind
-    return kind if kind in ("real_paper", "shadow") else None
+    return kind if kind in ("real_paper", "shadow", "real_live") else None
 
 
 def custody_world_or_paper(world: CustodyWorld | None) -> CustodyWorld:
@@ -466,10 +467,9 @@ def custody_world_or_paper(world: CustodyWorld | None) -> CustodyWorld:
     ``None`` from :func:`primary_custody_world` means no authority is
     installed, so there is no world to name; the label falls back to the
     paper world because no other world is constructible without one (the
-    synthetic world is never primary, and ``real_live`` is unconstructible
-    until ADR 0059 slice 7). Takes the already-read world rather than
-    re-reading it, so one surface's answer cannot change mid-request — and
-    so the coercion is written here once instead of at each caller.
+    synthetic world is never primary). Takes the already-read world rather
+    than re-reading it, so one surface's answer cannot change mid-request —
+    and so the coercion is written here once instead of at each caller.
 
     Labelling only. A caller that would have to *guess where evidence goes*
     must refuse on ``None`` instead (``bot_binding_authority.primary_custody_kind``).

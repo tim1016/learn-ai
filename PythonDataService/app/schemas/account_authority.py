@@ -14,20 +14,28 @@ SIMULATED_AUTHORITY_KINDS: frozenset[AuthorityKind] = frozenset({"synthetic", "s
 
 # The worlds a *primary* authority can custody in — the subset of
 # `AuthorityKind` a boot can select for the account a binding files its
-# evidence against. Narrower than `AuthorityKind` on both ends: the isolated
-# `synthetic` world is never a primary selection, and `real_live` is not a
-# custody world until the arming ceremony lands (ADR 0059 slice 7).
-CustodyWorld = Literal["real_paper", "shadow"]
+# evidence against. The isolated `synthetic` world is never a primary
+# selection. `real_live` joined in ADR 0059 slice 7.
+CustodyWorld = Literal["real_paper", "shadow", "real_live"]
+
+# The one account mode each world may custody (ADR 0059 D1, slice 7 R8 #13).
+# The shadow world reads the real-money account it was activated for, so it
+# admits only `live`; the real-live world custodies that same account for
+# real. Written once, here, so no gate re-derives it.
+_MODE_ADMITTED_BY_WORLD: dict[str, str] = {
+    "real_paper": "paper",
+    "shadow": "live",
+    "real_live": "live",
+}
 
 
 def world_admits_account_mode(world: CustodyWorld, account_mode: str | None) -> bool:
     """Whether ``world`` may custody an account the broker reports in ``account_mode``.
 
-    A real-paper authority admits only a paper account; the shadow authority
-    reads the real account it was activated for, whose mode was learned at
-    activation.
+    ``None`` — no observation — admits nothing: an unobserved account is not
+    a paper account and not a live one.
     """
-    return world == "shadow" or account_mode == "paper"
+    return account_mode is not None and _MODE_ADMITTED_BY_WORLD[world] == account_mode
 
 
 def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) -> None:

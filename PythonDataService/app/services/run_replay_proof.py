@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
-    authority_kind_for_account,
+    authority_kind_in_world,
     evidence_account_id_for,
 )
+from app.broker.alpaca.clerk.active_authority import custody_world_or_paper, primary_custody_world
 from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
@@ -844,10 +845,15 @@ def ledger_account_id_for(binding: BrokerBotBinding) -> str:
             f"Mode {binding.mode!r} retains no source-bar evidence; nothing to replay.",
             http_status=404,
         )
+    # Read under the rule the writer used (design R13): the ledger was retained
+    # by `PrimaryAccountBindingAuthority.source_bars` in the primary world's
+    # kind, so a live instance's proof must not go looking in `paper:`.
     custody_kind = (
         "real_paper"
         if binding.sealed_account_id is None
-        else authority_kind_for_account(binding.sealed_account_id)
+        else authority_kind_in_world(
+            binding.sealed_account_id, custody_world_or_paper(primary_custody_world())
+        )
     )
     return evidence_account_id_for(
         mode=binding.mode,

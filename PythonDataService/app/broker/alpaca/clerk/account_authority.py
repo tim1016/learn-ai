@@ -41,15 +41,27 @@ real-paper instance keeps ``paper:<instance>``. The prefix is deliberately not
 """
 
 
+LIVE_EVIDENCE_ACCOUNT_PREFIX = "live-evidence:"
+"""Instance-scoped evidence namespace for real-live retained source bars (slice 7).
+
+Custody is the live account id itself; every instance that trades on it keeps
+its own retained-bar ledger here, exactly as a paper instance keeps
+``paper:<instance>`` and a shadow instance ``shadow-evidence:<instance>``. A
+live instance's warmup then reads exactly what *it* retained, never its
+former paper or shadow self's ledger, and the name is honest.
+"""
+
+
 # Every namespace a real Alpaca account id may not occupy: the two reserved
-# custody worlds and the two instance-scoped evidence namespaces. All four are
-# minted by this module, so a "real" account carrying any of them is a
+# custody worlds and the three instance-scoped evidence namespaces. All five
+# are minted by this module, so a "real" account carrying any of them is a
 # composition bug, not an operator typo.
 _RESERVED_PREFIXES: tuple[str, ...] = (
     SIM_ACCOUNT_PREFIX,
     SHADOW_ACCOUNT_PREFIX,
     PAPER_EVIDENCE_ACCOUNT_PREFIX,
     SHADOW_EVIDENCE_ACCOUNT_PREFIX,
+    LIVE_EVIDENCE_ACCOUNT_PREFIX,
 )
 
 
@@ -73,8 +85,8 @@ def require_real_account_id(account_id: str) -> str:
         raise AccountAuthorityIdentityError("real account identity must be non-empty")
     if account_id.startswith(_RESERVED_PREFIXES):
         raise AccountAuthorityIdentityError(
-            "real Alpaca ports refuse the reserved sim:/shadow:/paper:/shadow-evidence: "
-            "account identities"
+            "real Alpaca ports refuse the reserved sim:/shadow:/paper:/shadow-evidence:/"
+            "live-evidence: account identities"
         )
     return account_id
 
@@ -112,6 +124,21 @@ def authority_kind_for_account(
     if is_shadow_account_id(account_id):
         return "shadow"
     return "real_live" if account_mode == "live" else "real_paper"
+
+
+def authority_kind_in_world(account_id: str, custody_world: CustodyWorld) -> AccountAuthorityKind:
+    """The read-contract kind for a custody id, in the world the primary authority custodies in.
+
+    The id's own reserved namespace (``sim:``, ``shadow:``) always decides; a
+    real id is ``real_live`` only when the primary world is the live one
+    (ADR 0059 slice 7). Derived, never defaulted: the wire's ``real_paper``
+    default is exactly the misstatement a live account must never carry, and
+    the writer of a live instance's evidence ledger and the reader of it must
+    agree on which namespace that is (design R13).
+    """
+    return authority_kind_for_account(
+        account_id, account_mode="live" if custody_world == "real_live" else "paper"
+    )
 
 
 def synthetic_account_id_for_strategy(strategy_instance_id: str) -> str:
@@ -177,6 +204,13 @@ def shadow_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
     return f"{SHADOW_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
 
 
+def live_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
+    """Return the isolated real-live source-bar namespace for one instance."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    return f"{LIVE_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
 def is_shadow_evidence_account_id(account_id: str) -> bool:
     """Return whether ``account_id`` is a shadow instance's evidence namespace."""
     return account_id.startswith(SHADOW_EVIDENCE_ACCOUNT_PREFIX)
@@ -193,15 +227,17 @@ def evidence_account_id_for(
     Dry Run's custody and evidence share ``sim:<instance>``. Every other
     binding's evidence is instance-scoped under the world the primary
     authority custodies in — ``paper:`` on the real-paper authority,
-    ``shadow-evidence:`` on the shadow authority — so two instances on one
-    symbol never share a ledger and a replay proof reads exactly what its run
-    retained. Whether a mode is replayable is the replay proof's judgement,
-    not this function's.
+    ``shadow-evidence:`` on the shadow authority, ``live-evidence:`` on the
+    real-live authority — so two instances on one symbol never share a
+    ledger and a replay proof reads exactly what its run retained. Whether a
+    mode is replayable is the replay proof's judgement, not this function's.
     """
     if mode == "dry_run":
         return synthetic_account_id_for_strategy(strategy_instance_id)
     if custody_kind == "shadow":
         return shadow_evidence_account_id_for_strategy(strategy_instance_id)
+    if custody_kind == "real_live":
+        return live_evidence_account_id_for_strategy(strategy_instance_id)
     return paper_evidence_account_id_for_strategy(strategy_instance_id)
 
 
@@ -220,11 +256,17 @@ def bind_real_alpaca_ports(
     account_id: str,
     read: BrokerReadPort,
     trade: BrokerTradePort,
+    account_mode: Literal["paper", "live"] = "paper",
 ) -> AccountBoundBrokerPorts:
-    """Create a real-account composition only after rejecting reserved namespaces."""
+    """Create a real-account composition only after rejecting reserved namespaces.
+
+    ``account_mode`` is what the caller positively learned from the broker
+    (ADR 0054 / ADR 0059 D1); it decides ``real_paper`` versus ``real_live``
+    and is never inferred from the id's shape.
+    """
     return AccountBoundBrokerPorts(
         account_id=require_real_account_id(account_id),
-        authority_kind="real_paper",
+        authority_kind=authority_kind_for_account(account_id, account_mode=account_mode),
         read=read,
         trade=trade,
     )
@@ -274,6 +316,7 @@ def bind_shadow_ports(
 
 
 __all__ = [
+    "LIVE_EVIDENCE_ACCOUNT_PREFIX",
     "PAPER_EVIDENCE_ACCOUNT_PREFIX",
     "SHADOW_ACCOUNT_PREFIX",
     "SHADOW_EVIDENCE_ACCOUNT_PREFIX",
@@ -282,6 +325,7 @@ __all__ = [
     "AccountAuthorityKind",
     "AccountBoundBrokerPorts",
     "authority_kind_for_account",
+    "authority_kind_in_world",
     "bind_real_alpaca_ports",
     "bind_shadow_ports",
     "bind_synthetic_ports",
@@ -292,6 +336,7 @@ __all__ = [
     "is_shadow_evidence_account_id",
     "is_synthetic_account_id",
     "live_account_id_for_shadow_account",
+    "live_evidence_account_id_for_strategy",
     "paper_evidence_account_id_for_strategy",
     "require_real_account_id",
     "require_shadow_account_id",

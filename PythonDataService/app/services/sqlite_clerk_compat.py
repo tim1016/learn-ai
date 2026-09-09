@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.account_authority import (
-    authority_kind_for_account,
+    authority_kind_in_world,
     custody_account_id_for,
 )
 from app.broker.alpaca.clerk.active_authority import (
@@ -296,12 +296,8 @@ def sqlite_clerk_status(
         channel_healths=(
             list(channel_healths) if channel_healths is not None else None
         ),
-        # Derived from the facade's own custody id, never asserted: under a
-        # shadow authority ``projection.account_id`` is ``shadow:<live id>``,
-        # and a wire saying ``real_paper`` beside it is the same misstatement
-        # ADR 0059 slice 4 exists to remove. ``real_paper`` is the only real
-        # world constructible today, so the id alone decides.
-        authority_kind=authority_kind_for_account(projection.account_id),
+        # Derived from the id and the primary's world, never asserted (slice 4 / slice 7, R12).
+        authority_kind=authority_kind_in_world(projection.account_id, custody_world),
         operator_posture=posture,
     )
 
@@ -368,7 +364,7 @@ def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
             if not divergent
             else "Use the SQLite Clerk's typed, evidence-bound recovery actions."
         ),
-        authority_kind=authority_kind_for_account(projection.account_id),
+        authority_kind=authority_kind_in_world(projection.account_id, custody_world_or_paper(primary_custody_world())),
         divergences=divergences,
         resolution_plan=(),
     )
