@@ -84,7 +84,7 @@ MAX_TRANSACTION_DETAIL_EXECUTIONS = 100
 # `root_recorded_at_ms` for callers that need the *original* economic time of
 # a corrected fill, not the correction's arrival time. Continue with `, <name>
 # AS (...)` or a direct `SELECT ... LEFT JOIN roots ON ...`.
-_EFFECTIVE_FILL_LINEAGE_CTE = """
+EFFECTIVE_FILL_LINEAGE_CTE = """
     WITH RECURSIVE lineage(
         effective_fill_id,
         parent_execution_id,
@@ -1043,7 +1043,7 @@ class SqliteEconomicProjectionReader:
         if limit is not None:
             params.append(limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+            {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
                        f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
                        f.recorded_at_ms, f.recorded_transition_sequence,
@@ -1118,7 +1118,7 @@ class SqliteEconomicProjectionReader:
             params.extend((cursor_key[0], cursor_key[0], cursor_key[1]))
         params.append(limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}
+            {EFFECTIVE_FILL_LINEAGE_CTE}
             SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                    f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                    f.recorded_transition_sequence,
@@ -1169,7 +1169,7 @@ class SqliteEconomicProjectionReader:
             total_limit_sql = "LIMIT ?"
             params.append(total_limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+            {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                        f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                        f.recorded_transition_sequence,

@@ -11,15 +11,14 @@ never cash. The shadow book fills at submit while the sweep records the
 fill later, so a filled order with no fill row is the common case there,
 not a corner.
 
-Corrections (``event_kind='correction'``, and any ``is_correction`` fill) are
-ignored, and that is safe in one direction only. A correction restates the
-quantity of an execution this read has already counted at its original size.
-Ignoring an *upward* restatement over-reserves: less looks filled than truly
-is, so the remainder is priced too large. Ignoring a *downward* restatement
-under-reserves by exactly the restated difference — the remainder is priced
-too small, and the envelope believes it has cash it does not. Corrections are
-reachable today (``EXECUTION_SLICE_CORRECTED``), so this is a known bound on
-the read, not an impossible case.
+Corrections fold at their restated size. Each order contributes its
+*effective* fills — the head of every correction chain, whatever its
+``event_kind`` — at the effective quantity, resolved through the canonical
+``EFFECTIVE_FILL_LINEAGE_CTE``. Each one is dated by its ROOT execution's
+``recorded_at_ms``, not the correction's own: the broker's cash at that
+instant already reflected the true quantity, whenever the Clerk got around to
+recording the restatement. So a fill of 10 restated to 5 after the observation
+prices the remaining 5 as unfilled, and the mirror upward case prices nothing.
 
 The row is a sibling of the ``ENTER_ACCEPTED`` custody transition, committed
 in its transaction but never part of its hashed payload: adding a reservation
@@ -66,17 +65,31 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
     touching ``orders``, and the websocket's acknowledgement is skipped when
     the snapshot has not moved, so a dead order's ``updated_at_ms`` can
     sit *before* an observation that has not seen its fills. Only a fill's own
-    ``recorded_at_ms`` can say what an observation could have seen.
+    ``recorded_at_ms`` can say what an observation could have seen — and for a
+    corrected execution that is the *root's* ``recorded_at_ms``, which
+    ``roots`` supplies.
     """
+    # Imported here, not at module scope: ``repository`` imports this module,
+    # and ``economic_projection`` imports ``repository``. The canonical CTE
+    # still has exactly one definition; only its arrival is deferred.
+    from app.broker.alpaca.clerk.sqlite.economic_projection import (
+        EFFECTIVE_FILL_LINEAGE_CTE,
+    )
+
     rows = conn.execute(
+        f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         "SELECT r.quantity AS quantity, r.reference_price AS reference_price, "
         "LOWER(o.broker_state) AS state, "
-        "COALESCE(SUM(CASE WHEN f.recorded_at_ms < ? THEN f.qty ELSE 0 END), 0) AS filled_before, "
-        "COALESCE(SUM(CASE WHEN f.recorded_at_ms >= ? THEN f.qty ELSE 0 END), 0) AS filled_after "
+        "COALESCE(SUM(CASE WHEN r2.root_recorded_at_ms < ? THEN f.qty ELSE 0 END), 0) "
+        "  AS filled_before, "
+        "COALESCE(SUM(CASE WHEN r2.root_recorded_at_ms >= ? THEN f.qty ELSE 0 END), 0) "
+        "  AS filled_after "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
         "LEFT JOIN fills f ON f.order_ref = o.order_ref "
-        "  AND f.event_kind = 'fill' AND f.is_correction = 0 "
+        "  AND NOT EXISTS (SELECT 1 FROM fills s "
+        "                  WHERE s.superseded_execution_ref = f.execution_id) "
+        "LEFT JOIN roots r2 ON r2.effective_fill_id = f.fill_id "
         "GROUP BY r.effect_operation_id",
         (observed_at_ms, observed_at_ms),
     ).fetchall()

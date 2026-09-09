@@ -71,7 +71,12 @@ notional cap, no symbol allowlist, no session restriction.
   working *or filled* order reserves its quantity minus whatever was
   recorded before the observation; a dead order (canceled/expired/rejected/
   replaced) reserves only its post-observation fills, because its unrecorded
-  remainder is cancelled quantity, never cash. `reserved_cash_usd(observed_at_ms=...)`
+  remainder is cancelled quantity, never cash. Corrections fold at their
+  restated size: only the head of each correction chain counts (resolved
+  through `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
+  *root* execution's `recorded_at_ms`, because the broker's cash at that
+  instant already reflected the true quantity however late the Clerk recorded
+  the restatement. `reserved_cash_usd(observed_at_ms=...)`
   sums this across every accepted ENTER, and `cash_bound_admits`
   (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) checks
   `notional + reserved <= cash_available`.
@@ -200,15 +205,6 @@ that one line when `real_live` custody becomes constructible.
   15 s tick re-observes cash, and any fill recorded by then is already
   subtracted through `account_net_cash_spent_usd`. An operator running a
   rebuild while entries are working should expect it rather than discover it.
-- **A downward fill correction under-reserves.** `reserved_cash_usd` ignores
-  correction rows, and that is safe in one direction only. Ignoring an
-  *upward* restatement over-reserves, which errs closed. Ignoring a *downward*
-  one prices the remaining quantity too small, so the envelope believes it has
-  cash it does not — and keeps believing it until the order is dead.
-  Corrections are reachable today (`EXECUTION_SLICE_CORRECTED`), so this is a
-  known bound on the read, not an impossible case; the module docstring at
-  `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
-  states it in the same direction.
 - **No Frontend button yet.** `Frontend/src/app/shell/alpaca-live-banner.component.ts`
   (Task 10) renders a `· loss hold` chip on the banner when
   `loss_hold === 'held'`; it carries no clear action. Clearing the hold is

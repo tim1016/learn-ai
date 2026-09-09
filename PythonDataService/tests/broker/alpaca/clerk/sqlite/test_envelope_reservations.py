@@ -29,8 +29,11 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.facts import (
+    ExecutionCorrectedFacts,
+    ExecutionSliceFilledFacts,
+)
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
@@ -489,6 +492,163 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
 
     assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
+
+
+def _append_slice(
+    repo: ClerkSqliteRepository,
+    accepted: EnterSubmission,
+    *,
+    execution_id: str,
+    quantity: float,
+    source_event_at_ms: int,
+) -> None:
+    """One websocket execution slice with a broker identity a correction can name."""
+    facts = ExecutionSliceFilledFacts(
+        execution_id=execution_id,
+        symbol="SPY",
+        side="BUY",
+        slice_qty=quantity,
+        slice_price=100.0,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=source_event_at_ms,
+    )
+    assert (
+        repo.append_execution_slice_if_absent(
+            execution_id=execution_id,
+            order_ref=accepted.order_ref or "",
+            build_transition=lambda: TransitionInput(
+                strategy_instance_id=accepted.command.strategy_instance_id,
+                run_id=accepted.command.run_id,
+                command_id=accepted.command.command_id,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                transition_kind="EXECUTION_SLICE_FILLED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="in_progress",
+                source_event_at_ms=source_event_at_ms,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="EXECUTION_SLICE_FILLED",
+                facts_json=facts.to_facts_json(),
+            ),
+            build_coverage_conflict=_refuse_coverage_conflict,
+        )
+        == "appended"
+    )
+
+
+def _append_correction(
+    repo: ClerkSqliteRepository,
+    accepted: EnterSubmission,
+    *,
+    execution_id: str,
+    superseded_execution_ref: str,
+    quantity: float,
+    source_event_at_ms: int,
+) -> None:
+    """Restate a prior slice's quantity, leaving the superseded row auditable."""
+    facts = ExecutionCorrectedFacts(
+        execution_id=execution_id,
+        superseded_execution_ref=superseded_execution_ref,
+        symbol="SPY",
+        side="BUY",
+        corrected_qty=quantity,
+        corrected_price=100.0,
+        why="Broker restated the execution quantity",
+    )
+    assert (
+        repo.append_execution_correction_or_raise(
+            correction=TransitionInput(
+                strategy_instance_id=accepted.command.strategy_instance_id,
+                run_id=accepted.command.run_id,
+                command_id=accepted.command.command_id,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                transition_kind="EXECUTION_CORRECTED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="in_progress",
+                source_event_at_ms=source_event_at_ms,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="EXECUTION_CORRECTED",
+                facts_json=facts.to_facts_json(),
+            ),
+            build_uncertainty=_refuse_correction_uncertainty,
+        )
+        == "appended"
+    )
+
+
+def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
+    raise AssertionError(f"the correction fixture must be valid: {reason}")
+
+
+@pytest.mark.parametrize(
+    ("original_qty", "corrected_qty", "expected"),
+    [
+        (10.0, 5.0, 500.0),  # downward: the restated 5 units are unfilled cash again
+        (5.0, 10.0, 0.0),  # upward: the whole ENTER is filled, nothing left to reserve
+    ],
+)
+def test_a_corrected_fill_reserves_at_its_restated_size(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    active_instance: tuple[str, str],
+    original_qty: float,
+    corrected_qty: float,
+    expected: float,
+) -> None:
+    """A correction is dated by the root execution, not by its own arrival.
+
+    The original fill is recorded *before* the observation and restated
+    *after* it — the case that used to price the remainder at the superseded
+    size for the whole life of the working order. What the broker's cash
+    reflected at ``T2_OBSERVATION`` is the restated quantity, because the
+    execution itself happened at ``T1_TERMINAL_ACK``; only the Clerk's
+    knowledge of it arrived late.
+    """
+    sid, run_id = active_instance
+    accepted = accept_enter(
+        envelope_repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid,
+        decision_id="d1",
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10),
+        envelope=_gate(),
+        reference_price=100.0,
+    )
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+
+    envelope_clock.value = T1_TERMINAL_ACK
+    _append_slice(
+        envelope_repo,
+        accepted,
+        execution_id="exec-original-1",
+        quantity=original_qty,
+        source_event_at_ms=T1_TERMINAL_ACK,
+    )
+    envelope_clock.value = T3_TRAILING_FILL
+    _append_correction(
+        envelope_repo,
+        accepted,
+        execution_id="exec-corrected-1",
+        superseded_execution_ref="exec-original-1",
+        quantity=corrected_qty,
+        source_event_at_ms=T3_TRAILING_FILL,
+    )
+
+    # The order never acknowledged, so it is still working: its unfilled
+    # remainder is what the bound has to price.
+    assert (
+        envelope_repo._conn.execute(
+            "SELECT broker_state FROM orders WHERE order_ref = ?", (accepted.order_ref,)
+        ).fetchone()["broker_state"]
+        is None
+    )
+    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(expected)
 
 
 def test_reservations_sum_across_instances(
