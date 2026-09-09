@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME, ActivationStore
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from scripts.manage_alpaca_arming import main
+from scripts.manage_alpaca_arming import _SUBMISSION_ADMITTED_NOTE, _SUBMISSION_UNVERIFIED_NOTE, main
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -20,6 +22,7 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     live_settings,
     record_sealed_binding,
 )
+from tests.broker.alpaca.clerk.live_authority_fixtures import live_activation
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT
 
 SETTINGS = live_settings()
@@ -523,3 +526,46 @@ def test_a_ledger_row_that_will_not_verify_is_an_evidence_error_at_exit_one(
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 1
 
     assert "digest does not verify" in _last_object(capsys)["error"]
+
+
+def test_an_unverifiable_activation_ledger_reports_not_admitted_and_logs_a_warning(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt activation ledger is a note, never a traceback (Task 10 review, Finding 3).
+
+    ``ActivationStore.latest`` raises ``ActivationRecordInvalid`` on malformed
+    JSON; that must not break this module's one-JSON-object contract, worst of
+    all on ``apply`` after the arming record has already been sealed.
+    """
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    ledger_path = artifacts_root / "accounts" / "alpaca" / ACTIVATION_FILENAME
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text("not-json\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+
+    report = _last_object(capsys)
+    assert report["submission_admitted"] is False
+    assert report["note"] == _SUBMISSION_UNVERIFIED_NOTE
+    (warning,) = [
+        record for record in caplog.records if getattr(record, "action", None) == "arming_cli_activation_record_invalid"
+    ]
+    assert warning.levelno == logging.WARNING
+    assert warning.live_account_id == LIVE_ACCT  # type: ignore[attr-defined]
+
+
+def test_a_real_activation_record_reports_submission_admitted(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once graduation has installed the live authority, an armed instance's ENTER submits."""
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    ActivationStore(artifacts_root / "accounts" / "alpaca").append(live_activation())
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+
+    report = _last_object(capsys)
+    assert report["submission_admitted"] is True
+    assert report["note"] == _SUBMISSION_ADMITTED_NOTE

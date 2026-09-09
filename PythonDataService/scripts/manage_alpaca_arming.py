@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -59,7 +60,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
 )
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
-from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.config import (
     AlpacaSettings,
@@ -70,11 +71,20 @@ from app.broker.ibkr.config import live_artifacts_root
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
+logger = logging.getLogger(__name__)
+
 _SUBMISSION_ADMITTED_NOTE = (
     "a live authority is activated for this account; an armed instance's ENTER is submitted"
 )
 _SUBMISSION_NOT_ADMITTED_NOTE = (
     "no live authority is activated for this account; nothing submits until the live cutover"
+)
+_SUBMISSION_UNEVALUATED_NOTE = (
+    "submission admission was not evaluated: the command was refused before its account was resolved"
+)
+_SUBMISSION_UNVERIFIED_NOTE = (
+    "the live activation record for this account does not verify; nothing submits until an operator "
+    "repairs it (ADR 0059 D1)"
 )
 
 
@@ -141,12 +151,30 @@ def _submission_admitted(artifacts_root: Path | None, payload: Mapping[str, Any]
     for the account; arming alone never opens that path. The cutover's own
     ``ActivationStore`` is the read of that fact. A payload with no resolvable
     ``artifacts_root`` or ``live_account_id`` (a usage or pre-dispatch
-    refusal) answers the same as an ungraduated account: nothing submits.
+    refusal) never reached account resolution, so admission was never
+    evaluated -- that is a distinct fact from an ungraduated account and gets
+    its own note. A ledger that fails ``ActivationStore``'s own verification
+    (a symlinked or non-regular file, a non-monotonic generation, malformed
+    JSON) is reported the same way: not admitted, with a note naming the
+    unverified ledger instead of a traceback.
     """
     live_account_id = payload.get("live_account_id")
     if artifacts_root is None or not isinstance(live_account_id, str):
-        return False, _SUBMISSION_NOT_ADMITTED_NOTE
-    activated = ActivationStore(artifacts_root / "accounts" / "alpaca").latest(live_account_id) is not None
+        return False, _SUBMISSION_UNEVALUATED_NOTE
+    try:
+        activated = (
+            ActivationStore(artifacts_root / "accounts" / "alpaca").latest(live_account_id) is not None
+        )
+    except ActivationRecordInvalid as exc:
+        logger.warning(
+            "the live activation record does not verify; submission is reported as not admitted",
+            extra={
+                "action": "arming_cli_activation_record_invalid",
+                "live_account_id": live_account_id,
+                "error": str(exc),
+            },
+        )
+        return False, _SUBMISSION_UNVERIFIED_NOTE
     return (
         (True, _SUBMISSION_ADMITTED_NOTE) if activated else (False, _SUBMISSION_NOT_ADMITTED_NOTE)
     )

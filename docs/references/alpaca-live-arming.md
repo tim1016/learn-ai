@@ -135,12 +135,16 @@ prints and exits `2` on: `LIVE_ENVELOPE_MISSING`,
 `LIVE_ARMING_PLAN_EXPIRED`, `LIVE_ARMING_INPUTS_CHANGED`,
 `LIVE_ARMING_NOT_ARMED`.
 
-Thirteen reason codes in all — the five in the states/codes table above plus
-the seven the ceremony raises directly and `LIVE_SHADOW_INCOMPLETE`, which
-stays defined for the verdict's vocabulary though no code path raises it
-since slice 7 (shadow is a mode, not a requirement — owner decision
-2026-09-09). `ARMING_REASON_CODES` in `live_arming.py` is the frozen set of
-all thirteen, and the two are meant to stay in lockstep.
+`ARMING_REASON_CODES` in `live_arming.py` is the frozen set of every arming
+reason code and the source of truth for the corpus: the five status codes in
+the table above; the seven the ceremony raises directly; the three
+ENTER-admission codes the live authority added in slice 7
+(`LIVE_ARMING_REQUIRED`, `LIVE_ARMING_UNOBSERVED`, `LIVE_ARMING_LEDGER_INVALID`
+— see [alpaca-live-authority](alpaca-live-authority.md)); the halt's
+`LIVE_VERDICT_TRANSITION_HALT`; and `LIVE_SHADOW_INCOMPLETE`, which stays
+defined for the verdict's vocabulary though no code path raises it since
+slice 7 (shadow is a mode, not a requirement — owner decision 2026-09-09).
+This note does not repeat the count; the set does.
 
 ## Lapse, and a worked example
 
