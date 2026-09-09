@@ -1,14 +1,16 @@
 """Boot-time selection and process registry for the SQLite Alpaca Clerk.
 
 The broker account is resolved before any writer is constructed. A paper
-account with a valid activation record selects SQLite; a live account selects
-the Shadow Account Authority behind its own activation fence (ADR 0059 D2),
-which reads the live account but submits nothing. Every other activation state
-selects no custody authority.
+account with a valid activation record selects SQLite. A live account selects
+on its own cutover record (ADR 0059 D1, slice 7): with one, the real-money
+Live Account Authority; without one, the Shadow Account Authority behind its
+own activation fence (ADR 0059 D2), which reads the live account but submits
+nothing. Every other activation state selects no custody authority.
 
-The composition each selection ends in lives in ``active_runtime``, and the
-shadow world's own boot story in ``shadow_authority``; both are re-exported
-here so this module stays the single import surface callers already use.
+The composition each selection ends in lives in ``active_runtime``, the shadow
+world's own boot story in ``shadow_authority`` and the live world's in
+``live_authority``; all are re-exported here so this module stays the single
+import surface callers already use.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     open_repository,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.live_authority import select_live_clerk_runtime
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
@@ -98,6 +101,8 @@ async def select_active_clerk_runtime(
     stream_health_gate: StreamHealthGate | None = None,
     roster_symbols: Callable[[], Sequence[str]] | None = None,
     live_envelope_values: LiveEnvelopeValues | None = None,
+    live_state_root: Callable[[], Path] | None = None,
+    control_unauthenticated: bool = False,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
 
@@ -109,6 +114,12 @@ async def select_active_clerk_runtime(
     ``live_envelope_values`` reach only the live world's shadow authority
     (ADR 0059 D4). The paper authority below never composes an envelope, so a
     caller may offer values on any boot without changing what paper admits.
+
+    ``live_state_root`` resolves the runner's bindings root lazily -- the live
+    authority's arming gate reads sealed bindings beside the ledger every tick
+    (slice 7). ``control_unauthenticated`` is the data plane's open-control
+    flag; a live account refuses to install behind it (design R14). Both are
+    inert on a paper boot.
     """
     try:
         account = await read.get_account()
@@ -133,10 +144,40 @@ async def select_active_clerk_runtime(
             account_id=None,
             recovery=f"Restore the Alpaca account identity probe: {exc}",
         )
+    store = activation_store or ActivationStore(artifacts_root / "accounts" / "alpaca")
     if account.account_mode == "live":
-        return await select_shadow_clerk_runtime(
+        # ADR 0059 D1 / slice 7 R1: graduation is a boot-time selection. The
+        # cutover's activation record for this exact account is the second
+        # leg of mode agreement; present, the real-money authority is
+        # composed; absent, the account is shadowed exactly as slice 4 built.
+        try:
+            live_activation = store.latest(account.account_id)
+        except ActivationRecordInvalid as exc:
+            return unavailable_runtime(
+                "ACTIVATION_RECORD_INVALID",
+                account_id=account.account_id,
+                recovery=str(exc),
+                activation_detected=True,
+            )
+        if live_activation is None:
+            return await select_shadow_clerk_runtime(
+                account=account,
+                read=read,
+                artifacts_root=artifacts_root,
+                repository_opener=repository_opener,
+                startup_recovery_timeout_s=startup_recovery_timeout_s,
+                execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+                execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+                stream_health_gate=stream_health_gate,
+                roster_symbols=roster_symbols,
+                live_envelope_values=live_envelope_values,
+            )
+        return await select_live_clerk_runtime(
             account=account,
+            activation=live_activation,
+            activation_store=store,
             read=read,
+            trade=trade,
             artifacts_root=artifacts_root,
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
@@ -145,6 +186,8 @@ async def select_active_clerk_runtime(
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
             live_envelope_values=live_envelope_values,
+            live_state_root=live_state_root,
+            control_unauthenticated=control_unauthenticated,
         )
     try:
         ports = bind_real_alpaca_ports(
@@ -160,7 +203,6 @@ async def select_active_clerk_runtime(
             recovery=str(exc),
         )
 
-    store = activation_store or ActivationStore(artifacts_root / "accounts" / "alpaca")
     try:
         activation = store.latest(account.account_id)
     except ActivationRecordInvalid as exc:
@@ -563,6 +605,7 @@ __all__ = [
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",
     "select_active_clerk_runtime",
+    "select_live_clerk_runtime",
     "select_synthetic_clerk_runtime",
     "set_active_clerk_runtime",
     "set_alpaca_clerk",

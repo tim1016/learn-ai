@@ -439,3 +439,32 @@ def test_the_shadow_composition_hands_the_sync_the_accounts_arming_ledger() -> N
         "compose_repository_runtime must hand the arming ledger to LiveEnvelopeSync, or "
         "the sealed envelope is never refreshed"
     )
+
+
+def test_the_live_composition_binds_the_real_trade_port_and_both_gates() -> None:
+    """ADR 0059 D11 (slice 7), pinned structurally because the failures are missing calls.
+
+    Without ``account_mode="live"`` the ports bind as ``real_paper``; without
+    ``custody_is_simulated=False`` the envelope subtracts the Clerk's own fills
+    twice; without the arming gate and the seals reader nothing is ever armed.
+    """
+    live_source = (APPLICATION_ROOT / "broker/alpaca/clerk/live_authority.py").read_text(encoding="utf-8")
+    selector_source = (APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py").read_text(encoding="utf-8")
+    runtime_source = (APPLICATION_ROOT / "broker/alpaca/clerk/active_runtime.py").read_text(encoding="utf-8")
+    main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
+
+    assert 'account_mode="live"' in live_source and "bind_real_alpaca_ports(" in live_source
+    assert "custody_is_simulated=False" in live_source
+    assert "arming_gate=ArmingGate()," in live_source
+    assert (
+        "arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id),"
+        in live_source
+    )
+    assert "verify_shadow_namespace_empty" not in live_source, (
+        "R18: the live authority inherits the paper path's cold start"
+    )
+    assert "select_live_clerk_runtime(" in selector_source
+    assert "store.latest(account.account_id)" in selector_source
+    assert "live_arming=arming_gate," in runtime_source and "instance_seals=instance_seals," in runtime_source
+    assert "live_state_root=live_artifacts_root," in main_source
+    assert "control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL," in main_source

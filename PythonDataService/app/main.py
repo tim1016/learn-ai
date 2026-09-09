@@ -256,6 +256,11 @@ async def lifespan(app: FastAPI):
             stream_health_gate=alpaca_stream_health_gate,
             roster_symbols=_alpaca_roster_symbols,
             live_envelope_values=live_envelope_values,
+            # ADR 0059 slice 7: the live authority reads sealed bindings beside
+            # the arming ledger every tick (lazily, through the runner's root),
+            # and refuses to install behind an open control plane (R14).
+            live_state_root=live_artifacts_root,
+            control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:
