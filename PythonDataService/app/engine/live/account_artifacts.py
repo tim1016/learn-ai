@@ -60,7 +60,8 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
     )
 )
 
-_ACCOUNT_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
+# Uppercase alphanumerics only, digit-led allowed: Alpaca live account ids are digit-led (ADR 0059 slice 7).
+_ACCOUNT_ID_RE = re.compile(r"^[A-Z0-9]{2,}$")
 logger = logging.getLogger(__name__)
 
 

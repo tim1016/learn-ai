@@ -214,15 +214,12 @@ def initialize_cutover_authority(
     record is written, so legacy remains selected until apply.
     """
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
-    normalized = _normalize_broker_evidence(broker_evidence)
-    live_evidence = _live_evidence_permits_empty_legacy(normalized)
     with advisory_file_lock(account_dir / "cutover-initialize"):
         return _initialize_cutover_authority_locked(
             account_id=account_id,
             artifacts_root=artifacts_root,
             runner_artifacts_root=runner_artifacts_root,
-            normalized_broker=normalized,
-            live_evidence=live_evidence,
+            normalized_broker=_normalize_broker_evidence(broker_evidence),
             max_broker_evidence_age_ms=max_broker_evidence_age_ms,
             accounts_root=accounts_root,
             account_dir=account_dir,
@@ -236,13 +233,13 @@ def _initialize_cutover_authority_locked(
     artifacts_root: Path,
     runner_artifacts_root: Path,
     normalized_broker: BrokerCutoverEvidence,
-    live_evidence: bool,
     max_broker_evidence_age_ms: int,
     accounts_root: Path,
     account_dir: Path,
     clock: Clock,
 ) -> CutoverInitializationReceipt:
     """Initialize or resume while holding the account's cutover lock."""
+    live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)
     now = clock()
     registry = EstablishedAccountsRegistry(accounts_root)
     established = registry.latest(account_id)
@@ -717,11 +714,12 @@ def _normalize_broker_evidence(evidence: BrokerCutoverEvidence) -> BrokerCutover
 def _live_evidence_permits_empty_legacy(broker_evidence: BrokerCutoverEvidence) -> bool:
     """Whether live evidence may stand in for legacy artifacts (ADR 0059 slice 7, design R3).
 
-    A live account has no legacy JSONL authority to quarantine and no prior
-    activation to have reset, so live evidence itself permits the empty set.
-    Shadow rehearsal is a mode, not a requirement (owner decision 2026-09-09);
-    the flat, order-free check is what still guards graduation. For a paper
-    account nothing changes.
+    A never-legacy live account has nothing to quarantine and no prior
+    activation to have reset, so live evidence permits (does not require) the
+    empty legacy set; a live account that does carry legacy artifacts is
+    quarantined exactly like a paper one. Shadow rehearsal is a mode, not a
+    requirement (owner decision 2026-09-09); the flat, order-free check is
+    what still guards graduation. For a paper account nothing changes.
     """
     return broker_evidence.account_mode == "live"
 

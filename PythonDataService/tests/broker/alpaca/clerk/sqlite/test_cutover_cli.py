@@ -268,6 +268,27 @@ def test_read_cutover_evidence_refuses_live_evidence_under_non_live_alpaca_mode(
     assert evidence.account_mode == "live"
 
 
+def test_read_cutover_evidence_never_reads_settings_for_paper_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "account_id": ACCOUNT_ID,
+        "account_mode": "paper",
+        "observed_at_ms": PLAN_MS,
+        "proof_reference": "fake-cli-proof",
+        "positions": {},
+        "open_order_ids": [],
+    }
+    evidence_path = tmp_path / "paper-broker-evidence.json"
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def _explode() -> AlpacaSettings:
+        raise AssertionError("paper evidence must not read Alpaca settings")
+
+    monkeypatch.setattr(recovery_cli_module, "get_alpaca_settings", _explode)
+    assert _read_cutover_evidence(evidence_path, ACCOUNT_ID).account_mode == "paper"
+
+
 def test_v9_upgrade_and_rollback_cli_require_account_bound_process_stop_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
