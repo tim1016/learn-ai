@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UnexplainedOrderCause,
     UnknownOrderIdentity,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,13 @@ def account_hold_envelope(
         )
     else:
         raise KeyError(f"{reason_code!r} is not a registered account-hold cause")
-    policy = _REASON_POLICIES[reason_code]
+    policy = reason_policy(reason_code)
+    if policy is None:
+        # Only registered codes reach here today (the branches above name
+        # three), but the two facts below are the policy's to state, not this
+        # envelope's to invent -- so an unregistered one refuses rather than
+        # being described with defaults.
+        raise KeyError(f"{reason_code!r} has no registered reason policy")
     return UncertaintyRaisedFacts(
         severity="error",
         blocks_new_exposure=policy.blocks_new_exposure,

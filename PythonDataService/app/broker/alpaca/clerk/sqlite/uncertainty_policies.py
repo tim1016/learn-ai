@@ -255,6 +255,16 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
 }
 
 
+def reason_policy(reason_code: str) -> ReasonPolicy | None:
+    """The registered policy for one reason code, or ``None`` if there is none.
+
+    The public read of the registry. ``None`` is a real answer, not an error:
+    an unregistered code is exactly what the admission path must fail closed
+    on, so every caller branches on it rather than catching a ``KeyError``.
+    """
+    return _REASON_POLICIES.get(reason_code)
+
+
 def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](
     reason_code: str, expect: type[AgePolicyT]
 ) -> AgePolicyT:

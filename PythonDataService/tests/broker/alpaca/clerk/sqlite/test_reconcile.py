@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 import pytest
 
-import app.broker.alpaca.clerk.sqlite.uncertainty as uncertainty_module
+import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -90,10 +90,10 @@ def _exit_not_flat_redrive_policy() -> RedriveThenEscalate:
 
 def _set_exit_not_flat_max_redrives(monkeypatch: pytest.MonkeyPatch, max_count: int) -> None:
     """Override only ``max_count`` on the declared policy, for one test."""
-    policy = uncertainty_module._REASON_POLICIES[EXIT_NOT_FLAT_REASON_CODE]
+    policy = uncertainty_policies_module._REASON_POLICIES[EXIT_NOT_FLAT_REASON_CODE]
     updated_age = dataclasses.replace(policy.age, max_count=max_count)
     monkeypatch.setitem(
-        uncertainty_module._REASON_POLICIES,
+        uncertainty_policies_module._REASON_POLICIES,
         EXIT_NOT_FLAT_REASON_CODE,
         dataclasses.replace(policy, age=updated_age),
     )
