@@ -297,6 +297,26 @@ class ArmingStatus:
     sessions_remaining: int
 
 
+def _live_state(
+    latest: LiveArmingRecord,
+    *,
+    seal_hash: str | None,
+    configured_envelope: LiveEnvelopeValues,
+    future_dated: bool,
+    used: int,
+) -> tuple[ArmingState, str | None]:
+    """The ordered rule R5 states, as five lines; ``arming_status`` says why."""
+    if seal_hash is None or seal_hash != latest.seal_hash:
+        return "disarmed", LIVE_ARMING_SEAL_CHANGED
+    if latest.envelope_sha256 != configured_envelope.sha:
+        return "disarmed", LIVE_ENVELOPE_DISAGREEMENT
+    if future_dated:
+        return "disarmed", LIVE_ARMING_FUTURE_DATED
+    if used > latest.max_sessions:
+        return "lapsed", LIVE_ARMING_LAPSED
+    return "armed", None
+
+
 def arming_status(
     records: Sequence[LedgerRecord],
     *,
@@ -340,40 +360,21 @@ def arming_status(
         used = sessions_used(armed_at_ms=latest.armed_at_ms, now_ms=now_ms)
         remaining = max(0, latest.max_sessions - used)
 
-    if seal_hash is None or seal_hash != latest.seal_hash:
-        return ArmingStatus(
-            state="disarmed",
-            reason_code=LIVE_ARMING_SEAL_CHANGED,
-            record=latest,
-            sessions_used=used,
-            sessions_remaining=remaining,
-        )
-    if latest.envelope_sha256 != configured_envelope.sha:
-        return ArmingStatus(
-            state="disarmed",
-            reason_code=LIVE_ENVELOPE_DISAGREEMENT,
-            record=latest,
-            sessions_used=used,
-            sessions_remaining=remaining,
-        )
-    if future_dated:
-        return ArmingStatus(
-            state="disarmed",
-            reason_code=LIVE_ARMING_FUTURE_DATED,
-            record=latest,
-            sessions_used=used,
-            sessions_remaining=remaining,
-        )
-    if used > latest.max_sessions:
-        return ArmingStatus(
-            state="lapsed",
-            reason_code=LIVE_ARMING_LAPSED,
-            record=latest,
-            sessions_used=used,
-            sessions_remaining=0,
-        )
+    # ``remaining`` is already 0 wherever the rule says lapsed, because that
+    # branch is reached only when ``used > max_sessions``.
+    state, reason_code = _live_state(
+        latest,
+        seal_hash=seal_hash,
+        configured_envelope=configured_envelope,
+        future_dated=future_dated,
+        used=used,
+    )
     return ArmingStatus(
-        state="armed", reason_code=None, record=latest, sessions_used=used, sessions_remaining=remaining
+        state=state,
+        reason_code=reason_code,
+        record=latest,
+        sessions_used=used,
+        sessions_remaining=remaining,
     )
 
 
