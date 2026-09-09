@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RESEARCH_LAB_NAV } from './research-lab-nav.config';
 import { researchLabRoutes } from './research-lab.routes';
+import { NewsPageComponent } from './news/news-page.component';
 import { RecencyChartPageComponent } from './recency-chart/recency-chart-page.component';
 
 describe('Research Lab route configuration', () => {
@@ -21,5 +22,18 @@ describe('Research Lab route configuration', () => {
       path: 'backtests/recency-chart',
       label: 'Recency Chart',
     });
+  });
+
+  it('registers the Ticker News page in the Market navigation', async () => {
+    const shell = researchLabRoutes.find((route) => route.path === '');
+    const pageRoute = shell?.children?.find((route) => route.path === 'market/news');
+    const market = RESEARCH_LAB_NAV.find((group) => group.label === 'Market');
+
+    if (pageRoute?.loadComponent === undefined) {
+      throw new Error('Ticker News route is missing.');
+    }
+    expect(await pageRoute.loadComponent()).toBe(NewsPageComponent);
+    expect(pageRoute?.data?.['title']).toBe('Ticker News');
+    expect(market?.items).toContainEqual({ path: 'market/news', label: 'Ticker News' });
   });
 });

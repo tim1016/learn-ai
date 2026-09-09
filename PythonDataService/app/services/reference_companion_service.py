@@ -144,7 +144,19 @@ def build_news_csv(
         )
         if not rows:
             return None
-        rows = _sorted_by_time(rows, "published_utc")
+        rows = _sorted_by_time(rows, "published_utc_ms")
+        # Flatten the list-valued and nested fields here, at the CSV boundary.
+        # The client returns them structured so richer consumers (the news
+        # page) keep full fidelity; only this exporter needs flat strings.
+        rows = [
+            {
+                **row,
+                "publisher": (row.get("publisher") or {}).get("name"),
+                "tickers": ",".join(row.get("tickers") or []),
+                "keywords": ",".join(row.get("keywords") or []),
+            }
+            for row in rows
+        ]
         return _write_csv(
             rows,
             [
@@ -152,7 +164,9 @@ def build_news_csv(
                 "publisher",
                 "title",
                 "author",
-                "published_utc",
+                # Canonical int64 ms UTC per temporal-rigor — the vendor's RFC3339
+                # string is not carried into a durable artifact.
+                "published_utc_ms",
                 "article_url",
                 "tickers",
                 "description",

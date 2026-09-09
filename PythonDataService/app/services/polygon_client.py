@@ -18,6 +18,7 @@ see why the app is slow rather than guessing.
 See ``docs/references/polygon-throttle.md`` for the layman explanation.
 """
 
+import json
 import logging
 import threading
 import time
@@ -29,6 +30,7 @@ from typing import Any
 from polygon import RESTClient
 
 from app.config import settings
+from app.utils.timestamps import timestamp_like_to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -301,39 +303,137 @@ class PolygonClientService:
 
     def list_news(
         self,
-        ticker: str,
-        published_utc_gte: str | None = None,
+        *,
+        ticker: str | None = None,
+        ticker_lt: str | None = None,
+        ticker_lte: str | None = None,
+        ticker_gt: str | None = None,
+        ticker_gte: str | None = None,
+        published_utc: str | None = None,
+        published_utc_lt: str | None = None,
         published_utc_lte: str | None = None,
+        published_utc_gt: str | None = None,
+        published_utc_gte: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
         limit: int = 1000,
+        on_event: ThrottleEvent | None = None,
     ) -> list[dict[str, Any]]:
-        """Ticker news. Endpoint: GET /v2/reference/news"""
+        """Ticker news with sentiment insights. Endpoint: GET /v2/reference/news
+
+        Every upstream query parameter is a passthrough: the ``ticker`` and
+        ``published_utc`` comparison operators, ``sort``, ``order``, and ``limit``
+        map directly onto the Polygon request.
+
+        **Why ``raw=True`` rather than the SDK's model objects.** polygon-api-client
+        1.12.5's ``TickerNews`` dataclass has no ``insights`` field — its fields are
+        exactly ``amp_url, article_url, author, description, id, image_url, keywords,
+        published_utc, publisher, tickers, title``. The API *does* return ``insights``;
+        the SDK drops it during deserialization, silently. Reading the raw payload is
+        the only way to see the sentiment at all, so do not "simplify" this back to the
+        typed iterator without first confirming the installed SDK models the field.
+        One request returns one page (upstream caps a page at 1000, which is also this
+        function's ceiling), so no pagination loop is needed.
+
+        **The ``insights`` array is vendor-asserted, not derived.** Each entry carries
+        a sentiment label produced by Polygon's own unpublished model. We cannot
+        reimplement it, so it can never satisfy the golden-fixture standard in
+        ``.claude/rules/numerical-rigor.md`` — it is recorded, never validated.
+        Consumers must label it as external vendor data. Note also that Polygon scores
+        an article whenever *it* runs the model, not at ``published_utc``: backfilled
+        sentiment is scored by a model newer than the article, so it is unsafe as a
+        point-in-time research input.
+
+        **Temporal boundary.** The ``published_utc*`` *filters* stay vendor-format
+        strings, which is a deliberate, documented deviation from
+        ``.claude/rules/temporal-rigor.md`` (CLAUDE.md philosophy #4): Polygon gives a
+        bare ``YYYY-MM-DD`` whole-day semantics that an instant in milliseconds cannot
+        express, so converting would narrow what a caller can ask for. This function is
+        the designated ingestion boundary, and the direction that matters — vendor data
+        coming *in* — is canonicalized here: each article's ``published_utc`` becomes
+        ``published_utc_ms`` and the vendor's string is not kept.
+        """
         try:
-            out: list[dict[str, Any]] = []
-            for n in self.client.list_ticker_news(
+            # One request is one Polygon call, so pace it the way `fetch_aggregates`
+            # does. Note this throttle is per-`PolygonClientService` instance and each
+            # router constructs its own, so it paces *this* caller, not a global budget.
+            self._throttle.acquire(label=f"news:{ticker or 'range'}", on_event=on_event)
+
+            response = self.client.list_ticker_news(
                 ticker=ticker,
-                published_utc_gte=published_utc_gte,
+                ticker_lt=ticker_lt,
+                ticker_lte=ticker_lte,
+                ticker_gt=ticker_gt,
+                ticker_gte=ticker_gte,
+                published_utc=published_utc,
+                published_utc_lt=published_utc_lt,
                 published_utc_lte=published_utc_lte,
+                published_utc_gt=published_utc_gt,
+                published_utc_gte=published_utc_gte,
+                sort=sort,
+                order=order,
                 limit=min(limit, 1000),
-            ):
-                out.append(
-                    {
-                        "id": getattr(n, "id", None),
-                        "publisher": getattr(n.publisher, "name", None) if getattr(n, "publisher", None) else None,
-                        "title": getattr(n, "title", None),
-                        "author": getattr(n, "author", None),
-                        "published_utc": getattr(n, "published_utc", None),
-                        "article_url": getattr(n, "article_url", None),
-                        "tickers": ",".join(getattr(n, "tickers", []) or []),
-                        "description": getattr(n, "description", None),
-                        "keywords": ",".join(getattr(n, "keywords", []) or []),
-                    }
-                )
-                if len(out) >= limit:
-                    break
-            return out
+                raw=True,
+            )
+            payload = json.loads(response.data)
+            return [self._serialize_news_article(article) for article in payload.get("results") or []]
         except Exception as exc:
             logger.error(f"Error listing news for {ticker}: {exc}")
             raise
+
+    @staticmethod
+    def _serialize_news_article(article: dict[str, Any]) -> dict[str, Any]:
+        """Flatten one raw news article into ``app.schemas.news.NewsArticle``'s shape.
+
+        Keys mirror that model exactly so the router can ``model_validate`` the result
+        without a hand-written mapper in between.
+        """
+        raw_published = article.get("published_utc")
+        published_ms: int | None = None
+        if raw_published is not None:
+            try:
+                published_ms = timestamp_like_to_ms_utc(raw_published, field_name="published_utc")
+            except (TypeError, ValueError) as exc:
+                # Explicit, logged, and non-fatal: one unparseable vendor
+                # timestamp must not discard the rest of the page. The row
+                # still surfaces, with a null ms that consumers sort last.
+                logger.warning(
+                    "Unparseable published_utc on news article; ms left null",
+                    extra={"article_id": article.get("id"), "raw": raw_published, "error": str(exc)},
+                )
+
+        publisher = article.get("publisher")
+        insights = article.get("insights") or []
+
+        return {
+            "id": article.get("id"),
+            "title": article.get("title"),
+            "description": article.get("description"),
+            "author": article.get("author"),
+            "article_url": article.get("article_url"),
+            "amp_url": article.get("amp_url"),
+            "image_url": article.get("image_url"),
+            "published_utc_ms": published_ms,
+            "tickers": list(article.get("tickers") or []),
+            "keywords": list(article.get("keywords") or []),
+            "publisher": {
+                "name": publisher.get("name"),
+                "homepage_url": publisher.get("homepage_url"),
+                "logo_url": publisher.get("logo_url"),
+                "favicon_url": publisher.get("favicon_url"),
+            }
+            if isinstance(publisher, dict)
+            else None,
+            "insights": [
+                {
+                    "ticker": i.get("ticker"),
+                    "sentiment": i.get("sentiment"),
+                    "sentiment_reasoning": i.get("sentiment_reasoning"),
+                }
+                for i in insights
+                if isinstance(i, dict)
+            ],
+        }
 
     def list_financials(
         self,

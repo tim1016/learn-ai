@@ -21724,6 +21724,273 @@
         "title": "NearestWeeklyExpiry",
         "type": "object"
       },
+      "NewsArticle": {
+        "additionalProperties": false,
+        "properties": {
+          "amp_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amp Url"
+          },
+          "article_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Article Url"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "insights": {
+            "items": {
+              "$ref": "#/components/schemas/NewsInsight"
+            },
+            "title": "Insights",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "published_utc_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical int64 ms UTC. Null when the vendor string was unparseable.",
+            "title": "Published Utc Ms"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NewsPublisher"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tickers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tickers",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "NewsArticle",
+        "type": "object"
+      },
+      "NewsInsight": {
+        "additionalProperties": false,
+        "description": "One vendor-asserted sentiment reading for one ticker in one article.",
+        "properties": {
+          "sentiment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment"
+          },
+          "sentiment_reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment Reasoning"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          }
+        },
+        "title": "NewsInsight",
+        "type": "object"
+      },
+      "NewsPublisher": {
+        "additionalProperties": false,
+        "properties": {
+          "favicon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Favicon Url"
+          },
+          "homepage_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homepage Url"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "NewsPublisher",
+        "type": "object"
+      },
+      "NewsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "articles": {
+            "items": {
+              "$ref": "#/components/schemas/NewsArticle"
+            },
+            "title": "Articles",
+            "type": "array"
+          },
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "fetched_at_ms": {
+            "description": "When this platform fetched the page \u2014 not when the vendor scored the sentiment.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Fetched At Ms",
+            "type": "integer"
+          },
+          "sentiment_provenance": {
+            "const": "vendor_asserted",
+            "default": "vendor_asserted",
+            "title": "Sentiment Provenance"
+          },
+          "vendor": {
+            "const": "polygon",
+            "default": "polygon",
+            "title": "Vendor"
+          },
+          "vendor_endpoint": {
+            "const": "/v2/reference/news",
+            "default": "/v2/reference/news",
+            "title": "Vendor Endpoint"
+          }
+        },
+        "required": [
+          "articles",
+          "count",
+          "fetched_at_ms"
+        ],
+        "title": "NewsResponse",
+        "type": "object"
+      },
       "NonSessionRecord": {
         "properties": {
           "market": {
@@ -49962,6 +50229,274 @@
         "summary": "Get Market Status",
         "tags": [
           "market"
+        ]
+      }
+    },
+    "/api/news": {
+      "get": {
+        "description": "Fetch ticker news with vendor sentiment insights.",
+        "operationId": "list_news_api_news_get",
+        "parameters": [
+          {
+            "description": "Exact ticker, case-sensitive (e.g. SPY).",
+            "in": "query",
+            "name": "ticker",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact ticker, case-sensitive (e.g. SPY).",
+              "title": "Ticker"
+            }
+          },
+          {
+            "description": "Ticker range: greater than or equal.",
+            "in": "query",
+            "name": "ticker_gte",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticker range: greater than or equal.",
+              "title": "Ticker Gte"
+            }
+          },
+          {
+            "description": "Ticker range: strictly greater than.",
+            "in": "query",
+            "name": "ticker_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticker range: strictly greater than.",
+              "title": "Ticker Gt"
+            }
+          },
+          {
+            "description": "Ticker range: less than or equal.",
+            "in": "query",
+            "name": "ticker_lte",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticker range: less than or equal.",
+              "title": "Ticker Lte"
+            }
+          },
+          {
+            "description": "Ticker range: strictly less than.",
+            "in": "query",
+            "name": "ticker_lt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticker range: strictly less than.",
+              "title": "Ticker Lt"
+            }
+          },
+          {
+            "description": "Exact publication date (YYYY-MM-DD or RFC3339).",
+            "in": "query",
+            "name": "published_utc",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact publication date (YYYY-MM-DD or RFC3339).",
+              "title": "Published Utc"
+            }
+          },
+          {
+            "description": "Published on or after.",
+            "in": "query",
+            "name": "published_utc_gte",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published on or after.",
+              "title": "Published Utc Gte"
+            }
+          },
+          {
+            "description": "Published strictly after.",
+            "in": "query",
+            "name": "published_utc_gt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published strictly after.",
+              "title": "Published Utc Gt"
+            }
+          },
+          {
+            "description": "Published on or before.",
+            "in": "query",
+            "name": "published_utc_lte",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published on or before.",
+              "title": "Published Utc Lte"
+            }
+          },
+          {
+            "description": "Published strictly before.",
+            "in": "query",
+            "name": "published_utc_lt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published strictly before.",
+              "title": "Published Utc Lt"
+            }
+          },
+          {
+            "description": "Field to order by; upstream supports published_utc.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Field to order by; upstream supports published_utc.",
+              "title": "Sort"
+            }
+          },
+          {
+            "description": "Sort direction.",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sort direction.",
+              "title": "Order"
+            }
+          },
+          {
+            "description": "Max articles; upstream ceiling is 1000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Max articles; upstream ceiling is 1000.",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List News",
+        "tags": [
+          "news"
         ]
       }
     },
