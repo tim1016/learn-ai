@@ -118,7 +118,7 @@ def test_status_on_an_account_with_no_records_answers_unarmed(
     assert report["envelope_state"] == "configured_unsealed"
     assert report["instances"] == []
     assert report["submission_admitted"] is False
-    assert "Slice 7" in report["note"]
+    assert "no live authority is activated for this account" in report["note"]
 
 
 def test_plan_writes_only_the_plan_file_and_apply_writes_the_sealed_record(

@@ -21,9 +21,11 @@ the ceremony refused, under a named ``LIVE_ARMING_*`` / ``LIVE_ENVELOPE_MISSING`
 code.
 
 Every invocation writes exactly one JSON object to stdout, every temporal value
-in it is ``int64 ms UTC``, and every object carries ``"submission_admitted":
-false`` -- the fact an operator most easily assumes wrong. (``--help`` is
-argparse's own usage text and exits ``0``; it runs no command.)
+in it is ``int64 ms UTC``, and every object carries a computed
+``submission_admitted`` and ``note``: since ADR 0059 slice 7, whether an armed
+instance's ENTER is actually submitted depends on graduation -- whether a live
+authority is activated for this account -- not on this ceremony alone.
+(``--help`` is argparse's own usage text and exits ``0``; it runs no command.)
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
 )
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
+from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.config import (
     AlpacaSettings,
@@ -67,10 +70,11 @@ from app.broker.ibkr.config import live_artifacts_root
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
-SUBMISSION_NOTE = (
-    "An arming record is evidence, not a submission path: no code path submits a "
-    "real-money order in ADR 0059 slice 6. Slice 7 is what reads this record at "
-    "ENTER admission."
+_SUBMISSION_ADMITTED_NOTE = (
+    "a live authority is activated for this account; an armed instance's ENTER is submitted"
+)
+_SUBMISSION_NOT_ADMITTED_NOTE = (
+    "no live authority is activated for this account; nothing submits until the live cutover"
 )
 
 
@@ -129,18 +133,38 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _write(payload: Mapping[str, Any]) -> None:
+def _submission_admitted(artifacts_root: Path | None, payload: Mapping[str, Any]) -> tuple[bool, str]:
+    """Whether a live authority is activated for this payload's account.
+
+    Since ADR 0059 slice 7, an armed instance's ENTER is only ever submitted
+    once graduation -- the live cutover -- has installed the live authority
+    for the account; arming alone never opens that path. The cutover's own
+    ``ActivationStore`` is the read of that fact. A payload with no resolvable
+    ``artifacts_root`` or ``live_account_id`` (a usage or pre-dispatch
+    refusal) answers the same as an ungraduated account: nothing submits.
+    """
+    live_account_id = payload.get("live_account_id")
+    if artifacts_root is None or not isinstance(live_account_id, str):
+        return False, _SUBMISSION_NOT_ADMITTED_NOTE
+    activated = ActivationStore(artifacts_root / "accounts" / "alpaca").latest(live_account_id) is not None
+    return (
+        (True, _SUBMISSION_ADMITTED_NOTE) if activated else (False, _SUBMISSION_NOT_ADMITTED_NOTE)
+    )
+
+
+def _write(payload: Mapping[str, Any], *, artifacts_root: Path | None = None) -> None:
     """One JSON object per invocation, on stdout.
 
-    Every object carries ``submission_admitted`` and its note because that is
-    the fact an operator most easily assumes wrong: arming is a permission slice
-    7 will read, not a submission path this slice opened. ``default=str`` covers
-    the ``Path`` values a plan may carry; every temporal value is already
-    ``int64 ms UTC``.
+    Every object carries a computed ``submission_admitted`` and its note
+    because that is the fact an operator most easily assumes wrong: arming
+    alone never opens the submission path -- graduation does (see
+    ``_submission_admitted``). ``default=str`` covers the ``Path`` values a
+    plan may carry; every temporal value is already ``int64 ms UTC``.
     """
+    submission_admitted, note = _submission_admitted(artifacts_root, payload)
     sys.stdout.write(
         json.dumps(
-            {**payload, "submission_admitted": False, "note": SUBMISSION_NOTE},
+            {**payload, "submission_admitted": submission_admitted, "note": note},
             sort_keys=True,
             default=str,
         )
@@ -235,7 +259,8 @@ def _status(
                 _instance_payload(status, strategy_instance_id=sid)
                 for sid, status in sorted(arming.statuses.items())
             ],
-        }
+        },
+        artifacts_root=artifacts_root,
     )
     return 0
 
@@ -261,7 +286,7 @@ def _plan(
             atomic_write_json(args.plan_out, asdict(plan))
         except OSError as exc:
             raise ArmingOperatorRefusal(f"cannot write the plan file: {exc}") from exc
-    _write(asdict(plan))
+    _write(asdict(plan), artifacts_root=artifacts_root)
     return 0
 
 
@@ -276,7 +301,7 @@ def _apply(
         settings=settings,
         clock=_clock(args.now_ms),
     )
-    _write(asdict(record))
+    _write(asdict(record), artifacts_root=artifacts_root)
     return 0
 
 
@@ -288,7 +313,8 @@ def _disarm(args: argparse.Namespace, *, artifacts_root: Path) -> int:
                 artifacts_root=artifacts_root,
                 clock=_clock(args.now_ms),
             )
-        )
+        ),
+        artifacts_root=artifacts_root,
     )
     return 0
 

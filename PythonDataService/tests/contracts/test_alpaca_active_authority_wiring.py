@@ -468,3 +468,14 @@ def test_the_live_composition_binds_the_real_trade_port_and_both_gates() -> None
     assert "live_arming=arming_gate," in runtime_source and "instance_seals=instance_seals," in runtime_source
     assert "live_state_root=live_artifacts_root," in main_source
     assert "control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL," in main_source
+
+
+def test_operator_reduce_only_paths_carry_no_mode_or_arming_gate() -> None:
+    """ADR 0059 D3/D4 and slice 7 R17: a flatten is EXIT-shaped and is how a halted position closes."""
+    for relative in (
+        "broker/alpaca/clerk/sqlite/safe_flatten_execution.py",
+        "services/broker_v2_panel/cohort_flatten.py",
+    ):
+        source = (APPLICATION_ROOT / relative).read_text(encoding="utf-8")
+        assert "account_mode" not in source, f"{relative} gates on the account mode; reduce-only actions never do"
+        assert "arming" not in source, f"{relative} consults arming; reduce-only actions never do"

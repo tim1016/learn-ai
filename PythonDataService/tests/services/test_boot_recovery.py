@@ -868,3 +868,27 @@ async def test_lease_recovery_pass_stamps_revival_provenance(
     desired = desired_repo.read()
     assert desired is not None
     assert desired.updated_by == "bot_runner_lease_revival"
+
+
+async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(tmp_path: Path) -> None:
+    """R15: after graduation the rehearsal's bindings are foreign, not fatal."""
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    shadow_sealed = registry._bots[_SID].binding.sealed_account_id
+    await registry.stop("alpaca", _SID, updated_by="test")
+
+    proof = _custody_proof(exposure={}).model_copy(update={"account_id": f"live-of-{shadow_sealed}"})
+    set_alpaca_clerk(_CustodyClerk(proof))
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    report = await rebooted.run_boot_recovery()
+
+    assert report.authority_unavailable_instances == ()
+    assert rebooted.status("alpaca", _SID).running is False

@@ -18,11 +18,13 @@ same ceremony run again. An arming also **lapses** after
 "come back and look" fence, because an armed bot nobody has looked at in a
 month is the configuration accident this ADR was written to prevent.
 
-**Nothing here submits a real-money order.** In this slice an arming record is
-evidence: the runtime reads it to seal the risk envelope (below), and the live
-verdict counts it. ADR 0059 slice 7 is what teaches ENTER admission to read it.
-Every JSON object the CLI prints says so, in a `submission_admitted: false`
-field and a `note`.
+**Since ADR 0059 slice 7 an arming record is what admits a real-money ENTER**
+on the live authority: `require_arming_admission` reads it at every ENTER,
+between the holds and the envelope, through the `ArmingGate` the sync
+refreshes each tick. The CLI's `submission_admitted` field now reports
+whether a live authority exists for the account; its `note` says under which
+authority the record is read. See
+[alpaca-live-authority](alpaca-live-authority.md).
 
 ## Where it runs
 
@@ -60,17 +62,18 @@ field and a `note`.
 `plan` reads each of these, and `apply` reads every one of them again and
 refuses if any has moved (`LIVE_ARMING_INPUTS_CHANGED`). The ceremony never
 contacts the broker: mode agreement against Alpaca stays the runtime's job at
-boot, and slice 7's at admission.
+boot, and the live authority's at admission (`LIVE_MODE_DISAGREEMENT` from the
+sync's read).
 
 | Input | Where it comes from | Refusal if absent |
 |---|---|---|
 | Settings | `ALPACA_MODE=live` and a complete `LiveEnvelopeValues.from_settings` | `LIVE_ENVELOPE_MISSING` |
 | The live account id | the shadow activation fence under the artifacts root — **observed, never supplied**, so an arming cannot name an account no shadow gate was run against | `LIVE_ARMING_INSTANCE_UNSEALED` |
 | The instance's sealed binding on that account | `BotBindingRepository.list_for_broker("alpaca")`, filtered to `sealed_account_id` in `{<live_account_id>, shadow:<live_account_id>}` | `LIVE_ARMING_INSTANCE_UNSEALED` |
-| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=ALPACA_LIVE_SHADOW_SESSIONS)` | `LIVE_SHADOW_INCOMPLETE` |
+| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=ALPACA_LIVE_SHADOW_SESSIONS)` | *(none — recorded when present, null otherwise; owner decision 2026-09-09)* |
 
 Both custody ids are admissible for the same account because shadow custody
-seals `shadow:<live_account_id>` while slice 7's `real_live` custody will seal
+seals `shadow:<live_account_id>` while the live authority seals
 the live id itself. They are one account to an operator.
 
 ## The record
@@ -127,15 +130,17 @@ in envelope disagreement without the calendar ever seeing a reversed range.
 
 The ceremony's own refusals, each raised as a `LiveArmingRefused` the CLI
 prints and exits `2` on: `LIVE_ENVELOPE_MISSING`,
-`LIVE_ARMING_INSTANCE_UNSEALED`, `LIVE_SHADOW_INCOMPLETE`,
+`LIVE_ARMING_INSTANCE_UNSEALED`,
 `LIVE_ARMING_TTL_INVALID`, `LIVE_ARMING_TOKEN_INVALID`,
 `LIVE_ARMING_PLAN_EXPIRED`, `LIVE_ARMING_INPUTS_CHANGED`,
 `LIVE_ARMING_NOT_ARMED`.
 
 Thirteen reason codes in all — the five in the states/codes table above plus
-the eight the ceremony raises directly. `ARMING_REASON_CODES` in
-`live_arming.py` is the frozen set of all thirteen, and the two are meant to
-stay in lockstep.
+the seven the ceremony raises directly and `LIVE_SHADOW_INCOMPLETE`, which
+stays defined for the verdict's vocabulary though no code path raises it
+since slice 7 (shadow is a mode, not a requirement — owner decision
+2026-09-09). `ARMING_REASON_CODES` in `live_arming.py` is the frozen set of
+all thirteen, and the two are meant to stay in lockstep.
 
 ## Lapse, and a worked example
 
@@ -192,9 +197,9 @@ unsealed and is logged at **error** level, once per transition
 (`live_arming_ledger_invalid`), and the verdict counts zero armed instances and
 names the fault in its detail.
 
-Per-instance arming is **not** consulted at ENTER admission in this slice. The
-sealed envelope is account-level; slice 7 is where an individual instance's
-arming decides whether its order may be submitted.
+Per-instance arming **is** consulted at ENTER admission on the live authority
+(slice 7); under the shadow authority the sealed envelope stays account-level
+and rehearsal ENTERs are not gated on arming.
 
 ## Operator recipe
 
@@ -234,23 +239,21 @@ route: an arming is a supervised, out-of-process act.
 | `envelope_state` | `sealed` once the ledger holds at least one arming record, else `configured_unsealed` |
 | `final_verdict` | `live-armed` when the account is live, mode agreed, a Clerk installed and the count is at least 1; otherwise `live-unarmed` |
 
-The headline names the count; the detail states that no path submits a
-real-money order yet and names every instance the ledger knows that is not
-armed, with its reason code. The schema is unchanged — every one of these
+The headline names the count; the detail states whether real-money submission
+is open on this authority and names every instance the ledger knows that is
+not armed, with its reason code. The schema is unchanged — every one of these
 values was already declared in slice 1.
 
 ## Residuals
 
-- **An arming record admits nothing.** Slice 7 is what reads it at ENTER
-  admission. The CLI and the verdict both say so rather than leaving it to be
-  inferred.
-- **The ceremony does not re-observe the broker.** Mode agreement is proven at
-  boot by `select_active_clerk_runtime` and (slice 7) again at admission. An
-  arming that named a live account whose broker mode later disagreed is
-  refused there, not here.
-- **The sealed envelope is account-level under shadow.** Per-instance
-  disagreement is reported by `status` and by the verdict; it is enforced per
-  instance at admission in slice 7.
+- **Resolved by `arming_admission.py`.** An arming record admits a real-money
+  ENTER now — the third admission in the chain, on the live authority.
+- **Resolved by the sync's `LIVE_MODE_DISAGREEMENT` path.** Mid-session
+  broker-mode disagreement is caught there, not by the ceremony re-contacting
+  the broker.
+- **Resolved by `require_arming_admission`.** Per-instance disagreement is
+  enforced per instance at ENTER admission on the live authority, not merely
+  reported by `status` and the verdict.
 - **One shadowed account per artifacts root — for arming, not for disarm.**
   `live_account_id_for` refuses rather than choosing when the activation fence
   names two, because an arming has no basis to pick one. `disarm` does **not**
@@ -269,18 +272,10 @@ values was already declared in slice 1.
 - **`ALPACA_LIVE_ARMING_MAX_SESSIONS` has no upper bound in code** — the owner
   rejected numbers in code. The plan output shows exactly how many sessions the
   arming buys, so an implausible grant is visible at the moment it is confirmed.
-- **The verdict counts armed instances only under the shadow authority.**
-  `observe_arming` reports zero whenever the installed authority is not
-  `shadow` — including the real `sqlite` live authority slice 7 installs —
-  until that gate is widened. Slice 7 owns the widening; this slice does not
-  pre-empt it.
-- **An unreadable ledger *unseals* the gate — the one place a ledger fault
-  relaxes rather than tightens.** `_refresh_sealed_envelope` returns the
-  envelope to unsealed when the ledger will not verify, which is harmless in
-  this slice because nothing submits and the verdict counts zero armed. Slice 7
-  must make a `LiveArmingInvalid` at ENTER admission a *refusal*, not an absent
-  arming: otherwise one corrupt ledger would drop the disagreement fence and
-  the per-instance check at the same moment.
+- **Resolved: `observe_arming` reads on every facade authority now**, live
+  authority included, not the shadow authority alone.
+- **Resolved by `ArmingGate.invalidate`.** An unreadable ledger is a refusal
+  at ENTER admission now, not an absent arming.
 - **A record dated after the clock disarms; it never extends.** `now_ms`
   behind a record's `armed_at_ms` reports `disarmed` / `LIVE_ARMING_FUTURE_DATED`
   rather than deferring the lapse count: a rolled-back clock must never buy an

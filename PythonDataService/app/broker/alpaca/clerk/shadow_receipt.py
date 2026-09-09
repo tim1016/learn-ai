@@ -1,10 +1,10 @@
 """The shadow receipt: sealed, per-instance proof that the shadow gate passed (ADR 0059 D2).
 
 Append-only under ``accounts/shadow/``; every row is sha256-sealed over its
-payload, so a receipt is either exactly what the gate wrote or invalid. Slice
-6's arming ceremony reads ``ShadowReceiptStore.current`` and refuses to arm
-without one (``LIVE_SHADOW_INCOMPLETE``). Dates are the sessions' calendar
-opens in ``int64 ms UTC``.
+payload, so a receipt is either exactly what the gate wrote or invalid. The
+arming ceremony reads ``ShadowReceiptStore.current`` and records the
+receipt's sha when one exists; since slice 7 it arms without one. Dates are
+the sessions' calendar opens in ``int64 ms UTC``.
 """
 
 from __future__ import annotations
