@@ -4,7 +4,7 @@
 
 **Goal:** A `real_live` custody world exists and is selected at boot on three-way mode agreement; every one of Decision 11's gates admits it exactly as the ADR says; an ENTER on the live authority passes admission → per-instance arming → envelope and reaches the real Alpaca trade port; an unarmed instance's every ENTER refuses, a lost arming is refused and warned about once under `LIVE_VERDICT_TRANSITION_HALT` with no desired state written; the deploy wire, the verdict and the contract say so.
 
-**Architecture:** One new selector (`live_authority.py`) mirrors the shadow selector over the real trade port and the same `compose_repository_runtime`; one new pure gate (`live_arming_gate.py`) holds the arming snapshot the existing `LiveEnvelopeSync` refreshes every tick from a single ledger read (the sealed bindings arrive as an injected callable); one new admission (`sqlite/arming_admission.py`) sits between `require_admission` and the envelope inside `accept_enter`. Start/Resume admission gains an arming fact that refuses only an unreadable ledger. The cutover ceremony admits `live` evidence on the strength of a shadow receipt; the deploy view offers `live`; a live instance arms on its twin's receipt; the verdict reads any facade authority. Nothing in this slice pauses a bot.
+**Architecture:** One new selector (`live_authority.py`) mirrors the shadow selector over the real trade port and the same `compose_repository_runtime`; one new pure gate (`live_arming_gate.py`) holds the arming snapshot the existing `LiveEnvelopeSync` refreshes every tick from a single ledger read (the sealed bindings arrive as an injected callable); one new admission (`sqlite/arming_admission.py`) sits between `require_admission` and the envelope inside `accept_enter`. Start/Resume admission gains an arming fact that refuses only an unreadable ledger. The cutover ceremony admits `live` evidence (the account flat and order-free); the deploy view offers `live`; the arming ceremony records a shadow receipt when the instance holds one and arms either way (shadow is a mode, not a requirement — owner decision 2026-09-09); the verdict reads any facade authority. Nothing in this slice pauses a bot.
 
 **Tech Stack:** Python 3.12, Pydantic v2 (settings, wire schemas), the Clerk's SQLite spine and JSONL sealed ledgers, FastAPI, Angular 22 + Vitest (one deploy-form spec), `openapi-typescript` codegen.
 
@@ -14,7 +14,7 @@
 
 - Never commit secrets; `.env` only. **No new environment variable.** `DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL` and every `ALPACA_LIVE_*` already exist.
 - Never edit sealed artifacts: `app/lean_sidecar/trading_calendar.py`, `app/utils/timestamps.py`, `app/utils/session_anchors.py`, `app/engine/consolidators/trade_bar_consolidator.py`, anything in `registry.py`'s `artifact_paths`.
-- **No SQLite schema change** (`app/broker/alpaca/clerk/sqlite/schema.py` untouched). **No change to the arming ledger's record shape** (`LiveArmingRecord` / `LiveDisarmRecord` fields, `schema_version=1`).
+- **No SQLite schema change** (`app/broker/alpaca/clerk/sqlite/schema.py` untouched). **One change to the arming ledger's record shape, in Task 4b only:** `LiveArmingRecord.shadow_receipt_sha256` becomes `str | None` (owner decision 2026-09-09 — shadow is a mode, not a requirement); `schema_version` stays 1; `LiveDisarmRecord` unchanged.
 - **One OpenAPI regeneration**, in Task 9, after every schema edit (Tasks 6, 7). Until then `export_openapi_contract.py --check` is expected to drift; from Task 9 on it must be **green**. Never regenerate twice.
 - Explicit-path staging only: `git add <paths>` — never `git add -A`, never `git add .`, never `git stash` (shared checkout; other sessions' untracked files exist). Every commit message ends with a blank line then `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - No silent exception handlers. Structured logging only: `logger.<level>(message, extra={"action": "...", ...})`. No `print()` in `app/`.
@@ -58,7 +58,7 @@
 | `app/services/bot_runner.py` | One constructor keyword threading the resolver into both admissions — nothing else. |
 | `app/services/run_replay_proof.py` | `ledger_account_id_for` reads under the writer's rule (R13). |
 | `app/schemas/broker_bots.py`, `app/services/broker_v2_panel/paper_deploy_service.py`, `panel_deploy.py` | `live` on the wire; the live world's cards, copy and receipt. |
-| `app/broker/alpaca/clerk/shadow_receipt.py`, `live_arming_ceremony.py` | `current_for_account`; `InstanceSeal.program`; the twin-identity receipt lookup. |
+| `app/broker/alpaca/clerk/live_arming.py`, `live_arming_ceremony.py` | `shadow_receipt_sha256` optional on the record, the inputs and the plan; the ceremony no longer refuses `LIVE_SHADOW_INCOMPLETE` (Task 4b). |
 | `app/services/alpaca_live_verdict.py` | Observations widened to every facade authority; two live copy rows. |
 | `Frontend/src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.component.ts` (+ spec, fixtures) | The Live card is selectable when offered. |
 | `contracts/openapi/python-data-service.openapi.json`, `Frontend/src/app/api/broker.types.ts` | Regenerated once (Task 9). |
@@ -2242,6 +2242,194 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
+### Task 4b: Shadow is a mode, not a requirement — the arming ceremony records a receipt when one exists (owner decision 2026-09-09)
+
+**Files:**
+- Modify: `PythonDataService/app/broker/alpaca/clerk/live_arming.py:93-148, 231-272`
+- Modify: `PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py:76-87, 92-108, 178-227`
+- Modify: `PythonDataService/scripts/manage_alpaca_arming.py` (only prose that names `LIVE_SHADOW_INCOMPLETE` as a ceremony refusal)
+- Test: `PythonDataService/tests/broker/alpaca/clerk/test_live_arming.py` (append), `PythonDataService/tests/broker/alpaca/clerk/test_live_arming_ceremony.py` (convert the receipt refusal tests), `PythonDataService/tests/scripts/test_manage_alpaca_arming.py` (convert any exit-2 case whose cause was a missing receipt)
+
+**Interfaces:**
+- Consumes: slice 6's `LiveArmingRecord`, `ArmingInputs`, `LiveArmingPlan`, `observe_arming_inputs`, `ShadowReceiptStore.current`.
+- Produces: `LiveArmingRecord.shadow_receipt_sha256: str | None` (and `create(..., shadow_receipt_sha256: str | None)`), `ArmingInputs.shadow_receipt_sha256: str | None`, `LiveArmingPlan.shadow_receipt_sha256: str | None`. `LIVE_SHADOW_INCOMPLETE` stays defined in `live_arming.py` and in `ARMING_REASON_CODES` (docs and the verdict may still name it) but the ceremony no longer raises it.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/broker/alpaca/clerk/test_live_arming.py` (the module's `_armed` helper, `ACCOUNT`, `SID`, `SEAL`, `SIGNAL`, `ENVELOPE`, `FRIDAY_MS`, `asdict`, `LiveArmingInvalid` already exist there):
+
+```python
+def test_a_record_without_a_receipt_seals_round_trips_and_still_detects_tampering() -> None:
+    """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
+    record = LiveArmingRecord.create(
+        live_account_id=ACCOUNT,
+        strategy_instance_id=SID,
+        seal_hash=SEAL,
+        configured_signal_hash=SIGNAL,
+        shadow_receipt_sha256=None,
+        envelope=ENVELOPE,
+        armed_at_ms=FRIDAY_MS,
+        max_sessions=ENVELOPE.arming_max_sessions,
+    )
+    payload = asdict(record)
+    assert payload["shadow_receipt_sha256"] is None
+    assert LiveArmingRecord.from_payload(payload) == record
+    with pytest.raises(LiveArmingInvalid):
+        LiveArmingRecord.from_payload({**payload, "shadow_receipt_sha256": "e" * 64})
+    with pytest.raises(LiveArmingInvalid):
+        LiveArmingRecord.from_payload({**payload, "seal_hash": "f" * 64})
+    # A receipt-less record still grants exactly what an armed row grants.
+    assert arming_status(
+        (record,),
+        live_account_id=ACCOUNT,
+        strategy_instance_id=SID,
+        seal_hash=SEAL,
+        configured_envelope=ENVELOPE,
+        now_ms=FRIDAY_MS,
+    ) == ArmingStatus.ARMED
+```
+
+In `tests/broker/alpaca/clerk/test_live_arming_ceremony.py`, replace `test_no_current_shadow_receipt_is_the_adrs_own_refusal` (lines 251–266) and `test_a_receipt_sealed_for_another_live_account_never_arms_this_one` (lines 268–297) with these three, and drop `LIVE_SHADOW_INCOMPLETE` from the file's imports if nothing else uses it:
+
+```python
+def test_an_instance_with_no_receipt_arms_and_records_none(roots: tuple[Path, Path]) -> None:
+    """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    seal = record_sealed_binding(live_state_root)
+    # A receipt for a different configured signal is not this seal's, and is not recorded.
+    seal_receipt(artifacts_root, configured_signal_hash="f" * 64)
+
+    inputs = observe_arming_inputs(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+    )
+
+    assert inputs.seal_hash == seal.bot_configuration_hash
+    assert inputs.shadow_receipt_sha256 is None
+
+
+def test_a_receipt_sealed_for_another_live_account_is_not_recorded_on_this_one(
+    roots: tuple[Path, Path],
+) -> None:
+    """The receipt store filters by instance, seal and count -- not by account.
+
+    Two live accounts can carry the same instance id and the same configured
+    signal; only the account the activation proof named was rehearsed, so
+    another account's receipt is not this account's fact and the record
+    carries none.
+    """
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    seal = record_sealed_binding(live_state_root)
+    seal_receipt(
+        artifacts_root,
+        configured_signal_hash=seal.configured_signal_hash,
+        live_account_id="9LIVE0002",
+        sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
+    )
+
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    assert plan.shadow_receipt_sha256 is None
+    assert plan.seal_hash == seal.bot_configuration_hash
+
+
+def test_a_receipt_less_arming_applies_and_its_record_carries_null(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    record_sealed_binding(live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    record = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 1_000),
+    )
+
+    assert record.shadow_receipt_sha256 is None
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == (record,)
+```
+
+(`apply_arming`'s keyword names: use exactly the ones the file's existing apply happy-path test passes — the plan, its token, both roots, settings and a clock past `created_at_ms` — the assertions above are what matters.) Every other test in the file stays as it is: `test_the_observer_reads_the_four_inputs_off_disk` still sees a 64-char sha because `arming_ready` seals a receipt, and the existing apply round-trip still carries it.
+
+In `tests/scripts/test_manage_alpaca_arming.py`, `test_planning_without_a_current_shadow_receipt_refuses_by_the_adrs_code` (lines 216–233) becomes `test_planning_without_a_current_shadow_receipt_plans_with_a_null_receipt`: the same setup, `main([... "plan" ...]) == 0`, and the printed object (`_last_object(capsys)`) has `["shadow_receipt_sha256"] is None` and `["submission_admitted"] is False` (the CLI prints `asdict(plan)` at line 264, so the key is top-level).
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/test_live_arming.py tests/broker/alpaca/clerk/test_live_arming_ceremony.py -q -p no:cacheprovider`
+Expected: FAIL — `LiveArmingInvalid("live arming record has invalid hash facts")` on the `None` record, and `LiveArmingRefused(LIVE_SHADOW_INCOMPLETE)` on the receipt-less instance.
+
+- [ ] **Step 3: The record**
+
+In `app/broker/alpaca/clerk/live_arming.py`: `shadow_receipt_sha256: str | None` on `LiveArmingRecord` (line 138) and on `create`'s signature (line 153); in `_validate_armed` (lines 282–287) hash-check the three unconditional hashes and the receipt only when present:
+
+```python
+    _require_hashes(record.seal_hash, record.configured_signal_hash, record.envelope_sha256)
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # receipt is recorded when the instance holds one, and null otherwise.
+    if record.shadow_receipt_sha256 is not None:
+        _require_hashes(record.shadow_receipt_sha256)
+```
+
+The record's docstring (line 131) gains "; `shadow_receipt_sha256` is null when the instance holds no receipt".
+
+- [ ] **Step 4: The ceremony**
+
+In `app/broker/alpaca/clerk/live_arming_ceremony.py`: `ArmingInputs.shadow_receipt_sha256: str | None` (line 84), `LiveArmingPlan.shadow_receipt_sha256: str | None` (line 105). In `observe_arming_inputs`, replace lines 196–218 (the receipt lookup and its two refusals) with:
+
+```python
+    receipt = ShadowReceiptStore(artifacts_root).current(
+        strategy_instance_id,
+        configured_signal_hash=seal.configured_signal_hash,
+        required_sessions=envelope.shadow_sessions,
+    )
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # current receipt for this instance on THIS account is recorded; its
+    # absence arms nothing less. A receipt sealed for another account is not
+    # this account's rehearsal and is not recorded either.
+    shadow_receipt_sha256 = (
+        receipt.receipt_sha256 if receipt is not None and receipt.live_account_id == live_account_id else None
+    )
+```
+
+and pass `shadow_receipt_sha256=shadow_receipt_sha256` into `ArmingInputs`. Remove `LIVE_SHADOW_INCOMPLETE` from this module's imports if nothing else uses it (ruff). The module docstring's (lines 9–11) "The four inputs (design R8) are settings, the shadow activation proof, the instance's sealed binding, and a current shadow receipt" becomes "…the instance's sealed binding; a current shadow receipt is recorded when one exists". `apply_arming`, `_require_no_drift` and `LiveArmingRecord.create(...)` pass the optional value through unchanged.
+
+In `scripts/manage_alpaca_arming.py`, every sentence that lists `LIVE_SHADOW_INCOMPLETE` among the ceremony's refusals drops it; the exit-code mapping is untouched.
+
+- [ ] **Step 5: Run the suites**
+
+Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/test_live_arming.py tests/broker/alpaca/clerk/test_live_arming_ceremony.py tests/broker/alpaca/clerk/test_live_arming_ledger.py tests/scripts/test_manage_alpaca_arming.py tests/services/test_alpaca_live_verdict.py tests/broker/alpaca/clerk/sqlite/test_live_envelope_sync_arming.py -q -p no:cacheprovider && .venv/bin/ruff check app/ tests/ scripts/`
+Expected: PASS; ruff clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add PythonDataService/app/broker/alpaca/clerk/live_arming.py PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py PythonDataService/scripts/manage_alpaca_arming.py PythonDataService/tests/broker/alpaca/clerk/test_live_arming.py PythonDataService/tests/broker/alpaca/clerk/test_live_arming_ceremony.py PythonDataService/tests/scripts/test_manage_alpaca_arming.py
+git commit -m "feat(alpaca): shadow is a mode, not a requirement — arming records a receipt when one exists (ADR 0059 slice 7, owner decision 2026-09-09)
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 5: The cutover admits live evidence — graduation (R3)
 
 **Files:**
@@ -2250,8 +2438,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Test: `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover_live.py` (new); `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover.py` (one parametrized happy path); `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_cutover_cli.py` (one case)
 
 **Interfaces:**
-- Consumes: `ShadowReceiptStore.any_for_account` (slice 4); `LIVE_SHADOW_INCOMPLETE` (slice 6); `seal_receipt` (`live_arming_fixtures`).
-- Produces: `BrokerCutoverEvidence.account_mode: Literal["paper", "live"]`; `_live_evidence_shadowed(*, artifacts_root, broker_evidence) -> bool` (cutover.py; refuses `CutoverRefused` prefixed `LIVE_SHADOW_INCOMPLETE:` when live and unshadowed, returns `False` for paper).
+- Consumes: `BrokerCutoverEvidence`, `_developer_reset_replaces_activation` (cutover.py, unchanged).
+- Produces: `BrokerCutoverEvidence.account_mode: Literal["paper", "live"]`; `_live_evidence_permits_empty_legacy(broker_evidence) -> bool` (cutover.py; `True` iff `account_mode == "live"`). No shadow receipt is consulted: shadow is a mode, not a requirement (owner decision 2026-09-09).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2261,9 +2449,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 """A live account graduates through the paper cutover ceremony, widened (ADR 0059 D1/D11, slice 7 R3).
 
 The ceremony is offline and its evidence file is hand-authored, so the only
-mode facts it can prove are the evidence's own word and — for ``live`` — that
-the account already holds a shadow receipt, which stands in for the legacy
-artifacts a never-legacy live account cannot have.
+mode fact it can prove is the evidence's own word; for ``live`` that word
+permits the empty legacy set a never-legacy live account cannot fill. Shadow
+rehearsal is a mode, not a requirement (owner decision 2026-09-09); flat and
+order-free is what still guards graduation.
 """
 
 from __future__ import annotations
@@ -2278,7 +2467,6 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from tests.broker.alpaca.clerk.live_arming_fixtures import seal_receipt
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT
 
 NOW = 1_800_000_000_000
@@ -2307,8 +2495,8 @@ def _initialize(tmp_path: Path, evidence: BrokerCutoverEvidence):
     )
 
 
-def test_a_never_legacy_live_account_with_a_shadow_receipt_initializes(tmp_path: Path) -> None:
-    seal_receipt(tmp_path, configured_signal_hash="b" * 64, live_account_id=LIVE_ACCT)
+def test_a_never_legacy_never_rehearsed_live_account_initializes(tmp_path: Path) -> None:
+    """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
     receipt = _initialize(tmp_path, _evidence())
     assert receipt.account_id == LIVE_ACCT
     assert receipt.broker_evidence.account_mode == "live"
@@ -2322,17 +2510,6 @@ def test_a_never_legacy_paper_account_still_refuses(tmp_path: Path) -> None:
         _initialize(tmp_path, _evidence(account_id="PA-NEVER", account_mode="paper"))
 
 
-def test_a_live_account_nobody_shadowed_refuses_shadow_incomplete(tmp_path: Path) -> None:
-    with pytest.raises(CutoverRefused, match="LIVE_SHADOW_INCOMPLETE"):
-        _initialize(tmp_path, _evidence())
-
-
-def test_a_receipt_for_another_account_does_not_graduate_this_one(tmp_path: Path) -> None:
-    seal_receipt(tmp_path, configured_signal_hash="b" * 64, live_account_id="9OTHER0002")
-    with pytest.raises(CutoverRefused, match="LIVE_SHADOW_INCOMPLETE"):
-        _initialize(tmp_path, _evidence())
-
-
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
@@ -2342,7 +2519,6 @@ def test_a_receipt_for_another_account_does_not_graduate_this_one(tmp_path: Path
 )
 def test_a_live_account_must_be_flat_and_order_free_to_graduate(tmp_path: Path, kwargs, match: str) -> None:
     """R3 / owner question E2: the shadow authority never submitted, so any position is a human's."""
-    seal_receipt(tmp_path, configured_signal_hash="b" * 64, live_account_id=LIVE_ACCT)
     with pytest.raises(CutoverRefused, match=match):
         _initialize(tmp_path, _evidence(**kwargs))
 
@@ -2352,7 +2528,7 @@ def test_an_unknown_mode_is_refused_by_name(tmp_path: Path) -> None:
         _initialize(tmp_path, _evidence(account_mode="sandbox"))
 ```
 
-In `tests/broker/alpaca/clerk/sqlite/test_cutover.py`, find the happy-path test that builds the legacy tree and runs `initialize_cutover_authority` → `plan_cutover` → `apply_cutover` for a paper account (it asserts the activation record is written), and parametrize it over `account_mode` in `("paper", "live")`: the `live` variant uses a live-shaped account id (`"9LIVE0001"`), calls `seal_receipt(tmp_path, configured_signal_hash="b" * 64, live_account_id="9LIVE0001")` first, passes `account_mode="live"` in every `BrokerCutoverEvidence` the test constructs, and asserts the same activation outcome. Do not change the paper variant's bytes; the parametrization must leave the existing assertions untouched.
+In `tests/broker/alpaca/clerk/sqlite/test_cutover.py`, find the happy-path test that builds the legacy tree and runs `initialize_cutover_authority` → `plan_cutover` → `apply_cutover` for a paper account (it asserts the activation record is written), and parametrize it over `account_mode` in `("paper", "live")`: the `live` variant uses a live-shaped account id (`"9LIVE0001"`), passes `account_mode="live"` in every `BrokerCutoverEvidence` the test constructs, and asserts the same activation outcome. Do not change the paper variant's bytes; the parametrization must leave the existing assertions untouched.
 
 In `tests/broker/alpaca/clerk/sqlite/test_cutover_cli.py`, add one case beside the existing evidence-reading tests: an evidence file with `"account_mode": "live"` is refused with `ValueError` matching `ALPACA_MODE` when the CLI runs with paper settings (monkeypatch `scripts.manage_alpaca_sqlite_clerk.get_alpaca_settings` to return `AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")`), and is read when it returns the `live_settings()` fixture from `live_arming_fixtures`.
 
@@ -2375,31 +2551,20 @@ In `app/broker/alpaca/clerk/sqlite/cutover.py`:
 - After `_normalize_broker_evidence` add:
 
 ```python
-def _live_evidence_shadowed(*, artifacts_root: Path, broker_evidence: BrokerCutoverEvidence) -> bool:
+def _live_evidence_permits_empty_legacy(broker_evidence: BrokerCutoverEvidence) -> bool:
     """Whether live evidence may stand in for legacy artifacts (ADR 0059 slice 7, design R3).
 
     A live account has no legacy JSONL authority to quarantine and no prior
-    activation to have reset; what it has, if anything, is the shadow gate's
-    receipt. That receipt is the one proof this offline ceremony can ask
-    for, so it is required — and for a paper account nothing changes.
+    activation to have reset, so live evidence itself permits the empty set.
+    Shadow rehearsal is a mode, not a requirement (owner decision 2026-09-09);
+    the flat, order-free check is what still guards graduation. For a paper
+    account nothing changes.
     """
-    if broker_evidence.account_mode != "live":
-        return False
-    # Local imports: the receipt store lives beside the arming ledger, above
-    # the sqlite package; this module must not pull either in at import.
-    from app.broker.alpaca.clerk.live_arming import LIVE_SHADOW_INCOMPLETE
-    from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
-
-    if not ShadowReceiptStore(artifacts_root).any_for_account(broker_evidence.account_id):
-        raise CutoverRefused(
-            f"{LIVE_SHADOW_INCOMPLETE}: a live account may be activated only after at least "
-            "one instance completed the shadow gate on it (ADR 0059 D2)"
-        )
-    return True
+    return broker_evidence.account_mode == "live"
 ```
 
-- In `initialize_cutover_authority` (line 222) compute `live_shadowed = _live_evidence_shadowed(artifacts_root=artifacts_root, broker_evidence=normalized)` right after normalizing and pass it into `_initialize_cutover_authority_locked` as a new keyword `live_shadowed: bool`; inside, replace both `allow_empty=reset_authorized` (lines 269 and 278) with `allow_empty=reset_authorized or live_shadowed`.
-- In `plan_cutover` (line 468) and `apply_cutover` (line 550), right after `normalized_broker = _normalize_broker_evidence(broker_evidence)`, add `live_shadowed = _live_evidence_shadowed(artifacts_root=artifacts_root, broker_evidence=normalized_broker)`; then in each of the following `_legacy_artifact_evidence(...)` and `_runner_roster_evidence(...)` calls, change `allow_empty=_developer_reset_replaces_activation(...)` to `allow_empty=live_shadowed or _developer_reset_replaces_activation(...)` (four sites: two per function).
+- In `initialize_cutover_authority` (line 222) compute `live_evidence = _live_evidence_permits_empty_legacy(normalized)` right after normalizing and pass it into `_initialize_cutover_authority_locked` as a new keyword `live_evidence: bool`; inside, replace both `allow_empty=reset_authorized` (lines 269 and 278) with `allow_empty=reset_authorized or live_evidence`.
+- In `plan_cutover` (line 468) and `apply_cutover` (line 550), right after `normalized_broker = _normalize_broker_evidence(broker_evidence)`, add `live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)`; then in each of the following `_legacy_artifact_evidence(...)` and `_runner_roster_evidence(...)` calls, change `allow_empty=_developer_reset_replaces_activation(...)` to `allow_empty=live_evidence or _developer_reset_replaces_activation(...)` (four sites: two per function).
 
 `_validate_cutover_broker_state` (lines 729–747) is deliberately unchanged: a live account graduates flat and order-free.
 
@@ -2831,24 +2996,20 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Deploy on the live world — the `live` mode, the receipt copy, and the rehearsal's receipt found by twin identity (R7, R12)
+### Task 7: Deploy on the live world — the `live` mode and the receipt copy (R7, R12)
 
 **Files:**
 - Modify: `PythonDataService/app/schemas/broker_bots.py:154, 246, 279-303, 503`
 - Modify: `PythonDataService/app/services/broker_v2_panel/paper_deploy_service.py:152-159, 184-224, 241-260, 271-330, 721-726`
 - Modify: `PythonDataService/app/services/broker_v2_panel/panel_deploy.py:72-82`
 - Modify: `PythonDataService/app/services/broker_v2_panel/panel_projection_service.py:473-484`
-- Modify: `PythonDataService/app/broker/alpaca/clerk/shadow_receipt.py:170-184`
-- Modify: `PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py:68-74, 138-155, 178-227`
-- Test: `PythonDataService/tests/broker/v2panel/test_panel_deploy_live.py` (new), `PythonDataService/tests/broker/alpaca/clerk/test_live_arming_ceremony_twin.py` (new), `PythonDataService/tests/broker/v2panel/test_panel_deploy_shadow.py` (one assertion), `PythonDataService/tests/services/test_panel_projection_service.py` (one string, if pinned)
+- Test: `PythonDataService/tests/broker/v2panel/test_panel_deploy_live.py` (new), `PythonDataService/tests/broker/v2panel/test_panel_deploy_shadow.py` (one assertion), `PythonDataService/tests/services/test_panel_projection_service.py` (one string, if pinned)
 
 **Interfaces:**
-- Consumes: `CustodyWorld` with `real_live` (Task 1); `twins_agree` (`alpaca_shadow_reconciliation.py`, slice 4); `custody_account_ids_for`.
+- Consumes: `CustodyWorld` with `real_live` (Task 1); `custody_account_ids_for`. The arming ceremony is untouched here: Task 4b made the receipt optional, so a live-sealed instance arms with or without a rehearsal and no twin-identity lookup exists (owner decision 2026-09-09).
 - Produces:
   - wire: `AlpacaPaperDeployRequest.execution_mode`, `AlpacaPaperDeployReceipt.execution_mode`: `Literal["paper", "dry_run", "shadow", "live"]`; `AlpacaPaperDeployStrategy.admissible_modes: tuple[Literal["dry_run", "paper", "shadow", "live"], ...]`
   - `BrokerExecutionMode = Literal["paper", "shadow", "live"]`; `_broker_mode_for(custody_world)` maps `real_live → "live"`
-  - `ShadowReceiptStore.current_for_account(live_account_id, *, required_sessions) -> tuple[ShadowReceipt, ...]`
-  - `InstanceSeal(seal_hash, configured_signal_hash, program: SealedBotProgram)`; `twin_receipt(*, store, live_account_id, program, required_sessions, seals: Mapping[str, InstanceSeal]) -> ShadowReceipt | None`
 
 - [ ] **Step 1: Write the failing deploy-view tests**
 
@@ -2916,90 +3077,12 @@ If `AlpacaPaperSizingSelection` is not the sizing model's name, use the class `A
 
 In `tests/broker/v2panel/test_panel_deploy_shadow.py::test_real_paper_world_is_unchanged` (line 128) the expected mode set `{"dry_run", "paper", "live"}` stays true (the live card is still `planned` on a paper world) — run it to prove it.
 
-- [ ] **Step 2: Write the failing twin-receipt tests**
+- [ ] **Step 2: Run to verify they fail**
 
-`tests/broker/alpaca/clerk/test_live_arming_ceremony_twin.py`:
+Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/v2panel/test_panel_deploy_live.py -q -p no:cacheprovider`
+Expected: FAIL — a `ValidationError` on `custody_world="real_live"` / `execution_mode="live"`.
 
-```python
-"""A live-sealed instance finds its rehearsal's receipt by twin identity (slice 7, R7)."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-import pytest
-
-from app.broker.alpaca.clerk.live_arming import LIVE_SHADOW_INCOMPLETE, LiveArmingRefused
-from app.broker.alpaca.clerk.live_arming_ceremony import observe_arming_inputs
-from tests.broker.alpaca.clerk.live_arming_fixtures import (
-    ARMING_SID,
-    activate_shadow_fence,
-    live_settings,
-    record_sealed_binding,
-    seal_receipt,
-)
-from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, SHADOW_ACCT, TEST_ENVELOPE_VALUES
-
-LIVE_SID = "ema-live-1"
-
-
-def _rehearsed(tmp_path: Path, live_state_root: Path, *, quantity: int = 1):
-    """The shadow instance, its receipt, and the fence — the slice-6 world as it stands after a gate."""
-    activate_shadow_fence(tmp_path)
-    shadow_seal = record_sealed_binding(live_state_root, strategy_instance_id=ARMING_SID, sealed_account_id=SHADOW_ACCT, quantity=quantity)
-    seal_receipt(
-        tmp_path,
-        configured_signal_hash=shadow_seal.configured_signal_hash,
-        strategy_instance_id=ARMING_SID,
-        sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
-    )
-    return shadow_seal
-
-
-def test_the_live_instance_arms_on_its_twins_receipt(tmp_path: Path) -> None:
-    live_state_root = tmp_path / "runner"
-    _rehearsed(tmp_path, live_state_root)
-    live_seal = record_sealed_binding(live_state_root, strategy_instance_id=LIVE_SID, sealed_account_id=LIVE_ACCT)
-
-    inputs = observe_arming_inputs(
-        strategy_instance_id=LIVE_SID, artifacts_root=tmp_path, live_state_root=live_state_root, settings=live_settings()
-    )
-
-    assert inputs.strategy_instance_id == LIVE_SID
-    assert inputs.seal_hash == live_seal.bot_configuration_hash
-    assert inputs.live_account_id == LIVE_ACCT
-    # The receipt is the rehearsal's; the record will name it beside the live seal.
-    assert inputs.configured_signal_hash == live_seal.configured_signal_hash
-
-
-def test_a_size_change_between_rehearsal_and_live_is_shadow_incomplete(tmp_path: Path) -> None:
-    live_state_root = tmp_path / "runner"
-    _rehearsed(tmp_path, live_state_root, quantity=1)
-    record_sealed_binding(live_state_root, strategy_instance_id=LIVE_SID, sealed_account_id=LIVE_ACCT, quantity=2)
-
-    with pytest.raises(LiveArmingRefused) as exc_info:
-        observe_arming_inputs(
-            strategy_instance_id=LIVE_SID, artifacts_root=tmp_path, live_state_root=live_state_root, settings=live_settings()
-        )
-    assert exc_info.value.reason_code == LIVE_SHADOW_INCOMPLETE
-
-
-def test_the_shadow_instance_itself_still_arms_on_its_own_receipt(tmp_path: Path) -> None:
-    """Slice 6 unchanged: an instance with its own current receipt never needs a twin."""
-    live_state_root = tmp_path / "runner"
-    _rehearsed(tmp_path, live_state_root)
-    inputs = observe_arming_inputs(
-        strategy_instance_id=ARMING_SID, artifacts_root=tmp_path, live_state_root=live_state_root, settings=live_settings()
-    )
-    assert inputs.strategy_instance_id == ARMING_SID
-```
-
-- [ ] **Step 3: Run to verify they fail**
-
-Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/v2panel/test_panel_deploy_live.py tests/broker/alpaca/clerk/test_live_arming_ceremony_twin.py -q -p no:cacheprovider`
-Expected: FAIL — a `ValidationError` on `custody_world="real_live"` / `execution_mode="live"`, and `LIVE_SHADOW_INCOMPLETE` on the twin test.
-
-- [ ] **Step 4: The wire and the view**
+- [ ] **Step 3: The wire and the view**
 
 In `app/schemas/broker_bots.py`: lines 154 and 503 become `execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"`; line 246 becomes `admissible_modes: tuple[Literal["dry_run", "paper", "shadow", "live"], ...]`; in `_admissible_modes_invariants` (line 295) the admitted tuples become `(("dry_run", "paper"), ("dry_run", "shadow"), ("dry_run", "live"))` and the message `"... its account's one broker-contacting mode (paper, shadow or live)."`; extend the comment above it with "`live` on the real-live authority (ADR 0059 D11, slice 7)".
 
@@ -3151,112 +3234,18 @@ In `app/services/broker_v2_panel/panel_deploy.py` (lines 72–82) reword the ref
 
 In `app/services/broker_v2_panel/panel_projection_service.py` (line 484) the `"trade"` sentence becomes world-neutral and true on every world: `"trade": "Broker execution through the Clerk. Only the Clerk may submit, cancel, or reduce broker orders.",`. If `tests/services/test_panel_projection_service.py` pins the old "Paper execution." string, update that one string.
 
-- [ ] **Step 5: The twin-identity receipt lookup**
+- [ ] **Step 4: Run the suites**
 
-In `app/broker/alpaca/clerk/shadow_receipt.py`, after `current(...)` add:
-
-```python
-    def current_for_account(self, live_account_id: str, *, required_sessions: int) -> tuple[ShadowReceipt, ...]:
-        """Every instance's latest receipt on this account that still proves the count, newest first.
-
-        The read slice 7's twin lookup makes: a live-sealed instance has no
-        receipt of its own, so the ceremony asks which rehearsals on this
-        account are current and then matches by program identity.
-        """
-        latest_by_instance: dict[str, ShadowReceipt] = {}
-        for receipt in self._read_all():
-            if receipt.live_account_id == live_account_id:
-                latest_by_instance[receipt.strategy_instance_id] = receipt
-        return tuple(
-            receipt
-            for receipt in reversed(list(latest_by_instance.values()))
-            if len(receipt.sessions) >= required_sessions
-        )
-```
-
-In `app/broker/alpaca/clerk/live_arming_ceremony.py`:
-- `InstanceSeal` gains `program: SealedBotProgram` (import `SealedBotProgram` from `app.schemas.signal_program_seal`); `instance_seal_hashes` sets `program=seal`.
-- After `instance_seal_hashes` add:
-
-```python
-def twin_receipt(
-    *,
-    store: ShadowReceiptStore,
-    live_account_id: str,
-    program: SealedBotProgram,
-    required_sessions: int,
-    seals: Mapping[str, InstanceSeal],
-) -> ShadowReceipt | None:
-    """The receipt of a rehearsal on this account whose sealed program is ``program``'s twin (slice 7, R7).
-
-    A live-sealed instance is a new instance (its account is inside its
-    seal), so the shadow receipt that proved its program names a different
-    instance id. Identity is the one the shadow gate itself used —
-    ``twins_agree``: configured signal, action plan, size and carryover
-    policy, a ``shadow:``-sealed rehearsal and a side that is not.
-    """
-    # Local import: the reconciliation module imports the sqlite package; the
-    # ceremony is imported at boot by the live selector and must not pull it in.
-    from app.services.alpaca_shadow_reconciliation import twins_agree
-
-    for receipt in store.current_for_account(live_account_id, required_sessions=required_sessions):
-        rehearsed = seals.get(receipt.strategy_instance_id)
-        if rehearsed is None or receipt.configured_signal_hash != rehearsed.configured_signal_hash:
-            continue
-        if twins_agree(rehearsed.program, program) is None:
-            return receipt
-    return None
-```
-
-- In `observe_arming_inputs`, replace the receipt lookup (lines 196–206) with:
-
-```python
-    seals = instance_seal_hashes(live_account_id=live_account_id, live_state_root=live_state_root)
-    seal = seals.get(strategy_instance_id)
-    if seal is None:
-        raise LiveArmingRefused(
-            LIVE_ARMING_INSTANCE_UNSEALED,
-            f"{strategy_instance_id} has no sealed alpaca binding on {live_account_id}",
-        )
-    store = ShadowReceiptStore(artifacts_root)
-    receipt = store.current(
-        strategy_instance_id,
-        configured_signal_hash=seal.configured_signal_hash,
-        required_sessions=envelope.shadow_sessions,
-    )
-    if receipt is None:
-        # A live-sealed instance is a new instance: its proof is its twin's (R7).
-        receipt = twin_receipt(
-            store=store,
-            live_account_id=live_account_id,
-            program=seal.program,
-            required_sessions=envelope.shadow_sessions,
-            seals=seals,
-        )
-    if receipt is None:
-        raise LiveArmingRefused(
-            LIVE_SHADOW_INCOMPLETE,
-            f"{strategy_instance_id} has no current shadow receipt for this program over "
-            f"{envelope.shadow_sessions} session(s) — its own, or a rehearsal's with the same "
-            "configured signal, action plan, size and carryover policy",
-        )
-```
-
-(the existing `seal = instance_seal_hashes(...).get(...)` lines 188–195 are replaced by the first six lines above; the account check that follows the lookup stays as it is). Add `"twin_receipt"` to `__all__`.
-
-- [ ] **Step 6: Run the suites**
-
-Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/v2panel/test_panel_deploy_live.py tests/broker/v2panel/test_panel_deploy_shadow.py tests/broker/v2panel/test_panel_deploy.py tests/broker/alpaca/clerk/test_live_arming_ceremony_twin.py tests/broker/alpaca/clerk/test_live_arming_ceremony.py tests/broker/alpaca/clerk/test_shadow_receipt.py tests/scripts/test_manage_alpaca_arming.py tests/services/test_panel_projection_service.py -q -p no:cacheprovider`
+Run: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/v2panel/test_panel_deploy_live.py tests/broker/v2panel/test_panel_deploy_shadow.py tests/broker/v2panel/test_panel_deploy.py tests/services/test_panel_projection_service.py -q -p no:cacheprovider`
 Expected: PASS (drop a listed file only if it does not exist). `export_openapi_contract.py --check` now reports drift by design — Task 9 regenerates.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add PythonDataService/app/schemas/broker_bots.py PythonDataService/app/services/broker_v2_panel/paper_deploy_service.py PythonDataService/app/services/broker_v2_panel/panel_deploy.py PythonDataService/app/services/broker_v2_panel/panel_projection_service.py PythonDataService/app/broker/alpaca/clerk/shadow_receipt.py PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py PythonDataService/tests/broker/v2panel/test_panel_deploy_live.py PythonDataService/tests/broker/alpaca/clerk/test_live_arming_ceremony_twin.py PythonDataService/tests/broker/v2panel/test_panel_deploy_shadow.py PythonDataService/tests/services/test_panel_projection_service.py
-git commit -m "feat(alpaca): the live world deploys live, and a live instance arms on its twin's receipt (ADR 0059 slice 7, R7, R12)
+git add PythonDataService/app/schemas/broker_bots.py PythonDataService/app/services/broker_v2_panel/paper_deploy_service.py PythonDataService/app/services/broker_v2_panel/panel_deploy.py PythonDataService/app/services/broker_v2_panel/panel_projection_service.py PythonDataService/tests/broker/v2panel/test_panel_deploy_live.py PythonDataService/tests/broker/v2panel/test_panel_deploy_shadow.py PythonDataService/tests/services/test_panel_projection_service.py
+git commit -m "feat(alpaca): the live world deploys live (ADR 0059 slice 7, R7, R12)
 
-The deploy wire gains live; the real-live world offers dry_run and live only;
-the ceremony finds a live-sealed instance's rehearsal by twin identity.
+The deploy wire gains live; the real-live world offers dry_run and live only.
 OpenAPI --check drifts until Task 9 regenerates.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
@@ -3749,8 +3738,8 @@ built it. Graduation is therefore the live cutover:
 cd PythonDataService
 # The evidence file names the account, `"account_mode": "live"`, flat
 # positions and no open orders; the CLI refuses live evidence unless
-# ALPACA_MODE=live, and the ceremony refuses unless at least one shadow
-# receipt exists for the account (LIVE_SHADOW_INCOMPLETE).
+# ALPACA_MODE=live. No shadow receipt is required to graduate: shadow is a
+# mode, not a requirement (owner decision 2026-09-09).
 python -m scripts.manage_alpaca_sqlite_clerk --account-id <LIVE> --artifacts-root <CLERK_DIR> \
     cutover-initialize --broker-evidence live-evidence.json --max-evidence-age-ms 600000 --runner-artifacts-root <RUNNER_ROOT>
 python -m scripts.manage_alpaca_sqlite_clerk ... cutover-plan  --output plan.json ...
@@ -3824,9 +3813,10 @@ that trades on `<id>`: the live run is a **new instance** (R6).
    `LIVE_ARMING_REQUIRED` until it is armed, and the admitted decision and the
    receipt say so.
 2. Arm it: `manage_alpaca_arming plan` / `apply`. The ceremony reads the
-   live-sealed binding and finds the rehearsal's receipt **by twin identity**
-   (`twins_agree`: configured signal, action plan, size, carryover policy) —
-   a size change since the rehearsal is `LIVE_SHADOW_INCOMPLETE` (R7).
+   live-sealed binding, records the instance's own current shadow receipt
+   when it has one (`shadow_receipt_sha256` is null otherwise), and arms
+   either way — shadow is a mode, not a requirement (R7; owner decision
+   2026-09-09).
 3. Within one sync tick the gate holds the instance `armed`; its next ENTER
    passes all three admissions and `submit_enter` hands the leg to the real
    trade port.
@@ -3900,6 +3890,9 @@ Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
 - Lines 72–74: replace "slice 7's `real_live` custody will seal the live id itself" with "the live authority seals the live id itself".
 - Lines 195–197 become: `Per-instance arming **is** consulted at ENTER admission on the live authority (slice 7); under the shadow authority the sealed envelope stays account-level and rehearsal ENTERs are not gated on arming.`
 - Lines 237–238: replace "states that no path submits a real-money order yet" with "states whether real-money submission is open on this authority".
+- Line 70 (the inputs table's receipt row): the third cell `LIVE_SHADOW_INCOMPLETE` becomes `*(none — recorded when present, null otherwise; owner decision 2026-09-09)*`. Line 130: drop `LIVE_SHADOW_INCOMPLETE` from the ceremony's refusal list.
+
+`docs/references/alpaca-shadow-authority.md` lines 395–399: replace the sentence from "Arming without a current receipt is `LIVE_SHADOW_INCOMPLETE`" through "raised by `live_arming_ceremony.observe_arming_inputs`." with "Since slice 7 the arming ceremony records a current receipt when the instance holds one and arms without one (shadow is a mode, not a requirement — owner decision 2026-09-09); `LIVE_SHADOW_INCOMPLETE` stays defined in `live_arming.py` for the verdict's vocabulary." `PythonDataService/app/broker/alpaca/clerk/shadow_receipt.py` lines 5–6: "Slice 6's arming ceremony reads ``ShadowReceiptStore.current`` and refuses to arm without one (``LIVE_SHADOW_INCOMPLETE``)." becomes "The arming ceremony reads ``ShadowReceiptStore.current`` and records the receipt's sha when one exists; since slice 7 it arms without one."
 - Residuals 244–253 and 272–283 are resolved — replace each with one line naming the slice-7 unit that resolved it (`arming_admission.py`; the sync's `LIVE_MODE_DISAGREEMENT` path; `require_arming_admission`; `observe_arming` on every facade authority; `ArmingGate.invalidate` — an unreadable ledger is a refusal at admission).
 - In `scripts/manage_alpaca_arming.py`, the `submission_admitted: false` literal and its `note` become a computed pair: `submission_admitted` is `True` iff the cutover's `ActivationStore(artifacts_root / "accounts" / "alpaca").latest(live_account_id)` is not `None`, and the `note` reads `"a live authority is activated for this account; an armed instance's ENTER is submitted"` or `"no live authority is activated for this account; nothing submits until the live cutover"`. Update `tests/scripts/test_manage_alpaca_arming.py`'s assertion on `report["note"]` (it pins `"Slice 7"`) to the new sentence.
 
@@ -3910,7 +3903,7 @@ Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
 `docs/architecture/engine-authority-map.md`: prepend to line 4's list `2026-09-09 (the live authority, graduation and the ENTER admission chain, ADR 0059 slice 7);`. In the shadow row (22) replace "routes every boot whose broker-observed `account_mode` is `live` to it" with "routes every live boot with no live activation record to it" and "`real_live` custody stays unconstructible until slice 7" with "an activated account boots its live authority instead (slice 7)"; in the arming row (65) replace "**An arming record admits nothing in this slice**: no path submits a real-money order until slice 7 reads it at ENTER admission." with "**An arming record is what admits a real-money ENTER** on the live authority (slice 7)."; in the envelope row (64) append "On the live authority the envelope bounds real custody (`custody_is_simulated=False`, slice 7)." Add one row after the arming row:
 
 ```
-| Real-money live custody (ADR 0059 D1/D11) | **The Live Account Authority — the sqlite Clerk over a real account, admitting ENTER through holds → arming → envelope** | `PythonDataService/app/broker/alpaca/clerk/live_authority.py` (selection on three-way agreement), `app/broker/alpaca/clerk/live_arming_gate.py` (the snapshot the sync refreshes), `app/broker/alpaca/clerk/sqlite/arming_admission.py` (the third ENTER admission), `app/services/live_arming_admission.py` (the Start/Resume fact); consumers `sqlite/enter.py::accept_enter`, `sqlite/live_envelope_sync.py`, `services/alpaca_live_verdict.py`. | Graduation is the live cutover; a live instance is a new instance armed on its twin's receipt; a lost arming refuses ENTER and is logged once, and no desired state is written (R10). Cold start is the paper path's. | **canonical for ADR 0059 slice 7** — see [alpaca-live-authority](../references/alpaca-live-authority.md); validated by `tests/broker/alpaca/clerk/test_live_authority_runtime.py`, `test_live_arming_gate.py`, `sqlite/test_arming_admission.py`, `sqlite/test_live_envelope_sync_arming.py`, `sqlite/test_cutover_live.py`, `tests/services/test_live_arming_admission.py`, `tests/broker/v2panel/test_panel_deploy_live.py`, `tests/contracts/test_alpaca_active_authority_wiring.py`. |
+| Real-money live custody (ADR 0059 D1/D11) | **The Live Account Authority — the sqlite Clerk over a real account, admitting ENTER through holds → arming → envelope** | `PythonDataService/app/broker/alpaca/clerk/live_authority.py` (selection on three-way agreement), `app/broker/alpaca/clerk/live_arming_gate.py` (the snapshot the sync refreshes), `app/broker/alpaca/clerk/sqlite/arming_admission.py` (the third ENTER admission), `app/services/live_arming_admission.py` (the Start/Resume fact); consumers `sqlite/enter.py::accept_enter`, `sqlite/live_envelope_sync.py`, `services/alpaca_live_verdict.py`. | Graduation is the live cutover; a live instance is a new instance, armed with or without a rehearsal; a lost arming refuses ENTER and is logged once, and no desired state is written (R10). Cold start is the paper path's. | **canonical for ADR 0059 slice 7** — see [alpaca-live-authority](../references/alpaca-live-authority.md); validated by `tests/broker/alpaca/clerk/test_live_authority_runtime.py`, `test_live_arming_gate.py`, `sqlite/test_arming_admission.py`, `sqlite/test_live_envelope_sync_arming.py`, `sqlite/test_cutover_live.py`, `tests/services/test_live_arming_admission.py`, `tests/broker/v2panel/test_panel_deploy_live.py`, `tests/contracts/test_alpaca_active_authority_wiring.py`. |
 ```
 
 `CONTEXT.md`: amend lines 464–467 to end with "Selected at boot when the account's live activation record exists — its **graduation** — and otherwise shadowed. _Avoid_: live mode, production account, real account, real_live custody (say *live authority*)". After the **Arming lapse** entry (line 505) add:
@@ -3918,9 +3911,9 @@ Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
 ```
 - **Graduation** — the live cutover: the supervised ceremony that writes a
   real-money account's activation record, after which the account boots its
-  live authority instead of its shadow authority. It requires a shadow receipt
-  for the account and a flat, order-free account. _Avoid_: going live, flipping
-  to live, promotion
+  live authority instead of its shadow authority. It requires a flat,
+  order-free account; a shadow rehearsal is a mode the operator may choose,
+  not a requirement. _Avoid_: going live, flipping to live, promotion
 - **Arming gate** — the live authority's per-instance check at ENTER, between
   the holds and the risk envelope, that the instance is armed right now. Its
   evidence is a snapshot of the arming ledger and the sealed bindings the
@@ -3939,8 +3932,10 @@ Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
 In `docs/architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md`:
 - Decision 8 (line 89): replace the sentence `A transition out of \`live-armed\` observed mid-session halts new submission and sets \`desired_state = PAUSED\` with a \`LIVE_VERDICT_TRANSITION_HALT\` receipt, exactly the ADR 0011 §5 shape; Resume is guarded (§6).` with `A transition out of \`live-armed\` observed mid-session halts new submission: new entries are refused with a \`LIVE_VERDICT_TRANSITION_HALT\` receipt and the verdict says why; exits keep running; re-arming restores submission (amended 2026-09-09 — a paused instance would strand its position, because PAUSED is observe-only for EXIT too).`
 - Decision 2 (line 40): replace `because \`submit_mode\` is hashed into run identity` with `because \`sealed_account_id\` is inside the sealed program's hash and therefore inside run identity (amended 2026-09-09)`.
-- The amendment note: read `docs/architecture/adrs/0039-adr-status-is-decision-standing.md` for the form an amended-in-place ADR carries and `scripts/check_adr_status.py` (repo root) for what the status guard accepts, then add the note in that form directly after the `**Vocabulary:**` line — one line, dated 2026-09-09, naming both amended decisions and the slice-7 design's R10 and R12 as the reasons, and the owner's grill-me decision as the authority. Run `python scripts/check_adr_status.py` from the repo root and `python scripts/test_check_adr_status.py -v`; both must pass.
-- `docs/doc-authority.md` row 0059 (line 144): append `; D8's halt refuses new entries without pausing and D2 names sealed_account_id (amended 2026-09-09)` inside the cell.
+- Decision 2 (line 42): replace `Arming without a current receipt is \`LIVE_SHADOW_INCOMPLETE\`.` with `A current receipt is recorded on the arming record when the instance holds one; arming does not require it (amended 2026-09-09 — shadow is a mode, not a requirement to run a bot).`
+- Decision 3 (line 46): replace `the shadow receipt sha, the **envelope sha**` with `the shadow receipt sha (null when the instance holds no receipt, amended 2026-09-09), the **envelope sha**`.
+- The amendment note: read `docs/architecture/adrs/0039-adr-status-is-decision-standing.md` for the form an amended-in-place ADR carries and `scripts/check_adr_status.py` (repo root) for what the status guard accepts, then add the note in that form directly after the `**Vocabulary:**` line — one line, dated 2026-09-09, naming the three amended decisions (2, 3, 8) and the slice-7 design's R3, R7, R10 and R12 as the reasons, and the owner's two grill-me decisions as the authority. Run `python scripts/check_adr_status.py` from the repo root and `python scripts/test_check_adr_status.py -v`; both must pass.
+- `docs/doc-authority.md` row 0059 (line 144): append `; D8's halt refuses new entries without pausing, D2 names sealed_account_id, and D2/D3 no longer require a shadow receipt to arm (amended 2026-09-09)` inside the cell.
 
 - [ ] **Step 5: The operator's environment truth**
 
@@ -4019,7 +4014,7 @@ The branch is ready for the independent thermo review the repo requires before i
 | R4 (composition; no new runtime kind) | Task 4 and Task 3 (facade invariant) |
 | R5 (the third admission; codes; transient) | Task 2 |
 | R6 (launch admitted; UNREADABLE refuses; the note) | Task 6 |
-| R7 (`live` mode; twin receipt) | Task 7 |
+| R7 (`live` mode; receipt recorded when present, never required) | Task 7 (the mode) and Task 4b (the ceremony) |
 | R8 (the thirteen gates) | Tasks 1, 4, 5, 6, 7 — rows 3, 4, 6, 7, 8, 9, 11, 13; rows 1, 2, 5, 10, 12 unchanged by design (row 6, `historical_execution_recovery`, is **not** in a task — see Plan notes) |
 | R9 (verdict) | Task 8 |
 | R10 (the halt as refusal + warning) | Task 3 (`_note_transitions`) and Task 2 (the refusal) |
@@ -4034,7 +4029,7 @@ The branch is ready for the independent thermo review the repo requires before i
 
 **2. Placeholder scan.** Every code step carries the code. Three steps tell the implementer to *read* a neighbouring construction before mirroring it (`_broker_order_fixture`'s field list, the shadow spec's submit helper, the request fixture's sizing model) — each names the file and lines to read and states the assertions that must hold, and each exists because the exact identifier is on disk and this plan will not guess it.
 
-**3. Type consistency.** `ArmingGate.invalidate(why, *, reason_code=)` (Task 2) is what Task 3's sync calls with `reason_code=LIVE_MODE_DISAGREEMENT`; `ArmingSnapshot.armed_instance_ids(now_ms)` (Task 2) is what Task 3's `_note_transitions` calls; `compose_repository_runtime(arming_gate=, instance_seals=)` (Task 3) is what Task 4's selector passes; `InstanceSeal.program` (Task 7) is what `twin_receipt` reads; `authority_kind_in_world` (Task 1) is imported by name in `sqlite_clerk_compat.py` and `run_replay_proof.py`; `live_settings`, `record_sealed_binding`, `seal_receipt`, `activate_shadow_fence`, `ARMED_AT_MS`, `ARMING_SID` are the slice-6 fixture names on disk; `_binding`, `RUN_ID` (`test_runtime_program_leg`), `_retain`, `DAY` (`test_shadow_broker`), `BAR_CLOSE`, `DECISION_MINUTE`, `NOW_MS`, `shadow_runtime` (`test_shadow_envelope_runtime`), `_ActivationStore` (`test_active_authority`) are imported exactly as the slice-5/6 tests import them.
+**3. Type consistency.** `ArmingGate.invalidate(why, *, reason_code=)` (Task 2) is what Task 3's sync calls with `reason_code=LIVE_MODE_DISAGREEMENT`; `ArmingSnapshot.armed_instance_ids(now_ms)` (Task 2) is what Task 3's `_note_transitions` calls; `compose_repository_runtime(arming_gate=, instance_seals=)` (Task 3) is what Task 4's selector passes; `authority_kind_in_world` (Task 1) is imported by name in `sqlite_clerk_compat.py` and `run_replay_proof.py`; `live_settings`, `record_sealed_binding`, `seal_receipt`, `activate_shadow_fence`, `ARMED_AT_MS`, `ARMING_SID` are the slice-6 fixture names on disk; `_binding`, `RUN_ID` (`test_runtime_program_leg`), `_retain`, `DAY` (`test_shadow_broker`), `BAR_CLOSE`, `DECISION_MINUTE`, `NOW_MS`, `shadow_runtime` (`test_shadow_envelope_runtime`), `_ActivationStore` (`test_active_authority`) are imported exactly as the slice-5/6 tests import them.
 
 ## Plan notes for the controller
 
