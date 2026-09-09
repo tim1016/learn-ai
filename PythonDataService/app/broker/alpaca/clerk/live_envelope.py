@@ -163,6 +163,15 @@ class LiveEnvelopeGate:
     def publish(self, observation: AccountObservation) -> None:
         self._observation = observation
 
+    def withdraw(self) -> None:
+        """Drop the published observation.
+
+        The sync could not judge the account, so ENTER refuses
+        ``LIVE_ENVELOPE_UNOBSERVED`` at once (plan R3, R5) rather than
+        bounding one against a figure that only *looks* fresh.
+        """
+        self._observation = None
+
     def latest_observation(self) -> AccountObservation | None:
         return self._observation
 

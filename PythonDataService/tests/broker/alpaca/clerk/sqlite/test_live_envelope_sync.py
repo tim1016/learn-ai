@@ -1,0 +1,321 @@
+"""The fixed-cadence sync that observes the account and raises the loss hold (ADR 0059 D4).
+
+One background tap produces both the envelope's cash observation and the
+durable loss hold; ``accept_enter`` consumes them and never contacts the
+broker. The whole decision is one ``tick``, so these tests drive it directly
+rather than over a running loop: every stamp is the repository clock, pinned
+at ``NOON``, and nothing here sleeps or reads a wall clock.
+
+The seeding fixtures are the day-P&L suite's own. The two files judge the
+same ledger, and a second copy of ``seeded_open_buy`` would be a second
+thing to keep true.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator, Callable
+from typing import Any
+
+import pytest
+
+from app.broker.alpaca.clerk.live_envelope import (
+    OBSERVATION_MAX_AGE_MS,
+    LiveEnvelopeGate,
+    LiveEnvelopeValues,
+)
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    LossHoldCause,
+)
+from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
+from tests.broker.alpaca.clerk.sqlite.test_day_pnl import (
+    NOON,
+    clock,  # noqa: F401 — the day-P&L suite's clock, pinned at NOON
+    repo,  # noqa: F401 — the day-P&L suite's authority fixture
+    seeded_external_order_today,  # noqa: F401 — one order the Clerk did not place
+    seeded_open_buy,  # noqa: F401 — one effective BUY fill, 10 @ 100, before NOON
+)
+
+SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
+
+VALUES = LiveEnvelopeValues(
+    loss_fraction=0.05,
+    loss_usd=5_000.0,
+    shadow_sessions=1,
+    arming_max_sessions=20,
+    xh_entry_bps=10.0,
+    xh_exit_bps=10.0,
+)
+
+
+class _Read:
+    """A read port whose account and positions the test sets per tick."""
+
+    def __init__(
+        self,
+        *,
+        cash: float = 100_000.0,
+        last_equity: float | None = 100_000.0,
+        unrealized: float = 0.0,
+        fail: bool = False,
+    ) -> None:
+        self.cash, self.last_equity, self.unrealized, self.fail = cash, last_equity, unrealized, fail
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        if self.fail:
+            raise BrokerUnavailable("account read timed out")
+        return BrokerAccountSnapshot(
+            broker="alpaca",
+            account_id="9LIVE0001",
+            account_mode="live",
+            account_status="ACTIVE",
+            currency="USD",
+            cash=self.cash,
+            equity=self.cash + self.unrealized,
+            buying_power=self.cash,
+            portfolio_value=self.cash,
+            long_market_value=0.0,
+            short_market_value=0.0,
+            last_equity=self.last_equity,
+            pattern_day_trader=False,
+            trading_blocked=False,
+            account_blocked=False,
+            created_at_ms=None,
+            observed_at_ms=NOON,
+        )
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        if self.unrealized == 0.0:
+            return []
+        return [
+            BrokerPosition(
+                broker="alpaca",
+                symbol="SPY",
+                asset_id=None,
+                asset_class=None,
+                quantity=1,
+                side="long",
+                average_entry_price=100.0,
+                market_value=100.0 + self.unrealized,
+                cost_basis=100.0,
+                current_price=None,
+                unrealized_pl=self.unrealized,
+                unrealized_plpc=None,
+                observed_at_ms=NOON,
+            )
+        ]
+
+
+@pytest.fixture
+async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
+    """Build syncs, and close every read-only projection connection they opened.
+
+    ``LiveEnvelopeSync`` opens its own ``mode=ro`` connection in the
+    constructor and closes it in ``stop``, exactly as the day-P&L suite's
+    ``reader`` fixture does — so every sync a test builds is stopped here.
+    """
+    built: list[LiveEnvelopeSync] = []
+
+    def build(
+        repository: ClerkSqliteRepository,
+        read: _Read,
+        *,
+        simulated: bool = True,
+        **loop: Any,
+    ) -> LiveEnvelopeSync:
+        sync = LiveEnvelopeSync(
+            repo=repository,
+            read=read,
+            envelope=LiveEnvelopeGate(values=VALUES, custody_is_simulated=simulated),
+            **loop,
+        )
+        built.append(sync)
+        return sync
+
+    yield build
+    for sync in built:
+        await sync.stop()
+
+
+def _hold(repository: ClerkSqliteRepository) -> dict | None:
+    return repository.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        strategy_instance_id=None,
+    )
+
+
+def _sync_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.name == SYNC_LOGGER]
+
+
+async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    sync = make_sync(repo, _Read())
+    assert await sync.tick() == "observed"
+    observation = sync.envelope.fresh_observation(NOON)
+    assert observation is not None and observation.observed_at_ms == NOON
+    assert observation.cash_available_usd == 100_000.0
+    assert observation.last_equity_usd == 100_000.0
+
+
+async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_spent(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    seeded_open_buy: None,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """Under simulated custody the broker's cash never moved (plan R2)."""
+    sync = make_sync(repo, _Read(), simulated=True)
+    await sync.tick()
+    shadow = sync.envelope.latest_observation()
+    assert shadow is not None and shadow.cash_available_usd == pytest.approx(99_000.0)
+    assert shadow.broker_cash_usd == pytest.approx(100_000.0)
+
+    real = make_sync(repo, _Read(), simulated=False)
+    await real.tick()
+    observation = real.envelope.latest_observation()
+    assert observation is not None
+    assert observation.cash_available_usd == pytest.approx(100_000.0)
+
+
+async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """Only the guarded operator action clears the hold (plan R6, R12)."""
+    read = _Read(unrealized=-5_000.0)
+    sync = make_sync(repo, read)
+    assert await sync.tick() == "hold_raised"
+    hold = _hold(repo)
+    assert hold is not None
+    cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
+    assert cause.day_pnl_usd == pytest.approx(-5_000.0)
+    assert cause.loss_limit_usd == pytest.approx(5_000.0)
+    assert cause.last_equity_usd == pytest.approx(100_000.0)
+    assert cause.observed_at_ms == NOON
+
+    revision = repo.control_meta_snapshot().control_revision
+    read.unrealized = -6_000.0
+    assert await sync.tick() == "hold_stands"
+    read.unrealized = 0.0
+    assert await sync.tick() == "hold_stands"
+    assert repo.control_meta_snapshot().control_revision == revision
+
+
+async def test_a_standing_hold_still_publishes_the_observation(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """The hold refuses the ENTER; the cash fact stays true while it stands."""
+    sync = make_sync(repo, _Read(unrealized=-5_000.0))
+    assert await sync.tick() == "hold_raised"
+    assert await sync.tick() == "hold_stands"
+    assert sync.envelope.fresh_observation(NOON) is not None
+
+
+async def test_an_unknown_fact_raises_nothing(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    seeded_external_order_today: None,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An external order observed today leaves the day's P&L unknowable (plan R5)."""
+    sync = make_sync(repo, _Read(unrealized=-50_000.0))
+    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
+        assert await sync.tick() == "unknown"
+    assert _hold(repo) is None
+    assert sync.envelope.fresh_observation(NOON) is None
+
+    (record,) = _sync_records(caplog)
+    assert record.action == "live_envelope_unknown"
+    assert record.last_equity_known is True
+    assert record.external_orders_today == 1
+    assert record.execution_coverage == "incomplete"
+    assert record.fee_fidelity == "reported"
+
+
+async def test_a_missing_last_equity_is_unknown(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """No ``last_equity`` is no loss limit, so the account cannot be judged (plan R3)."""
+    sync = make_sync(repo, _Read(last_equity=None, unrealized=-50_000.0))
+    assert await sync.tick() == "unknown"
+    assert _hold(repo) is None
+    assert sync.envelope.fresh_observation(NOON) is None
+
+
+async def test_an_unknown_tick_withdraws_the_previous_observation_at_once(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """An unjudgeable account refuses every ENTER now, not in 45 seconds.
+
+    A read that *succeeded* but cannot be judged is not a stale observation —
+    it is a current one the envelope must not bound an ENTER against, so it is
+    withdrawn rather than left to age out.
+    """
+    read = _Read()
+    sync = make_sync(repo, read)
+    assert await sync.tick() == "observed"
+    assert sync.envelope.fresh_observation(NOON) is not None
+
+    read.last_equity = None
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.fresh_observation(NOON) is None
+    assert sync.envelope.latest_observation() is None
+
+
+async def test_a_failed_read_keeps_the_loop_alive_and_lets_the_observation_age_out(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A broker outage is not a verdict on the account: the last read stands until it is stale."""
+    read = _Read()
+    sync = make_sync(repo, read)
+    await sync.tick()
+    read.fail = True
+    assert await sync.tick() == "read_failed"
+    assert sync.envelope.fresh_observation(NOON) is not None
+    assert sync.envelope.fresh_observation(NOON + OBSERVATION_MAX_AGE_MS + 1) is None
+
+
+async def test_only_a_change_of_verdict_is_logged(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 15 s cadence must never spam: an unchanged verdict says nothing."""
+    read = _Read(fail=True)
+    sync = make_sync(repo, read)
+    with caplog.at_level(logging.INFO, logger=SYNC_LOGGER):
+        assert await sync.tick() == "read_failed"
+        assert await sync.tick() == "read_failed"
+        read.fail = False
+        assert await sync.tick() == "observed"
+
+    assert [(record.levelno, record.action) for record in _sync_records(caplog)] == [
+        (logging.WARNING, "live_envelope_read_failed"),
+        (logging.INFO, "live_envelope_observed"),
+    ]
+
+
+async def test_the_loop_survives_a_failing_tick(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    sync = make_sync(repo, _Read(fail=True), interval_s=15.0, sleep=sleep, max_ticks=3)
+    await sync.run()
+    assert slept == [15.0, 15.0, 15.0]

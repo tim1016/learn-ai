@@ -98,6 +98,16 @@ def test_the_gate_serves_only_a_fresh_observation() -> None:
     assert gate.latest_observation() == _observation(1_000)
 
 
+def test_withdrawing_drops_the_observation_at_once() -> None:
+    """An account the sync could not judge refuses every ENTER now, not once stale."""
+    gate = LiveEnvelopeGate(values=VALUES, custody_is_simulated=True)
+    gate.publish(_observation(1_000))
+    assert gate.fresh_observation(1_000) is not None
+    gate.withdraw()
+    assert gate.fresh_observation(1_000) is None
+    assert gate.latest_observation() is None
+
+
 def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
     assert set(ENVELOPE_ADMISSION_REASON_CODES) == {
         "LIVE_ENVELOPE_CASH_EXCEEDED",
