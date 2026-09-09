@@ -365,6 +365,20 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
         "the tap order belongs in one tuple; three hand-kept branch orders is "
         "what `_ordered_taps` exists to retire"
     )
+    # Codex re-review: a refactor made `start_background_taps` start the
+    # sweep too, so the periodic pass raced boot recovery (both call
+    # `reconcile_once`) and the ADR 0050 revival hook bound after the loop
+    # was already running.
+    start_taps_body = source[
+        source.index("def start_background_taps") : source.index("async def close")
+    ]
+    assert start_taps_body.count("sweep=None)") >= 1, (
+        "`start_background_taps` must not start the reconciliation sweep, or "
+        "the periodic sweep races the boot reconciliation pass"
+    )
+    assert main_source.index("run_boot_recovery()") < main_source.index(
+        "_pending_sweep.start()"
+    ), "the reconciliation sweep must start after boot recovery, or the periodic pass races it"
 
 
 def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:

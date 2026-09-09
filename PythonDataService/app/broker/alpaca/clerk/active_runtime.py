@@ -150,16 +150,20 @@ class ActiveClerkRuntime:
         )
 
     def start_background_taps(self) -> None:
-        """Start every background tap this authority owns.
+        """Start the taps that need nothing from boot recovery.
 
-        Separate from selection because one of the stream-health sync's two
-        providers -- the ``trade_updates`` consumer -- is registered after the
-        selector returns; see the construction site. The envelope sync needs
-        only the read port and could start earlier, but sharing this seam is
-        what makes "did anything start the taps?" one question main.py answers
-        in one place.
+        The reconciliation sweep is deliberately absent: main.py starts it
+        after boot recovery so the periodic pass cannot race the boot
+        reconciliation (both call ``reconcile_once``), and binds the ADR 0050
+        revival hook before that loop runs. Separate from selection because
+        one of the stream-health sync's two providers -- the
+        ``trade_updates`` consumer -- is registered after the selector
+        returns; see the construction site. The envelope sync needs only the
+        read port and could start earlier, but sharing this seam is what
+        makes "did anything start the taps?" one question main.py answers in
+        one place.
         """
-        for tap in self._taps():
+        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None):
             tap.start()
 
     async def close(self) -> None:

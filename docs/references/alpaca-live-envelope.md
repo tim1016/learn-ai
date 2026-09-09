@@ -52,10 +52,12 @@ notional cap, no symbol allowlist, no session restriction.
   composes `LiveEnvelopeGate(values=live_envelope_values,
   custody_is_simulated=True)` and passes the *live* account's own read port
   as `envelope_read=read` — not the shadow composite — so the sync observes
-  the live account directly. A live-mode boot with an incomplete envelope
-  (`LiveEnvelopeIncomplete`) is not aborted: the shadow authority simply
-  declines to install one and refuses `LIVE_ENVELOPE_MISSING` at startup, so
-  every unrelated data-plane surface stays up.
+  the live account directly. Settings validation
+  (`AlpacaSettings._enforce_mode_agreement`) already refuses live mode
+  without every `ALPACA_LIVE_*` value, before the Clerk is composed, so that
+  boot never reaches the shadow authority. `LIVE_ENVELOPE_MISSING` remains
+  the selector's refusal for a caller that composes the shadow authority
+  without an envelope.
 
 ## The facts
 

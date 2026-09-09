@@ -5,8 +5,9 @@ hold was raised on and refuses while the breach still stands. The hold
 never clears on a timer or at session rollover; this is the only release.
 
 Re-reading is not free of side effects: ``sync.observe()`` is the same call
-the background tap makes, so it re-publishes the gate's observation when the
-account is judgeable and withdraws it when it is not.
+the background tap makes, so after ruling R-A′ it re-publishes the gate's
+observation only when the reading is judgeable AND not breached, and
+withdraws it otherwise -- unknown or breached alike.
 """
 
 from __future__ import annotations
