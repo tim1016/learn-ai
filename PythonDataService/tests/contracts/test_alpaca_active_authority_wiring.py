@@ -417,3 +417,25 @@ def test_the_shadow_composition_hands_the_envelope_the_live_read_port() -> None:
         "compose_repository_runtime; the shadow envelope would fall back to "
         "the synthesized read port and its unrealized P&L would always be 0"
     )
+
+
+def test_the_shadow_composition_hands_the_sync_the_accounts_arming_ledger() -> None:
+    """ADR 0059 D3/R10, pinned structurally because the failure is a missing call.
+
+    Without the ledger the gate is unsealed forever, ``envelope_agreement`` can
+    never leave ``unsealed``, and ``LIVE_ENVELOPE_DISAGREEMENT`` can never be
+    refused -- and every unit test still passes.
+    """
+    shadow_source = (APPLICATION_ROOT / "broker/alpaca/clerk/shadow_authority.py").read_text(encoding="utf-8")
+    runtime_source = (APPLICATION_ROOT / "broker/alpaca/clerk/active_runtime.py").read_text(encoding="utf-8")
+
+    assert (
+        "arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id)" in shadow_source
+    ), (
+        "the shadow authority must build the arming ledger on the LIVE account id; the "
+        "shadow: custody namespace is not where an arming record lives"
+    )
+    assert "arming_ledger=arming_ledger," in runtime_source, (
+        "compose_repository_runtime must hand the arming ledger to LiveEnvelopeSync, or "
+        "the sealed envelope is never refreshed"
+    )

@@ -27,6 +27,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import (
     ENVELOPE_SYNC_INTERVAL_S,
     AccountObservation,
@@ -163,6 +165,7 @@ class LiveEnvelopeSync:
         interval_s: float = ENVELOPE_SYNC_INTERVAL_S,
         sleep: Sleep = asyncio.sleep,
         max_ticks: int | None = None,
+        arming_ledger: LiveArmingLedger | None = None,
     ) -> None:
         self._repo = repo
         self._read = read
@@ -170,6 +173,10 @@ class LiveEnvelopeSync:
         self._interval_s = interval_s
         self._sleep = sleep
         self._max_ticks = max_ticks
+        self._arming_ledger = arming_ledger
+        # Whether the last refresh found the ledger unreadable, so the error is
+        # logged once per transition rather than four times a minute.
+        self._arming_ledger_invalid = False
         self._reader = SqliteEconomicProjectionReader.from_repository(repo)
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
@@ -255,6 +262,65 @@ class LiveEnvelopeSync:
             self.envelope.withdraw()
         return reading
 
+    def _refresh_sealed_envelope(self) -> None:
+        """Re-read the account's sealed envelope from the arming ledger (ADR 0059 D3/R10).
+
+        The envelope a live ENTER is admitted against is the one an operator
+        sealed at arming, not the one this process booted with -- so an edit to
+        the ``ALPACA_LIVE_*`` environment after an arming is
+        ``LIVE_ENVELOPE_DISAGREEMENT`` at every ENTER until a re-arm.
+
+        Read on every tick rather than once at composition because an arming can
+        happen while the service is running: the ceremony is an out-of-process
+        CLI, and one sync cadence is the whole latency between an operator's
+        ``apply`` and the gate that enforces it.
+
+        A ledger nobody can read seals nothing: the gate returns to unsealed and
+        the fault is logged at error level, once per transition. The account
+        level is all this slice enforces; per-instance arming is consulted at
+        admission in slice 7.
+        """
+        if self._arming_ledger is None:
+            return
+        try:
+            sealed = self._arming_ledger.sealed_envelope()
+        except LiveArmingInvalid as exc:
+            sealed = None
+            if not self._arming_ledger_invalid:
+                logger.error(
+                    "live arming ledger cannot be read; the envelope is unsealed",
+                    extra={
+                        "action": "live_arming_ledger_invalid",
+                        "account_id": self._repo.account_id,
+                        "live_account_id": self._arming_ledger.live_account_id,
+                        "path": str(self._arming_ledger.path),
+                        "why": str(exc),
+                    },
+                )
+            self._arming_ledger_invalid = True
+        else:
+            self._arming_ledger_invalid = False
+        if sealed == self.envelope.sealed:
+            return
+        self.envelope.sealed = sealed
+        emit = logger.warning if self.envelope.agreement == "disagreed" else logger.info
+        emit(
+            "live envelope sealed by an arming record"
+            if sealed is not None
+            else "live envelope is no longer sealed by any arming record",
+            extra={
+                "action": "live_envelope_sealed" if sealed is not None else "live_envelope_unsealed",
+                # Three ids, because under shadow they are three different
+                # accounts: the custody namespace the hold is written against,
+                # the live account the ledger is rooted on, and the broker
+                # account the figures were read from.
+                "account_id": self._repo.account_id,
+                "live_account_id": self._arming_ledger.live_account_id,
+                "observed_account_id": self._observed_account_id,
+                "agreement": self.envelope.agreement,
+            },
+        )
+
     async def tick(self) -> EnvelopeSyncAction:
         """Observe once, and act on the verdict.
 
@@ -263,6 +329,7 @@ class LiveEnvelopeSync:
         it with a later tick's numbers would churn the control revision and
         overwrite the evidence the operator is reading.
         """
+        self._refresh_sealed_envelope()
         try:
             reading = await self.observe()
         except BrokerError as exc:

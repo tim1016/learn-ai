@@ -60,6 +60,9 @@ if TYPE_CHECKING:
     # not exist yet. Verified: making it a plain import fails
     # ``import app.main`` with exactly that ImportError. The cycle, not the
     # sort order, is the thing to fix, and it is not this slice's to fix.
+    # ``live_arming_ledger`` imports ``live_envelope``, so it is here for
+    # exactly the same reason.
+    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
     from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
@@ -253,6 +256,7 @@ async def compose_repository_runtime(
     sweep_listener: ReconciliationListener | None = None,
     live_envelope: LiveEnvelopeGate | None = None,
     envelope_read: BrokerReadPort | None = None,
+    arming_ledger: LiveArmingLedger | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -264,6 +268,10 @@ async def compose_repository_runtime(
     Clerk's own read port -- the shadow authority passes the live account's
     read so cash and positions are the real account's while custody stays
     synthesized.
+
+    ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
+    envelope sync re-reads it every tick so an arming performed by the
+    out-of-process CLI reaches the running gate within one cadence.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -359,6 +367,7 @@ async def compose_repository_runtime(
                     else guard_broker_read_port(envelope_read, intake=intake)
                 ),
                 envelope=live_envelope,
+                arming_ledger=arming_ledger,
             )
         )
         await asyncio.wait_for(

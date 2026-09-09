@@ -14,7 +14,9 @@ ET day the P&L spans are all the same fixed instant.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,8 @@ from app.broker.alpaca.clerk.active_authority import (
     activate_shadow_clerk_authority,
     select_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -316,3 +320,126 @@ async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_
         strategy_instance_id=None,
     )
     assert hold is not None
+
+
+def _arm(
+    artifacts_root: Path,
+    *,
+    envelope: object = TEST_ENVELOPE_VALUES,
+    armed_at_ms: int = NOW_MS,
+) -> LiveArmingRecord:
+    """Append one arming record straight to the ledger.
+
+    The ceremony that mints these has its own tests; what is under test here is
+    what the *runtime* does with a record that exists.
+    """
+    record = LiveArmingRecord.create(
+        live_account_id=LIVE_ACCT,
+        strategy_instance_id=SID,
+        seal_hash="a" * 64,
+        configured_signal_hash="b" * 64,
+        shadow_receipt_sha256="c" * 64,
+        envelope=envelope,  # type: ignore[arg-type]
+        armed_at_ms=armed_at_ms,
+        max_sessions=20,
+    )
+    LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).append(record)
+    return record
+
+
+async def test_the_gate_is_unsealed_until_an_arming_record_exists(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker], tmp_path: Path
+) -> None:
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    assert runtime.envelope_sync.envelope.sealed is None
+    assert runtime.envelope_sync.envelope.agreement == "unsealed"
+
+    _arm(tmp_path)
+
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.sealed == TEST_ENVELOPE_VALUES
+    assert runtime.envelope_sync.envelope.agreement == "agreed"
+
+
+async def test_an_environment_change_after_arming_refuses_every_enter_end_to_end(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+    tmp_path: Path,
+) -> None:
+    """R10's whole point: a live ENTER is admitted against the *sealed* values.
+
+    Both halves are pinned on their own -- the sync seals from the ledger, and a
+    disagreeing gate refuses -- but the chain between them is what an operator
+    is trusting, and a regression that broke the join would leave both halves
+    green.
+    """
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+    assert await runtime.envelope_sync.tick() == "observed"
+
+    admitted = await _enter(runtime, registered_running_bot, quantity=1)
+    assert admitted.state.value == "submitted", admitted.explanation
+
+    # The operator edited ALPACA_LIVE_LOSS_USD and restarted nothing.
+    runtime.envelope_sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=4_000.0)
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.agreement == "disagreed"
+
+    refused = await _enter(runtime, registered_running_bot, quantity=1, decision_id="d2")
+    assert refused.state.value == "rejected"
+    assert refused.explanation.startswith("LIVE_ENVELOPE_DISAGREEMENT:"), refused.explanation
+    assert "re-arm" in refused.explanation
+
+
+async def test_a_re_arm_seals_the_new_environment_and_admits_again(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+    tmp_path: Path,
+) -> None:
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+    tightened = replace(TEST_ENVELOPE_VALUES, loss_usd=4_000.0)
+    runtime.envelope_sync.envelope.values = tightened
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.agreement == "disagreed"
+
+    _arm(tmp_path, envelope=tightened, armed_at_ms=NOW_MS + 1)
+    assert await runtime.envelope_sync.tick() == "observed"
+
+    assert runtime.envelope_sync.envelope.sealed == tightened
+    assert runtime.envelope_sync.envelope.agreement == "agreed"
+    admitted = await _enter(runtime, registered_running_bot, quantity=1)
+    assert admitted.state.value == "submitted", admitted.explanation
+
+
+async def test_an_unreadable_arming_ledger_unseals_the_gate_and_is_logged_once(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Fail closed and loud: a ledger nobody can read seals nothing."""
+    runtime, _broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.sealed is not None
+
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.path.write_text(
+        ledger.path.read_text(encoding="utf-8").replace('"max_sessions":20', '"max_sessions":90'),
+        encoding="utf-8",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        assert await runtime.envelope_sync.tick() == "observed"
+        assert await runtime.envelope_sync.tick() == "observed"
+
+    assert runtime.envelope_sync.envelope.sealed is None
+    assert runtime.envelope_sync.envelope.agreement == "unsealed"
+    invalid = [
+        record for record in caplog.records if getattr(record, "action", None) == "live_arming_ledger_invalid"
+    ]
+    assert len(invalid) == 1, "the fault is logged once per transition, not four times a minute"
