@@ -67,6 +67,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 |---|---|---|---|---|---|
 | Alpaca equity regulatory fees (SEC §31, FINRA TAF, FINRA CAT; EOD per-component cent round-up) | `PythonDataService/app/broker/alpaca/regulatory_fees.py` | none (the IBKR tier model in `app/research/parity/ibkr_commission.py` is a different concept — broker commission, not regulatory pass-through) | Alpaca Broker Fee Schedule (retrieved 2026-09-07); SEC fee-rate advisories 2024-2/2025-2/2026-2; FINRA SR-FINRA-2024-019 — see [alpaca-regulatory-fees](docs/references/alpaca-regulatory-fees.md) | `PythonDataService/tests/broker/alpaca/test_regulatory_fees.py`; golden `FEE-001` in `tests/fixtures/test_alpaca_regulatory_fees_fixture.py` (hand_computed, atol=0) | canonical — 4-field provenance block present |
 
+### Risk envelope (ADR 0059 D4)
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Day P&L / loss limit (account-wide realized + broker-observed unrealized P&L, net of fees; the loss hold's `min(loss_fraction × last_equity, loss_usd)` limit) | `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py` + `PythonDataService/app/broker/alpaca/clerk/live_envelope.py` | none | ADR 0059 D4 — see [alpaca-live-envelope](docs/references/alpaca-live-envelope.md) | `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_day_pnl.py`; `PythonDataService/tests/broker/alpaca/clerk/test_live_envelope.py` | canonical |
+
 ### Broker session and order anchoring (ADR 0059 D5)
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |

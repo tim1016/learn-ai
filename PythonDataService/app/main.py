@@ -192,7 +192,8 @@ async def lifespan(app: FastAPI):
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
         alpaca_broker = AlpacaBroker()
-        alpaca_clerk_root = get_alpaca_settings().clerk_dir
+        alpaca_settings = get_alpaca_settings()
+        alpaca_clerk_root = alpaca_settings.clerk_dir
         # #1671: scheduled session structure remains calendar-owned; this
         # source provides the separate real-time clock + per-symbol
         # halt/resume evidence used to fail new exposure closed.
@@ -237,12 +238,24 @@ async def lifespan(app: FastAPI):
                 {binding.symbol for binding in bindings if binding.mode != "dry_run"}
             )
 
+        # ADR 0059 D4: the live world's risk envelope, read once from the
+        # environment. Settings validation (`_enforce_mode_agreement`) already
+        # refuses live mode without every ALPACA_LIVE_* value, so this cannot
+        # raise here; the selector's LIVE_ENVELOPE_MISSING refusal remains the
+        # defence for a caller that composes the shadow authority without it.
+        from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+
+        live_envelope_values = (
+            None if alpaca_settings.is_paper else LiveEnvelopeValues.from_settings(alpaca_settings)
+        )
+
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
             trade=alpaca_broker,
             artifacts_root=alpaca_clerk_root,
             stream_health_gate=alpaca_stream_health_gate,
             roster_symbols=_alpaca_roster_symbols,
+            live_envelope_values=live_envelope_values,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:
@@ -267,8 +280,10 @@ async def lifespan(app: FastAPI):
             logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
             # Only now does the stream-health sync have both providers to
             # sample; starting it earlier reads the not-yet-registered
-            # consumer as an outage (#1777 WP4).
-            alpaca_clerk_runtime.start_hold_sync()
+            # consumer as an outage (#1777 WP4). The envelope sync could have
+            # started sooner but rides the same seam, so this is the one place
+            # to ask whether the account's background taps are running.
+            alpaca_clerk_runtime.start_background_taps()
         elif alpaca_clerk_runtime.startup_failure is not None:
             logger.warning(
                 "Alpaca Clerk unavailable after authority selection.",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,14 +16,17 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    LossHoldCause,
     OrderOutcomeUnknownCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
     UnknownOrderIdentity,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
 
 logger = logging.getLogger(__name__)
 
@@ -50,22 +54,46 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
 
 
 def account_hold_envelope(
-    *, reason_code: str, evidence_refs: list[str]
+    *,
+    reason_code: str,
+    evidence_refs: list[str],
+    cause_facts: Mapping[str, Any] | None = None,
 ) -> UncertaintyRaisedFacts:
-    """The R5 envelope for one former ``holds`` cause (ADR 0048 Decision 2).
+    """The R5 envelope for one account-hold cause (ADR 0048 Decision 2).
 
     A hold carried no envelope — only a reason code and evidence refs — so
     the copy that describes it has to be authored somewhere, and this is the
     one place. The wording deliberately matches the panel's closed operator
-    vocabulary for the same two codes; the panel keeps rendering its own
-    copy, so the two are peers, not a chain, and neither layer imports the
-    other. Every hold blocks entries account-wide and authorizes no
-    reduction, which is exactly what the registered policy declares.
+    vocabulary for the same codes; the panel keeps rendering its own copy, so
+    the two are peers, not a chain, and neither layer imports the other.
+
+    The two v12 causes derive their whole cause payload from
+    ``evidence_refs``, and passing ``cause_facts`` for either is refused
+    rather than ignored — a caller that believed it had stamped a cause which
+    was never stored is the failure this module exists to prevent. The ADR
+    0059 D4 loss hold is the opposite case: the breach it was raised on is
+    numbers, not evidence lines, so its caller supplies ``cause_facts`` and
+    this function refuses to describe the hold without them.
+
+    ``blocks_new_exposure`` and ``allows_reduction`` are read from the
+    registered policy, which is the authority on what an episode permits
+    (ADR 0048 Decision 1). They are not this envelope's to invent: the one
+    caller that stores them verbatim, :func:`insert_account_hold_episode`,
+    would otherwise be free to write a row contradicting the policy the
+    admission path reads.
 
     Raises ``KeyError`` for any other reason code: a hold cause reaching here
     unregistered would otherwise be described as a generic uncertainty and
     lose the account-wide fence it exists to hold.
     """
+    if cause_facts is not None and reason_code in (
+        UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+        STREAM_HEALTH_HOLD_REASON_CODE,
+    ):
+        raise ValueError(
+            f"{reason_code!r} derives its whole cause from its evidence lines; "
+            "cause_facts would be silently dropped"
+        )
     cause: dict[str, Any]
     if reason_code == UNEXPLAINED_ORDER_HOLD_REASON_CODE:
         cause = UnexplainedOrderCause(broker_order_ids=tuple(evidence_refs)).to_mapping()
@@ -87,12 +115,36 @@ def account_hold_envelope(
         )
         operator_impact = "New submits are paused account-wide."
         next_step = "Restore the named channel; the hold releases on its own once it recovers."
+    elif reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE:
+        if cause_facts is None:
+            raise ValueError("the loss hold needs cause_facts: the breach it was raised on")
+        loss = LossHoldCause.from_mapping(dict(cause_facts))
+        cause = loss.to_mapping()
+        headline = "The account is in loss hold"
+        explanation = (
+            f"Today's P&L reached {loss.day_pnl_usd:.2f} USD against a loss limit of "
+            f"{loss.loss_limit_usd:.2f} USD. Every ENTER on the account is refused; every "
+            "EXIT still runs, so each program keeps managing its own position."
+        )
+        operator_impact = "New submits are paused account-wide; exits are unaffected."
+        next_step = (
+            "When the account has recovered, clear the hold with the guarded operator action "
+            "(POST /api/brokers/alpaca/live-envelope/loss-hold/clear). It does not clear at "
+            "session rollover."
+        )
     else:
         raise KeyError(f"{reason_code!r} is not a registered account-hold cause")
+    policy = reason_policy(reason_code)
+    if policy is None:
+        # Only registered codes reach here today (the branches above name
+        # three), but the two facts below are the policy's to state, not this
+        # envelope's to invent -- so an unregistered one refuses rather than
+        # being described with defaults.
+        raise KeyError(f"{reason_code!r} has no registered reason policy")
     return UncertaintyRaisedFacts(
         severity="error",
-        blocks_new_exposure=True,
-        allows_reduction=False,
+        blocks_new_exposure=policy.blocks_new_exposure,
+        allows_reduction=policy.allows_reduction,
         reason_code=reason_code,
         headline=headline,
         explanation=explanation,

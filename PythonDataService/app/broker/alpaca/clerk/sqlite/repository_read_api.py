@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -386,6 +386,11 @@ class ClerkSqliteRepositoryReadApi:
                 for order in reads.external_orders(self._conn)
             ]
 
+    def external_orders_observed_since(self: ClerkSqliteRepository, *, since_ms: int) -> int:
+        """Count foreign orders observed at or after ``since_ms`` (ADR 0059 D4)."""
+        with self._write_lock:
+            return reads.external_orders_observed_since(self._conn, since_ms=since_ms)
+
     def effect_operation(
         self: ClerkSqliteRepository,
         effect_operation_id: str,
@@ -621,4 +626,11 @@ class ClerkSqliteRepositoryReadApi:
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
                 subject_id=subject_id,
+            )
+
+    def reserved_cash_usd(self: ClerkSqliteRepository, *, observed_at_ms: int) -> float:
+        """Cash the accepted ENTERs claim that ``observed_at_ms`` cannot see."""
+        with self._write_lock:
+            return envelope_reservations.reserved_cash_usd(
+                self._conn, observed_at_ms=observed_at_ms
             )

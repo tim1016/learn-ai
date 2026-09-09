@@ -41,6 +41,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Intent',
     explanation: 'The bot recorded an order intent before touching the broker.',
   },
+  LIVE_ENVELOPE_LOSS_HOLD: {
+    label: 'Loss hold',
+    explanation:
+      "Today's loss reached the account's limit. New entries are refused account-wide until an operator clears the hold; exits still run.",
+  },
   NO_HOLD: {
     label: 'No hold',
     explanation: 'No exposure hold is active. Order submission is allowed.',

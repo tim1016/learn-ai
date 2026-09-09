@@ -18,7 +18,11 @@ function makeVerdict(overrides: Partial<AlpacaLiveVerdict> = {}): AlpacaLiveVerd
     clerk_refusal_reason_code: null,
     armed_instance_count: 0,
     envelope_state: 'not_applicable',
+    // A paper verdict carries no envelope and no hold, and the server says so
+    // with 'not_applicable' on both.
+    envelope_agreement: 'not_applicable',
     shadow_state: 'not_applicable',
+    loss_hold: 'not_applicable',
     final_verdict: 'paper',
     headline: 'Paper account PA9 — no real money at risk',
     detail: 'ALPACA_MODE=paper.',
@@ -46,7 +50,12 @@ describe('AlpacaLiveVerdictService', () => {
 
   it('refresh() stores the server verdict verbatim', async () => {
     const { svc, brokers } = setup();
-    const v = makeVerdict({ final_verdict: 'live-unarmed', configured_mode: 'live' });
+    const v = makeVerdict({
+      final_verdict: 'live-unarmed',
+      configured_mode: 'live',
+      envelope_agreement: 'unsealed',
+      loss_hold: 'clear',
+    });
     brokers.getLiveVerdict.mockResolvedValue(v);
 
     await svc.refresh();

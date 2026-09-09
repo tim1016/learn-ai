@@ -84,7 +84,7 @@ MAX_TRANSACTION_DETAIL_EXECUTIONS = 100
 # `root_recorded_at_ms` for callers that need the *original* economic time of
 # a corrected fill, not the correction's arrival time. Continue with `, <name>
 # AS (...)` or a direct `SELECT ... LEFT JOIN roots ON ...`.
-_EFFECTIVE_FILL_LINEAGE_CTE = """
+EFFECTIVE_FILL_LINEAGE_CTE = """
     WITH RECURSIVE lineage(
         effective_fill_id,
         parent_execution_id,
@@ -625,6 +625,42 @@ class SqliteEconomicProjectionReader:
             },
         )
 
+    def account_net_cash_spent_usd(self) -> float:
+        """Σ BUY notional − Σ SELL notional over every effective fill, lifetime.
+
+        The cash the Clerk's own fills would have taken from the account.
+        Under simulated custody (ADR 0059 D2) the broker's cash never moved,
+        so the envelope subtracts this to rehearse the cash bound honestly
+        (plan R2); under real custody the broker's cash already reflects it.
+
+        Formula: ``net_cash_spent = Σ(quantity × fill_price over effective BUY
+          fills) − Σ(quantity × fill_price over effective SELL fills), over
+          every owned custody subject, lifetime.``
+        Reference: ADR 0059 Decision 4; slice-5 plan ruling R2 (shadow cash =
+          broker cash − net cash the Clerk's own fills would have spent).
+        Canonical implementation: this method — the only place the Clerk's
+          net cash spent is computed.
+        Validated against:
+          ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py::test_net_cash_spent_is_buys_less_sells_over_every_subject``.
+        """
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_fill_rows(
+                strategy_instance_ids=None,
+                from_ms=None,
+                to_ms=None,
+                cursor_key=None,
+                limit=None,
+            )
+        total = 0.0
+        for record in (
+            _to_fill_record(row, account_id=self._account_id, custody_subject_identity=True)
+            for row in rows
+        ):
+            notional = record.quantity * record.fill_price
+            total += notional if record.side is OrderSide.BUY else -notional
+        return total
+
     def effective_execution_summaries(
         self,
         order_refs: Sequence[str],
@@ -1007,7 +1043,7 @@ class SqliteEconomicProjectionReader:
         if limit is not None:
             params.append(limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+            {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
                        f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
                        f.recorded_at_ms, f.recorded_transition_sequence,
@@ -1082,7 +1118,7 @@ class SqliteEconomicProjectionReader:
             params.extend((cursor_key[0], cursor_key[0], cursor_key[1]))
         params.append(limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}
+            {EFFECTIVE_FILL_LINEAGE_CTE}
             SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                    f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                    f.recorded_transition_sequence,
@@ -1133,7 +1169,7 @@ class SqliteEconomicProjectionReader:
             total_limit_sql = "LIMIT ?"
             params.append(total_limit + 1)
         sql = f"""
-            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+            {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                        f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                        f.recorded_transition_sequence,

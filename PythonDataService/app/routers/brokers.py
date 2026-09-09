@@ -73,6 +73,7 @@ from app.schemas.account_pnl_attribution import (
     PortfolioHistoryProofResponse,
 )
 from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
+from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.schemas.manual_orders import (
@@ -90,7 +91,12 @@ from app.security.data_plane_control import (
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
-from app.services.alpaca_live_verdict import alpaca_live_verdict, observe_shadow_state
+from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
+from app.services.alpaca_live_verdict import (
+    alpaca_live_verdict,
+    observe_loss_hold,
+    observe_shadow_state,
+)
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
@@ -153,6 +159,19 @@ def _sqlite_projection_unavailable() -> HTTPException:
             "message": "The Account Clerk order record could not be read safely.",
             "next_step": ("Keep broker actions blocked and retry after the Clerk projection is repaired."),
         },
+    )
+
+
+def _live_envelope_not_installed(message: str) -> HTTPException:
+    """The one 503 for "this authority carries no live envelope" (ADR 0059 D4).
+
+    Two seams reach it -- no active runtime at all, and a runtime whose
+    authority composed no envelope -- and an operator reads the same
+    condition either way, so they answer with one body.
+    """
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "live_envelope_not_installed", "message": message},
     )
 
 
@@ -712,7 +731,34 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
         shadow_state=(
             None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
         ),
+        loss_hold=observe_loss_hold(runtime),
     )
+
+
+@router.post(
+    "/{broker}/live-envelope/loss-hold/clear",
+    response_model=LossHoldClearOutcome,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def clear_live_loss_hold(broker: str) -> LossHoldClearOutcome:
+    """The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands."""
+    # This docstring is the route's published OpenAPI description; the two
+    # 503 seams below share one body via ``_live_envelope_not_installed``.
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "live_envelope_unsupported_broker",
+                "message": f"No live envelope for broker '{broker}'.",
+            },
+        )
+    runtime = get_active_clerk_runtime()
+    if runtime is None:
+        raise _live_envelope_not_installed("No Alpaca Clerk authority is installed.")
+    try:
+        return await clear_loss_hold(runtime, now_ms=now_ms_utc())
+    except LiveEnvelopeNotInstalled as exc:
+        raise _live_envelope_not_installed(str(exc)) from exc
 
 
 @router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)

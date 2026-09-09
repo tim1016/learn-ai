@@ -641,6 +641,16 @@
             "title": "Detail",
             "type": "string"
           },
+          "envelope_agreement": {
+            "enum": [
+              "not_applicable",
+              "unsealed",
+              "agreed",
+              "disagreed"
+            ],
+            "title": "Envelope Agreement",
+            "type": "string"
+          },
           "envelope_state": {
             "enum": [
               "not_applicable",
@@ -663,6 +673,15 @@
           "headline": {
             "minLength": 1,
             "title": "Headline",
+            "type": "string"
+          },
+          "loss_hold": {
+            "enum": [
+              "not_applicable",
+              "clear",
+              "held"
+            ],
+            "title": "Loss Hold",
             "type": "string"
           },
           "mode_agreement": {
@@ -711,6 +730,8 @@
           "clerk_refusal_reason_code",
           "armed_instance_count",
           "envelope_state",
+          "envelope_agreement",
+          "loss_hold",
           "shadow_state",
           "final_verdict",
           "headline",
@@ -7303,6 +7324,7 @@
               "NO_HOLD",
               "UNEXPLAINED_ORDER_HOLD",
               "STREAM_HEALTH_HOLD",
+              "LIVE_ENVELOPE_LOSS_HOLD",
               "UNKNOWN_HOLD"
             ],
             "title": "Hold Reason",
@@ -20014,6 +20036,75 @@
           "conditions"
         ],
         "title": "LogicNodeOrConditions",
+        "type": "object"
+      },
+      "LossHoldClearOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "day_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl Usd"
+          },
+          "detail": {
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "loss_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Limit Usd"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "cleared",
+              "no_hold",
+              "refused"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          }
+        },
+        "required": [
+          "outcome",
+          "reason_code",
+          "day_pnl_usd",
+          "loss_limit_usd",
+          "observed_at_ms",
+          "detail"
+        ],
+        "title": "LossHoldClearOutcome",
         "type": "object"
       },
       "ManualOrderBrokerOrderResponse": {
@@ -46081,6 +46172,65 @@
           }
         },
         "summary": "Get Session Fee Reconciliation",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/live-envelope/loss-hold/clear": {
+      "post": {
+        "description": "The guarded loss-hold clear (ADR 0059 D4; ADR 0011 \u00a76 shape): re-observes, refuses while the breach stands.",
+        "operationId": "clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LossHoldClearOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Live Loss Hold",
         "tags": [
           "brokers-v2"
         ]

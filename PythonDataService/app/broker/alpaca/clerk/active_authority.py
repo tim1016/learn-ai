@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     open_repository,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
     activate_shadow_clerk_authority,
@@ -96,6 +97,7 @@ async def select_active_clerk_runtime(
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     stream_health_gate: StreamHealthGate | None = None,
     roster_symbols: Callable[[], Sequence[str]] | None = None,
+    live_envelope_values: LiveEnvelopeValues | None = None,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
 
@@ -103,6 +105,10 @@ async def select_active_clerk_runtime(
     (#1795): a callable returning the fleet's bound symbols, injected here so
     the clerk layer never imports the bot-registration services. ``None`` (the
     default, and every test/synthetic path) constructs no probe.
+
+    ``live_envelope_values`` reach only the live world's shadow authority
+    (ADR 0059 D4). The paper authority below never composes an envelope, so a
+    caller may offer values on any boot without changing what paper admits.
     """
     try:
         account = await read.get_account()
@@ -138,6 +144,7 @@ async def select_active_clerk_runtime(
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
+            live_envelope_values=live_envelope_values,
         )
     try:
         ports = bind_real_alpaca_ports(

@@ -21,8 +21,12 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    HOLD_REASON_CODES,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    LossHoldCause,
 )
 from app.broker.alpaca.clerk.trade_evidence import UNEXPLAINED_TRADE_UPDATE_REASON_CODE
 from app.schemas.broker_v2_panel import ClerkCard
@@ -34,13 +38,28 @@ ACCOUNT_ID = "PA-HOLD-SEAM"
 SID = "spy-bot"
 _NOW = 1_700_000_000_000
 
-# Every reason code a production writer can store into `holds`. Kept as the
-# live constants rather than string literals so a writer that renames its
-# code cannot quietly stop being renderable.
-_STORED_HOLD_CAUSES = (
-    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
-    UNEXPLAINED_TRADE_UPDATE_REASON_CODE,
-    STREAM_HEALTH_REASON_CODE,
+# Every reason code a production writer can store into `holds`: each writer's
+# own constant, so a writer that renames its code cannot quietly stop being
+# renderable, plus every cause the clerk registry admits, so a cause added
+# there without a panel vocabulary row fails here instead of rendering as
+# `UNKNOWN_HOLD` (ADR 0059 D4 added the third).
+_STORED_HOLD_CAUSES = tuple(
+    sorted(
+        {
+            UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+            UNEXPLAINED_TRADE_UPDATE_REASON_CODE,
+            STREAM_HEALTH_REASON_CODE,
+            *HOLD_REASON_CODES,
+        }
+    )
+)
+
+_LOSS_CAUSE = LossHoldCause(
+    day_start_ms=1_788_000_000_000,
+    day_pnl_usd=-5_250.0,
+    loss_limit_usd=5_000.0,
+    last_equity_usd=100_000.0,
+    observed_at_ms=1_788_040_000_000,
 )
 
 
@@ -51,6 +70,26 @@ class _Clock:
     def __call__(self) -> int:
         self.value += 1
         return self.value
+
+
+def _write_hold(repo: ClerkSqliteRepository, reason_code: str) -> None:
+    """Write one hold the way its own producer does.
+
+    The two v12 causes still arrive as the pre-v12 ``ACCOUNT_HOLD_RAISED``
+    transition replayed from a mirror, which is the path this file exists to
+    cross. The ADR 0059 D4 loss hold postdates v12 and cannot arrive that way:
+    its cause is the breached day-P&L numbers, not evidence lines, so it is
+    raised through the seam that carries them.
+    """
+    if reason_code == LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE:
+        raise_account_hold(
+            repo,
+            reason_code=reason_code,
+            evidence_refs=[f"day-pnl:{_LOSS_CAUSE.day_start_ms}"],
+            cause_facts=_LOSS_CAUSE.to_mapping(),
+        )
+        return
+    repo.append_transition(_hold_transition(reason_code=reason_code))
 
 
 def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
@@ -66,7 +105,7 @@ def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
         symbol="SPY",
         config_hash="spy-hash",
     )
-    repo.append_transition(_hold_transition(reason_code=reason_code))
+    _write_hold(repo, reason_code)
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
     try:
         projection = reader.bot_snapshot(SID)

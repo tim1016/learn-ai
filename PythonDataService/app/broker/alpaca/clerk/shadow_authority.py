@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_activation import (
     ShadowActivationInvalid,
     ShadowActivationRecord,
@@ -56,13 +57,28 @@ async def select_shadow_clerk_runtime(
     execution_lease_retry_interval_s: float,
     stream_health_gate: StreamHealthGate | None,
     roster_symbols: Callable[[], Sequence[str]] | None,
+    live_envelope_values: LiveEnvelopeValues | None,
 ) -> ActiveClerkRuntime:
     """Compose the Shadow Account Authority for a live account (ADR 0059 D2).
 
     The live trade port is never bound: the shadow world's trade port is
     ``NoSubmitAlpacaTradePort``. Real-money custody stays unconstructible
     until slice 7 admits an armed instance.
+
+    ``live_envelope_values`` are the configured ``ALPACA_LIVE_*`` bounds
+    (ADR 0059 D4). They are not optional in practice: the shadow authority
+    exists to *rehearse* the live envelope, so a boot that cannot build one
+    installs no authority at all rather than a rehearsal of nothing.
     """
+    if live_envelope_values is None:
+        return unavailable_runtime(
+            "LIVE_ENVELOPE_MISSING",
+            account_id=shadow_account_id_for_live_account(account.account_id),
+            recovery=(
+                "Set every ALPACA_LIVE_* value; the shadow authority rehearses the "
+                "live envelope and refuses to run without it (ADR 0059 D4)."
+            ),
+        )
     try:
         await verify_shadow_namespace_empty(read)
         shadow = compose_shadow_ports(
@@ -150,6 +166,15 @@ async def select_shadow_clerk_runtime(
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
             sweep_listener=sessions.record,
+            # Simulated custody: the live account's cash never moves, so the
+            # envelope subtracts what this Clerk's own fills would have spent
+            # (plan R2). Unsealed until an arming record exists (slice 6).
+            live_envelope=LiveEnvelopeGate(
+                values=live_envelope_values, custody_is_simulated=True
+            ),
+            # The envelope observes the live account's cash and positions
+            # (plan: unrealized is the live account's).
+            envelope_read=read,
         )
     except Exception as exc:
         logger.warning(
@@ -174,6 +199,7 @@ async def select_shadow_clerk_runtime(
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        envelope_sync=composed.envelope_sync,
         evidence_sink=NullTradeUpdateEvidenceSink(),
         _sqlite_repository=composed.repository,
         account_id=shadow.account_id,

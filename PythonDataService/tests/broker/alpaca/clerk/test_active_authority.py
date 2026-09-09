@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.trade_evidence import NullTradeUpdateEvidenceSink
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 
 
 def _account() -> BrokerAccountSnapshot:
@@ -481,7 +482,10 @@ def _vendor_order(client_order_id: str) -> BrokerOrder:
 
 async def test_live_account_without_shadow_activation_is_refused_by_name(tmp_path: Path) -> None:
     runtime = await select_active_clerk_runtime(
-        read=_LiveBroker(), trade=_LiveBroker(), artifacts_root=tmp_path
+        read=_LiveBroker(),
+        trade=_LiveBroker(),
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
     )
 
     assert runtime.authority_kind == "unavailable"
@@ -494,7 +498,10 @@ async def test_live_account_holding_clerk_minted_orders_is_poisoned(tmp_path: Pa
     broker = _LiveBroker([_vendor_order("learn-ai/ema-1/v1:abc")])
 
     runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
     )
 
     assert runtime.startup_failure is not None
@@ -521,7 +528,10 @@ async def test_a_live_boot_degrades_to_unavailable_when_the_namespace_probe_erro
     broker = _MalformedLiveBroker()
 
     runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
     )
 
     assert runtime.authority_kind == "unavailable"
@@ -544,7 +554,10 @@ async def test_activated_live_account_composes_the_shadow_authority(tmp_path: Pa
 
     broker = _LiveBroker()
     runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
     )
     try:
         assert runtime.authority_kind == "shadow"

@@ -1527,6 +1527,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/live-envelope/loss-hold/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear Live Loss Hold
+         * @description The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands.
+         */
+        post: operations["clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/live-verdict": {
         parameters: {
             query?: never;
@@ -5269,6 +5289,11 @@ export interface components {
             /** Detail */
             detail: string;
             /**
+             * Envelope Agreement
+             * @enum {string}
+             */
+            envelope_agreement: "not_applicable" | "unsealed" | "agreed" | "disagreed";
+            /**
              * Envelope State
              * @enum {string}
              */
@@ -5280,6 +5305,11 @@ export interface components {
             final_verdict: "paper" | "live-unarmed" | "live-armed" | "unknown";
             /** Headline */
             headline: string;
+            /**
+             * Loss Hold
+             * @enum {string}
+             */
+            loss_hold: "not_applicable" | "clear" | "held";
             /**
              * Mode Agreement
              * @enum {string}
@@ -8011,7 +8041,7 @@ export interface components {
              * Hold Reason
              * @enum {string}
              */
-            hold_reason: "NO_HOLD" | "UNEXPLAINED_ORDER_HOLD" | "STREAM_HEALTH_HOLD" | "UNKNOWN_HOLD";
+            hold_reason: "NO_HOLD" | "UNEXPLAINED_ORDER_HOLD" | "STREAM_HEALTH_HOLD" | "LIVE_ENVELOPE_LOSS_HOLD" | "UNKNOWN_HOLD";
             /** Hold Reason Explanation */
             hold_reason_explanation: string;
             /** Hold Reason Label */
@@ -13826,6 +13856,27 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
+        };
+        /** LossHoldClearOutcome */
+        LossHoldClearOutcome: {
+            /** Day Pnl Usd */
+            day_pnl_usd: number | null;
+            /** Detail */
+            detail: string;
+            /** Loss Limit Usd */
+            loss_limit_usd: number | null;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "cleared" | "no_hold" | "refused";
+            /** Reason Code */
+            reason_code: string | null;
         };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
@@ -25406,6 +25457,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionFeeReconciliation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LossHoldClearOutcome"];
                 };
             };
             /** @description Validation Error */

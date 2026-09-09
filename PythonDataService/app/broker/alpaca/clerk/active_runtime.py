@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -20,8 +20,12 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    guard_broker_ports,
+    guard_broker_read_port,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
     ReconciliationListener,
@@ -42,7 +46,21 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 )
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
+from app.broker.contract.ports import BrokerReadPort
 from app.utils.timestamps import now_ms_utc
+
+if TYPE_CHECKING:
+    # Type-only, and load-bearing: ``live_envelope`` and ``clerk/sqlite`` are
+    # mutually dependent (``live_envelope`` reads the loss-hold reason code out
+    # of ``sqlite.uncertainty_causes``; ``sqlite.repository`` reads
+    # ``EnvelopeReservation`` back out of ``live_envelope``). A plain import
+    # here sorts ABOVE the ``clerk.sqlite`` imports below, so it would run
+    # ``sqlite/__init__`` -- and therefore ``repository`` -- while
+    # ``live_envelope`` is still half-built, and ``EnvelopeReservation`` would
+    # not exist yet. Verified: making it a plain import fails
+    # ``import app.main`` with exactly that ImportError. The cycle, not the
+    # sort order, is the thing to fix, and it is not this slice's to fix.
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
@@ -71,6 +89,24 @@ class BackgroundSweep(Protocol):
     async def stop(self) -> None: ...
 
 
+def _ordered_taps(
+    *,
+    envelope_sync: BackgroundSweep | None,
+    hold_sync: BackgroundSweep | None,
+    sweep: BackgroundSweep | None,
+) -> tuple[BackgroundSweep, ...]:
+    """The background taps an authority owns, in start order, absent ones dropped.
+
+    The order is semantic and stated here once: the envelope sync goes first
+    because its own projection reader is a second handle on the repository
+    every other tap and the facade write through, so it is also the first to
+    be stopped. Both stop sites -- the runtime's ``close()`` and the failed
+    startup cleanup in :func:`compose_repository_runtime` -- read it from
+    here rather than each keeping their own branch order true.
+    """
+    return tuple(tap for tap in (envelope_sync, hold_sync, sweep) if tap is not None)
+
+
 @dataclass(frozen=True)
 class ClerkStartupFailure:
     """Fail-closed account impact exposed when no mutating Clerk is installed."""
@@ -94,6 +130,7 @@ class ActiveClerkRuntime:
     clerk: ActiveAlpacaClerk | None = None
     sweep: BackgroundSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
+    envelope_sync: LiveEnvelopeSync | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -107,20 +144,39 @@ class ActiveClerkRuntime:
             return None
         return self._sqlite_repository
 
-    def start_hold_sync(self) -> None:
-        """Begin sampling stream health, once both providers are installed.
+    def _taps(self) -> tuple[BackgroundSweep, ...]:
+        return _ordered_taps(
+            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep
+        )
 
-        Separate from selection because the ``trade_updates`` consumer is
-        registered after the selector returns; see the construction site.
+    def start_background_taps(self) -> None:
+        """Start the taps that need nothing from boot recovery.
+
+        The reconciliation sweep is deliberately absent: main.py starts it
+        after boot recovery so the periodic pass cannot race the boot
+        reconciliation (both call ``reconcile_once``), and binds the ADR 0050
+        revival hook before that loop runs. Separate from selection because
+        one of the stream-health sync's two providers -- the
+        ``trade_updates`` consumer -- is registered after the selector
+        returns; see the construction site. The envelope sync needs only the
+        read port and could start earlier, but sharing this seam is what
+        makes "did anything start the taps?" one question main.py answers in
+        one place.
         """
-        if self.hold_sync is not None:
-            self.hold_sync.start()
+        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None):
+            tap.start()
 
     async def close(self) -> None:
-        if self.hold_sync is not None:
-            await self.hold_sync.stop()
-        if self.sweep is not None:
-            await self.sweep.stop()
+        # Every tap is stopped before the repository it writes to is closed,
+        # in ``_ordered_taps``' declared order. ``stop()`` is terminal -- the
+        # envelope sync closes its own projection reader there -- so the
+        # handles are dropped afterwards and a second ``close()`` re-stops
+        # nothing, exactly as ``_sqlite_repository`` below.
+        for tap in self._taps():
+            await tap.stop()
+        self.envelope_sync = None
+        self.hold_sync = None
+        self.sweep = None
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
             await self.clerk.drain_effects()
         if self._sqlite_repository is not None:
@@ -178,6 +234,7 @@ class _ComposedAuthority:
     facade: SqliteAlpacaClerkFacade
     sweep: ReconciliationSweep
     hold_sync: StreamHealthHoldSync
+    envelope_sync: LiveEnvelopeSync | None
 
 
 async def compose_repository_runtime(
@@ -194,16 +251,24 @@ async def compose_repository_runtime(
     stream_health_gate: StreamHealthGate | None,
     roster_symbols: Callable[[], Sequence[str]] | None,
     sweep_listener: ReconciliationListener | None = None,
+    live_envelope: LiveEnvelopeGate | None = None,
+    envelope_read: BrokerReadPort | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
     Shared by the real-paper and shadow authorities; on any failure every
     handle opened here is closed before the exception propagates, so the
     caller only maps it to a startup refusal.
+
+    ``envelope_read`` is the port the envelope observes when it is not the
+    Clerk's own read port -- the shadow authority passes the live account's
+    read so cash and positions are the real account's while custody stays
+    synthesized.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
+    envelope_sync: LiveEnvelopeSync | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -229,6 +294,7 @@ async def compose_repository_runtime(
             # Proven above from the broker's own account read, not inferred.
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+            live_envelope=live_envelope,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -273,8 +339,28 @@ async def compose_repository_runtime(
         # startup recovery. Sampling before then reads "consumer is not
         # running" -- indistinguishable from a real outage -- and would
         # persist a false account-wide hold on every boot. main.py starts
-        # it via `start_hold_sync()` once the provider exists.
+        # it via `start_background_taps()` once the provider exists.
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
+        # ADR 0059 D4: the envelope's own fixed cadence, for the same reason
+        # the hold sync has one -- the reconcile loop's backoff reaches 300 s
+        # on failure, and a losing day must not wait that long to be judged.
+        # Unstarted here too: `start_background_taps()` is the one start seam.
+        # The envelope judges the account the money is in. Under shadow that
+        # is the live account (cash and positions), not the synthesized
+        # book, whose positions never mark to market.
+        envelope_sync = (
+            None
+            if live_envelope is None
+            else LiveEnvelopeSync(
+                repo=repository,
+                read=(
+                    guarded_read
+                    if envelope_read is None
+                    else guard_broker_read_port(envelope_read, intake=intake)
+                ),
+                envelope=live_envelope,
+            )
+        )
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,
@@ -284,12 +370,16 @@ async def compose_repository_runtime(
             facade=facade,
             sweep=sweep,
             hold_sync=hold_sync,
+            envelope_sync=envelope_sync,
         )
     except Exception:
-        if hold_sync is not None:
-            await hold_sync.stop()
-        if sweep is not None:
-            await sweep.stop()
+        # Whatever was built before the failure, stopped in the same declared
+        # order the runtime's own ``close()`` uses -- a tap left running here
+        # would outlive the repository closed on the next line.
+        for tap in _ordered_taps(
+            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep
+        ):
+            await tap.stop()
         if repository is not None:
             repository.close()
         raise

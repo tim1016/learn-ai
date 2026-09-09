@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     AtomicDecisionReceipt,
@@ -42,6 +43,9 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_decision_receipt_row,
     atomic_decision_receipt_conflicts_with_existing,
     update_decision_receipt_for_bar,
+)
+from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
+    append_envelope_reservation_row,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
@@ -517,6 +521,7 @@ class ClerkSqliteRepository(
                 row_hash=row_hash,
                 payload=payload,
                 decision_receipt=decision_receipt,
+                envelope_reservation=transition.envelope_reservation,
             )
 
             # Step 3 — FINALIZE: fsync the matching external mirror line. Writes
@@ -907,6 +912,7 @@ class ClerkSqliteRepository(
         row_hash: str,
         payload: dict,
         decision_receipt: AtomicDecisionReceipt | None = None,
+        envelope_reservation: EnvelopeReservation | None = None,
     ) -> int:
         """Insert order matches the pinned §4 transaction matrix literally:
         transition insert -> fold -> revision advance -> mirror_fence insert.
@@ -932,6 +938,15 @@ class ClerkSqliteRepository(
                     effect_operation_id=effect_operation_id,
                     order_ref=payload["order_ref"],
                     receipt=decision_receipt,
+                )
+            if envelope_reservation is not None:
+                if not payload["effect_operation_id"]:
+                    raise ValueError("a cash reservation needs the effect it reserves for")
+                append_envelope_reservation_row(
+                    self._conn,
+                    effect_operation_id=payload["effect_operation_id"],
+                    reservation=envelope_reservation,
+                    reserved_at_ms=payload["recorded_at_ms"],
                 )
             control_revision = writes.advance_control_revision(self._conn)
             writes.insert_mirror_fence_prepare_row(

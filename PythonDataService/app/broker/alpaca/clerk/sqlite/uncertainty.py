@@ -13,10 +13,12 @@ causes are account-wide and fail closed; no generic clear primitive exists.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
     UncertaintyRaisedFacts,
@@ -31,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
     HOLD_REASON_CODES,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -40,9 +43,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
-    _REASON_POLICIES,
     Capability,
     ReasonPolicy,
+    reason_policy,
 )
 
 DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
@@ -91,7 +94,7 @@ def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_i
 def _effective_identity(
     *, reason_code: str, strategy_instance_id: str | None
 ) -> tuple[ReasonPolicy | None, str, str | None]:
-    policy = _REASON_POLICIES.get(reason_code)
+    policy = reason_policy(reason_code)
     if policy is None:
         return None, "ACCOUNT_CLERK", None
     if policy.scope == "CUSTODY_SUBJECT" and strategy_instance_id is not None:
@@ -175,21 +178,28 @@ def raise_account_hold(
     reason_code: str,
     evidence_refs: list[str],
     provenance: TransitionProvenance = TransitionProvenance(),
+    cause_facts: Mapping[str, Any] | None = None,
 ) -> str:
     """Raise or refresh one account-hold episode (ADR 0048 Decision 2).
 
-    The two former ``holds`` causes now travel the ordinary uncertainty path:
+    The former ``holds`` causes now travel the ordinary uncertainty path:
     same table, same append-on-change-only gate, same atomic check-then-append
     under one write lock. What this adds over calling :func:`raise_uncertainty`
     directly is that the caller supplies only its cause and evidence — the
     operator envelope comes from :func:`account_hold_envelope`, so the two
     producers cannot drift into describing the same hold differently.
 
+    ``cause_facts`` is for a hold whose cause is not derivable from its
+    evidence lines — the ADR 0059 D4 loss hold, whose cause is the breached
+    day-P&L numbers. The envelope refuses to describe that hold without them.
+
     ``blocks_new_exposure`` and ``allows_reduction`` are deliberately *not*
     taken from the envelope: :func:`raise_uncertainty` reads them from the
     registered policy, which is the authority on what an episode permits.
     """
-    envelope = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
+    envelope = account_hold_envelope(
+        reason_code=reason_code, evidence_refs=evidence_refs, cause_facts=cause_facts
+    )
     return raise_uncertainty(
         repo,
         strategy_instance_id=None,
@@ -473,6 +483,114 @@ def _exit_stuck_allows_action(
     return cause.symbol == intent.symbol.upper()
 
 
+def _hold_defers_reduction_to_its_cause(reason_code: str) -> bool:
+    """Whether this hold leaves REDUCE to the per-reason evaluation."""
+    policy = reason_policy(reason_code)
+    return policy is not None and policy.allows_reduction
+
+
+def _position_drift_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    return _position_drift_allows_action(
+        repo, uncertainty=uncertainty, facts=facts, intent=intent
+    )
+
+
+def _exit_not_flat_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    return (
+        _exit_not_flat_allows_action(facts=facts, intent=intent)
+        and strategy_instance_id is not None
+        and intent is not None
+        and _moves_toward_zero_without_crossing(
+            repo.position(strategy_instance_id, intent.symbol.upper()),
+            intent.signed_delta,
+        )
+    )
+
+
+def _exit_stuck_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    return (
+        _exit_stuck_allows_action(facts=facts, intent=intent)
+        and strategy_instance_id is not None
+        and intent is not None
+        and _moves_toward_zero_without_crossing(
+            repo.position(strategy_instance_id, intent.symbol.upper()),
+            intent.signed_delta,
+        )
+    )
+
+
+def _no_per_symbol_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    """The proof an account-scoped reduction-admitting cause needs: none.
+
+    A cause that says nothing about any one position -- ADR 0059 D4's loss
+    hold is the first -- cannot be asked for a per-symbol proof. Registering
+    this function against a reason code is how that cause declares it has
+    nothing per-symbol to prove; a reduction-admitting code with no
+    registration is refused, not admitted. Fail-closed is unaffected: the
+    caller has already required ``policy.allows_reduction``, which only the
+    registry can grant, so an unregistered or reduction-forbidding cause
+    never reaches here.
+    """
+    return True
+
+
+def _unregistered_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    """The proof dispatch falls back to when a reason code has none registered.
+
+    An ``allows_reduction`` code with no proof here is refused, not admitted.
+    """
+    return False
+
+
+type ReductionProof = Callable[..., bool]
+# Dispatch on the reason code, once. Registering a proof here is how a cause
+# says "authorize this reduction only if my own evidence bears it out";
+# registering ``_no_per_symbol_proof`` is how an account-scoped cause
+# declares it has nothing per-symbol to prove instead. A reduction-admitting
+# code with no registration here is refused, not admitted.
+_REDUCTION_PROOFS: dict[str, ReductionProof] = {
+    POSITION_DRIFT_REASON_CODE: _position_drift_proof,
+    EXIT_NOT_FLAT_REASON_CODE: _exit_not_flat_proof,
+    EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
+}
+
+
 def decide_capability(
     repo: ClerkSqliteRepository,
     *,
@@ -513,10 +631,21 @@ def decide_capability(
                 ),
             )
 
-    holds = repo.active_holds_for_admission(
-        strategy_instance_id=strategy_instance_id,
-        subject_id=subject_id,
-    )
+    # Before ADR 0059 D4 every hold forbade both capabilities, so this check
+    # could short-circuit whatever it was asked about. The loss hold blocks
+    # entries account-wide and admits every exit, so a hold whose registered
+    # policy allows reduction falls through to the per-reason evaluation below
+    # rather than being refused here. An unregistered code has no policy and
+    # stays fail-closed.
+    holds = [
+        hold
+        for hold in repo.active_holds_for_admission(
+            strategy_instance_id=strategy_instance_id,
+            subject_id=subject_id,
+        )
+        if capability is Capability.NEW_EXPOSURE
+        or not _hold_defers_reduction_to_its_cause(hold["reason_code"])
+    ]
     if holds:
         hold = holds[0]
         return CapabilityDecision(
@@ -531,7 +660,7 @@ def decide_capability(
         subject_id=subject_id,
     ):
         reason_code = uncertainty["reason_code"]
-        policy = _REASON_POLICIES.get(reason_code)
+        policy = reason_policy(reason_code)
         facts = None if policy is None else _strict_uncertainty_facts(uncertainty, policy)
         understood = facts is not None
         blocked = (
@@ -542,48 +671,12 @@ def decide_capability(
                 and policy is not None
                 and policy.allows_reduction
                 and uncertainty["allows_reduction"]
-                and (
-                    (
-                        reason_code == POSITION_DRIFT_REASON_CODE
-                        and _position_drift_allows_action(
-                            repo,
-                            uncertainty=uncertainty,
-                            facts=facts,
-                            intent=reduction_intent,
-                        )
-                    )
-                    or (
-                        reason_code == EXIT_NOT_FLAT_REASON_CODE
-                        and _exit_not_flat_allows_action(
-                            facts=facts,
-                            intent=reduction_intent,
-                        )
-                        and strategy_instance_id is not None
-                        and reduction_intent is not None
-                        and _moves_toward_zero_without_crossing(
-                            repo.position(
-                                strategy_instance_id,
-                                reduction_intent.symbol.upper(),
-                            ),
-                            reduction_intent.signed_delta,
-                        )
-                    )
-                    or (
-                        reason_code == EXIT_STUCK_REASON_CODE
-                        and _exit_stuck_allows_action(
-                            facts=facts,
-                            intent=reduction_intent,
-                        )
-                        and strategy_instance_id is not None
-                        and reduction_intent is not None
-                        and _moves_toward_zero_without_crossing(
-                            repo.position(
-                                strategy_instance_id,
-                                reduction_intent.symbol.upper(),
-                            ),
-                            reduction_intent.signed_delta,
-                        )
-                    )
+                and _REDUCTION_PROOFS.get(reason_code, _unregistered_proof)(
+                    repo,
+                    uncertainty=uncertainty,
+                    facts=facts,
+                    intent=reduction_intent,
+                    strategy_instance_id=strategy_instance_id,
                 )
             )
         )
@@ -662,13 +755,18 @@ class RefusalClass(StrEnum):
 # CUSTODY_SUBJECT episode and every unknown future code — stays TERMINAL so
 # an unclassified refusal keeps today's fail-closed behavior (F19 fix shape:
 # ops study §9 "classify snapshot-staleness admission blocks as
-# retry-on-next-clock in the runner's error taxonomy").
-TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
-    {
-        BROKER_SNAPSHOT_STALE_REASON_CODE,
-        RECONCILIATION_INCOMPLETE_REASON_CODE,
-        "RECONCILIATION_IN_PROGRESS",
-    }
+# retry-on-next-clock in the runner's error taxonomy"). Every envelope refusal
+# joins them: ADR 0059 forbids halting or pausing a bot for an account-scoped
+# fact, so an envelope refusal retries on the next decision clock.
+TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
+    frozenset(
+        {
+            BROKER_SNAPSHOT_STALE_REASON_CODE,
+            RECONCILIATION_INCOMPLETE_REASON_CODE,
+            "RECONCILIATION_IN_PROGRESS",
+        }
+    )
+    | ENVELOPE_ADMISSION_REASON_CODES
 )
 
 

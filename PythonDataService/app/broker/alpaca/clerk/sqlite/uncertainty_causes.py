@@ -24,6 +24,10 @@ EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
 # for the old ``UNEXPLAINED_ORDER`` spelling retires with the migration.
 UNEXPLAINED_ORDER_HOLD_REASON_CODE = "UNEXPLAINED_ORDER_HOLD"
 STREAM_HEALTH_HOLD_REASON_CODE = "STREAM_HEALTH_HOLD"
+# The third hold, added after v12 by ADR 0059 D4 rather than migrated into it:
+# the day-P&L breach that fences the account against entries while leaving
+# every program free to exit.
+LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE = "LIVE_ENVELOPE_LOSS_HOLD"
 
 # The reason codes whose episodes project as ``holds`` rather than
 # ``uncertainties``. After v12 both live in one table, and this frozenset is
@@ -33,7 +37,12 @@ STREAM_HEALTH_HOLD_REASON_CODE = "STREAM_HEALTH_HOLD"
 # It lives in this leaf module so the reads and projections that partition on
 # it need not import the policy registry that imports the repository.
 HOLD_REASON_CODES: frozenset[str] = frozenset(
-    {UNEXPLAINED_ORDER_HOLD_REASON_CODE, STREAM_HEALTH_HOLD_REASON_CODE}
+    {
+        UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+        STREAM_HEALTH_HOLD_REASON_CODE,
+        # ADR 0059 D4: the third hold, and the first that admits reductions.
+        LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    }
 )
 # Rendered once for the ``IN (...)`` half of every partitioning query, so the
 # SQL and the frozenset can never name different code sets.
@@ -50,6 +59,10 @@ _HOLD_REASON_CODE_NORMALISATION: dict[str, str] = {
     "UNEXPLAINED_ORDER": UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE: UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE: STREAM_HEALTH_HOLD_REASON_CODE,
+    # ADR 0059 D4 postdates v12, so no pre-v12 file or mirror can contain it.
+    # It is listed anyway so this table covers every registered hold code and
+    # a caller cannot get a ``KeyError`` for a code ``HOLD_REASON_CODES`` names.
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 }
 
 
@@ -316,6 +329,54 @@ class StreamHealthHoldCause:
         return cls(channels=_ordered_evidence_strings(value, field_name="channels"))
 
 
+@dataclass(frozen=True)
+class LossHoldCause:
+    """The day-P&L breach that put the account in loss hold (ADR 0059 D4).
+
+    Stamped once at the raise; the sync never refreshes a standing hold, so
+    the stored cause is the breach the operator has to look at, not the
+    latest tick.
+    """
+
+    day_start_ms: int
+    day_pnl_usd: float
+    loss_limit_usd: float
+    last_equity_usd: float
+    observed_at_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "day_start_ms": self.day_start_ms,
+            "day_pnl_usd": self.day_pnl_usd,
+            "loss_limit_usd": self.loss_limit_usd,
+            "last_equity_usd": self.last_equity_usd,
+            "observed_at_ms": self.observed_at_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> LossHoldCause:
+        if not isinstance(value, dict):
+            raise ValueError("loss hold cause must be an object")
+        # Exact keys, like every other structured cause here. This is the one
+        # hold whose policy authorizes reductions, so an unrecognized extra
+        # field has to fail closed rather than ride along as a familiar cause.
+        _require_exact_keys(
+            value,
+            {"day_start_ms", "day_pnl_usd", "loss_limit_usd", "last_equity_usd", "observed_at_ms"},
+        )
+        for field_name in ("day_start_ms", "observed_at_ms"):
+            stamp = value[field_name]
+            if not isinstance(stamp, int) or isinstance(stamp, bool) or stamp < 0:
+                raise ValueError(f"loss hold cause {field_name} must be a non-negative int64 ms UTC")
+        return cls(
+            day_start_ms=value["day_start_ms"],
+            day_pnl_usd=_finite_number(value["day_pnl_usd"], field_name="day_pnl_usd"),
+            loss_limit_usd=_finite_number(value["loss_limit_usd"], field_name="loss_limit_usd"),
+            last_equity_usd=_finite_number(value["last_equity_usd"], field_name="last_equity_usd"),
+            observed_at_ms=value["observed_at_ms"],
+        )
+
+
 def _ordered_evidence_strings(value: Any, *, field_name: str) -> tuple[str, ...]:
     """Decode one uniquely-sorted list of non-empty strings.
 
@@ -363,6 +424,7 @@ __all__ = [
     "HOLD_REASON_CODES",
     "HOLD_REASON_CODE_SQL_PARAMS",
     "HOLD_REASON_CODE_SQL_PLACEHOLDERS",
+    "LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
@@ -371,6 +433,7 @@ __all__ = [
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "ExitStuckCause",
+    "LossHoldCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",
     "PositionDriftObservation",

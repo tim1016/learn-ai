@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -215,6 +216,7 @@ class SqliteAlpacaClerkFacade:
         authority_kind: Literal["sqlite", "synthetic", "shadow"] = "sqlite",
         account_mode: Literal["paper", "live"],
         program_leg_policy: ProgramLegPolicy | None = None,
+        live_envelope: LiveEnvelopeGate | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -239,6 +241,10 @@ class SqliteAlpacaClerkFacade:
         # from. Passed in, never read off the ports here — the composition root
         # owns which capabilities and which operator allowances apply.
         self._program_leg_policy = program_leg_policy or ProgramLegPolicy.regular_only()
+        # ADR 0059 D4: the risk envelope every live-world ENTER is bounded by,
+        # or ``None`` where no envelope is configured (paper, synthetic).
+        # Composed by the authority selector, never built here.
+        self._live_envelope = live_envelope
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -268,6 +274,11 @@ class SqliteAlpacaClerkFacade:
     def repository(self) -> ClerkSqliteRepository:
         """Read-model integration seam; strategy callers never receive this."""
         return self._repo
+
+    @property
+    def live_envelope(self) -> LiveEnvelopeGate | None:
+        """The envelope this authority admits ENTERs against, if it has one."""
+        return self._live_envelope
 
     @property
     def intake(self) -> ReentrantAsyncLock:
@@ -829,6 +840,18 @@ class SqliteAlpacaClerkFacade:
                         lifecycle_run_id=run_id,
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
+                        envelope=self._live_envelope,
+                        # The bar's close is a ``Decimal``; the envelope's money
+                        # is float end to end (``BrokerAccountSnapshot.cash``,
+                        # the REAL columns the reservation is stored in, and
+                        # ``cash_bound_admits``' own epsilon). Converting here
+                        # keeps the boundary at one line instead of leaking a
+                        # Decimal into arithmetic that would silently promote.
+                        reference_price=(
+                            None
+                            if retained_source_bar is None
+                            else float(retained_source_bar.close)
+                        ),
                     )
                 except AdmissionBlockedError as exc:
                     return rejected(

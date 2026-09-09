@@ -10,6 +10,7 @@
     "EXITED_UNVERIFIED",
     "FILL",
     "INTENT",
+    "LIVE_ENVELOPE_LOSS_HOLD",
     "NO_HOLD",
     "OFF_DUTY",
     "ON_DUTY",
@@ -74,6 +75,10 @@
     "INTENT": {
       "label": "Intent",
       "explanation": "The bot recorded an order intent before touching the broker."
+    },
+    "LIVE_ENVELOPE_LOSS_HOLD": {
+      "label": "Loss hold",
+      "explanation": "Today's loss reached the account's limit. New entries are refused account-wide until an operator clears the hold; exits still run."
     },
     "NO_HOLD": {
       "label": "No hold",

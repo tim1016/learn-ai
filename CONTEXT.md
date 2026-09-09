@@ -499,10 +499,10 @@ so they survive a broker change.
   difference between the two is a refusal. EXIT is never subject to it;
   no symbol, session, or per-order size is restricted by it. _Avoid_: risk limits, guardrails (ADR
   0021's word for a different thing), safety rails
-- **Cash bound** — the envelope rule that gross long exposure after an ENTER
-  may not exceed broker-observed cash. It reads cash, not buying power, so it
-  is the same on a cash account and a margin account. _Avoid_: no margin,
-  1× leverage, cash-only
+- **Cash bound** — the envelope rule that a new ENTER's notional plus every
+  working ENTER's unfilled notional may not exceed broker-observed cash. It
+  reads cash, not buying power, so it is the same on a cash account and a
+  margin account. _Avoid_: no margin, 1× leverage, cash-only
 - **Envelope refusal** — the per-order refusal of one ENTER that would breach
   the cash bound. No other state changes.
 - **Loss hold** — the account-wide state entered when day P&L breaches the
@@ -510,7 +510,9 @@ so they survive a broker change.
   EXIT still runs until a guarded operator action clears it. It does not clear
   at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
 - **Day P&L** — Clerk-projected realized session P&L plus broker-observed
-  unrealized P&L. It is unknown, not zero, when marks are incomplete.
+  unrealized P&L. It is unknown, not zero, when an external order was seen
+  today, when the broker reports no previous-close equity, or when marks are
+  incomplete.
 - **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
   equities. Fees the broker charged are the truth; the schedule predicts them.
   _Avoid_: commission, trading fee, broker fee

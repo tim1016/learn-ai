@@ -59,7 +59,7 @@ def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_twenty_one_pinned_tables() -> None:
+def test_schema_creates_all_twenty_two_pinned_tables() -> None:
     """``holds`` is absent on purpose: v12 retired the table (ADR 0048 D2).
 
     Its name survives as a read-only view over ``uncertainties``, asserted
@@ -86,6 +86,7 @@ def test_schema_creates_all_twenty_one_pinned_tables() -> None:
         "external_orders",
         "bot_config",
         "decision_receipts",
+        "envelope_reservations",
         "positions",
         "uncertainties",
         "manual_order_tickets",

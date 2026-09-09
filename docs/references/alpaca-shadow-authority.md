@@ -243,6 +243,14 @@ the twin reconciliation has no gating divergence. The other five outcomes —
 `sweep_not_clean`, `sweep_opened_late`, `run_not_covering`, `twin_diverged`,
 `not_evaluable` — are named states, not silence.
 
+**The shadow authority also rehearses the live risk envelope (ADR 0059 D4,
+slice 5)**, on the live account's real cash — net of what its own synthesized
+fills would have spent, so the reserved amount never double-counts a fill the
+paper twin also made. An envelope refusal on the shadow side is therefore read
+the same way any other one-sided decision is: it is a twin decision mismatch,
+so that day does not count. See
+[alpaca-live-envelope](alpaca-live-envelope.md).
+
 ## Receipt
 
 `ShadowReceipt` carries `schema_version`, `live_account_id`,

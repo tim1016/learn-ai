@@ -30,12 +30,13 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
     POSITION_SUBJECT_COMPATIBILITY_DDL,
+    SCHEMA_V13_STATEMENTS,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -666,6 +667,16 @@ SCHEMA_V12_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
     for statement in _V11_TO_V12_STATEMENTS
 )
+
+# v13 adds the durable cash reservation one accepted ENTER claims until its
+# fills are observed (ADR 0059 D4), indexes the ``external_orders`` column the
+# day-P&L rule filters on every tick, and re-publishes the ``holds`` view for
+# the reason the fragment module states. Same statements as
+# ``SCHEMA_MIGRATIONS[12]``.
+SCHEMA_V13_DDL = "\n".join(
+    statement if statement.endswith(";") or "\n" in statement else f"{statement};"
+    for statement in SCHEMA_V13_STATEMENTS
+)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -674,6 +685,8 @@ SCHEMA_DDL = (
     + SCHEMA_V11_DDL
     + "\n\n"
     + SCHEMA_V12_DDL
+    + "\n\n"
+    + SCHEMA_V13_DDL
 ).rstrip("\n")
 
 
@@ -886,6 +899,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # statements run — the envelope each migrated row needs is authored in
     # Python, not restatable as SQL without duplicating operator copy.
     11: _V11_TO_V12_STATEMENTS,
+    # v12 -> v13: the cash an accepted ENTER claims becomes durable (ADR 0059
+    # D4). Same statements as the fresh v13 block above.
+    12: SCHEMA_V13_STATEMENTS,
 }
 
 
