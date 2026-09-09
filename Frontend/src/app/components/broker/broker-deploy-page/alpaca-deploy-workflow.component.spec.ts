@@ -16,6 +16,7 @@ import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.componen
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
+  LIVE_DEPLOY_VIEW,
   SHADOW_DEPLOY_VIEW,
   SMA_OVERRIDE_STRATEGY,
   VALIDATION_STRATEGY,
@@ -605,6 +606,28 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).execution_mode)
       .toBe('shadow');
+  });
+
+  it('on a live view the Live mode is offered, selected by default, and submitted', async () => {
+    const service = mockService(RECEIPT, LIVE_DEPLOY_VIEW);
+    await renderWorkflow(service);
+
+    expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    expect(live.checked).toBe(true);
+    expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/paper account/i);
+    expect(document.body.textContent).not.toMatch(/shadow/i);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-live-01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy live bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.execution_mode).toBe('live');
   });
 
   it('still requires the durable override for an evidence-only Shadow deploy', async () => {

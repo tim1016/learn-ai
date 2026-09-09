@@ -8,15 +8,13 @@ import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.componen
 /**
  * The one broker world a deploy against this account can use.
  *
- * A paper account deploys Paper; a live account is held by the Shadow
- * Account Authority and deploys Shadow (ADR 0059 D2). One closed map, one
- * author: this chrome is the drawer's own copy, and the alternative — a
- * literal `paper` above a Shadow form on a real-money account — is exactly
- * the false safety signal slice 4 exists to remove.
+ * A paper account deploys Paper. A live account is shadowed or
+ * live-custodied; the drawer does not know which until the deploy view
+ * says, so it names no world rather than a wrong one (ADR 0059 D2/D11).
  */
-const DEPLOY_WORLD_BY_ACCOUNT_MODE: Readonly<Record<'paper' | 'live', 'paper' | 'shadow'>> = {
+const DEPLOY_WORLD_BY_ACCOUNT_MODE: Readonly<Record<'paper' | 'live', 'paper' | null>> = {
   paper: 'paper',
-  live: 'shadow',
+  live: null,
 };
 
 /**
@@ -62,8 +60,8 @@ export class AlpacaDeployDrawerComponent {
     () => this.deskAccountData?.account.error() !== undefined || this.account.error() !== undefined,
   );
 
-  /** `null` while no account read has answered: the chrome then names no world. */
-  private readonly brokerWorld = computed<'paper' | 'shadow' | null>(() => {
+  /** `null` while no account read has answered, or the account is live: the chrome then names no world. */
+  private readonly brokerWorld = computed<'paper' | null>(() => {
     const shared = this.deskAccountData?.account;
     if (shared?.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[shared.value().account_mode];
     if (this.account.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[this.account.value().account_mode];

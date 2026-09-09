@@ -48,11 +48,12 @@ export class DeployPaperAccessComponent {
   /**
    * The broker world this account's grant is worded for: `Paper` on a paper
    * account, `Shadow` on a live one held by the Shadow Account Authority
-   * (ADR 0059 D2). The backend enum stays `paper_access_state` — that is the
-   * grant's identity, not prose — but the prose must not call a real-money
-   * account's grant "Paper".
+   * (ADR 0059 D2). `Live` on one custodied by its live authority. The
+   * backend enum stays `paper_access_state` — that is the grant's identity,
+   * not prose — but the prose must not call a real-money account's grant
+   * "Paper".
    */
-  readonly modeLabel = input.required<"Paper" | "Shadow">();
+  readonly modeLabel = input.required<"Paper" | "Shadow" | "Live">();
   readonly accessChanged = output();
 
   private readonly panelService = inject(BrokerV2PanelService);

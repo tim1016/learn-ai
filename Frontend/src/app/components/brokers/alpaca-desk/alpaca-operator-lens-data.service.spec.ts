@@ -82,6 +82,27 @@ describe('AlpacaOperatorLensDataService', () => {
     await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('shadow:9LIVE0001'));
   });
 
+  it('reads the SQLite projection for a real_live authority too', async () => {
+    const getClerkStatus = vi
+      .fn()
+      .mockResolvedValue(
+        clerkStatus({ account_id: '9LIVE0001', authority_kind: 'real_live' }),
+      );
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(projection());
+
+    TestBed.configureTestingModule({
+      providers: [
+        AlpacaOperatorLensDataService,
+        { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
+      ],
+    });
+    const service = TestBed.inject(AlpacaOperatorLensDataService);
+
+    service.loadOnce();
+
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('9LIVE0001'));
+  });
+
   it('never fetches before loadOnce is called', async () => {
     const getClerkStatus = vi.fn().mockResolvedValue(clerkStatus());
     const getSqliteClerkProjection = vi.fn().mockResolvedValue(projection());

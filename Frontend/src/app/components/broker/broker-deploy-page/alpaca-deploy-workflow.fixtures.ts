@@ -192,3 +192,36 @@ export const SHADOW_DEPLOY_VIEW: DeployBotView = {
   ],
 };
 
+/** The real-live authority's view: Dry Run and Live, and nothing that lies (ADR 0059 D11, slice 7). */
+export const LIVE_DEPLOY_VIEW: DeployBotView = {
+  ...SHADOW_DEPLOY_VIEW,
+  account_label: 'Alpaca live · 9LIVE0001',
+  // Verbatim from the backend's own live-world copy table
+  // (`paper_deploy_service._deploy_view_copy`, `custody_world == "real_live"`).
+  // SHADOW_DEPLOY_VIEW's eligibility is shadow-worded; spreading it alone
+  // would leave "shadow" in a live account's own deploy view.
+  eligibility: {
+    eligible: true,
+    reason_code: 'ALPACA_PAPER_DEPLOY_READY',
+    headline: 'This Alpaca live account is eligible for a Clerk-governed live deployment.',
+    explanation:
+      'The operator may choose Clerk-governed live execution — real-money submission for an '
+      + 'armed instance only; every ENTER of an unarmed instance is refused — or a '
+      + 'zero-broker-write Dry Run before launch.',
+    next_action: 'Complete the deployment ticket, review the summary, then deploy the bot.',
+  },
+  strategies: SHADOW_DEPLOY_VIEW.strategies.map((strategy) => ({
+    ...strategy,
+    admissible_modes: strategy.admissible_modes.map((mode) => (mode === 'shadow' ? 'live' : mode)),
+  })),
+  execution_modes: [
+    DRY_RUN_EXECUTION_MODE,
+    {
+      mode: 'live',
+      label: 'Live',
+      availability: 'available',
+      explanation: 'Real-money submission through the live Clerk for an armed instance only.',
+    },
+  ],
+};
+

@@ -63,7 +63,7 @@ interface AlpacaDeployTicket {
   symbol: string;
   sizingPreset: 'safe_canary' | 'custom';
   quantity: number;
-  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper' | 'shadow'>;
+  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper' | 'shadow' | 'live'>;
   allowCarryover: boolean;
   parameters: Record<string, unknown>;
   overrideAcknowledged: boolean;
@@ -251,19 +251,25 @@ export class AlpacaDeployWorkflowComponent {
   /**
    * Which single broker-contacting mode this account's view offers: Paper on
    * a paper account, Shadow on a live one held by the Shadow Account
-   * Authority (ADR 0059 D2). Never both — an account has one broker world,
-   * and the view's own `execution_modes` is the sole authority on which.
+   * Authority, Live on one custodied by its live authority (ADR 0059 D2/D11).
+   * Never two — the view's own `execution_modes` is the sole authority, and
+   * there is no `'paper'` fallback once a live-world card is offered.
    */
-  protected readonly brokerMode = computed<'paper' | 'shadow'>(() =>
-    this.currentView()?.execution_modes.some(
-      (mode) => mode.mode === 'shadow' && mode.availability === 'available',
-    ) ? 'shadow' : 'paper',
-  );
+  protected readonly brokerMode = computed<'paper' | 'shadow' | 'live'>(() => {
+    const offered = (mode: 'shadow' | 'live') =>
+      this.currentView()?.execution_modes.some(
+        (candidate) => candidate.mode === mode && candidate.availability === 'available',
+      ) ?? false;
+    if (offered('live')) return 'live';
+    if (offered('shadow')) return 'shadow';
+    return 'paper';
+  });
 
   /** The account's one broker world, as the access-grant copy words it. */
-  protected readonly brokerModeLabel = computed<'Paper' | 'Shadow'>(
-    () => (this.brokerMode() === 'shadow' ? 'Shadow' : 'Paper'),
-  );
+  protected readonly brokerModeLabel = computed<'Paper' | 'Shadow' | 'Live'>(() => {
+    const mode = this.brokerMode();
+    return mode === 'live' ? 'Live' : mode === 'shadow' ? 'Shadow' : 'Paper';
+  });
 
   /**
    * True when the ticket's mode contacts the broker. Dry Run is the only
@@ -449,12 +455,11 @@ export class AlpacaDeployWorkflowComponent {
       // consequence of the view, and stays idempotent: once the mode is one
       // the view offers, the guard below makes every later pass a no-op.
       // `brokerMode()` answers 'paper' whenever no view is loaded, so a
-      // 'shadow' answer already implies one.
-      if (this.brokerMode() === 'shadow') {
+      // 'shadow' or 'live' answer already implies one.
+      const mode = this.brokerMode();
+      if (mode !== 'paper') {
         this.ticket.update((ticket) =>
-          ticket.executionMode === 'paper'
-            ? { ...ticket, executionMode: 'shadow' }
-            : ticket,
+          ticket.executionMode === 'paper' ? { ...ticket, executionMode: mode } : ticket,
         );
       }
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
@@ -591,7 +596,7 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setExecutionMode(mode: DeployExecutionMode['mode']): void {
-    if (mode !== 'dry_run' && mode !== 'paper' && mode !== 'shadow') return;
+    if (mode !== 'dry_run' && mode !== 'paper' && mode !== 'shadow' && mode !== 'live') return;
     const option = this.currentView()?.execution_modes.find(
       (candidate) => candidate.mode === mode,
     );
