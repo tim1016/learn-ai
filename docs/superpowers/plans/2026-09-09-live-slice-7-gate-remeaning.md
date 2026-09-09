@@ -3845,7 +3845,7 @@ admits. EXITs keep running; the operator's reduce-only actions
 ## The thirteen gates, re-meant
 
 See the table in design R8: `manual_order_runtime` keeps `LIVE_ACCOUNT_REFUSED`;
-`historical_execution_recovery` admits live; `cutover` admits `paper | live`;
+`historical_execution_recovery` still refuses `LIVE_ACCOUNT_REFUSED` — the one paper-only gate this slice does not re-meant, a named follow-up; `cutover` admits `paper | live`;
 `dev_reset` still refuses non-paper on the configured mode; `panel_deploy`
 offers `live` on the live world; the `run_admission` corpus gate is unchanged
 and the arming fact sits beside it; `CustodyWorld` gains `real_live` and every
