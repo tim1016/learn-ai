@@ -57,7 +57,11 @@ LIVE_SHADOW_INCOMPLETE = "LIVE_SHADOW_INCOMPLETE"
 # Slice 7 (ADR 0059 D11): the admission-time codes. ``REQUIRED`` is an instance
 # the ledger has never named; ``UNOBSERVED`` is a gate with no fresh snapshot;
 # ``LEDGER_INVALID`` is a snapshot the last refresh could not verify. The
-# fourth is ADR 0059 D8's own name for the pause a lost arming causes.
+# fourth is ADR 0059 D8's own name for the *transition* a lost arming makes:
+# it is the sync's once-per-transition log action, never a receipt code — the
+# refused ENTER carries the instance's own arming code (owner decision
+# 2026-09-09: the halt is the refusal, the warning and the verdict; no
+# ``desired_state`` is written).
 LIVE_ARMING_REQUIRED = "LIVE_ARMING_REQUIRED"
 LIVE_ARMING_UNOBSERVED = "LIVE_ARMING_UNOBSERVED"
 LIVE_ARMING_LEDGER_INVALID = "LIVE_ARMING_LEDGER_INVALID"
@@ -91,8 +95,9 @@ ARMING_REASON_CODES: frozenset[str] = frozenset(
 
 # What ``sqlite/arming_admission.require_arming_admission`` may refuse with —
 # the three codes above plus the per-instance states ``arming_status`` names.
-# ``uncertainty.py`` classifies all of them transient: the reaction to a lost
-# arming is the tick rule's pause, never a fatal halt from inside admission.
+# ``uncertainty.py`` classifies all of them transient: a lost arming refuses
+# the next ENTER and retries on the next decision clock — it never pauses the
+# instance and never halts it from inside admission.
 ARMING_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ARMING_REQUIRED,

@@ -57,6 +57,7 @@ from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEn
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid, ShadowActivationStore
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.config import AlpacaSettings
+from app.schemas.account_authority import CustodyWorld
 from app.services.bot_binding_repository import live_state_binding_repository
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -135,14 +136,32 @@ def live_account_id_for(artifacts_root: Path) -> str:
     return live_account_id_for_shadow_account(shadow_ids[0])
 
 
-def instance_seal_hashes(*, live_account_id: str, live_state_root: Path) -> dict[str, InstanceSeal]:
+def instance_seal_hashes(
+    *,
+    live_account_id: str,
+    live_state_root: Path,
+    custody_world: CustodyWorld | None = None,
+) -> dict[str, InstanceSeal]:
     """Every sealed Alpaca instance bound to this live account, by instance id.
 
     A binding with no v2 program seal is skipped rather than refused: it is a
     legacy record that cannot be armed, and its presence must not stop a sealed
     sibling from arming.
+
+    ``custody_world="real_live"`` narrows the admissible custody ids to the
+    live id alone. After graduation the rehearsal's ``shadow:``-sealed
+    bindings stay on disk (design R15) and their slice-6 arming records stay
+    in the same account-rooted ledger, so a reader that counts them would
+    report instances the live authority does not custody -- and refuses on
+    every Start -- as armed under it. ``None`` (the ceremony, the operator
+    CLI) keeps both ids: arming a shadow-sealed instance under a graduated
+    account grants nothing and is refused at Start anyway.
     """
-    admissible = custody_account_ids_for(live_account_id)
+    admissible = (
+        frozenset({live_account_id})
+        if custody_world == "real_live"
+        else custody_account_ids_for(live_account_id)
+    )
     seals: dict[str, InstanceSeal] = {}
     for binding in live_state_binding_repository(live_state_root).list_for_broker("alpaca"):
         seal = binding.sealed_program
@@ -440,6 +459,7 @@ def account_arming(
     configured_envelope: LiveEnvelopeValues,
     now_ms: int,
     strategy_instance_ids: Sequence[str] | None = None,
+    custody_world: CustodyWorld | None = None,
 ) -> AccountArming:
     """This account's arming evidence, reading the ledger file exactly once.
 
@@ -453,12 +473,20 @@ def account_arming(
     answer for an instance that was never armed, so a ``status`` on a
     never-armed account touches no bindings root at all -- which on a fresh
     installation may not exist yet.
+
+    ``custody_world`` passes straight through to :func:`instance_seal_hashes`:
+    a caller that knows it reads the ``real_live`` world counts only
+    live-sealed instances.
     """
     records = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).records()
     known = instance_ids(records)
     wanted = known if strategy_instance_ids is None else tuple(strategy_instance_ids)
     seals = (
-        instance_seal_hashes(live_account_id=live_account_id, live_state_root=live_state_root)
+        instance_seal_hashes(
+            live_account_id=live_account_id,
+            live_state_root=live_state_root,
+            custody_world=custody_world,
+        )
         if any(sid in known for sid in wanted)
         else {}
     )

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import pytest
 
 from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_LAPSED,
     LIVE_ARMING_REVOKED,
     LIVE_MODE_DISAGREEMENT,
     LIVE_VERDICT_TRANSITION_HALT,
@@ -44,7 +45,7 @@ def _halts(caplog: pytest.LogCaptureFixture) -> list:
     return [r for r in caplog.records if getattr(r, "action", None) == "live_verdict_transition_halt"]
 
 
-def _record() -> LiveArmingRecord:
+def _record(*, armed_at_ms: int = T0 - 60_000) -> LiveArmingRecord:
     return LiveArmingRecord.create(
         live_account_id=LIVE_ACCT,
         strategy_instance_id=SID,
@@ -52,7 +53,7 @@ def _record() -> LiveArmingRecord:
         configured_signal_hash="b" * 64,
         shadow_receipt_sha256="e" * 64,
         envelope=TEST_ENVELOPE_VALUES,
-        armed_at_ms=T0 - 60_000,
+        armed_at_ms=armed_at_ms,
         max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
     )
 
@@ -147,6 +148,80 @@ async def test_an_instance_leaving_armed_is_warned_about_once_with_its_code(
     assert halts[0].strategy_instance_id == SID
     assert halts[0].live_account_id == LIVE_ACCT
     assert LIVE_VERDICT_TRANSITION_HALT in halts[0].getMessage()
+
+
+async def test_a_ledger_that_verifies_again_restores_the_gate(
+    envelope_repo: ClerkSqliteRepository, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The invalidation is a fault, not a latch: the next readable tick publishes again."""
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    sound = ledger.path.read_text(encoding="utf-8")
+    ledger.path.write_text(sound.replace('"kind":"armed"', '"kind":"armed ', 1), encoding="utf-8")
+    gate = ArmingGate()
+    sync = _sync(envelope_repo, ledger, gate, {SID: SEAL})
+
+    with caplog.at_level("ERROR"):
+        await sync.tick()
+        assert gate.invalid_reason_code == "LIVE_ARMING_LEDGER_INVALID"
+        ledger.path.write_text(sound, encoding="utf-8")
+        await sync.tick()
+
+    assert gate.invalid_reason_code is None
+    snapshot = gate.fresh_snapshot(T0)
+    assert snapshot is not None
+    assert snapshot.status_for(SID, now_ms=T0).state == "armed"
+    assert sync.envelope.sealed == TEST_ENVELOPE_VALUES
+
+
+async def test_a_second_loss_of_arming_is_warned_about_again(
+    envelope_repo: ClerkSqliteRepository, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Once *per transition*, not once per process: re-arming rearms the warning too."""
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    gate = ArmingGate()
+    sync = _sync(envelope_repo, ledger, gate, {SID: SEAL})
+
+    with caplog.at_level("WARNING"):
+        await sync.tick()
+        ledger.revoke_latest(SID, disarmed_at_ms=T0)
+        await sync.tick()
+        assert len(_halts(caplog)) == 1
+        ledger.append(_record(armed_at_ms=T0 - 30_000))
+        await sync.tick()
+        assert len(_halts(caplog)) == 1
+        ledger.revoke_latest(SID, disarmed_at_ms=T0)
+        await sync.tick()
+
+    halts = _halts(caplog)
+    assert len(halts) == 2
+    assert [record.reason_code for record in halts] == [LIVE_ARMING_REVOKED, LIVE_ARMING_REVOKED]
+
+
+async def test_the_first_tick_after_boot_warns_about_nothing_already_lapsed(
+    envelope_repo: ClerkSqliteRepository, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A transition is a change this process observed, never the state it booted into.
+
+    An instance whose sessions were spent before the sync existed never left
+    the armed set, so warning about it would make every restart of a
+    long-lapsed account look like a fresh halt.
+    """
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    # Armed 400 calendar days ago: far past the 20-session grant, so the very
+    # first snapshot this process publishes already reads ``lapsed``.
+    ledger.append(_record(armed_at_ms=T0 - 400 * 86_400_000))
+    gate = ArmingGate()
+    sync = _sync(envelope_repo, ledger, gate, {SID: SEAL})
+
+    with caplog.at_level("WARNING"):
+        await sync.tick()
+
+    snapshot = gate.fresh_snapshot(T0)
+    assert snapshot is not None
+    assert snapshot.status_for(SID, now_ms=T0).reason_code == LIVE_ARMING_LAPSED
+    assert _halts(caplog) == []
 
 
 async def test_a_mid_session_mode_disagreement_invalidates_the_gate_until_a_read_agrees_again(

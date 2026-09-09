@@ -999,6 +999,47 @@ async def test_boot_projects_a_binding_the_installed_authority_still_custodies(
     assert lifecycle["duty_outcome"]["reason_code"] == "INTERRUPTED_BY_RESTART"
 
 
+async def test_a_native_bindings_genuine_identity_refusal_still_aborts_the_sweep(
+    tmp_path: Path,
+) -> None:
+    """Corruption is not foreignness (R15): a native binding's real refusal still raises.
+
+    The R15 skip judges *custody*, not identity. A binding the installed
+    authority does custody, whose broker identity is nonetheless refused,
+    must abort candidate enumeration exactly as it did before the skip
+    existed -- otherwise the foreign path becomes a way to boot past a
+    corrupt binding.
+    """
+    feed = _FakeFeed([], mode="hold")
+    proof = _custody_proof(exposure={})
+    registry = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+    registry._bindings.record_launch(
+        BrokerBotBinding(
+            strategy_instance_id=_SID,
+            broker="ibkr",
+            symbol="SPY",
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id="ibkr-run",
+            created_at_ms=_T0,
+            # Native: the installed authority custodies exactly this account,
+            # so nothing here is foreign.
+            sealed_account_id=proof.account_id,
+        ),
+        launch_reason="deploy",
+    )
+    clerk = _CustodyClerk(proof)
+    clerk.active_runs[_SID] = "ibkr-run"
+    set_alpaca_clerk(clerk)
+
+    with pytest.raises(BootAuthorityPreparationError):
+        await registry.run_boot_recovery()
+
+
 async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path) -> None:
     """A ``sim:`` binding is excluded by where it routes, not by how its id reads.
 

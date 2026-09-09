@@ -27,7 +27,9 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import (
     ActiveClerkRuntime,
+    compose_failure_refusal,
     compose_repository_runtime,
+    developer_reset_refusal,
     unavailable_runtime,
 )
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
@@ -42,9 +44,6 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
     ActivationStore,
-)
-from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
-    DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -80,7 +79,12 @@ def _instance_seals_reader(
         return {
             sid: seal.seal_hash
             for sid, seal in instance_seal_hashes(
-                live_account_id=live_account_id, live_state_root=live_state_root()
+                live_account_id=live_account_id,
+                live_state_root=live_state_root(),
+                # This authority custodies the live id itself, so the
+                # rehearsal's ``shadow:``-sealed bindings are foreign to it
+                # (design R15) and seal nothing the gate may admit.
+                custody_world="real_live",
             ).items()
         }
 
@@ -141,23 +145,15 @@ async def select_live_clerk_runtime(
         return unavailable_runtime(
             "REAL_PORT_REJECTED_SYNTHETIC_ACCOUNT", account_id=account.account_id, recovery=str(exc)
         )
-    alpaca_accounts_root = artifacts_root / "accounts" / "alpaca"
-    if DeveloperCleanSlateResetRegistry(alpaca_accounts_root).authorizes_reinitialize(
+    reset_refusal = developer_reset_refusal(
         account_id=account.account_id,
-        prior_authority_generation=activation.authority_generation,
         artifacts_root=artifacts_root,
-    ):
-        return unavailable_runtime(
-            "DEVELOPER_RESET_REACTIVATION_REQUIRED",
-            account_id=account.account_id,
-            recovery=(
-                "This activated authority was moved aside by a developer clean-slate reset. "
-                "Regenerate it, then complete a new live cutover before startup."
-            ),
-            activation_detected=True,
-            authority_generation=activation.authority_generation,
-            db_identity_token=activation.db_identity_token,
-        )
+        authority_generation=activation.authority_generation,
+        db_identity_token=activation.db_identity_token,
+        cutover_noun="live",
+    )
+    if reset_refusal is not None:
+        return reset_refusal
 
     def _verify_live_activation(meta: ControlMetaSnapshot) -> None:
         if (
@@ -196,15 +192,9 @@ async def select_live_clerk_runtime(
             extra={"action": "live_active_clerk_startup_failed", "account_id": account.account_id},
             exc_info=True,
         )
-        return unavailable_runtime(
-            (
-                "ACTIVATION_RECORD_INVALID"
-                if isinstance(exc, ActivationRecordInvalid)
-                else "SQLITE_CLERK_STARTUP_FAILED"
-            ),
+        return compose_failure_refusal(
+            exc,
             account_id=account.account_id,
-            recovery=str(exc),
-            activation_detected=True,
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,
         )

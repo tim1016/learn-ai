@@ -20,9 +20,13 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
     guard_broker_read_port,
+)
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
@@ -429,6 +433,72 @@ def unavailable_runtime(
             authority_generation=authority_generation,
             db_identity_token=db_identity_token,
         ),
+    )
+
+
+def developer_reset_refusal(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    authority_generation: int,
+    db_identity_token: str,
+    cutover_noun: Literal["paper", "live"],
+) -> ActiveClerkRuntime | None:
+    """Refuse an activation a developer clean-slate reset moved aside, or admit it.
+
+    ``None`` means the registry authorizes nothing against this generation and
+    the boot may continue. Both sides of the live fork ask the same question of
+    the same registry and answer with the same sentence; only the cutover the
+    operator must redo differs, so ``cutover_noun`` is the whole difference and
+    the guard is written once (ADR 0059 D10).
+    """
+    authorized = DeveloperCleanSlateResetRegistry(
+        artifacts_root / "accounts" / "alpaca"
+    ).authorizes_reinitialize(
+        account_id=account_id,
+        prior_authority_generation=authority_generation,
+        artifacts_root=artifacts_root,
+    )
+    if not authorized:
+        return None
+    return unavailable_runtime(
+        "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+        account_id=account_id,
+        recovery=(
+            "This activated authority was moved aside by a developer clean-slate reset. "
+            f"Regenerate it, then complete a new {cutover_noun} cutover before startup."
+        ),
+        activation_detected=True,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
+    )
+
+
+def compose_failure_refusal(
+    exc: BaseException,
+    *,
+    account_id: str,
+    authority_generation: int,
+    db_identity_token: str,
+) -> ActiveClerkRuntime:
+    """The one refusal for a composition that raised, on either side of the live fork.
+
+    An ``ActivationRecordInvalid`` is the cutover record's fault and names
+    itself; every other failure is the startup's. Both sides carried the same
+    six-keyword call with the same ternary, which is how the two sentences
+    would have drifted.
+    """
+    return unavailable_runtime(
+        (
+            "ACTIVATION_RECORD_INVALID"
+            if isinstance(exc, ActivationRecordInvalid)
+            else "SQLITE_CLERK_STARTUP_FAILED"
+        ),
+        account_id=account_id,
+        recovery=str(exc),
+        activation_detected=True,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
     )
 
 

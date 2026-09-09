@@ -234,10 +234,12 @@ class LiveArmingLedger:
     def sealed_envelope(self) -> LiveEnvelopeValues | None:
         """The envelope the account's newest arming record sealed (R10), in one read.
 
-        The envelope-sync tick wants only this one fact, so it stays a method;
-        every reader that wants more than one derived answer takes the
-        ``records()`` tuple and asks ``live_arming``'s pure questions of it,
-        rather than re-reading the file once per question.
+        No production path reads it any more: since slice 7 the envelope sync
+        takes the ``records()`` tuple once per tick and derives both the sealed
+        envelope and the arming snapshot from that single read, so one tick can
+        never describe two snapshots of a file an operator may be appending to.
+        This stays the single-fact read for a caller that wants the envelope
+        and nothing derived beside it -- the ledger's own tests today.
         """
         latest = latest_arming(self.records())
         return None if latest is None else latest.envelope

@@ -53,6 +53,26 @@ flat-and-order-free evidence and `recover()`'s reconciliation of open orders
 at every boot. The shadow namespace scan is not applied — after the first real
 order it would refuse every boot.
 
+### After graduation: the rehearsal's bindings are foreign, not corrupt (R15)
+
+A binding sealed on a custody account the installed primary authority does
+not custody — after graduation, the rehearsal's `shadow:<live_account_id>`
+bindings under the live primary — is *foreign* to that authority, not
+corrupt. `bot_boot_recovery.py` decides that from the registry's own routing
+(the binding's authority is the primary lifecycle authority) plus the same
+comparison Start makes (`binding.sealed_account_id != <installed Clerk
+account id>`), so a `sim:` Dry Run binding — routed to its own per-instance
+authority — is never foreign. Such a binding is named in the boot report's
+`foreign_instances`, logged once (`action=boot_recovery_foreign_binding`),
+and **left exactly as its own lifecycle files say**: never projected against
+an authority that has never seen it, no duty state authored from the sweep
+(ADR 0050), and the sweep never aborts. Unlike
+`authority_unavailable_instances` this does not close the Start gate —
+foreign bindings are refused one at a time on Start with
+`SEALED_ACCOUNT_MISMATCH` (`run_admission.py`), and native instances stay
+startable. The live verdict's arming count reads the same rule: a
+`shadow:`-sealed instance is not armed on the graduated account.
+
 ## Where it runs
 
 - `PythonDataService/app/broker/alpaca/clerk/live_authority.py::select_live_clerk_runtime`
@@ -119,9 +139,13 @@ Decision 8's `desired_state = PAUSED` is deliberately **not** written (R10):
 `PAUSED` is observe-only for EXIT too, and would strand a real position every
 morning under `ALPACA_LIVE_ARMING_MAX_SESSIONS=1`. What is built: new
 submission stops (every ENTER of an instance that is no longer armed refuses,
-as a rejected receipt); it is loud (the sync logs
+as a rejected receipt carrying **that instance's own arming code** —
+`LIVE_ARMING_LAPSED`, `LIVE_ARMING_REVOKED`, `LIVE_ARMING_SEAL_CHANGED`,
+`LIVE_ARMING_FUTURE_DATED` or `LIVE_MODE_DISAGREEMENT`; no receipt ever
+carries `LIVE_VERDICT_TRANSITION_HALT`); it is loud (the sync logs
 `live_verdict_transition_halt` at warning level once per instance per
-transition, naming the code, and the verdict names the instance); and
+transition, naming the code the receipt will carry, and the verdict names the
+instance); and
 resumption is guarded by the arming ceremony itself, after which the next tick
 admits. EXITs keep running; the operator's reduce-only actions
 (`execute_safe_flatten`, the cohort flatten) are EXIT-shaped and never gated
@@ -131,7 +155,7 @@ admits. EXITs keep running; the operator's reduce-only actions
 
 See the table in design R8: `manual_order_runtime` keeps `LIVE_ACCOUNT_REFUSED`;
 `historical_execution_recovery` still refuses `LIVE_ACCOUNT_REFUSED` — the one
-paper-only gate this slice does not re-meant, a named follow-up; `cutover`
+paper-only gate this slice does not re-mean, a named follow-up; `cutover`
 admits `paper | live`; `dev_reset` still refuses non-paper on the configured
 mode; `panel_deploy` offers `live` on the live world; the `run_admission`
 corpus gate is unchanged and the arming fact sits beside it; `CustodyWorld`
@@ -139,7 +163,11 @@ gains `real_live` and every world admits exactly one account mode.
 
 ## In the live verdict
 
-`observe_arming` and `observe_loss_hold` read on any facade authority. On the
+`observe_arming` and `observe_loss_hold` read on every live-custodying facade
+authority (shadow, or sqlite on `real_live`); the paper authority reads
+neither. `observe_arming` counts only live-sealed instances on the
+`real_live` world — the rehearsal's `shadow:`-sealed bindings are foreign
+to a graduated authority (R15) and are never counted as armed under it. On the
 live authority the headline is `LIVE account <id> — N instances armed,
 real-money submission open` or `… — real-money authority installed, no
 instance armed`; `clerk_authority` stays `sqlite` (`configured_mode` names the
@@ -168,22 +196,6 @@ install the authority; the second is already refused by `injection_permitted`).
 - A human trading the live account withdraws day P&L to unknown for the day
   (slice 5 R5), so every program ENTER refuses `LIVE_ENVELOPE_UNOBSERVED` — E7.
 - `StrategySpec.submit_mode` is not stamped at deploy — E8.
-- **R15's boot half (both paths now confirmed).** A binding sealed on a custody
-  account the installed primary authority does not custody — after graduation,
-  the rehearsal's `shadow:<live_account_id>` bindings under the live primary —
-  is *foreign* to that authority, not corrupt. `bot_boot_recovery.py` decides
-  that from the registry's own routing (the binding's authority is the primary
-  lifecycle authority) plus the same comparison Start makes
-  (`binding.sealed_account_id != <installed Clerk account id>`), so a `sim:`
-  Dry Run binding — routed to its own per-instance authority — is never
-  foreign. Such a binding is named in the boot report's `foreign_instances`,
-  logged once (`action=boot_recovery_foreign_binding`), and **left exactly as
-  its own lifecycle files say**: never projected against an authority that has
-  never seen it, no duty state authored from the sweep (ADR 0050), and the
-  sweep never aborts. Unlike `authority_unavailable_instances` this does not
-  close the Start gate — foreign bindings are refused one at a time on Start
-  with `SEALED_ACCOUNT_MISMATCH` (`run_admission.py`), and native instances
-  stay startable.
 - **Historical execution recovery stays paper-only.** `historical_execution_recovery.py`
   refuses `LIVE_ACCOUNT_REFUSED` at both entry points; re-meaning it for a live
   account (its own admission and a live-safe replay) is a follow-up slice.

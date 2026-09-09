@@ -126,6 +126,10 @@ def test_current_validation_fact_requires_override_for_current_evidence_only_pro
     )
 
     assert without_override.state == "UNVERIFIED"
+    # The override is the same durable record on every world, so its next
+    # step names no mode: "the paper-mode evidence override" was a lying
+    # label once the live world could reach this refusal (slice 7).
+    assert without_override.next_step == "Record the evidence override before deploying."
     assert with_override.state == "VERIFIED"
     assert with_override.evidence_status == "evidence_only"
 

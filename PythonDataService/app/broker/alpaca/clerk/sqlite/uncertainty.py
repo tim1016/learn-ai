@@ -759,8 +759,9 @@ class RefusalClass(StrEnum):
 # retry-on-next-clock in the runner's error taxonomy"). Every envelope refusal
 # joins them: ADR 0059 forbids halting or pausing a bot for an account-scoped
 # fact, so an envelope refusal retries on the next decision clock. Every
-# arming refusal joins them too (slice 7): the reaction to a lost arming is
-# the sync's pause, never a halt from admission.
+# arming refusal joins them too (slice 7): a lost arming refuses that
+# instance's next ENTER, is warned about once per transition and is named in
+# the live verdict — nothing pauses, and nothing halts from admission.
 TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
     frozenset(
         {

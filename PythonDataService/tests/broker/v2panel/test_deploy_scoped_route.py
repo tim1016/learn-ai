@@ -304,6 +304,13 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "safe_canary",
         "custom",
     ]
+    # The same form is served on the live world (R12), so its sizing copy
+    # names no mode: "the first paper deployment" on a real-money form was
+    # the lying label the whole-branch review found.
+    assert [row["explanation"] for row in body["sizing_options"]] == [
+        "Fixed one-share sizing for a first deployment.",
+        "Whole-share sizing, bounded from 1 through 100 shares.",
+    ]
     assert "enter" in body["action_plan_explanation"].lower()
     assert "close" in body["action_plan_explanation"].lower()
     assert body["carryover_available"] is False

@@ -32,7 +32,12 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     paper_settings,
     record_sealed_binding,
 )
-from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES, _LiveBroker
+from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    LIVE_ACCT,
+    SHADOW_ACCT,
+    TEST_ENVELOPE_VALUES,
+    _LiveBroker,
+)
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import shadow_runtime  # noqa: F401
 
 _NOW = 1_800_000_000_000
@@ -550,6 +555,48 @@ def test_the_verdict_counts_arming_on_the_real_live_authority(tmp_path: Path) ->
     )
     assert observation.armed_instance_count == 1
     assert observation.envelope_state == "sealed"
+
+
+def test_the_real_live_count_ignores_the_rehearsals_shadow_sealed_instance(tmp_path: Path) -> None:
+    """After graduation the rehearsal's rows are still in the same ledger; they are not armed here.
+
+    A `shadow:`-sealed binding is foreign to the live authority (design R15)
+    and is refused on every Start, so counting it would make the verdict say
+    "2 instances armed, real-money submission open" about an instance that can
+    never submit. The shadow authority's own counting is unchanged --
+    ``test_observe_arming_counts_the_ledgers_armed_instances`` pins it.
+    """
+    live_state_root = tmp_path / "runner"
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    for strategy_instance_id, sealed_account_id in (
+        ("ema-live-1", LIVE_ACCT),
+        ("ema-shadow-1", SHADOW_ACCT),
+    ):
+        seal = record_sealed_binding(
+            live_state_root,
+            strategy_instance_id=strategy_instance_id,
+            sealed_account_id=sealed_account_id,
+        )
+        ledger.append(
+            LiveArmingRecord.create(
+                live_account_id=LIVE_ACCT,
+                strategy_instance_id=strategy_instance_id,
+                seal_hash=seal.bot_configuration_hash,
+                configured_signal_hash=seal.configured_signal_hash,
+                shadow_receipt_sha256=None,
+                envelope=TEST_ENVELOPE_VALUES,
+                armed_at_ms=ARMED_AT_MS,
+                max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
+            )
+        )
+
+    observation = observe_arming(
+        _live_runtime(), tmp_path, lambda: live_state_root, settings=live_settings(), now_ms=ARMED_AT_MS + 60_000
+    )
+
+    assert observation.armed_instance_count == 1
+    assert "ema-shadow-1" in observation.detail
+    assert "ema-live-1" not in observation.detail
 
 
 def test_a_live_armed_real_live_account_says_submission_is_open() -> None:

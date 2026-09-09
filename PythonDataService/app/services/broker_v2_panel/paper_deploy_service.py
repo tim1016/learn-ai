@@ -76,7 +76,7 @@ def strategy_gate_recovery(
             "strategy's live-decision runtime."
         )
     if any(strategy.paper_access_state == "available" for strategy in strategies):
-        return "Review and enable Paper access for a strategy below."
+        return "Review and enable broker access for a strategy below."
     if any("dry_run" in strategy.admissible_modes for strategy in strategies):
         return "Repair the named proof, or re-validate the strategy in Strategy Validation."
     if strategies:
@@ -799,7 +799,7 @@ def build_alpaca_paper_deploy_view(
             AlpacaPaperSizingOption(
                 preset="safe_canary",
                 label="Safe canary · 1 share",
-                explanation="Fixed one-share sizing for the first paper deployment.",
+                explanation="Fixed one-share sizing for a first deployment.",
                 min_quantity=1,
                 max_quantity=1,
                 default_quantity=1,
@@ -807,7 +807,7 @@ def build_alpaca_paper_deploy_view(
             AlpacaPaperSizingOption(
                 preset="custom",
                 label="Bounded custom shares",
-                explanation="Whole-share paper sizing, bounded from 1 through 100 shares.",
+                explanation="Whole-share sizing, bounded from 1 through 100 shares.",
                 min_quantity=1,
                 max_quantity=100,
                 default_quantity=1,

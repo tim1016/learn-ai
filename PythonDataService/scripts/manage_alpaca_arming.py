@@ -74,7 +74,9 @@ from scripts._operator_cli import timestamp_ms
 logger = logging.getLogger(__name__)
 
 _SUBMISSION_ADMITTED_NOTE = (
-    "a live authority is activated for this account; an armed instance's ENTER is submitted"
+    "a live activation record exists for this account; an armed instance's ENTER is submitted "
+    "once the live authority boots — and it refuses to boot behind "
+    "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true (ADR 0059 D10, slice 7 R14)"
 )
 _SUBMISSION_NOT_ADMITTED_NOTE = (
     "no live authority is activated for this account; nothing submits until the live cutover"

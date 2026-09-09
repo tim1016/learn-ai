@@ -141,7 +141,9 @@ the table above; the seven the ceremony raises directly; the three
 ENTER-admission codes the live authority added in slice 7
 (`LIVE_ARMING_REQUIRED`, `LIVE_ARMING_UNOBSERVED`, `LIVE_ARMING_LEDGER_INVALID`
 — see [alpaca-live-authority](alpaca-live-authority.md)); the halt's
-`LIVE_VERDICT_TRANSITION_HALT`; and `LIVE_SHADOW_INCOMPLETE`, which stays
+`LIVE_VERDICT_TRANSITION_HALT`, which is the sync's once-per-transition log
+action and never reaches a receipt (the receipt carries the instance's own
+arming code); and `LIVE_SHADOW_INCOMPLETE`, which stays
 defined for the verdict's vocabulary though no code path raises it since
 slice 7 (shadow is a mode, not a requirement — owner decision 2026-09-09).
 This note does not repeat the count; the set does.
@@ -276,8 +278,10 @@ values was already declared in slice 1.
 - **`ALPACA_LIVE_ARMING_MAX_SESSIONS` has no upper bound in code** — the owner
   rejected numbers in code. The plan output shows exactly how many sessions the
   arming buys, so an implausible grant is visible at the moment it is confirmed.
-- **Resolved: `observe_arming` reads on every facade authority now**, live
-  authority included, not the shadow authority alone.
+- **Resolved: `observe_arming` reads on every live-custodying facade authority
+  now** (shadow, or sqlite on `real_live`), not the shadow authority alone. On
+  the `real_live` world it counts only live-sealed instances: the rehearsal's
+  `shadow:`-sealed bindings are foreign to a graduated authority (slice 7 R15).
 - **Resolved by `ArmingGate.invalidate`.** An unreadable ledger is a refusal
   at ENTER admission now, not an absent arming.
 - **A record dated after the clock disarms; it never extends.** `now_ms`

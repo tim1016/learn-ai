@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.schemas.account_authority import CustodyWorld
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
@@ -93,6 +94,17 @@ def active_reconciliation_sweep(broker: str = "alpaca") -> ReconciliationSweep |
     return runtime.sweep
 
 
+def _labelled_custody_world() -> CustodyWorld:
+    """This process's primary world, labelled for a compat surface.
+
+    The one place this module coerces an absent authority to the paper label
+    (``custody_world_or_paper``). Written once so two surfaces of the same
+    request cannot answer with two different worlds, and so a reader looking
+    for "where does this module decide the world?" finds one answer.
+    """
+    return custody_world_or_paper(primary_custody_world())
+
+
 def custody_account_id_for_route(broker: str, resolved: str) -> str:
     """The custody id a route's resolved account id names on the active authority.
 
@@ -110,7 +122,7 @@ def custody_account_id_for_route(broker: str, resolved: str) -> str:
     """
     if broker != "alpaca":
         return resolved
-    return custody_account_id_for(custody_world_or_paper(primary_custody_world()), resolved)
+    return custody_account_id_for(_labelled_custody_world(), resolved)
 
 
 def sqlite_projection(
@@ -240,7 +252,7 @@ def sqlite_clerk_status(
     channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
     # Read once and reused for both the identity expectation and the posture
     # context, so the two can never disagree about which world this is.
-    custody_world = custody_world_or_paper(primary_custody_world())
+    custody_world = _labelled_custody_world()
     identity_mismatch = (
         account is not None
         and custody_account_id_for(custody_world, account.account_id) != projection.account_id
@@ -364,7 +376,7 @@ def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
             if not divergent
             else "Use the SQLite Clerk's typed, evidence-bound recovery actions."
         ),
-        authority_kind=authority_kind_in_world(projection.account_id, custody_world_or_paper(primary_custody_world())),
+        authority_kind=authority_kind_in_world(projection.account_id, _labelled_custody_world()),
         divergences=divergences,
         resolution_plan=(),
     )

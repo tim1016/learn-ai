@@ -22,11 +22,22 @@ CustodyWorld = Literal["real_paper", "shadow", "real_live"]
 # The shadow world reads the real-money account it was activated for, so it
 # admits only `live`; the real-live world custodies that same account for
 # real. Written once, here, so no gate re-derives it.
-_MODE_ADMITTED_BY_WORLD: dict[str, str] = {
+_MODE_ADMITTED_BY_WORLD: dict[CustodyWorld, Literal["paper", "live"]] = {
     "real_paper": "paper",
     "shadow": "live",
     "real_live": "live",
 }
+
+
+def admitted_account_mode_for_world(custody_world: CustodyWorld) -> Literal["paper", "live"]:
+    """The one account mode ``custody_world`` may custody.
+
+    The public half of the same closed table :func:`world_admits_account_mode`
+    judges against, so a surface that must *name* the admitted mode -- an
+    operator refusal, an authority-kind derivation -- reads it here instead of
+    re-deriving a second world-to-mode rule that can disagree.
+    """
+    return _MODE_ADMITTED_BY_WORLD[custody_world]
 
 
 def world_admits_account_mode(world: CustodyWorld, account_mode: str | None) -> bool:
@@ -115,5 +126,6 @@ __all__ = [
     "CustodyWorld",
     "SingleAuthorityAggregate",
     "account_authority_agrees",
+    "admitted_account_mode_for_world",
     "world_admits_account_mode",
 ]

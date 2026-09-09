@@ -111,7 +111,7 @@ def current_strategy_validation_fact(
             event=event,
             evidence_refs=refs,
             explanation="This strategy has evidence-only validation and requires the durable human override.",
-            next_step="Record the paper-mode evidence override before deploying.",
+            next_step="Record the evidence override before deploying.",
         )
     return _unverified(
         binding.strategy_key,

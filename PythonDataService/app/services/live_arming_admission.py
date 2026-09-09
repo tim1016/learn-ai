@@ -57,6 +57,7 @@ def live_arming_admission_fact(
             configured_envelope=LiveEnvelopeValues.from_settings(resolved),
             now_ms=observed_at_ms,
             strategy_instance_ids=(binding.strategy_instance_id,),
+            custody_world=world,
         )
     except (LiveArmingInvalid, LiveEnvelopeIncomplete, ValidationError) as exc:
         logger.warning(

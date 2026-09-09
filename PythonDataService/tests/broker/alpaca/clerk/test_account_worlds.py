@@ -225,6 +225,26 @@ def test_authority_kind_in_world_follows_the_world_never_a_default(account_id: s
     assert authority_kind_in_world(account_id, world) == expected
 
 
+@pytest.mark.parametrize("world", ["real_paper", "shadow", "real_live"])
+def test_the_kind_derivation_and_the_admitted_mode_table_are_one_rule(world: str) -> None:
+    """One closed world-to-mode table, read by both, so the two cannot drift.
+
+    ``authority_kind_in_world`` computed its own ``"live" if world ==
+    "real_live"`` while ``_MODE_ADMITTED_BY_WORLD`` said ``shadow -> "live"``:
+    two maps of the same fact, disagreeing on one world.
+    """
+    from app.broker.alpaca.clerk.account_authority import authority_kind_in_world
+    from app.schemas.account_authority import admitted_account_mode_for_world
+
+    admitted = admitted_account_mode_for_world(world)
+    expected = "real_live" if admitted == "live" else "real_paper"
+
+    assert authority_kind_in_world("9LIVE0001", world) == expected
+    # A reserved namespace is still decided by its prefix in every world.
+    assert authority_kind_in_world("shadow:9LIVE0001", world) == "shadow"
+    assert authority_kind_in_world("sim:ema-1", world) == "synthetic"
+
+
 @pytest.mark.parametrize(("world", "expected"), [("real_live", "live-evidence:ema-live-1"), ("real_paper", "paper:ema-live-1")])
 def test_a_bindings_replay_ledger_is_read_where_the_primary_world_wrote_it(
     monkeypatch: pytest.MonkeyPatch, world: str, expected: str

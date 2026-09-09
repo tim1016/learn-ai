@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.alpaca.config import AlpacaSettings
+from app.schemas.account_authority import CustodyWorld
 from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     ClerkAuthority,
@@ -135,7 +136,7 @@ def _mid_session_disagreement(runtime: ActiveClerkRuntime | None) -> bool:
     that fault as the disagreement it is, not as an unobserved envelope.
     """
     clerk = runtime.clerk if runtime is not None else None
-    gate = getattr(clerk, "live_arming", None)
+    gate = None if clerk is None else clerk.live_arming
     return gate is not None and gate.invalid_reason_code == LIVE_MODE_DISAGREEMENT
 
 
@@ -233,6 +234,14 @@ def observe_arming(
     if not _live_custody_facade(runtime) or runtime.selected_account_id is None or settings.is_paper:
         return ArmingObservation.none()
     live_account_id = live_account_id_for_shadow_account(runtime.selected_account_id)
+    # On the graduated account the rehearsal's ``shadow:``-sealed bindings and
+    # their slice-6 arming records are still on disk (design R15). They are
+    # foreign to the live authority and refused on every Start, so counting
+    # them here would publish "N instances armed, real-money submission open"
+    # for instances that can never submit.
+    custody_world: CustodyWorld | None = (
+        "real_live" if runtime.selected_account_authority_kind == "real_live" else None
+    )
     try:
         # One read of the ledger answers every question below: the count, the
         # envelope state and the not-armed prose all come from the same
@@ -243,6 +252,7 @@ def observe_arming(
             artifacts_root=artifacts_root,
             live_state_root=live_state_root(),
             configured_envelope=LiveEnvelopeValues.from_settings(settings),
+            custody_world=custody_world,
             now_ms=now_ms,
         )
     except (LiveArmingInvalid, LiveEnvelopeIncomplete) as exc:
@@ -394,7 +404,7 @@ def alpaca_live_verdict(
     # permission nothing can act on, and must not read as the loudest state.
     observed_arming = arming if arming is not None else ArmingObservation.none()
     armed = observed_arming.armed_instance_count
-    live_custody = _live_custody_facade(runtime) and runtime.selected_account_authority_kind == "real_live"
+    live_custody = runtime is not None and runtime.selected_account_authority_kind == "real_live"
     live_armed = armed >= 1 and _live_custody_facade(runtime)
     instances = f"{armed} instance{'' if armed == 1 else 's'}"
     if live_custody:

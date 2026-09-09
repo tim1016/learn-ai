@@ -289,7 +289,7 @@ class LiveEnvelopeSync:
             self.envelope.withdraw()
         return reading
 
-    def _refresh_arming(self) -> ArmingSnapshot | None:
+    def _refresh_arming(self) -> None:
         """Re-read the account's arming ledger once; seal the envelope and refresh the gate.
 
         The envelope a live ENTER is admitted against is the one an operator
@@ -307,7 +307,7 @@ class LiveEnvelopeSync:
         fault is logged at error level once per transition.
         """
         if self._arming_ledger is None:
-            return None
+            return
         try:
             records = tuple(self._arming_ledger.records())
         except LiveArmingInvalid as exc:
@@ -327,12 +327,12 @@ class LiveEnvelopeSync:
             self._assign_sealed(None)
             if self._arming_gate is not None:
                 self._arming_gate.invalidate(str(exc))
-            return None
+            return
         self._arming_ledger_invalid = False
         newest = latest_arming(records)
         self._assign_sealed(None if newest is None else newest.envelope)
         if self._arming_gate is None:
-            return None
+            return
         snapshot = ArmingSnapshot(
             observed_at_ms=self._repo.clock(),
             live_account_id=self._arming_ledger.live_account_id,
@@ -350,7 +350,6 @@ class LiveEnvelopeSync:
         else:
             self._arming_gate.publish(snapshot)
         self._note_transitions(snapshot)
-        return snapshot
 
     def _note_transitions(self, snapshot: ArmingSnapshot) -> None:
         """Warn once, with the code, for every instance that was armed last tick and is not now (R10).
@@ -377,7 +376,11 @@ class LiveEnvelopeSync:
         self._previously_armed = armed_now
 
     def _assign_sealed(self, sealed: LiveEnvelopeValues | None) -> None:
-        """Assign the sealed envelope, logging each transition once (slice 6 R10)."""
+        """Assign the sealed envelope, logging each transition once (slice 6 R10).
+
+        Called only from :meth:`_refresh_arming`, past its no-ledger return,
+        so ``self._arming_ledger`` is never ``None`` here.
+        """
         if sealed == self.envelope.sealed:
             return
         self.envelope.sealed = sealed
@@ -388,8 +391,11 @@ class LiveEnvelopeSync:
             else "live envelope is no longer sealed by any arming record",
             extra={
                 "action": "live_envelope_sealed" if sealed is not None else "live_envelope_unsealed",
+                # Two ids, always: under shadow the custody id this Clerk
+                # writes against is ``shadow:<id>`` while the ledger the
+                # envelope was sealed from is rooted at the live ``<id>``.
                 "account_id": self._repo.account_id,
-                "live_account_id": self._arming_ledger.live_account_id if self._arming_ledger else None,
+                "live_account_id": self._arming_ledger.live_account_id,
                 "agreement": self.envelope.agreement,
             },
         )
@@ -549,4 +555,4 @@ class LiveEnvelopeSync:
         self._reader.close()
 
 
-__all__ = ["EnvelopeReading", "EnvelopeSyncAction", "LiveEnvelopeSync"]
+__all__ = ["EnvelopeReading", "EnvelopeSyncAction", "InstanceSeals", "LiveEnvelopeSync"]

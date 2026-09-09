@@ -296,11 +296,11 @@ class BotBootRecovery:
             return None
         # The custody id the installed primary authority holds -- the same
         # ``account_id`` a ``ClerkCustodySnapshot`` carries into Start
-        # admission. Read by name, as the sweep already reads this Clerk's
-        # other optional capabilities: with no authority installed there is
-        # no custody to compare against, and that case is already the
-        # ``authority_unavailable`` branch's to report.
-        installed_account_id = getattr(get_alpaca_clerk(), "account_id", None)
+        # admission. Every authority declares it (``ActiveAlpacaClerk``), so
+        # the only absence is "no authority installed", and that case is
+        # already the ``authority_unavailable`` branch's to report.
+        installed_clerk = get_alpaca_clerk()
+        installed_account_id = None if installed_clerk is None else installed_clerk.account_id
         if installed_account_id is None or binding.sealed_account_id == installed_account_id:
             return None
         if self._lifecycle_projector_for(strategy_instance_id) is not self._lifecycle_projector:

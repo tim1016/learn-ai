@@ -296,6 +296,42 @@ def test_shadow_custody_world_reads_a_live_account_without_the_wrong_mode_postur
     assert real_paper.condition.id == "alpaca_account_wrong_execution_mode"
 
 
+@pytest.mark.parametrize(
+    ("custody_world", "account_mode", "admitted"),
+    [
+        ("real_paper", "live", "paper"),
+        ("shadow", "paper", "live"),
+        ("real_live", "paper", "live"),
+    ],
+)
+def test_the_wrong_mode_refusal_names_the_mode_its_own_world_admits(
+    custody_world: str, account_mode: str, admitted: str
+) -> None:
+    """Design R8 #8: the copy names the world it is judging, not "paper" always.
+
+    A shadow or live authority reading an account the broker reports as
+    ``paper`` was told "This account is not in paper mode" -- the requirement
+    stated backwards. The admitted mode comes from the same closed table the
+    gate judged against (``admitted_account_mode_for_world``).
+    """
+    posture = build_account_operator_posture(
+        _context(account_mode=account_mode, custody_world=custody_world)
+    )
+
+    assert posture.condition is not None
+    assert posture.condition.id == "alpaca_account_wrong_execution_mode"
+    assert posture.condition.evidence["account_mode"] == account_mode
+    assert posture.condition.evidence["custody_world"] == custody_world
+    for blocker in (posture.account_desk, posture.fleet_roster):
+        assert blocker is not None
+        assert blocker.headline == f"This account is not in {admitted} mode"
+        assert blocker.detail is not None
+        assert f"require a {admitted}-mode account" in blocker.detail
+        # No ``!r``: the observed mode is read out plainly, and the world that
+        # judged it is on the evidence beside it.
+        assert f"reports {account_mode} mode" in blocker.detail
+
+
 def test_account_identity_mismatch_is_terminal_and_takes_priority_over_stale_defaults() -> None:
     """A mismatched account read must never leak its facts into this
     projection's account — the eligibility fields stay None regardless of

@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.schemas.account_authority import AuthorityKind, CustodyWorld
+from app.schemas.account_authority import (
+    AuthorityKind,
+    CustodyWorld,
+    admitted_account_mode_for_world,
+)
 
 # The clerk-side name for the one canonical account-world kind (ADR 0059 D1).
 AccountAuthorityKind = AuthorityKind
@@ -135,9 +139,14 @@ def authority_kind_in_world(account_id: str, custody_world: CustodyWorld) -> Acc
     default is exactly the misstatement a live account must never carry, and
     the writer of a live instance's evidence ledger and the reader of it must
     agree on which namespace that is (design R13).
+
+    The mode comes from :func:`admitted_account_mode_for_world` rather than a
+    second ``"live" if custody_world == "real_live"`` rule written here: one
+    closed world-to-mode table, so this derivation and the operator refusal
+    that names the admitted mode cannot drift apart.
     """
     return authority_kind_for_account(
-        account_id, account_mode="live" if custody_world == "real_live" else "paper"
+        account_id, account_mode=admitted_account_mode_for_world(custody_world)
     )
 
 

@@ -559,7 +559,12 @@ def test_an_unverifiable_activation_ledger_reports_not_admitted_and_logs_a_warni
 def test_a_real_activation_record_reports_submission_admitted(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Once graduation has installed the live authority, an armed instance's ENTER submits."""
+    """The CLI reports what it read -- a live activation record -- not a booted authority.
+
+    The record is on disk; whether the live authority actually installed is a
+    boot-time fact this read-only command cannot observe, and the note names
+    the one condition (an open control plane) that stops it (slice 7 R14).
+    """
     artifacts_root, _live_state_root = roots
     activate_shadow_fence(artifacts_root)
     ActivationStore(artifacts_root / "accounts" / "alpaca").append(live_activation())
@@ -569,3 +574,5 @@ def test_a_real_activation_record_reports_submission_admitted(
     report = _last_object(capsys)
     assert report["submission_admitted"] is True
     assert report["note"] == _SUBMISSION_ADMITTED_NOTE
+    assert "a live activation record exists for this account" in report["note"]
+    assert "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true" in report["note"]

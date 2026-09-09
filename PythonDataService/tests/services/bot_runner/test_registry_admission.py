@@ -523,7 +523,9 @@ async def test_carryover_rejects_a_new_deploy_without_an_enablement_switch(
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
-    with pytest.raises(CarryoverPolicyRefusedError, match="globally disabled"):
+    # Named for the broker, not the mode: carryover is disabled on every
+    # Alpaca world, and the live one reaches this same refusal (slice 7).
+    with pytest.raises(CarryoverPolicyRefusedError, match=r"globally disabled for Alpaca bots\."):
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_SID,
