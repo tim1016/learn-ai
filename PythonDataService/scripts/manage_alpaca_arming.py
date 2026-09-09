@@ -61,8 +61,8 @@ from app.broker.alpaca.config import (
     get_alpaca_settings,
 )
 from app.broker.ibkr.config import live_artifacts_root
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
+from scripts._operator_cli import timestamp_ms
 
 SUBMISSION_NOTE = (
     "An arming record is evidence, not a submission path: no code path submits a "
@@ -73,16 +73,6 @@ SUBMISSION_NOTE = (
 
 class ArmingOperatorRefusal(ValueError):
     """This command cannot be run as asked -- a named input is absent or malformed."""
-
-
-def _timestamp_ms(raw: str) -> int:
-    """One instant, ``int64 ms UTC``, inside the domain's admissible range."""
-    value = int(raw)
-    if not 0 <= value <= MAX_TIMESTAMP_MS:
-        raise argparse.ArgumentTypeError(
-            f"must be between 0 and {MAX_TIMESTAMP_MS} milliseconds since epoch UTC, not {value}"
-        )
-    return value
 
 
 def _confirmation_ttl_ms(raw: str) -> int:
@@ -132,7 +122,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     disarmer.add_argument("--strategy-instance-id", required=True)
 
     for subparser in (status, planner, applier, disarmer):
-        subparser.add_argument("--now-ms", type=_timestamp_ms)
+        subparser.add_argument("--now-ms", type=timestamp_ms)
     return parser.parse_args(argv)
 
 
