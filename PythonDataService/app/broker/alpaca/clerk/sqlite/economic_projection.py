@@ -632,6 +632,16 @@ class SqliteEconomicProjectionReader:
         Under simulated custody (ADR 0059 D2) the broker's cash never moved,
         so the envelope subtracts this to rehearse the cash bound honestly
         (plan R2); under real custody the broker's cash already reflects it.
+
+        Formula: ``net_cash_spent = Σ(quantity × fill_price over effective BUY
+          fills) − Σ(quantity × fill_price over effective SELL fills), over
+          every owned custody subject, lifetime.``
+        Reference: ADR 0059 Decision 4; slice-5 plan ruling R2 (shadow cash =
+          broker cash − net cash the Clerk's own fills would have spent).
+        Canonical implementation: this method — the only place the Clerk's
+          net cash spent is computed.
+        Validated against:
+          ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py::test_net_cash_spent_is_buys_less_sells_over_every_subject``.
         """
         with self._read_transaction():
             self._verified_meta()

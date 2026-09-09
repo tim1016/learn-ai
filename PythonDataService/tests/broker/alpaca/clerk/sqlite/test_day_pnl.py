@@ -312,6 +312,7 @@ def test_realized_counts_only_lots_closed_today_and_nets_reported_fees(
     assert pnl.unrealized_usd == 25.0
     assert pnl.total_usd == pytest.approx(124.95)
     assert pnl.known
+    assert pnl.execution_coverage == "complete"
 
 
 def test_a_lot_closed_yesterday_is_not_todays_realized(
@@ -344,6 +345,10 @@ def test_an_external_order_seen_today_makes_the_fact_unknown(
 ) -> None:
     pnl = day_pnl_at(reader, repo, observation=_observation(unrealized=0.0), now_ms=NOON)
     assert pnl.external_orders_today == 1 and not pnl.known
+    # The fixture's foreign order is filled (status="filled", filled_avg_price=50.0,
+    # quantity=3.0), so the projection's own external_fill_exists check trips and its
+    # verdict is "incomplete" — independent of, and carried alongside, `known`.
+    assert pnl.execution_coverage == "incomplete"
 
 
 def test_an_external_order_seen_yesterday_does_not(
