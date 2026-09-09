@@ -27,7 +27,6 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
     account_arming,
     apply_arming,
-    custody_account_ids_for,
     disarm,
     instance_seal_hashes,
     live_account_id_for,
@@ -45,11 +44,7 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     record_sealed_binding,
     seal_receipt,
 )
-from tests.broker.alpaca.clerk.live_envelope_fixtures import (
-    LIVE_ACCT,
-    SHADOW_ACCT,
-    TEST_ENVELOPE_VALUES,
-)
+from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
 
 TTL_MS = 120_000
 
@@ -106,11 +101,6 @@ def _plan_with(inputs: ArmingInputs, artifacts_root: Path, *, now_ms: int = ARME
         clock=_Clock(now_ms),
         observe=_observer(inputs),
     )
-
-
-def test_the_two_custody_ids_of_one_live_account_are_both_admissible() -> None:
-    """Shadow custody seals ``shadow:<id>``; slice 7's real_live custody seals ``<id>``."""
-    assert custody_account_ids_for(LIVE_ACCT) == frozenset({LIVE_ACCT, SHADOW_ACCT})
 
 
 def test_the_observer_reads_the_four_inputs_off_disk(roots: tuple[Path, Path]) -> None:

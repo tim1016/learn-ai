@@ -19,9 +19,11 @@ from app.broker.alpaca.clerk.account_authority import (
     authority_kind_for_account,
     bind_shadow_ports,
     custody_account_id_for,
+    custody_account_ids_for,
     evidence_account_id_for,
     is_shadow_account_id,
     is_shadow_evidence_account_id,
+    live_account_id_for_shadow_account,
     require_real_account_id,
     require_shadow_account_id,
     shadow_account_id_for_live_account,
@@ -97,6 +99,20 @@ def test_the_custody_id_a_world_holds_while_observing_a_real_account() -> None:
     assert custody_account_id_for("shadow", "9LIVE0001") != "9LIVE0001"
     with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
         custody_account_id_for("shadow", "shadow:9LIVE0001")
+
+
+def test_the_live_account_a_shadow_custody_id_observes_is_its_inverse() -> None:
+    """The module that mints a prefix is the only one that strips it."""
+    assert live_account_id_for_shadow_account("shadow:9LIVE0001") == "9LIVE0001"
+    assert live_account_id_for_shadow_account("9LIVE0001") == "9LIVE0001"
+    assert live_account_id_for_shadow_account(shadow_account_id_for_live_account("9LIVE0001")) == "9LIVE0001"
+
+
+def test_the_two_custody_ids_of_one_live_account_are_both_admissible() -> None:
+    """Shadow custody seals ``shadow:<id>``; slice 7's real_live custody seals ``<id>``."""
+    assert custody_account_ids_for("9LIVE0001") == frozenset({"9LIVE0001", "shadow:9LIVE0001"})
+    with pytest.raises(AccountAuthorityIdentityError, match="reserved"):
+        custody_account_ids_for("shadow:9LIVE0001")
 
 
 def test_shadow_evidence_namespace_is_instance_scoped_and_not_a_custody_namespace() -> None:

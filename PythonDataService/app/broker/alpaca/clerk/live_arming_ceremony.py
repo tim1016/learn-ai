@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
-    SHADOW_ACCOUNT_PREFIX,
-    shadow_account_id_for_live_account,
+    custody_account_ids_for,
+    live_account_id_for_shadow_account,
 )
 from app.broker.alpaca.clerk.ceremony import (
     DEFAULT_CONFIRMATION_TTL_MS,
@@ -112,17 +112,6 @@ def _refused(reason_code: str) -> Callable[[str], LiveArmingRefused]:
     return lambda message: LiveArmingRefused(reason_code, message)
 
 
-def custody_account_ids_for(live_account_id: str) -> frozenset[str]:
-    """The account ids a binding sealed on this live account may carry.
-
-    Under the Shadow Account Authority custody is ``shadow:<live_account_id>``,
-    so an instance rehearsing on this account seals the shadow id; slice 7's
-    ``real_live`` custody will seal the live id itself. Both are the same
-    account to an operator, and arming has to admit either.
-    """
-    return frozenset({live_account_id, shadow_account_id_for_live_account(live_account_id)})
-
-
 def live_account_id_for(artifacts_root: Path) -> str:
     """The live account the shadow gate was run against -- observed, not supplied.
 
@@ -142,7 +131,7 @@ def live_account_id_for(artifacts_root: Path) -> str:
             "the artifacts root names more than one shadowed live account "
             f"({', '.join(sorted(shadow_ids))}); arming cannot choose between them",
         )
-    return shadow_ids[0].removeprefix(SHADOW_ACCOUNT_PREFIX)
+    return live_account_id_for_shadow_account(shadow_ids[0])
 
 
 def instance_seal_hashes(*, live_account_id: str, live_state_root: Path) -> dict[str, InstanceSeal]:
@@ -479,7 +468,6 @@ __all__ = [
     "account_arming",
     "apply_arming",
     "configured_envelope",
-    "custody_account_ids_for",
     "disarm",
     "instance_seal_hashes",
     "live_account_id_for",

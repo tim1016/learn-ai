@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.broker.alpaca.clerk.account_authority import SHADOW_ACCOUNT_PREFIX
+from app.broker.alpaca.clerk.account_authority import live_account_id_for_shadow_account
 from app.broker.alpaca.clerk.active_authority import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
 from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
@@ -71,7 +71,7 @@ def observe_shadow_state(runtime: ActiveClerkRuntime | None, artifacts_root: Pat
     """
     if runtime is None or runtime.authority_kind != "shadow" or runtime.selected_account_id is None:
         return "none"
-    live_account_id = runtime.selected_account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
+    live_account_id = live_account_id_for_shadow_account(runtime.selected_account_id)
     if ShadowReceiptStore(artifacts_root).any_for_account(live_account_id):
         return "complete"
     if ShadowSessionLedger(artifacts_root=artifacts_root, account_id=runtime.selected_account_id).has_rows():
@@ -139,7 +139,7 @@ def observe_arming(
         or settings.is_paper
     ):
         return ArmingObservation.none()
-    live_account_id = runtime.selected_account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
+    live_account_id = live_account_id_for_shadow_account(runtime.selected_account_id)
     try:
         # One read of the ledger answers every question below: the count, the
         # envelope state and the not-armed prose all come from the same
@@ -274,7 +274,9 @@ def alpaca_live_verdict(
     # The copy names the LIVE account a human recognises. ``shadow:`` is the
     # runtime's custody namespace for the same account, not part of its number,
     # and it reads as a different account in a sentence beginning "LIVE account".
-    named_account_id = account_id.removeprefix(SHADOW_ACCOUNT_PREFIX) if account_id is not None else account_id
+    named_account_id = (
+        live_account_id_for_shadow_account(account_id) if account_id is not None else account_id
+    )
     # ``not_applicable``, not ``unsealed``, when no envelope object exists: a
     # live boot the composition refused ``LIVE_ENVELOPE_MISSING`` has no
     # envelope at all, and ``unsealed`` reads as "configured, not yet sealed".
