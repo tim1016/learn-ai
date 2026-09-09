@@ -68,6 +68,10 @@ def test_main_selects_one_authority_and_has_no_additive_sqlite_writer() -> None:
     )
 
     assert "select_active_clerk_runtime(" in source
+    # ADR 0059 D4: the live world's risk envelope reaches the selector from
+    # the composition root. Omitted, the shadow authority is `unavailable`
+    # on every live boot and nothing in the clerk layer can notice.
+    assert "live_envelope_values=live_envelope_values" in source
     assert "set_active_clerk_runtime(alpaca_clerk_runtime)" in source
     assert "evidence_sink=alpaca_clerk_runtime.evidence_sink" in source
     assert "alpaca_clerk_runtime.sweep" in source

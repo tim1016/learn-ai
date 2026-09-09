@@ -192,7 +192,8 @@ async def lifespan(app: FastAPI):
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
         alpaca_broker = AlpacaBroker()
-        alpaca_clerk_root = get_alpaca_settings().clerk_dir
+        alpaca_settings = get_alpaca_settings()
+        alpaca_clerk_root = alpaca_settings.clerk_dir
         # #1671: scheduled session structure remains calendar-owned; this
         # source provides the separate real-time clock + per-symbol
         # halt/resume evidence used to fail new exposure closed.
@@ -237,12 +238,32 @@ async def lifespan(app: FastAPI):
                 {binding.symbol for binding in bindings if binding.mode != "dry_run"}
             )
 
+        # ADR 0059 D4: the live world's risk envelope, read once from the
+        # environment. A live key with an incomplete envelope is not an abort:
+        # the selector refuses the authority by name (LIVE_ENVELOPE_MISSING)
+        # so every unrelated surface stays up and the operator reads why.
+        from app.broker.alpaca.clerk.live_envelope import (
+            LiveEnvelopeIncomplete,
+            LiveEnvelopeValues,
+        )
+
+        live_envelope_values: LiveEnvelopeValues | None = None
+        if not alpaca_settings.is_paper:
+            try:
+                live_envelope_values = LiveEnvelopeValues.from_settings(alpaca_settings)
+            except LiveEnvelopeIncomplete as exc:
+                logger.warning(
+                    "Alpaca live envelope is incomplete; the shadow authority will refuse to run.",
+                    extra={"action": "live_envelope_values_incomplete", "why": str(exc)},
+                )
+
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
             trade=alpaca_broker,
             artifacts_root=alpaca_clerk_root,
             stream_health_gate=alpaca_stream_health_gate,
             roster_symbols=_alpaca_roster_symbols,
+            live_envelope_values=live_envelope_values,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:

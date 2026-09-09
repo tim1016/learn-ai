@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
     ReconciliationListener,
@@ -43,6 +44,11 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
 from app.utils.timestamps import now_ms_utc
+
+if TYPE_CHECKING:
+    # Type-only: ``live_envelope`` imports the SQLite package for the loss-hold
+    # cause, and this module is imported *before* that package is initialized.
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
@@ -94,6 +100,7 @@ class ActiveClerkRuntime:
     clerk: ActiveAlpacaClerk | None = None
     sweep: BackgroundSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
+    envelope_sync: LiveEnvelopeSync | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -112,11 +119,20 @@ class ActiveClerkRuntime:
 
         Separate from selection because the ``trade_updates`` consumer is
         registered after the selector returns; see the construction site.
+
+        Also starts the live envelope sync, which needs only the read port and
+        could start earlier but shares this seam so main.py has one start call.
         """
         if self.hold_sync is not None:
             self.hold_sync.start()
+        if self.envelope_sync is not None:
+            self.envelope_sync.start()
 
     async def close(self) -> None:
+        # The envelope sync first: its own projection reader is a second
+        # handle on the repository closed below, and ``stop()`` is terminal.
+        if self.envelope_sync is not None:
+            await self.envelope_sync.stop()
         if self.hold_sync is not None:
             await self.hold_sync.stop()
         if self.sweep is not None:
@@ -178,6 +194,7 @@ class _ComposedAuthority:
     facade: SqliteAlpacaClerkFacade
     sweep: ReconciliationSweep
     hold_sync: StreamHealthHoldSync
+    envelope_sync: LiveEnvelopeSync | None
 
 
 async def compose_repository_runtime(
@@ -194,6 +211,7 @@ async def compose_repository_runtime(
     stream_health_gate: StreamHealthGate | None,
     roster_symbols: Callable[[], Sequence[str]] | None,
     sweep_listener: ReconciliationListener | None = None,
+    live_envelope: LiveEnvelopeGate | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -204,6 +222,7 @@ async def compose_repository_runtime(
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
+    envelope_sync: LiveEnvelopeSync | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -229,6 +248,7 @@ async def compose_repository_runtime(
             # Proven above from the broker's own account read, not inferred.
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+            live_envelope=live_envelope,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -275,6 +295,15 @@ async def compose_repository_runtime(
         # persist a false account-wide hold on every boot. main.py starts
         # it via `start_hold_sync()` once the provider exists.
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
+        # ADR 0059 D4: the envelope's own fixed cadence, for the same reason
+        # the hold sync has one -- the reconcile loop's backoff reaches 300 s
+        # on failure, and a losing day must not wait that long to be judged.
+        # Unstarted here too: `start_hold_sync()` is the one start seam.
+        envelope_sync = (
+            None
+            if live_envelope is None
+            else LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=live_envelope)
+        )
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,
@@ -284,8 +313,11 @@ async def compose_repository_runtime(
             facade=facade,
             sweep=sweep,
             hold_sync=hold_sync,
+            envelope_sync=envelope_sync,
         )
     except Exception:
+        if envelope_sync is not None:
+            await envelope_sync.stop()
         if hold_sync is not None:
             await hold_sync.stop()
         if sweep is not None:

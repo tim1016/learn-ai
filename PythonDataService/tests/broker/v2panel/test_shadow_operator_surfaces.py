@@ -60,6 +60,7 @@ from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     custody_account_id_for_route,
 )
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import fill_entry
 from tests.broker.v2panel.test_panel_projection import _MARKET_PULSE
@@ -170,7 +171,10 @@ async def shadow_app(
     )
     broker = _LiveBroker()
     runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        live_envelope_values=TEST_ENVELOPE_VALUES,
     )
     assert runtime.authority_kind == "shadow", runtime.startup_failure
     set_active_clerk_runtime(runtime)
