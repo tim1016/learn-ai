@@ -355,6 +355,38 @@ def test_a_tampered_plan_file_with_its_original_token_refuses_at_exit_two(
     assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
 
 
+def test_a_plan_file_that_cannot_be_written_is_one_json_refusal_at_exit_one(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--plan-out`` under a regular file is a refusal, not a traceback.
+
+    The documented contract is one JSON object per invocation, so an
+    ``OSError`` out of the atomic publish must not replace it -- and the plan
+    itself is not printed beside the error, or operator automation would read
+    two objects and a non-zero exit for the same run.
+    """
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    blocker = artifacts_root / "not-a-directory"
+    blocker.write_text("", encoding="utf-8")
+
+    assert (
+        main(
+            [*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID,
+             "--plan-out", str(blocker / "plan.json"), "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert len(printed) == 1
+    refusal = json.loads(printed[0])
+    assert "cannot write the plan file" in refusal["error"]
+    assert refusal["submission_admitted"] is False
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+
+
 def test_status_for_an_instance_the_ledger_has_never_seen_is_unarmed_at_exit_zero(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:

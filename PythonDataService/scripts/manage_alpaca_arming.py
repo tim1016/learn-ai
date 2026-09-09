@@ -249,7 +249,15 @@ def _plan(
         clock=_clock(args.now_ms),
     )
     if args.plan_out is not None:
-        atomic_write_json(args.plan_out, asdict(plan))
+        # An unwritable ``--plan-out`` -- a path whose parent is a regular file,
+        # a read-only tree, a failed replace or fsync -- must not replace this
+        # module's one-JSON-object contract with a traceback. The refusal is
+        # raised before anything is printed, so the operator reads exactly one
+        # object and it is the error.
+        try:
+            atomic_write_json(args.plan_out, asdict(plan))
+        except OSError as exc:
+            raise ArmingOperatorRefusal(f"cannot write the plan file: {exc}") from exc
     _write(asdict(plan))
     return 0
 
