@@ -393,5 +393,9 @@ progress yet". Only invalid Alpaca settings are absorbed, into the
 - **Per-instance shadow progress on the live verdict.** `shadow_state` is
   account-wide today (see "Operator recipe").
 - **Slice 6 arming consumes `ShadowReceiptStore.current`.** Arming without a
-  current receipt is `LIVE_SHADOW_INCOMPLETE`; that gate is written in slice 6,
-  and this slice only produces the receipt it will read.
+  current receipt is `LIVE_SHADOW_INCOMPLETE` — a real reason code since ADR
+  0059 slice 6, defined in
+  `PythonDataService/app/broker/alpaca/clerk/live_arming.py` and raised by
+  `live_arming_ceremony.observe_arming_inputs`. This slice produces the receipt
+  that gate reads; the gate itself is
+  [alpaca-live-arming](alpaca-live-arming.md).

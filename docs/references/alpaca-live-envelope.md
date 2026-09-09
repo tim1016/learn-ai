@@ -58,6 +58,14 @@ notional cap, no symbol allowlist, no session restriction.
   boot never reaches the shadow authority. `LIVE_ENVELOPE_MISSING` remains
   the selector's refusal for a caller that composes the shadow authority
   without an envelope.
+- Sealing: `PythonDataService/app/broker/alpaca/clerk/sqlite/live_envelope_sync.py::LiveEnvelopeSync._refresh_sealed_envelope`
+  re-reads the account's arming ledger on every tick and assigns
+  `LiveEnvelopeGate.sealed` from the newest arming record's own
+  `envelope_values` (ADR 0059 slice 6). Until then `sealed` was permanently
+  `None`, so `envelope_agreement` could only answer `unsealed` and
+  `LIVE_ENVELOPE_DISAGREEMENT` was unreachable. It is now the live rule: an
+  `ALPACA_LIVE_*` edit after an arming refuses every ENTER until a re-arm. See
+  [alpaca-live-arming](alpaca-live-arming.md).
 
 ## The facts
 
@@ -99,7 +107,7 @@ notional cap, no symbol allowlist, no session restriction.
 |---|---|---|
 | `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the sync withdrew its last observation because the reading was unjudgeable (day P&L / `last_equity`) **or breached** | ENTER refusal |
 | `LIVE_ENVELOPE_CASH_EXCEEDED` | The ENTER's notional plus reserved notional would exceed cash available | ENTER refusal |
-| `LIVE_ENVELOPE_DISAGREEMENT` | The sealed envelope (slice 6 arming) disagrees with the current `ALPACA_LIVE_*` environment values | ENTER refusal |
+| `LIVE_ENVELOPE_DISAGREEMENT` | The envelope sealed by the account's newest arming record disagrees with the current `ALPACA_LIVE_*` environment values ([alpaca-live-arming](alpaca-live-arming.md)) | ENTER refusal |
 | `LIVE_ENVELOPE_LOSS_HOLD` | The account-wide loss hold stands — checked earlier, by `require_admission` | ENTER refusal |
 | `LIVE_ENVELOPE_MISSING` | At least one `ALPACA_LIVE_*` value is absent for a live-mode boot | startup refusal of the Shadow Account Authority — never an ENTER refusal |
 
@@ -166,7 +174,7 @@ carries it.
 | Field | Value | Means |
 |---|---|---|
 | `envelope_agreement` | `not_applicable` | No envelope object is installed on the active authority: a paper or synthetic account, or a live boot the composition refused `LIVE_ENVELOPE_MISSING`. |
-| | `unsealed` | An envelope is installed and no arming record has sealed its values yet (slice 6 seals them). |
+| | `unsealed` | An envelope is installed and this account's arming ledger holds no arming record, so nothing has sealed its values yet. |
 | | `agreed` | The sealed values and the current `ALPACA_LIVE_*` environment have the same sha. |
 | | `disagreed` | They differ; every ENTER is refused `LIVE_ENVELOPE_DISAGREEMENT` until the account is re-armed. |
 | `loss_hold` | `not_applicable` | The hold is not observed here: no runtime, or an authority that is not the shadow one (paper, synthetic, unavailable). |
