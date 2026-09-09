@@ -273,8 +273,8 @@ export class AlpacaDeployWorkflowComponent {
 
   /**
    * True when the ticket's mode contacts the broker. Dry Run is the only
-   * mode that holds no custody, so Paper and Shadow share every gate the
-   * backend applies to a broker deploy (`_require_broker_deploy_request`),
+   * mode that holds no custody, so Paper, Shadow and Live share every gate
+   * the backend applies to a broker deploy (`_require_broker_deploy_request`),
    * the evidence-only override included.
    */
   protected readonly brokerModeSelected = computed(
@@ -284,8 +284,8 @@ export class AlpacaDeployWorkflowComponent {
   // A broker deploy of an evidence-only strategy carries the durable human
   // override (acknowledgement + reason) on the request itself — restored by
   // operator decision 2026-08-24 after #1702/#1746 re-pointed it at Live.
-  // The backend refuses an evidence-only Paper *or Shadow* deploy without
-  // it, and rejects one submitted for a fully accepted strategy.
+  // The backend refuses an evidence-only Paper, Shadow *or Live* deploy
+  // without it, and rejects one submitted for a fully accepted strategy.
   protected readonly overrideRequired = computed(() =>
     this.selectedStrategy()?.evidence_status === 'evidence_only'
       && this.brokerModeSelected(),
@@ -312,10 +312,11 @@ export class AlpacaDeployWorkflowComponent {
     }
   });
 
-  // Backend-authored reason the Paper/Shadow option is unreachable for the
-  // selected strategy (#1702). `null` whenever this account's broker mode is
-  // admissible or no strategy is selected yet — every non-admissible row is
-  // a blocked row today, so `blocked_explanation` is always present here.
+  // Backend-authored reason this account's own broker option — Paper, Shadow
+  // or Live (slice 7) — is unreachable for the selected strategy (#1702).
+  // `null` whenever this account's broker mode is admissible or no strategy
+  // is selected yet — every non-admissible row is a blocked row today, so
+  // `blocked_explanation` is always present here.
   protected readonly brokerModeUnavailableReason = computed(() => {
     const strategy = this.selectedStrategy();
     if (strategy === null || strategy.admissible_modes.includes(this.brokerMode())) return null;

@@ -187,7 +187,11 @@ export const SHADOW_DEPLOY_VIEW: DeployBotView = {
       mode: 'live',
       label: 'Live',
       availability: 'planned',
-      explanation: 'Requires a shadow receipt and arming.',
+      // Verbatim from `paper_deploy_service._execution_modes`, the shadow
+      // world's planned-live card: shadow is a mode, not a requirement.
+      explanation:
+        'Real-money submission follows the live cutover and the arming ceremony; a shadow '
+        + 'rehearsal is optional (ADR 0059, amended 2026-09-09).',
     },
   ],
 };
@@ -220,7 +224,11 @@ export const LIVE_DEPLOY_VIEW: DeployBotView = {
       mode: 'live',
       label: 'Live',
       availability: 'available',
-      explanation: 'Real-money submission through the live Clerk for an armed instance only.',
+      // Verbatim from `paper_deploy_service._execution_modes`, the live
+      // world's broker card.
+      explanation:
+        'Orders submit real-money trades through the live Clerk for an armed instance only; '
+        + 'every ENTER of an unarmed instance is refused until an operator arms it (ADR 0059 D11).',
     },
   ],
 };

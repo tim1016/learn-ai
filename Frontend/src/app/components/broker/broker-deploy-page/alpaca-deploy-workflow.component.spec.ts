@@ -617,7 +617,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
     expect(live.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/paper account/i);
+    expect(document.body.textContent).not.toMatch(/paper/i);
     expect(document.body.textContent).not.toMatch(/shadow/i);
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
@@ -628,6 +628,46 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
     expect(body.execution_mode).toBe('live');
+  });
+
+  it('leaves a planned Live card governed by availability alone when the strategy is blocked', async () => {
+    // Whole-branch Important 2: the blocked reason belongs to the card this
+    // world actually offers. On the paper world Live is `planned`, so it
+    // keeps reading Planned with its own copy — not Unavailable with Paper's
+    // blocked explanation.
+    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await renderWorkflow(service);
+
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    const liveCard = live.closest<HTMLElement>('.mode-option');
+    if (liveCard === null) throw new Error('Live mode-option container not found');
+    expect(within(liveCard).getByText('Planned')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'About Live: Live Alpaca execution is planned.',
+    })).toBeTruthy();
+
+    // The card this world does offer still inherits the strategy's reason.
+    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    const paperCard = paper.closest<HTMLElement>('.mode-option');
+    if (paperCard === null) throw new Error('Paper mode-option container not found');
+    expect(within(paperCard).getByText('Unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: `About Paper: ${BLOCKED_EXPLANATION}`,
+    })).toBeTruthy();
+  });
+
+  it('on the live view a blocked strategy makes the Live card carry the blocked reason', async () => {
+    const service = mockService(RECEIPT, { ...LIVE_DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await renderWorkflow(service);
+
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    expect(live.disabled).toBe(true);
+    const liveCard = live.closest<HTMLElement>('.mode-option');
+    if (liveCard === null) throw new Error('Live mode-option container not found');
+    expect(within(liveCard).getByText('Unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: `About Live: ${BLOCKED_EXPLANATION}`,
+    })).toBeTruthy();
   });
 
   it('still requires the durable override for an evidence-only Shadow deploy', async () => {

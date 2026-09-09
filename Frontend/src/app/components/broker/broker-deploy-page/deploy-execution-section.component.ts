@@ -28,9 +28,11 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
   // Backend-authored reason this account's broker-contacting mode — Paper on
-  // a paper account, Shadow on a live one (ADR 0059 D2) — is unreachable for
-  // the selected strategy (#1702). `null` when it is admissible or no
-  // strategy is selected. Only one of the two is ever on offer at a time.
+  // a paper account, Shadow or Live on a live one (ADR 0059 D2, slice 7) — is
+  // unreachable for the selected strategy (#1702). `null` when it is
+  // admissible or no strategy is selected. Only one of the three is ever on
+  // offer at a time; the other two are `planned` cards this reason never
+  // reaches.
   readonly brokerModeUnavailableReason = input<string | null>(null);
   // Backend-authored reason Dry Run is unreachable for the selected strategy
   // (#1703) — `null` unless the strategy has no registered runtime at all;
@@ -75,9 +77,10 @@ export class DeployExecutionSectionComponent {
   }
 
   private strategyUnavailableReason(mode: DeployExecutionMode): string | null {
-    if (mode.mode === 'paper' || mode.mode === 'shadow' || mode.mode === 'live') return this.brokerModeUnavailableReason();
     if (mode.mode === 'dry_run') return this.dryRunUnavailableReason();
-    return null;
+    // Only the card this world actually offers inherits the strategy's blocked
+    // reason; a planned Live card is governed by `availability` alone.
+    return mode.availability === 'available' ? this.brokerModeUnavailableReason() : null;
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {
