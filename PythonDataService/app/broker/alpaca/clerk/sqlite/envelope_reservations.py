@@ -19,6 +19,9 @@ Corrections fold at their restated size. Each order contributes its
 instant already reflected the true quantity, whenever the Clerk got around to
 recording the restatement. So a fill of 10 restated to 5 after the observation
 prices the remaining 5 as unfilled, and the mirror upward case prices nothing.
+Any fill row with no successor counts — including a cumulative-recovery row,
+which is its own root and genuinely filled quantity, so its own
+``recorded_at_ms`` dates it when the lineage walk supplies no root.
 
 The row is a sibling of the ``ENTER_ACCEPTED`` custody transition, committed
 in its transaction but never part of its hashed payload: adding a reservation
@@ -80,10 +83,10 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         "SELECT r.quantity AS quantity, r.reference_price AS reference_price, "
         "LOWER(o.broker_state) AS state, "
-        "COALESCE(SUM(CASE WHEN r2.root_recorded_at_ms < ? THEN f.qty ELSE 0 END), 0) "
-        "  AS filled_before, "
-        "COALESCE(SUM(CASE WHEN r2.root_recorded_at_ms >= ? THEN f.qty ELSE 0 END), 0) "
-        "  AS filled_after "
+        "COALESCE(SUM(CASE WHEN COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) < ? "
+        "  THEN f.qty ELSE 0 END), 0) AS filled_before, "
+        "COALESCE(SUM(CASE WHEN COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) >= ? "
+        "  THEN f.qty ELSE 0 END), 0) AS filled_after "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
         "LEFT JOIN fills f ON f.order_ref = o.order_ref "

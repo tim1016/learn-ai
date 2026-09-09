@@ -113,7 +113,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
             detail=(
                 "Day P&L is unknown (an external order was seen today, or the broker "
-                "reported no previous-close equity). The hold stands."
+                "reported no previous-close equity, or a risk figure the broker "
+                "reported was not a finite number). The hold stands."
             ),
         )
     if reading.breached:

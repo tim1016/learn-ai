@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
+    _SETTINGS_FIELDS,
     ENVELOPE_ADMISSION_REASON_CODES,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
@@ -17,7 +18,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
-from app.broker.alpaca.config import AlpacaSettings
+from app.broker.alpaca.config import _LIVE_REQUIRED_FIELDS, AlpacaSettings
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 
 
@@ -121,3 +122,8 @@ def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
         "LIVE_ENVELOPE_UNOBSERVED",
     }
     assert isinstance(ENVELOPE_ADMISSION_REASON_CODES, frozenset)
+
+
+def test_the_envelope_reads_exactly_the_settings_live_mode_requires() -> None:
+    """A value added to one list only would turn a valid live boot into a service that fails to start."""
+    assert tuple(name for _, name in _SETTINGS_FIELDS) == tuple(_LIVE_REQUIRED_FIELDS)
