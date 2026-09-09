@@ -3355,7 +3355,24 @@ def test_the_shadow_rows_no_longer_promise_a_future_slice(shadow_runtime) -> Non
     )
     assert "slice 7" not in verdict.detail
     assert "under the shadow authority" in verdict.detail
+
+
+def test_a_mid_session_mode_disagreement_is_the_verdicts_disagreement_not_an_unobserved_envelope() -> None:
+    """Owner decision 2026-09-09 / design R2: the gate's fault is the verdict's fact."""
+    from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
+
+    runtime = _live_runtime()
+    runtime.clerk.live_arming.invalidate("the broker answered paper", reason_code=LIVE_MODE_DISAGREEMENT)
+
+    verdict = alpaca_live_verdict(settings=live_settings(), runtime=runtime, now_ms=_NOW)
+
+    assert verdict.mode_agreement == "disagreed"
+    assert verdict.clerk_refusal_reason_code == LIVE_MODE_DISAGREEMENT
+    assert verdict.final_verdict == "unknown"
+    assert "disagree" in verdict.detail
 ```
+
+(`_LiveClerk` gains `self.live_arming = ArmingGate()` beside its envelope — import `ArmingGate` from `app.broker.alpaca.clerk.live_arming_gate`.)
 
 (`record_sealed_binding`, `live_settings`, `ARMED_AT_MS` come from `live_arming_fixtures`; `LIVE_ACCT`, `TEST_ENVELOPE_VALUES` from `live_envelope_fixtures`; `shadow_runtime` is the slice-6 fixture this file already imports.) The slice-6 test that asserts `"slice 7" in verdict.detail` now asserts `"under the shadow authority" in verdict.detail`; the slice-6 test that asserts the `armed` headline `"... armed, nothing submitted yet"` now asserts `"... armed under the shadow authority, nothing submitted"`. Change those two strings and nothing else in existing tests.
 
@@ -3423,6 +3440,34 @@ _LIVE_COPY: dict[LiveSituation, tuple[str, str]] = {
 ```
 
 (keep every other line of that function as it is).
+
+- The mid-session disagreement (owner decision 2026-09-09; design R2). Add, beside `_mode_agreement`:
+
+```python
+def _mid_session_disagreement(runtime: ActiveClerkRuntime | None) -> bool:
+    """Whether the live authority's arming gate stands invalid under the mode-disagreement code.
+
+    The sync's 15 s account read is the one reader that sees the broker's
+    mode move after boot (design R2). It holds the gate under
+    ``LIVE_MODE_DISAGREEMENT`` until a read agrees again; the verdict reads
+    that fault as the disagreement it is, not as an unobserved envelope.
+    """
+    clerk = runtime.clerk if runtime is not None else None
+    gate = getattr(clerk, "live_arming", None)
+    return gate is not None and gate.invalid_reason_code == LIVE_MODE_DISAGREEMENT
+```
+
+(import `LIVE_MODE_DISAGREEMENT` from `app.broker.alpaca.clerk.live_arming` and delete the module's private `_DISAGREEMENT` literal in favour of it). In `alpaca_live_verdict`, replace `agreement = _mode_agreement(account_id=account_id, refusal=refusal)` with:
+
+```python
+    if _mid_session_disagreement(runtime):
+        agreement: ModeAgreement = "disagreed"
+        refusal = LIVE_MODE_DISAGREEMENT
+    else:
+        agreement = _mode_agreement(account_id=account_id, refusal=refusal)
+```
+
+The existing fail-closed branch (`if agreement == "disagreed" or ...`) then produces the `unknown` verdict with that refusal code and the `_WHY_UNKNOWN["disagreed"]` sentence; nothing else changes.
 
 - [ ] **Step 4: Run the suites**
 
@@ -3889,6 +3934,14 @@ Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
   `paper:` and `shadow-evidence:`, read under the same rule it is written under.
 ```
 
+- [ ] **Step 4b: Amend ADR 0059 (owner decision 2026-09-09)**
+
+In `docs/architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md`:
+- Decision 8 (line 89): replace the sentence `A transition out of \`live-armed\` observed mid-session halts new submission and sets \`desired_state = PAUSED\` with a \`LIVE_VERDICT_TRANSITION_HALT\` receipt, exactly the ADR 0011 §5 shape; Resume is guarded (§6).` with `A transition out of \`live-armed\` observed mid-session halts new submission: new entries are refused with a \`LIVE_VERDICT_TRANSITION_HALT\` receipt and the verdict says why; exits keep running; re-arming restores submission (amended 2026-09-09 — a paused instance would strand its position, because PAUSED is observe-only for EXIT too).`
+- Decision 2 (line 40): replace `because \`submit_mode\` is hashed into run identity` with `because \`sealed_account_id\` is inside the sealed program's hash and therefore inside run identity (amended 2026-09-09)`.
+- The amendment note: read `docs/architecture/adrs/0039-adr-status-is-decision-standing.md` for the form an amended-in-place ADR carries and `scripts/check_adr_status.py` (repo root) for what the status guard accepts, then add the note in that form directly after the `**Vocabulary:**` line — one line, dated 2026-09-09, naming both amended decisions and the slice-7 design's R10 and R12 as the reasons, and the owner's grill-me decision as the authority. Run `python scripts/check_adr_status.py` from the repo root and `python scripts/test_check_adr_status.py -v`; both must pass.
+- `docs/doc-authority.md` row 0059 (line 144): append `; D8's halt refuses new entries without pausing and D2 names sealed_account_id (amended 2026-09-09)` inside the cell.
+
 - [ ] **Step 5: The operator's environment truth**
 
 Append to `PythonDataService/.env.example`:
@@ -3920,7 +3973,7 @@ Expected: PASS (`tests/contracts` guards every local docs link and the ADR index
 - [ ] **Step 7: Commit**
 
 ```bash
-git add docs/references/alpaca-live-authority.md docs/references/alpaca-live-arming.md docs/references/alpaca-live-envelope.md docs/references/alpaca-shadow-authority.md docs/architecture/engine-authority-map.md CONTEXT.md PythonDataService/.env.example compose.yaml PythonDataService/scripts/manage_alpaca_arming.py PythonDataService/tests/scripts/test_manage_alpaca_arming.py PythonDataService/tests/services/test_boot_recovery.py PythonDataService/tests/contracts/test_alpaca_active_authority_wiring.py PythonDataService/tests/broker/alpaca/test_fault_injection_live.py
+git add docs/references/alpaca-live-authority.md docs/references/alpaca-live-arming.md docs/references/alpaca-live-envelope.md docs/references/alpaca-shadow-authority.md docs/architecture/engine-authority-map.md docs/architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md docs/doc-authority.md CONTEXT.md PythonDataService/.env.example compose.yaml PythonDataService/scripts/manage_alpaca_arming.py PythonDataService/tests/scripts/test_manage_alpaca_arming.py PythonDataService/tests/services/test_boot_recovery.py PythonDataService/tests/contracts/test_alpaca_active_authority_wiring.py PythonDataService/tests/broker/alpaca/test_fault_injection_live.py
 git commit -m "docs(alpaca): the live authority reference note, the predecessors' sentences, and the operator's env truth (ADR 0059 slice 7, R14–R17)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
