@@ -239,23 +239,15 @@ async def lifespan(app: FastAPI):
             )
 
         # ADR 0059 D4: the live world's risk envelope, read once from the
-        # environment. A live key with an incomplete envelope is not an abort:
-        # the selector refuses the authority by name (LIVE_ENVELOPE_MISSING)
-        # so every unrelated surface stays up and the operator reads why.
-        from app.broker.alpaca.clerk.live_envelope import (
-            LiveEnvelopeIncomplete,
-            LiveEnvelopeValues,
-        )
+        # environment. Settings validation (`_enforce_mode_agreement`) already
+        # refuses live mode without every ALPACA_LIVE_* value, so this cannot
+        # raise here; the selector's LIVE_ENVELOPE_MISSING refusal remains the
+        # defence for a caller that composes the shadow authority without it.
+        from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 
-        live_envelope_values: LiveEnvelopeValues | None = None
-        if not alpaca_settings.is_paper:
-            try:
-                live_envelope_values = LiveEnvelopeValues.from_settings(alpaca_settings)
-            except LiveEnvelopeIncomplete as exc:
-                logger.warning(
-                    "Alpaca live envelope is incomplete; the shadow authority will refuse to run.",
-                    extra={"action": "live_envelope_values_incomplete", "why": str(exc)},
-                )
+        live_envelope_values = (
+            None if alpaca_settings.is_paper else LiveEnvelopeValues.from_settings(alpaca_settings)
+        )
 
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
