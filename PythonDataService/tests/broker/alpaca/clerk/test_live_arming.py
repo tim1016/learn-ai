@@ -177,6 +177,10 @@ def test_every_code_is_its_own_name_and_the_set_is_closed() -> None:
     ) == ARMING_REASON_CODES
     assert LIVE_ENVELOPE_MISSING == "LIVE_ENVELOPE_MISSING"
     assert LIVE_ARMING_FUTURE_DATED == "LIVE_ARMING_FUTURE_DATED"
+    from app.broker.alpaca.clerk import live_arming as live_arming_module
+
+    for name in ARMING_REASON_CODES:
+        assert getattr(live_arming_module, name) == name
 
 
 def test_the_arming_session_counts_as_one_and_a_weekend_spends_nothing() -> None:
@@ -200,9 +204,12 @@ def test_a_market_holiday_spends_nothing_either() -> None:
 
 
 def test_sessions_used_refuses_a_reversed_range() -> None:
-    """A now_ms behind the arming fails closed: the calendar never sees the reversed range."""
-    with pytest.raises(ValueError, match="reversed range"):
+    """A now_ms behind the arming fails closed, to the millisecond -- the calendar never sees a reversed range."""
+    with pytest.raises(ValueError, match="precedes armed_at_ms"):
         sessions_used(armed_at_ms=MONDAY_MS, now_ms=FRIDAY_MS)
+    with pytest.raises(ValueError):
+        sessions_used(armed_at_ms=FRIDAY_MS, now_ms=FRIDAY_MS - 1)
+    assert sessions_used(armed_at_ms=FRIDAY_MS, now_ms=FRIDAY_MS) == 1
 
 
 def test_no_record_is_unarmed() -> None:

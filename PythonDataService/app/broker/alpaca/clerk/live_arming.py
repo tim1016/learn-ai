@@ -23,7 +23,7 @@ signal would.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -193,7 +193,9 @@ def _unsigned(record: LedgerRecord) -> dict[str, Any]:
     return payload
 
 
-def _from_payload(cls, payload: Mapping[str, Any], validate) -> Any:
+def _from_payload[RecordT: LedgerRecord](
+    cls: type[RecordT], payload: Mapping[str, Any], validate: Callable[[RecordT], None]
+) -> RecordT:
     """Build, validate and verify one row, or leave by this module's error.
 
     Everything is inside the guard for the reason ``shadow_receipt.from_payload``
@@ -275,6 +277,8 @@ def sessions_used(*, armed_at_ms: int, now_ms: int) -> int:
     for this case itself before ever calling here, and reports it under
     ``LIVE_ARMING_FUTURE_DATED``.
     """
+    if now_ms < armed_at_ms:
+        raise ValueError("now_ms precedes armed_at_ms; a record dated after the clock is not current")
     armed_date = et_date_at_ms(armed_at_ms)
     now_date = et_date_at_ms(now_ms)
     if now_date < armed_date:
