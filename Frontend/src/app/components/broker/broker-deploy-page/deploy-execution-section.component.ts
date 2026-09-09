@@ -34,6 +34,11 @@ export class DeployExecutionSectionComponent {
   // offer at a time; the other two are `planned` cards this reason never
   // reaches.
   readonly brokerModeUnavailableReason = input<string | null>(null);
+  // Which card is this account's own broker-contacting mode — the parent's
+  // `brokerMode()`. Told, not inferred: `availability` is a display state, and
+  // reading it as an identity would drop the blocked reason (and enable the
+  // radio) the moment the backend emitted this world's card as anything else.
+  readonly brokerMode = input.required<DeployExecutionMode['mode']>();
   // Backend-authored reason Dry Run is unreachable for the selected strategy
   // (#1703) — `null` unless the strategy has no registered runtime at all;
   // every other row stays Dry-Run-admissible regardless of validation state.
@@ -79,8 +84,8 @@ export class DeployExecutionSectionComponent {
   private strategyUnavailableReason(mode: DeployExecutionMode): string | null {
     if (mode.mode === 'dry_run') return this.dryRunUnavailableReason();
     // Only the card this world actually offers inherits the strategy's blocked
-    // reason; a planned Live card is governed by `availability` alone.
-    return mode.availability === 'available' ? this.brokerModeUnavailableReason() : null;
+    // reason; every other broker card is governed by `availability` alone.
+    return mode.mode === this.brokerMode() ? this.brokerModeUnavailableReason() : null;
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {

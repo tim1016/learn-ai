@@ -6,18 +6,6 @@ import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-d
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 
 /**
- * The one broker world a deploy against this account can use.
- *
- * A paper account deploys Paper. A live account is shadowed or
- * live-custodied; the drawer does not know which until the deploy view
- * says, so it names no world rather than a wrong one (ADR 0059 D2/D11).
- */
-const DEPLOY_WORLD_BY_ACCOUNT_MODE: Readonly<Record<'paper' | 'live', 'paper' | null>> = {
-  paper: 'paper',
-  live: null,
-};
-
-/**
  * Reusable right-side host for the established Alpaca deploy workflow.
  *
  * Route surfaces own visibility: the desk mirrors it in the URL while an
@@ -63,9 +51,15 @@ export class AlpacaDeployDrawerComponent {
   /** `null` while no account read has answered, or the account is live: the chrome then names no world. */
   private readonly brokerWorld = computed<'paper' | null>(() => {
     const shared = this.deskAccountData?.account;
-    if (shared?.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[shared.value().account_mode];
-    if (this.account.hasValue()) return DEPLOY_WORLD_BY_ACCOUNT_MODE[this.account.value().account_mode];
-    return null;
+    const observed = shared?.hasValue()
+      ? shared.value()
+      : this.account.hasValue()
+        ? this.account.value()
+        : null;
+    // A paper account deploys Paper. A live account is shadowed or
+    // live-custodied; the drawer does not know which until the deploy view
+    // says, so it names no world rather than a wrong one (ADR 0059 D2/D11).
+    return observed?.account_mode === 'paper' ? 'paper' : null;
   });
 
   protected readonly headerLabel = computed(() => {

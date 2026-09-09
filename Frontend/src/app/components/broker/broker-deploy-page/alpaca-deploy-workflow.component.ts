@@ -63,7 +63,11 @@ interface AlpacaDeployTicket {
   symbol: string;
   sizingPreset: 'safe_canary' | 'custom';
   quantity: number;
-  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper' | 'shadow' | 'live'>;
+  // Spelled out, not `Extract<DeployExecutionMode['mode'], ...>`: the backend
+  // enum is these four today, so `Extract` narrows nothing and quietly widens
+  // with the wire. Written as its own union, a fifth backend mode fails to
+  // compile at `setExecutionMode` instead of silently becoming settable.
+  executionMode: 'dry_run' | 'paper' | 'shadow' | 'live';
   allowCarryover: boolean;
   parameters: Record<string, unknown>;
   overrideAcknowledged: boolean;
@@ -597,7 +601,6 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setExecutionMode(mode: DeployExecutionMode['mode']): void {
-    if (mode !== 'dry_run' && mode !== 'paper' && mode !== 'shadow' && mode !== 'live') return;
     const option = this.currentView()?.execution_modes.find(
       (candidate) => candidate.mode === mode,
     );

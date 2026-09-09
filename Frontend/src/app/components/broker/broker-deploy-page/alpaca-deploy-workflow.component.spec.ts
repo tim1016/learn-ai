@@ -670,6 +670,40 @@ describe('AlpacaDeployWorkflowComponent', () => {
     })).toBeTruthy();
   });
 
+  it('leaves an available card that is not this world\'s broker card governed by availability alone', async () => {
+    // The section is *told* which card is this world's rather than reading
+    // `availability` as an identity. Nothing enforces "exactly one available
+    // broker card": if a second one is ever emitted, it must not inherit this
+    // world's blocked reason — which would disable a radio the backend has
+    // said nothing about.
+    const service = mockService(RECEIPT, {
+      ...LIVE_DEPLOY_VIEW,
+      strategies: [BLOCKED_STRATEGY],
+      execution_modes: [
+        ...LIVE_DEPLOY_VIEW.execution_modes,
+        {
+          mode: 'paper',
+          label: 'Paper',
+          availability: 'available',
+          explanation: 'Available through the Alpaca Clerk.',
+        },
+      ],
+    });
+    await renderWorkflow(service);
+
+    // This world's card carries the blocked reason, as before.
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Live/ }).disabled).toBe(true);
+
+    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    const paperCard = paper.closest<HTMLElement>('.mode-option');
+    if (paperCard === null) throw new Error('Paper mode-option container not found');
+    expect(paper.disabled).toBe(false);
+    expect(within(paperCard).getByText('Available')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'About Paper: Available through the Alpaca Clerk.',
+    })).toBeTruthy();
+  });
+
   it('still requires the durable override for an evidence-only Shadow deploy', async () => {
     // Shadow holds the same custody as Paper, so the backend's broker-deploy
     // gate (`_require_broker_deploy_request`) demands the identical override.

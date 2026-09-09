@@ -47,6 +47,7 @@
 
             <app-deploy-execution-section
               [executionModes]="view.execution_modes"
+              [brokerMode]="brokerMode()"
               [brokerModeUnavailableReason]="brokerModeUnavailableReason()"
               [dryRunUnavailableReason]="dryRunUnavailableReason()"
               [selectedMode]="ticket().executionMode"
