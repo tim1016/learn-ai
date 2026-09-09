@@ -276,6 +276,10 @@ def test_every_code_is_its_own_name_and_the_set_is_closed() -> None:
             "LIVE_SHADOW_INCOMPLETE",
             "LIVE_ENVELOPE_DISAGREEMENT",
             "LIVE_ENVELOPE_MISSING",
+            "LIVE_ARMING_REQUIRED",
+            "LIVE_ARMING_UNOBSERVED",
+            "LIVE_ARMING_LEDGER_INVALID",
+            "LIVE_VERDICT_TRANSITION_HALT",
         }
     ) == ARMING_REASON_CODES
     assert LIVE_ENVELOPE_MISSING == "LIVE_ENVELOPE_MISSING"

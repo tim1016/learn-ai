@@ -54,6 +54,19 @@ LIVE_ARMING_FUTURE_DATED = "LIVE_ARMING_FUTURE_DATED"
 # nothing read the receipt yet. This is the first code that does.
 LIVE_SHADOW_INCOMPLETE = "LIVE_SHADOW_INCOMPLETE"
 
+# Slice 7 (ADR 0059 D11): the admission-time codes. ``REQUIRED`` is an instance
+# the ledger has never named; ``UNOBSERVED`` is a gate with no fresh snapshot;
+# ``LEDGER_INVALID`` is a snapshot the last refresh could not verify. The
+# fourth is ADR 0059 D8's own name for the pause a lost arming causes.
+LIVE_ARMING_REQUIRED = "LIVE_ARMING_REQUIRED"
+LIVE_ARMING_UNOBSERVED = "LIVE_ARMING_UNOBSERVED"
+LIVE_ARMING_LEDGER_INVALID = "LIVE_ARMING_LEDGER_INVALID"
+LIVE_VERDICT_TRANSITION_HALT = "LIVE_VERDICT_TRANSITION_HALT"
+# The adapter's own refusal (`BrokerAccountModeDisagreement.reason_code`),
+# restated so the gate can name it when the broker's mode moves mid-session
+# (design R2); a test pins the two strings equal.
+LIVE_MODE_DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
+
 ARMING_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ARMING_LAPSED,
@@ -69,6 +82,28 @@ ARMING_REASON_CODES: frozenset[str] = frozenset(
         LIVE_SHADOW_INCOMPLETE,
         LIVE_ENVELOPE_DISAGREEMENT,
         LIVE_ENVELOPE_MISSING,
+        LIVE_ARMING_REQUIRED,
+        LIVE_ARMING_UNOBSERVED,
+        LIVE_ARMING_LEDGER_INVALID,
+        LIVE_VERDICT_TRANSITION_HALT,
+    }
+)
+
+# What ``sqlite/arming_admission.require_arming_admission`` may refuse with —
+# the three codes above plus the per-instance states ``arming_status`` names.
+# ``uncertainty.py`` classifies all of them transient: the reaction to a lost
+# arming is the tick rule's pause, never a fatal halt from inside admission.
+ARMING_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
+    {
+        LIVE_ARMING_REQUIRED,
+        LIVE_ARMING_UNOBSERVED,
+        LIVE_ARMING_LEDGER_INVALID,
+        LIVE_ARMING_LAPSED,
+        LIVE_ARMING_REVOKED,
+        LIVE_ARMING_SEAL_CHANGED,
+        LIVE_ARMING_FUTURE_DATED,
+        LIVE_ENVELOPE_DISAGREEMENT,
+        LIVE_MODE_DISAGREEMENT,
     }
 )
 
@@ -414,20 +449,26 @@ def arming_status(
 
 
 __all__ = [
+    "ARMING_ADMISSION_REASON_CODES",
     "ARMING_REASON_CODES",
     "LIVE_ARMING_FUTURE_DATED",
     "LIVE_ARMING_INPUTS_CHANGED",
     "LIVE_ARMING_INSTANCE_UNSEALED",
     "LIVE_ARMING_LAPSED",
+    "LIVE_ARMING_LEDGER_INVALID",
     "LIVE_ARMING_NOT_ARMED",
     "LIVE_ARMING_PLAN_EXPIRED",
+    "LIVE_ARMING_REQUIRED",
     "LIVE_ARMING_REVOKED",
     "LIVE_ARMING_SEAL_CHANGED",
     "LIVE_ARMING_TOKEN_INVALID",
     "LIVE_ARMING_TTL_INVALID",
+    "LIVE_ARMING_UNOBSERVED",
     "LIVE_ENVELOPE_DISAGREEMENT",
     "LIVE_ENVELOPE_MISSING",
+    "LIVE_MODE_DISAGREEMENT",
     "LIVE_SHADOW_INCOMPLETE",
+    "LIVE_VERDICT_TRANSITION_HALT",
     "ArmingState",
     "ArmingStatus",
     "LedgerRecord",
