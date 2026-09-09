@@ -42,6 +42,52 @@ _WHY_UNKNOWN: dict[str, str] = {
     "unobserved": "the account has not been observed yet",
 }
 
+# The three situations a live, mode-agreed account can be in, and the operator
+# copy each one publishes. A table rather than nested conditionals: a fourth
+# situation is a row here, not a fourth arm inside two expressions.
+LiveSituation = Literal["armed", "shadow", "bare"]
+
+_LIVE_COPY: dict[LiveSituation, tuple[str, str]] = {
+    "armed": (
+        "LIVE account {account} — {instances} armed, nothing submitted yet",
+        "This is a real-money Alpaca account and an operator has armed "
+        "{instances} on it. No path submits a real-money order in this slice: the "
+        "shadow authority still synthesizes every fill, and ADR 0059 slice 7 is what "
+        "opens submission.",
+    ),
+    "shadow": (
+        "LIVE account {account} — shadow authority active, no instance armed",
+        "This is a real-money Alpaca account. Its shadow authority reads it and "
+        "synthesizes every fill; nothing is submitted. Arming requires a completed "
+        "shadow receipt and the supervised ceremony (ADR 0059).",
+    ),
+    "bare": (
+        "LIVE account {account} — real money, no instance armed",
+        "This is a real-money Alpaca account. No sealed instance is armed, so "
+        "every order path refuses. Arming requires a completed shadow receipt "
+        "and the supervised ceremony (ADR 0059).",
+    ),
+}
+
+# R11 requires each non-armed instance to be named with its reason code, and
+# the banner renders that sentence verbatim in a tooltip. One closed map, here,
+# gives the code a phrase an operator can read without a lookup table -- the
+# Frontend copy map stays untouched because this is backend-authored prose.
+_NOT_ARMED_WHY: dict[str, str] = {
+    "LIVE_ARMING_LAPSED": "its sessions are spent",
+    "LIVE_ARMING_REVOKED": "it was disarmed",
+    "LIVE_ARMING_SEAL_CHANGED": "its seal changed",
+    "LIVE_ENVELOPE_DISAGREEMENT": "the envelope changed",
+    "LIVE_ARMING_FUTURE_DATED": "its record is dated after the clock",
+}
+
+
+def _not_armed(strategy_instance_id: str, reason_code: str) -> str:
+    """One named instance, its reason code, and why in a short phrase."""
+    why = _NOT_ARMED_WHY.get(reason_code)
+    named = reason_code if why is None else f"{reason_code}: {why}"
+    return f"{strategy_instance_id} ({named})"
+
 
 def _clerk_authority(runtime: ActiveClerkRuntime | None) -> ClerkAuthority:
     if runtime is None:
@@ -153,8 +199,12 @@ def observe_arming(
             now_ms=now_ms,
         )
     except (LiveArmingInvalid, LiveEnvelopeIncomplete) as exc:
+        # "cannot be judged", not "cannot be read": the two faults caught here
+        # are a ledger that will not verify *and* an environment whose envelope
+        # is incomplete, and telling an operator the ledger is at fault when it
+        # is the .env sends them to the wrong file. The exception names which.
         logger.error(
-            "the arming ledger cannot be read; the verdict counts no armed instance",
+            "the arming evidence cannot be judged; the verdict counts no armed instance",
             extra={
                 "action": "live_arming_ledger_invalid",
                 "account_id": live_account_id,
@@ -164,10 +214,10 @@ def observe_arming(
         return ArmingObservation(
             armed_instance_count=0,
             envelope_state="configured_unsealed",
-            detail=f" The arming ledger cannot be read ({exc}); no instance is counted as armed.",
+            detail=f" The arming evidence cannot be judged ({exc}); no instance is counted as armed.",
         )
     not_armed = [
-        f"{strategy_instance_id} ({status.reason_code})"
+        _not_armed(strategy_instance_id, status.reason_code)
         for strategy_instance_id, status in sorted(arming.statuses.items())
         if status.state != "armed" and status.reason_code is not None
     ]
@@ -295,6 +345,8 @@ def alpaca_live_verdict(
     armed = observed_arming.armed_instance_count
     live_armed = armed >= 1 and authority in SQLITE_FACADE_AUTHORITIES
     instances = f"{armed} instance{'' if armed == 1 else 's'}"
+    situation: LiveSituation = "armed" if live_armed else "shadow" if shadow_active else "bare"
+    headline, detail = _LIVE_COPY[situation]
     return AlpacaLiveVerdict(
         configured_mode="live",
         observed_account_id=account_id,
@@ -307,28 +359,9 @@ def alpaca_live_verdict(
         loss_hold=observed_loss_hold,
         shadow_state=observed_shadow,
         final_verdict="live-armed" if live_armed else "live-unarmed",
-        headline=(
-            f"LIVE account {named_account_id} — {instances} armed, nothing submitted yet"
-            if live_armed
-            else f"LIVE account {named_account_id} — shadow authority active, no instance armed"
-            if shadow_active
-            else f"LIVE account {named_account_id} — real money, no instance armed"
-        )
+        headline=headline.format(account=named_account_id, instances=instances)
         + (" — loss hold" if held else ""),
-        detail=(
-            "This is a real-money Alpaca account and an operator has armed "
-            f"{instances} on it. No path submits a real-money order in this slice: the "
-            "shadow authority still synthesizes every fill, and ADR 0059 slice 7 is what "
-            "opens submission."
-            if live_armed
-            else "This is a real-money Alpaca account. Its shadow authority reads it and "
-            "synthesizes every fill; nothing is submitted. Arming requires a completed "
-            "shadow receipt and the supervised ceremony (ADR 0059)."
-            if shadow_active
-            else "This is a real-money Alpaca account. No sealed instance is armed, so "
-            "every order path refuses. Arming requires a completed shadow receipt "
-            "and the supervised ceremony (ADR 0059)."
-        )
+        detail=detail.format(instances=instances)
         + observed_arming.detail
         + (
             " The account is in loss hold: every ENTER is refused until an operator "

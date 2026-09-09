@@ -392,7 +392,8 @@ def test_observe_arming_names_a_lapsed_instance_and_counts_it_out(tmp_path: Path
 
     assert observation.armed_instance_count == 0
     assert observation.envelope_state == "sealed"
-    assert f"{ARMING_SID} (LIVE_ARMING_LAPSED)" in observation.detail
+    # R11 requires the code; the phrase after it is what an operator reads in the tooltip.
+    assert f"{ARMING_SID} (LIVE_ARMING_LAPSED: its sessions are spent)" in observation.detail
 
 
 def test_observe_arming_fails_closed_on_an_unreadable_ledger(tmp_path: Path) -> None:
@@ -414,7 +415,10 @@ def test_observe_arming_fails_closed_on_an_unreadable_ledger(tmp_path: Path) -> 
 
     assert observation.armed_instance_count == 0
     assert observation.envelope_state == "configured_unsealed"
-    assert "cannot be read" in observation.detail
+    # Not "the ledger cannot be read": the same branch also catches an
+    # incomplete environment, and the exception is what names which.
+    assert "The arming evidence cannot be judged" in observation.detail
+    assert "digest does not verify" in observation.detail
 
 
 def test_observe_arming_on_a_never_armed_account_claims_nothing(tmp_path: Path) -> None:
