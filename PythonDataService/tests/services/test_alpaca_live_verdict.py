@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
 )
-from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
+from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT, LiveArmingRecord
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.alpaca_live_verdict import ShadowState
@@ -32,7 +32,7 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     paper_settings,
     record_sealed_binding,
 )
-from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import shadow_runtime  # noqa: F401
 
 _NOW = 1_800_000_000_000
@@ -250,6 +250,17 @@ async def test_observe_loss_hold_reads_the_durable_hold_on_a_composed_shadow_run
     await runtime.envelope_sync.tick()
     assert observe_loss_hold(runtime) == "held"
     assert observe_loss_hold(None) == "not_applicable"
+
+
+def test_observe_loss_hold_is_not_applicable_on_a_real_paper_sqlite_runtime() -> None:
+    """The ``sqlite`` authority kind is shared by real-paper and real-live (slice 7, Task 4);
+
+    only the latter custodies a live account. A real-paper runtime must not open its
+    repository and answer a loss-hold state for an account this observation never reads.
+    """
+    runtime = ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001")
+
+    assert observe_loss_hold(runtime) == "not_applicable"
 
 
 MONDAY_MS = et_minute_of_day_ms(date(2026, 9, 14), 10 * 60)
@@ -556,6 +567,23 @@ def test_a_live_armed_real_live_account_says_submission_is_open() -> None:
     assert "nothing submitted" not in verdict.detail.lower()
 
 
+def test_a_live_armed_account_in_loss_hold_says_submission_is_held() -> None:
+    verdict = alpaca_live_verdict(
+        settings=live_settings(),
+        runtime=_live_runtime(),
+        now_ms=_NOW,
+        arming=ArmingObservation(armed_instance_count=2, envelope_state="sealed", detail=""),
+        loss_hold="held",
+    )
+    assert verdict.final_verdict == "live-armed"
+    assert verdict.headline == (
+        f"LIVE account {LIVE_ACCT} — 2 instances armed, real-money submission held by the loss hold"
+    )
+    assert "every ENTER is refused" in verdict.detail
+    assert "is submitted to Alpaca" not in verdict.detail
+    assert verdict.detail.count("loss hold") == 1
+
+
 def test_a_real_live_account_with_nothing_armed_says_every_enter_refuses() -> None:
     verdict = alpaca_live_verdict(settings=live_settings(), runtime=_live_runtime(), now_ms=_NOW)
     assert verdict.final_verdict == "live-unarmed"
@@ -563,7 +591,9 @@ def test_a_real_live_account_with_nothing_armed_says_every_enter_refuses() -> No
     assert "every ENTER" in verdict.detail
 
 
-def test_the_shadow_rows_no_longer_promise_a_future_slice(shadow_runtime) -> None:  # noqa: F811 — the imported fixture
+def test_the_shadow_rows_no_longer_promise_a_future_slice(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+) -> None:
     runtime, _broker = shadow_runtime
     verdict = alpaca_live_verdict(
         settings=live_settings(),
@@ -577,8 +607,6 @@ def test_the_shadow_rows_no_longer_promise_a_future_slice(shadow_runtime) -> Non
 
 def test_a_mid_session_mode_disagreement_is_the_verdicts_disagreement_not_an_unobserved_envelope() -> None:
     """Owner decision 2026-09-09 / design R2: the gate's fault is the verdict's fact."""
-    from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
-
     runtime = _live_runtime()
     runtime.clerk.live_arming.invalidate("the broker answered paper", reason_code=LIVE_MODE_DISAGREEMENT)
 
