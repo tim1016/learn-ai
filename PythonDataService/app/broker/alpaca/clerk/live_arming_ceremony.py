@@ -38,7 +38,6 @@ from app.broker.alpaca.clerk.ceremony import (
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INPUTS_CHANGED,
     LIVE_ARMING_INSTANCE_UNSEALED,
-    LIVE_ARMING_NOT_ARMED,
     LIVE_ARMING_PLAN_EXPIRED,
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
@@ -364,27 +363,20 @@ def disarm(
     record it revokes.
     """
     live_account_id = live_account_id_for(artifacts_root)
-    ledger = LiveArmingLedger(artifacts_root, live_account_id=live_account_id)
-    latest = ledger.latest(strategy_instance_id)
-    if not isinstance(latest, LiveArmingRecord):
-        raise LiveArmingRefused(
-            LIVE_ARMING_NOT_ARMED,
-            f"{strategy_instance_id} has no arming record to revoke on {live_account_id}",
-        )
-    record = LiveDisarmRecord.create(
-        live_account_id=live_account_id,
-        strategy_instance_id=strategy_instance_id,
-        revokes_record_sha256=latest.record_sha256,
-        disarmed_at_ms=clock(),
+    # The ledger owns the read-and-revoke transaction: what is being revoked
+    # and the row that revokes it are decided under one lock acquisition, so a
+    # concurrent re-arm cannot make ``revokes_record_sha256`` name a stale
+    # record (C6).
+    record = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).revoke_latest(
+        strategy_instance_id, disarmed_at_ms=clock()
     )
-    ledger.append(record)
     logger.warning(
         "live instance disarmed",
         extra={
             "action": "live_arming_revoked",
             "account_id": live_account_id,
             "strategy_instance_id": strategy_instance_id,
-            "revokes_record_sha256": latest.record_sha256,
+            "revokes_record_sha256": record.revokes_record_sha256,
         },
     )
     return record

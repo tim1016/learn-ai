@@ -20,9 +20,11 @@ from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
 from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_NOT_ARMED,
     LedgerRecord,
     LiveArmingInvalid,
     LiveArmingRecord,
+    LiveArmingRefused,
     LiveDisarmRecord,
     latest_arming,
 )
@@ -77,11 +79,51 @@ class LiveArmingLedger:
 
     def append(self, record: LedgerRecord) -> None:
         """Durably append one sealed row, under the lock, after re-verifying it."""
+        with advisory_file_lock(self._path):
+            self._append_locked(record)
+
+    def _append_locked(self, record: LedgerRecord) -> None:
+        """The append itself; the caller already holds this ledger's advisory lock.
+
+        Factored out so a transaction that must read *and* write under one
+        acquisition (``revoke_latest``) can reuse the write without taking the
+        lock a second time, which would deadlock on the blocking acquire.
+        """
         if record.live_account_id != self._live_account_id:
             raise LiveArmingInvalid(f"{_LABEL} record belongs to another live account than this ledger's")
         canonical = _verified_payload(record)
+        append_canonical_jsonl_line(self._path, canonical, invalid=LiveArmingInvalid, label=_LABEL)
+
+    def revoke_latest(self, strategy_instance_id: str, *, disarmed_at_ms: int) -> LiveDisarmRecord:
+        """Revoke this instance's latest arming, reading and appending under one lock.
+
+        Deciding *what* is being revoked and writing the row that revokes it
+        are one transaction. Split across two acquisitions, a concurrent re-arm
+        lands between them and ``revokes_record_sha256`` names a record that is
+        no longer the latest, while two concurrent disarms both succeed. Status
+        reads any trailing disarm row as revoking the instance either way, so
+        the effective state and the audit evidence would disagree about a
+        real-money permission -- the one place they must not.
+
+        The refusal is the ceremony's own ``LIVE_ARMING_NOT_ARMED``: there is
+        nothing to revoke when the instance's last row is a revocation, or when
+        it has no row at all.
+        """
         with advisory_file_lock(self._path):
-            append_canonical_jsonl_line(self._path, canonical, invalid=LiveArmingInvalid, label=_LABEL)
+            latest = self.latest(strategy_instance_id)
+            if not isinstance(latest, LiveArmingRecord):
+                raise LiveArmingRefused(
+                    LIVE_ARMING_NOT_ARMED,
+                    f"{strategy_instance_id} has no arming record to revoke on {self._live_account_id}",
+                )
+            record = LiveDisarmRecord.create(
+                live_account_id=self._live_account_id,
+                strategy_instance_id=strategy_instance_id,
+                revokes_record_sha256=latest.record_sha256,
+                disarmed_at_ms=disarmed_at_ms,
+            )
+            self._append_locked(record)
+        return record
 
     def records(self) -> tuple[LedgerRecord, ...]:
         """Every row this ledger's account owns, in file order.
