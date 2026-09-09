@@ -13,7 +13,6 @@ from __future__ import annotations
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_REQUIRED,
     LIVE_ARMING_UNOBSERVED,
-    ArmingStatus,
 )
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -34,8 +33,13 @@ def _refuse(reason_code: str, why: str) -> AdmissionBlockedError:
     )
 
 
-def require_arming_admission(gate: ArmingGate, *, strategy_instance_id: str, now_ms: int) -> ArmingStatus:
-    """Admit one ENTER only for an instance the ledger says is armed right now."""
+def require_arming_admission(gate: ArmingGate, *, strategy_instance_id: str, now_ms: int) -> None:
+    """Admit one ENTER only for an instance the ledger says is armed right now.
+
+    Returns nothing: the whole answer is whether it raised. No caller has ever
+    read a status back from here, and a return value nobody reads is a second
+    thing to keep true.
+    """
     reason_code = gate.invalid_reason_code
     if reason_code is not None:
         raise _refuse(
@@ -51,7 +55,7 @@ def require_arming_admission(gate: ArmingGate, *, strategy_instance_id: str, now
         )
     status = snapshot.status_for(strategy_instance_id, now_ms=now_ms)
     if status.state == "armed":
-        return status
+        return
     if status.state == "unarmed":
         raise _refuse(
             LIVE_ARMING_REQUIRED,

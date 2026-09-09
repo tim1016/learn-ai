@@ -55,9 +55,12 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
     "but the Python runner cannot dispatch it yet — this is a 'not built "
     "yet' block, distinct from an unmet validation or a stale evidence proof."
 )
+# Worded for every broker world, not just Paper: since ADR 0059 slice 7 this
+# sentence renders on a live account's own deploy form, where "Paper trading"
+# names the wrong thing entirely. The grant it points at is the same one.
 CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION = (
-    "Paper trading is not enabled for this strategy on this account yet. "
-    "Review and enable Paper access below. Dry Run is still available."
+    "Broker trading is not enabled for this strategy on this account yet. "
+    "Review and enable broker access below."
 )
 _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "A human marked this strategy validated, but its behavioral evidence is "

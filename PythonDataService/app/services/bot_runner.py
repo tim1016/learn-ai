@@ -322,6 +322,7 @@ class BotTaskRegistry:
             is_running=self._is_running,
             now_ms=self._now_ms,
             binding_for=self._read_binding,
+            installed_custody_account_id=lambda: None if (c := get_alpaca_clerk()) is None else c.account_id,
         )
         self._start_admission = BotStartAdmission(
             now_ms=self._now_ms,

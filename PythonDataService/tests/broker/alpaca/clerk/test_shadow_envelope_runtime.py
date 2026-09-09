@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     SHADOW_ACCT,
@@ -46,11 +47,7 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     _LiveBroker,
 )
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, SID, _binding
-from tests.broker.alpaca.clerk.test_active_authority import (
-    _activation,
-    _ActivationStore,
-    _Broker,
-)
+from tests.broker.alpaca.clerk.test_active_authority import _activation, _Broker
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _retain
 
 DECISION_MINUTE = 600  # 10:00 ET on a full NYSE session

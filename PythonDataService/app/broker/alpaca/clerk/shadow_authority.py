@@ -1,9 +1,12 @@
 """The Shadow Account Authority's boot story (ADR 0059 D2).
 
-A live account never gets a mutating Clerk. It gets this: the live read
-port bound behind a ``shadow:`` identity whose trade port submits nothing,
-composed only behind its own explicit activation fence and only while the
-live order namespace stays provably empty.
+A live account that has not graduated gets no mutating Clerk. It gets this:
+the live read port bound behind a ``shadow:`` identity whose trade port
+submits nothing, composed only behind its own explicit activation fence and
+only while the live order namespace stays provably empty. Graduation — the
+live cutover's activation record — is what selects the real-money authority
+instead (``live_authority.py``, slice 7); absent that record this is still
+every live boot's answer.
 """
 
 from __future__ import annotations
@@ -67,8 +70,9 @@ async def select_shadow_clerk_runtime(
     """Compose the Shadow Account Authority for a live account (ADR 0059 D2).
 
     The live trade port is never bound: the shadow world's trade port is
-    ``NoSubmitAlpacaTradePort``. Real-money custody stays unconstructible
-    until slice 7 admits an armed instance.
+    ``NoSubmitAlpacaTradePort``. Real-money custody is not constructible from
+    here at all — it is a different authority, reached only through the live
+    cutover's activation record (slice 7).
 
     ``live_envelope_values`` are the configured ``ALPACA_LIVE_*`` bounds
     (ADR 0059 D4). They are not optional in practice: the shadow authority

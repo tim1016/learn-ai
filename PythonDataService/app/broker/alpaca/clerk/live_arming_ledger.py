@@ -28,9 +28,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
-    latest_arming,
 )
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sealed_ledger import (
     append_canonical_jsonl_line,
     read_canonical_jsonl_objects,
@@ -230,19 +228,6 @@ class LiveArmingLedger:
     def latest(self, strategy_instance_id: str) -> LedgerRecord | None:
         rows = self.records_for(strategy_instance_id)
         return rows[-1] if rows else None
-
-    def sealed_envelope(self) -> LiveEnvelopeValues | None:
-        """The envelope the account's newest arming record sealed (R10), in one read.
-
-        No production path reads it any more: since slice 7 the envelope sync
-        takes the ``records()`` tuple once per tick and derives both the sealed
-        envelope and the arming snapshot from that single read, so one tick can
-        never describe two snapshots of a file an operator may be appending to.
-        This stays the single-fact read for a caller that wants the envelope
-        and nothing derived beside it -- the ledger's own tests today.
-        """
-        latest = latest_arming(self.records())
-        return None if latest is None else latest.envelope
 
 
 __all__ = ["LIVE_ARMING_FILENAME", "LiveArmingLedger"]

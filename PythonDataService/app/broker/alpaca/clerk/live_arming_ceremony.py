@@ -12,8 +12,10 @@ receipt is recorded when one exists -- all durable evidence already on disk.
 Mode agreement against the broker stays the runtime's job at boot, and (slice 7)
 at admission.
 
-An arming record grants nothing in this slice: no path submits a real-money
-order until slice 7 opens one.
+An arming record is a permission, never an authority. On an ungraduated
+account it grants nothing at all; on a graduated one (slice 7) it is what
+lets the live authority's arming gate admit that instance's ENTER — and only
+that instance's, and only while the record still stands.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
+    custody_account_id_for,
     custody_account_ids_for,
     live_account_id_for_shadow_account,
 )
@@ -148,8 +151,9 @@ def instance_seal_hashes(
     legacy record that cannot be armed, and its presence must not stop a sealed
     sibling from arming.
 
-    ``custody_world="real_live"`` narrows the admissible custody ids to the
-    live id alone. After graduation the rehearsal's ``shadow:``-sealed
+    ``custody_world`` narrows the admissible custody ids to that world's own
+    -- whatever ``custody_account_id_for`` answers for it, so ``real_live``
+    means the live id alone. After graduation the rehearsal's ``shadow:``-sealed
     bindings stay on disk (design R15) and their slice-6 arming records stay
     in the same account-rooted ledger, so a reader that counts them would
     report instances the live authority does not custody -- and refuses on
@@ -157,10 +161,13 @@ def instance_seal_hashes(
     CLI) keeps both ids: arming a shadow-sealed instance under a graduated
     account grants nothing and is refused at Start anyway.
     """
+    # The world-to-custody-id rule is ``custody_account_id_for``'s, so naming a
+    # world here narrows to that world's own id for *any* world rather than
+    # re-spelling the ``real_live`` half of the table in a feature module.
     admissible = (
-        frozenset({live_account_id})
-        if custody_world == "real_live"
-        else custody_account_ids_for(live_account_id)
+        custody_account_ids_for(live_account_id)
+        if custody_world is None
+        else frozenset({custody_account_id_for(custody_world, live_account_id)})
     )
     seals: dict[str, InstanceSeal] = {}
     for binding in live_state_binding_repository(live_state_root).list_for_broker("alpaca"):

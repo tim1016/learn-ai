@@ -14,7 +14,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -124,7 +123,8 @@ class BotBootRecovery:
         manages_instance: Callable[[str], bool],
         is_running: Callable[[str], bool],
         now_ms: Callable[[], int],
-        binding_for: Callable[[str], BrokerBotBinding | None] | None = None,
+        binding_for: Callable[[str], BrokerBotBinding | None],
+        installed_custody_account_id: Callable[[], str | None],
     ) -> None:
         del artifacts_root
         self._lifecycle_repo_for = lifecycle_repo_for
@@ -138,11 +138,14 @@ class BotBootRecovery:
         self._manages_instance = manages_instance
         self._is_running = is_running
         self._now_ms = now_ms
-        # The binding plane's reader, so the sweep can tell a binding this
-        # authority custodies from one it does not. Absent in the collaborator
-        # tests that drive the sweep from hand-built candidates: with no
-        # binding to read, no candidate can be judged foreign.
+        # The binding plane's reader and the installed authority's custody id:
+        # the two facts the foreign-binding classification compares. Required,
+        # both of them — this decides whether a real-money boot repairs a
+        # binding the installed authority does not custody, and a construction
+        # site that could omit it would get the pre-slice-7 behaviour with no
+        # signal (ADR 0059 slice 7, R15).
         self._binding_for = binding_for
+        self._installed_custody_account_id = installed_custody_account_id
 
     async def run(
         self,
@@ -288,19 +291,20 @@ class BotBootRecovery:
         Corruption is not foreignness: an unreadable binding, a non-Alpaca
         identity, and a historical IBKR binding keep raising exactly as they
         do today.
+
+        No installed custody id means "not foreign": with no authority
+        installed there is nothing for the binding to be foreign *to*, and
+        that boot is already the ``authority_unavailable`` branch's to
+        report -- it closes the start gate on its own.
         """
-        if self._binding_for is None:
-            return None
         binding = self._binding_for(strategy_instance_id)
         if binding is None or binding.sealed_account_id is None:
             return None
         # The custody id the installed primary authority holds -- the same
         # ``account_id`` a ``ClerkCustodySnapshot`` carries into Start
         # admission. Every authority declares it (``ActiveAlpacaClerk``), so
-        # the only absence is "no authority installed", and that case is
-        # already the ``authority_unavailable`` branch's to report.
-        installed_clerk = get_alpaca_clerk()
-        installed_account_id = None if installed_clerk is None else installed_clerk.account_id
+        # the only absence is "no authority installed".
+        installed_account_id = self._installed_custody_account_id()
         if installed_account_id is None or binding.sealed_account_id == installed_account_id:
             return None
         if self._lifecycle_projector_for(strategy_instance_id) is not self._lifecycle_projector:

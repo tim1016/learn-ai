@@ -3,7 +3,14 @@
 Selection-free on purpose: this module knows how to open an account's
 repository and stand up its Clerk, sweep and hold sync, but never which
 account or authority a boot should choose. That keeps it importable by
-every selector -- real paper, shadow and synthetic -- with no import cycle.
+every selector -- real paper, shadow, real live and synthetic -- with no
+import cycle.
+
+It also hosts the two refusal shapes those selectors share --
+``compose_failure_refusal`` and ``developer_reset_refusal`` -- for that same
+reason: they are used by ``active_authority`` and by ``live_authority``, and
+``live_authority`` is imported *by* ``active_authority``, so either selector
+owning them would put the shared shape downstream of one of its two callers.
 """
 
 from __future__ import annotations
@@ -560,7 +567,9 @@ __all__ = [
     "BackgroundSweep",
     "ClerkStartupFailure",
     "activate_isolated_authority",
+    "compose_failure_refusal",
     "compose_repository_runtime",
+    "developer_reset_refusal",
     "open_repository",
     "unavailable_runtime",
 ]

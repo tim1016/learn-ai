@@ -21,7 +21,7 @@ from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEn
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
 from app.broker.ibkr.config import live_artifacts_root
-from app.schemas.account_authority import CustodyWorld
+from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.run_admission import ARMING_NEXT_STEP, ArmingAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding
 
@@ -46,7 +46,14 @@ def live_arming_admission_fact(
     values; production resolves each from its one owner.
     """
     world = primary_custody_world() if custody_world is None else custody_world
-    if binding.mode == "dry_run" or custody.account_mode != "live" or world != "real_live":
+    # ``world != "real_live"`` is the world question; the mode question is the
+    # closed table's answer for that world, not a second ``"live"`` literal
+    # (repo philosophy #5 — one spelling of the world-to-mode rule).
+    if (
+        binding.mode == "dry_run"
+        or world != "real_live"
+        or not world_admits_account_mode(world, custody.account_mode)
+    ):
         return None
     try:
         resolved = get_alpaca_settings() if settings is None else settings

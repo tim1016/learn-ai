@@ -6,7 +6,7 @@ Formula: ``status_for(sid, now_ms) = arming_status(records, seal_hash=seals[sid]
 Reference: design R5 in
   ``docs/superpowers/specs/2026-09-09-live-slice-7-gate-remeaning-design.md``.
 Canonical implementation: this file. The status rule is ``live_arming.py``;
-  the refresh is ``sqlite/live_envelope_sync.py``; the admission is
+  the refresh is ``sqlite/arming_refresh.py``; the admission is
   ``sqlite/arming_admission.py``.
 Validated against: ``tests/broker/alpaca/clerk/test_live_arming_gate.py``.
 
@@ -64,17 +64,31 @@ class ArmingGate:
     """The snapshot one authority admits ENTERs against.
 
     A process-local cache of local evidence, never a custody fact — the
-    ``LiveEnvelopeGate`` precedent. ``invalidate`` drops the snapshot so a
-    ledger nobody can read — or a broker whose mode no longer agrees (R2) —
-    admits nothing, and says why under which code.
+    ``LiveEnvelopeGate`` precedent. Two faults, with two lifetimes, because
+    the two things that stop this gate admitting are not the same fact:
+
+    * ``invalidate`` is *this refresh's* verdict — a ledger nobody can read
+      seals nothing and admits nothing. The next refresh that does read the
+      ledger clears it by publishing.
+    * ``hold`` / ``release`` is a *sticky* fault the refresh cannot clear:
+      the account the broker answered is not the one this authority was
+      composed for (design R2). The ledger is fine, so a refresh would
+      happily publish over it; only a later read that agrees releases it.
+
+    Both report through ``invalid_reason_code`` / ``invalid_why``, and while
+    either stands ``fresh_snapshot`` answers ``None``. A standing hold wins
+    the report: it is the newer fact, and it is the one the tick just
+    observed.
     """
 
     def __init__(self, *, observation_max_age_ms: int = OBSERVATION_MAX_AGE_MS) -> None:
         self._max_age_ms = observation_max_age_ms
         self._snapshot: ArmingSnapshot | None = None
         self._invalid: tuple[str, str] | None = None
+        self._fault: tuple[str, str] | None = None
 
     def publish(self, snapshot: ArmingSnapshot) -> None:
+        """Cache one verified read. A standing ``hold`` is deliberately untouched."""
         self._snapshot = snapshot
         self._invalid = None
 
@@ -82,25 +96,41 @@ class ArmingGate:
         self._snapshot = None
         self._invalid = (reason_code, why)
 
+    def hold(self, reason_code: str, why: str) -> None:
+        """Stand a sticky fault that no ``publish`` clears; only :meth:`release` does."""
+        self._fault = (reason_code, why)
+
+    def release(self) -> None:
+        """Drop the sticky fault. The published snapshot decides again from here."""
+        self._fault = None
+
+    @property
+    def _standing(self) -> tuple[str, str] | None:
+        return self._invalid if self._fault is None else self._fault
+
     @property
     def invalid_why(self) -> str | None:
-        return None if self._invalid is None else self._invalid[1]
+        standing = self._standing
+        return None if standing is None else standing[1]
 
     @property
     def invalid_reason_code(self) -> str | None:
-        return None if self._invalid is None else self._invalid[0]
+        standing = self._standing
+        return None if standing is None else standing[0]
 
     def latest_snapshot(self) -> ArmingSnapshot | None:
         return self._snapshot
 
     def fresh_snapshot(self, now_ms: int) -> ArmingSnapshot | None:
-        """The published snapshot, if its age at ``now_ms`` is in range.
+        """The published snapshot, if no fault stands and its age at ``now_ms`` is in range.
 
         Fresh means ``0 <= age <= max_age`` — the envelope's rule: a snapshot
         dated after the admission clock is not fresh either.
         """
         snapshot = self._snapshot
-        if snapshot is None or not (0 <= now_ms - snapshot.observed_at_ms <= self._max_age_ms):
+        if self._fault is not None or snapshot is None:
+            return None
+        if not (0 <= now_ms - snapshot.observed_at_ms <= self._max_age_ms):
             return None
         return snapshot
 

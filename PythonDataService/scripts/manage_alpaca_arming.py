@@ -145,23 +145,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _submission_admitted(artifacts_root: Path | None, payload: Mapping[str, Any]) -> tuple[bool, str]:
-    """Whether a live authority is activated for this payload's account.
+def _submission_admitted(
+    artifacts_root: Path | None, live_account_id: str | None
+) -> tuple[bool, str]:
+    """Whether a live authority is activated for this account.
 
     Since ADR 0059 slice 7, an armed instance's ENTER is only ever submitted
     once graduation -- the live cutover -- has installed the live authority
     for the account; arming alone never opens that path. The cutover's own
-    ``ActivationStore`` is the read of that fact. A payload with no resolvable
+    ``ActivationStore`` is the read of that fact. Without a resolvable
     ``artifacts_root`` or ``live_account_id`` (a usage or pre-dispatch
-    refusal) never reached account resolution, so admission was never
+    refusal) account resolution never happened, so admission was never
     evaluated -- that is a distinct fact from an ungraduated account and gets
     its own note. A ledger that fails ``ActivationStore``'s own verification
     (a symlinked or non-regular file, a non-monotonic generation, malformed
     JSON) is reported the same way: not admitted, with a note naming the
     unverified ledger instead of a traceback.
+
+    The id is a parameter, not a probe into the payload: every caller that
+    has one already holds it, and a payload that came to name it differently
+    would degrade silently to "not evaluated".
     """
-    live_account_id = payload.get("live_account_id")
-    if artifacts_root is None or not isinstance(live_account_id, str):
+    if artifacts_root is None or live_account_id is None:
         return False, _SUBMISSION_UNEVALUATED_NOTE
     try:
         activated = (
@@ -182,7 +187,12 @@ def _submission_admitted(artifacts_root: Path | None, payload: Mapping[str, Any]
     )
 
 
-def _write(payload: Mapping[str, Any], *, artifacts_root: Path | None = None) -> None:
+def _write(
+    payload: Mapping[str, Any],
+    *,
+    artifacts_root: Path | None = None,
+    live_account_id: str | None = None,
+) -> None:
     """One JSON object per invocation, on stdout.
 
     Every object carries a computed ``submission_admitted`` and its note
@@ -191,7 +201,7 @@ def _write(payload: Mapping[str, Any], *, artifacts_root: Path | None = None) ->
     ``_submission_admitted``). ``default=str`` covers the ``Path`` values a
     plan may carry; every temporal value is already ``int64 ms UTC``.
     """
-    submission_admitted, note = _submission_admitted(artifacts_root, payload)
+    submission_admitted, note = _submission_admitted(artifacts_root, live_account_id)
     sys.stdout.write(
         json.dumps(
             {**payload, "submission_admitted": submission_admitted, "note": note},
@@ -291,6 +301,7 @@ def _status(
             ],
         },
         artifacts_root=artifacts_root,
+        live_account_id=live_account_id,
     )
     return 0
 
@@ -316,7 +327,7 @@ def _plan(
             atomic_write_json(args.plan_out, asdict(plan))
         except OSError as exc:
             raise ArmingOperatorRefusal(f"cannot write the plan file: {exc}") from exc
-    _write(asdict(plan), artifacts_root=artifacts_root)
+    _write(asdict(plan), artifacts_root=artifacts_root, live_account_id=plan.live_account_id)
     return 0
 
 
@@ -331,21 +342,17 @@ def _apply(
         settings=settings,
         clock=_clock(args.now_ms),
     )
-    _write(asdict(record), artifacts_root=artifacts_root)
+    _write(asdict(record), artifacts_root=artifacts_root, live_account_id=record.live_account_id)
     return 0
 
 
 def _disarm(args: argparse.Namespace, *, artifacts_root: Path) -> int:
-    _write(
-        asdict(
-            disarm(
-                strategy_instance_id=args.strategy_instance_id,
-                artifacts_root=artifacts_root,
-                clock=_clock(args.now_ms),
-            )
-        ),
+    record = disarm(
+        strategy_instance_id=args.strategy_instance_id,
         artifacts_root=artifacts_root,
+        clock=_clock(args.now_ms),
     )
+    _write(asdict(record), artifacts_root=artifacts_root, live_account_id=record.live_account_id)
     return 0
 
 

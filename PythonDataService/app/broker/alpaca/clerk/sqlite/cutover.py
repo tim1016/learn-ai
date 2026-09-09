@@ -467,22 +467,23 @@ def plan_cutover(
         database=database,
     )
     normalized_broker = _normalize_broker_evidence(broker_evidence)
-    live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)
     _validate_cutover_safety(
         account_id=account_id,
         broker_evidence=normalized_broker,
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    legacy = _legacy_artifact_evidence(
-        artifacts_root,
-        account_id,
-        allow_empty=live_evidence or _developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=account_id,
-            artifacts_root=artifacts_root,
-        ),
+    # One question, asked once: may the legacy and roster sets be empty? Both
+    # evidence reads below take the same answer, and the developer-reset half
+    # is a registry read that need not happen twice.
+    allow_empty = _live_evidence_permits_empty_legacy(
+        normalized_broker
+    ) or _developer_reset_replaces_activation(
+        accounts_root=accounts_root,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
     )
+    legacy = _legacy_artifact_evidence(artifacts_root, account_id, allow_empty=allow_empty)
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
@@ -490,11 +491,7 @@ def plan_cutover(
             artifacts_root,
             account_id,
         ),
-        allow_empty=live_evidence or _developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=account_id,
-            artifacts_root=artifacts_root,
-        ),
+        allow_empty=allow_empty,
     )
     draft = CutoverPlan(
         schema_version=3,
@@ -550,21 +547,22 @@ def apply_cutover(
         database=current_database,
     )
     normalized_broker = _normalize_broker_evidence(broker_evidence)
-    live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)
     _validate_cutover_safety(
         account_id=plan.account_id,
         broker_evidence=normalized_broker,
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
+    # The same one question the plan asked, re-asked against current evidence.
+    allow_empty = _live_evidence_permits_empty_legacy(
+        normalized_broker
+    ) or _developer_reset_replaces_activation(
+        accounts_root=accounts_root,
+        account_id=plan.account_id,
+        artifacts_root=artifacts_root,
+    )
     current_legacy = _legacy_artifact_evidence(
-        artifacts_root,
-        plan.account_id,
-        allow_empty=live_evidence or _developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=plan.account_id,
-            artifacts_root=artifacts_root,
-        ),
+        artifacts_root, plan.account_id, allow_empty=allow_empty
     )
     current_roster = _runner_roster_evidence(
         runner_artifacts_root,
@@ -573,11 +571,7 @@ def apply_cutover(
             artifacts_root,
             plan.account_id,
         ),
-        allow_empty=live_evidence or _developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=plan.account_id,
-            artifacts_root=artifacts_root,
-        ),
+        allow_empty=allow_empty,
     )
     if current_database != plan.database:
         raise CutoverRefused("SQLite database changed after cutover planning")

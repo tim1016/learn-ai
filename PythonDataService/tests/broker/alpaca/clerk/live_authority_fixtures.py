@@ -13,16 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, select_active_clerk_runtime
+from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+from app.broker.alpaca.clerk.live_authority import InstanceSealsForAccount
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrder
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
-from tests.broker.alpaca.clerk.test_active_authority import _ActivationStore
 
 LIVE_SID = "ema-live-1"
 
@@ -51,24 +53,23 @@ class _RecordingLiveBroker(_LiveBroker):
 
     def __init__(self, *, now_ms: int, **kwargs: Any) -> None:
         super().__init__(now_ms=now_ms, **kwargs)
-        self.submissions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        self.submissions: list[tuple[BrokerOrderLeg, str]] = []
 
-    async def submit(self, *args: Any, **kwargs: Any) -> BrokerOrder:
-        self.submissions.append((args, kwargs))
-        client_order_id = kwargs.get("client_order_id") or next(
-            (value for value in args if isinstance(value, str)), "unknown"
-        )
-        leg = kwargs.get("leg") or next((value for value in args if hasattr(value, "quantity")), None)
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        # ``BrokerTradePort.submit``'s signature exactly: this double is the
+        # evidence that a graduated live authority really submits, so a change
+        # to the real port must break it here rather than be absorbed.
+        self.submissions.append((leg, client_order_id))
         return BrokerOrder(
             broker="alpaca",
             order_id=f"live-order-{len(self.submissions)}",
             client_order_id=client_order_id,
-            symbol=getattr(leg, "symbol", "SPY"),
+            symbol=leg.symbol,
             asset_class="us_equity",
-            side=str(getattr(leg, "side", "buy")),
+            side=leg.side,
             order_type="market",
             time_in_force="day",
-            quantity=float(getattr(leg, "quantity", 1)),
+            quantity=leg.quantity,
             filled_quantity=0.0,
             limit_price=None,
             stop_price=None,
@@ -96,6 +97,26 @@ def pinned_repository(now_ms: int) -> Callable[[str, Path], ClerkSqliteRepositor
     return _open
 
 
+def instance_seals_over(live_state_root: Path) -> InstanceSealsForAccount:
+    """The composition root's seals reader, over a test's runner root.
+
+    Mirrors ``main.py``'s ``_alpaca_instance_seals``: the same ceremony read,
+    narrowed to the live world's own custody id (design R15).
+    """
+
+    def _seals(live_account_id: str) -> dict[str, str]:
+        return {
+            sid: seal.seal_hash
+            for sid, seal in instance_seal_hashes(
+                live_account_id=live_account_id,
+                live_state_root=live_state_root,
+                custody_world="real_live",
+            ).items()
+        }
+
+    return _seals
+
+
 async def compose_live(
     tmp_path: Path,
     broker: _LiveBroker,
@@ -104,8 +125,13 @@ async def compose_live(
     live_state_root: Path,
     control_unauthenticated: bool = False,
     live_envelope_values: LiveEnvelopeValues | None = TEST_ENVELOPE_VALUES,
+    with_seals: bool = True,
 ) -> ActiveClerkRuntime:
-    """Initialize the live custody database, activate it, and run the real selector."""
+    """Initialize the live custody database, activate it, and run the real selector.
+
+    ``with_seals=False`` composes the authority with no seals reader at all --
+    the fail-closed shape a composition root that never wired one would get.
+    """
     repository = ClerkSqliteRepository.initialize(
         account_id=LIVE_ACCT, artifacts_root=tmp_path, clock=lambda: now_ms
     )
@@ -121,9 +147,16 @@ async def compose_live(
         activation_store=_ActivationStore(activation),
         repository_opener=pinned_repository(now_ms),
         live_envelope_values=live_envelope_values,
-        live_state_root=lambda: live_state_root,
+        instance_seals=instance_seals_over(live_state_root) if with_seals else None,
         control_unauthenticated=control_unauthenticated,
     )
 
 
-__all__ = ["LIVE_SID", "_RecordingLiveBroker", "compose_live", "live_activation", "pinned_repository"]
+__all__ = [
+    "LIVE_SID",
+    "_RecordingLiveBroker",
+    "compose_live",
+    "instance_seals_over",
+    "live_activation",
+    "pinned_repository",
+]

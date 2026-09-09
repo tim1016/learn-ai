@@ -75,7 +75,6 @@ def test_the_ledger_is_account_rooted_outside_every_custody_namespace(tmp_path: 
     assert "alpaca" not in ledger.path.parts
     assert ledger.records() == () and instance_ids(ledger.records()) == ()
     assert ledger.latest(SID) is None and latest_arming(ledger.records()) is None
-    assert ledger.sealed_envelope() is None
 
 
 def test_a_reserved_namespace_account_never_gets_a_ledger(tmp_path: Path) -> None:
@@ -100,13 +99,16 @@ def test_append_and_read_keep_file_order_and_survive_a_reopen(tmp_path: Path) ->
 
 
 def test_the_sealed_envelope_is_the_latest_arming_records_own(tmp_path: Path) -> None:
+    """The seal is ``latest_arming(records())``'s envelope -- the one read the sync takes."""
     ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     ledger.append(_armed())
-    assert ledger.sealed_envelope() == ENVELOPE
+    latest = latest_arming(ledger.records())
+    assert latest is not None and latest.envelope == ENVELOPE
 
     tightened = replace(ENVELOPE, loss_usd=4_000.0)
     ledger.append(_armed(instance="ema-shadow-2", armed_at_ms=FRIDAY_MS + 1, envelope=tightened))
-    assert ledger.sealed_envelope() == tightened
+    latest = latest_arming(ledger.records())
+    assert latest is not None and latest.envelope == tightened
 
 
 def test_a_disarm_never_unseals_the_account_level_envelope(tmp_path: Path) -> None:
@@ -125,7 +127,7 @@ def test_a_disarm_never_unseals_the_account_level_envelope(tmp_path: Path) -> No
 
     assert isinstance(ledger.latest(SID), LiveDisarmRecord)
     assert latest_arming(ledger.records()) == record
-    assert ledger.sealed_envelope() == ENVELOPE
+    assert record.envelope == ENVELOPE
 
 
 def test_a_foreign_accounts_row_is_ignored_rather_than_answered_for(tmp_path: Path) -> None:

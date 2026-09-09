@@ -222,10 +222,9 @@ def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
     assert row.admissible_modes == ("dry_run",)
     assert row.override_explanation is not None
     assert row.blocked_explanation is not None
-    assert "Review and enable Paper access" in row.blocked_explanation
-    # The row's own copy is about the *Paper access state* and stays named
-    # for it; the readiness gate's next action is the sentence a live form
-    # also renders, so that one names the broker, not the mode.
+    # Both sentences render on a live account's deploy form as well as a
+    # paper one, so neither names the Paper mode (slice 7 last mile).
+    assert "Review and enable broker access" in row.blocked_explanation
     assert strategy_gate_recovery((row,)) == "Review and enable broker access for a strategy below."
 
 

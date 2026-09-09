@@ -183,6 +183,10 @@ async def test_boot_sweep_records_why_a_binding_was_left_unprojected(
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 2,
     ).run()
 
@@ -283,6 +287,10 @@ async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Pat
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 1,
     ).run(recover=recover, reconcile=reconcile)
 
@@ -338,6 +346,10 @@ async def test_boot_reconstructs_missing_projection_from_binding_candidate(
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 1,
     ).run()
 
@@ -406,6 +418,10 @@ async def test_file_cas_refusal_fails_boot_recovery(tmp_path: Path) -> None:
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 2,
     )
 
@@ -465,6 +481,10 @@ async def test_authority_retry_exhaustion_fails_boot_recovery(tmp_path: Path) ->
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 2,
     )
 
@@ -587,6 +607,10 @@ async def test_boot_sweep_does_not_report_a_superseded_interruption(
         stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 2,
     ).run()
 
@@ -813,6 +837,10 @@ async def test_repair_pass_preserves_same_run_terminal_evidence(
         stop_authority_run=record_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 5,
     ).run()
 
@@ -859,6 +887,10 @@ async def test_lease_recovery_pass_stamps_revival_provenance(
         stop_authority_run=record_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
+        # No binding plane and no installed authority: this sweep is driven
+        # from hand-built candidates, so it asks no foreign-binding question.
+        binding_for=lambda _strategy_instance_id: None,
+        installed_custody_account_id=lambda: None,
         now_ms=lambda: _T0 + 5,
     ).run(provenance=LEASE_REVIVAL_PROVENANCE)
 

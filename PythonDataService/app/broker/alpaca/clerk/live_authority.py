@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.schemas.account_authority import world_admits_account_mode
 
 logger = logging.getLogger(__name__)
 
@@ -59,36 +60,15 @@ logger = logging.getLogger(__name__)
 LIVE_CONTROL_UNAUTHENTICATED = "LIVE_CONTROL_UNAUTHENTICATED"
 
 
-def _instance_seals_reader(
-    *, live_account_id: str, live_state_root: Callable[[], Path] | None
-) -> Callable[[], Mapping[str, str]]:
-    """The runner's sealed bindings on this account, read per tick by the sync.
-
-    Injected as a callable so the clerk layer never learns the runner's root
-    (the ``roster_symbols`` pattern). No root means no seals, which means no
-    instance is armed — fail closed, never a default.
-    """
-
-    def _seals() -> Mapping[str, str]:
-        if live_state_root is None:
-            return {}
-        # Local import: the ceremony imports the runner's binding repository,
-        # which this boot-time module must not pull in at import.
-        from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
-
-        return {
-            sid: seal.seal_hash
-            for sid, seal in instance_seal_hashes(
-                live_account_id=live_account_id,
-                live_state_root=live_state_root(),
-                # This authority custodies the live id itself, so the
-                # rehearsal's ``shadow:``-sealed bindings are foreign to it
-                # (design R15) and seal nothing the gate may admit.
-                custody_world="real_live",
-            ).items()
-        }
-
-    return _seals
+# The runner's sealed bindings on one live account: ``strategy_instance_id``
+# -> that instance's current sealed-program hash. Built in the composition
+# root (``main.py``, beside ``_alpaca_roster_symbols``) and injected, so the
+# clerk layer never learns the runner's root and never imports the binding
+# repository — the ``roster_symbols`` pattern, one argument wider because the
+# composition root learns the live account's id only from this selector's own
+# broker read. ``None`` means no seals, which means no instance is armed:
+# fail closed, never a default.
+type InstanceSealsForAccount = Callable[[str], Mapping[str, str]]
 
 
 async def select_live_clerk_runtime(
@@ -106,7 +86,7 @@ async def select_live_clerk_runtime(
     stream_health_gate: StreamHealthGate | None,
     roster_symbols: Callable[[], Sequence[str]] | None,
     live_envelope_values: LiveEnvelopeValues | None,
-    live_state_root: Callable[[], Path] | None,
+    instance_seals: InstanceSealsForAccount | None,
     control_unauthenticated: bool,
 ) -> ActiveClerkRuntime:
     """Compose the real-money authority for an activated live account (ADR 0059 D1/D11)."""
@@ -119,7 +99,14 @@ async def select_live_clerk_runtime(
                 "never installs behind an open control plane (ADR 0059 D10)."
             ),
         )
-    if account.account_mode != "live" or activation.account_id != account.account_id:
+    # The world-to-mode rule is the closed table's, never a ``"live"`` literal
+    # restated here: this is the one place a real-money authority decides mode
+    # agreement, and a fourth spelling of the rule is a fourth thing to keep
+    # in step with `_MODE_ADMITTED_BY_WORLD` (repo philosophy #5).
+    if (
+        not world_admits_account_mode("real_live", account.account_mode)
+        or activation.account_id != account.account_id
+    ):
         return unavailable_runtime(
             LIVE_MODE_DISAGREEMENT,
             account_id=account.account_id,
@@ -182,8 +169,10 @@ async def select_live_clerk_runtime(
             live_envelope=LiveEnvelopeGate(values=live_envelope_values, custody_is_simulated=False),
             arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id),
             arming_gate=ArmingGate(),
-            instance_seals=_instance_seals_reader(
-                live_account_id=account.account_id, live_state_root=live_state_root
+            # Bound to the observed account here, where its id is first known;
+            # the sync calls the result with no arguments once per tick.
+            instance_seals=(
+                None if instance_seals is None else (lambda: instance_seals(account.account_id))
             ),
         )
     except Exception as exc:
@@ -219,4 +208,4 @@ async def select_live_clerk_runtime(
     )
 
 
-__all__ = ["LIVE_CONTROL_UNAUTHENTICATED", "select_live_clerk_runtime"]
+__all__ = ["LIVE_CONTROL_UNAUTHENTICATED", "InstanceSealsForAccount", "select_live_clerk_runtime"]

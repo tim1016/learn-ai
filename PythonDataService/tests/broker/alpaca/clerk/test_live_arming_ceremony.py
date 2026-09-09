@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     ArmingInputs,
@@ -34,6 +35,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
+from app.schemas.account_authority import CustodyWorld
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -247,6 +249,31 @@ def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[
     assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
 
 
+def test_a_named_custody_world_admits_only_that_worlds_own_custody_id(roots: tuple[Path, Path]) -> None:
+    """The narrowing is ``custody_account_id_for``'s answer, not a ``real_live`` special case.
+
+    Both bindings sit in the same runner root on the same live account -- the
+    shape design R15 leaves behind after graduation. Naming a world must pick
+    exactly that world's custody id, whichever world is named.
+    """
+    _artifacts_root, live_state_root = roots
+    record_sealed_binding(live_state_root, strategy_instance_id="rehearsed")
+    record_sealed_binding(live_state_root, strategy_instance_id="graduated", sealed_account_id=LIVE_ACCT)
+
+    def _seals(custody_world: CustodyWorld | None) -> set[str]:
+        return set(
+            instance_seal_hashes(
+                live_account_id=LIVE_ACCT,
+                live_state_root=live_state_root,
+                custody_world=custody_world,
+            )
+        )
+
+    assert _seals("real_live") == {"graduated"}
+    assert _seals("shadow") == {"rehearsed"}
+    assert _seals(None) == {"graduated", "rehearsed"}
+
+
 def test_an_instance_with_no_receipt_arms_and_records_none(roots: tuple[Path, Path]) -> None:
     """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
     artifacts_root, live_state_root = roots
@@ -391,7 +418,8 @@ def test_apply_arms_the_instance_and_appends_exactly_one_sealed_record(roots: tu
     assert record.envelope_sha256 == TEST_ENVELOPE_VALUES.sha
     ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
     assert ledger.records() == (record,)
-    assert ledger.sealed_envelope() == TEST_ENVELOPE_VALUES
+    sealed = latest_arming(ledger.records())
+    assert sealed is not None and sealed.envelope == TEST_ENVELOPE_VALUES
 
 
 def test_apply_refuses_a_token_that_is_not_the_plans(roots: tuple[Path, Path]) -> None:

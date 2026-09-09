@@ -37,7 +37,6 @@ from app.broker.alpaca.clerk.live_arming import (
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_authority import (
     LIVE_CONTROL_UNAUTHENTICATED,
-    _instance_seals_reader,
     select_live_clerk_runtime,
 )
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_MISSING
@@ -49,11 +48,13 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_arming_fixtures import record_sealed_binding
 from tests.broker.alpaca.clerk.live_authority_fixtures import (
     LIVE_SID,
     _RecordingLiveBroker,
     compose_live,
+    instance_seals_over,
     live_activation,
     pinned_repository,
 )
@@ -64,7 +65,6 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     _LiveBroker,
 )
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, _binding
-from tests.broker.alpaca.clerk.test_active_authority import _ActivationStore
 from tests.broker.alpaca.clerk.test_shadow_broker import _retain
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import BAR_CLOSE, DECISION_MINUTE, NOW_MS
 
@@ -236,7 +236,7 @@ async def test_an_activation_naming_another_account_is_a_mode_disagreement(tmp_p
         stream_health_gate=None,
         roster_symbols=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        live_state_root=None,
+        instance_seals=None,
         control_unauthenticated=False,
     )
     assert runtime.authority_kind == "unavailable"
@@ -265,7 +265,7 @@ async def test_a_paper_mode_account_reaching_the_live_selector_is_a_mode_disagre
         stream_health_gate=None,
         roster_symbols=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        live_state_root=None,
+        instance_seals=None,
         control_unauthenticated=False,
     )
     assert runtime.authority_kind == "unavailable"
@@ -296,7 +296,7 @@ async def _select_live(
         stream_health_gate=None,
         roster_symbols=None,
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        live_state_root=None if live_state_root is None else (lambda: live_state_root),
+        instance_seals=None if live_state_root is None else instance_seals_over(live_state_root),
         control_unauthenticated=False,
     )
 
@@ -388,9 +388,34 @@ def test_a_composition_that_raised_is_named_by_which_thing_failed(
     assert failure.db_identity_token == "live-db"
 
 
-def test_no_bindings_root_seals_nothing_rather_than_defaulting(tmp_path: Path) -> None:
-    """Fail closed: with no runner root the gate learns no seal, so no instance is armed."""
-    assert _instance_seals_reader(live_account_id=LIVE_ACCT, live_state_root=None)() == {}
+async def test_no_seals_reader_arms_nothing_rather_than_defaulting(
+    tmp_path: Path, live_state_root: Path
+) -> None:
+    """Fail closed: with no seals reader the gate learns no seal, so no instance is armed.
+
+    The reader is the composition root's (``main.py``'s
+    ``_alpaca_instance_seals``), which has no test seam of its own; what is
+    pinnable -- and what actually decides -- is what the live authority does
+    when one was never wired.
+    """
+    broker = _RecordingLiveBroker(now_ms=NOW_MS)
+    runtime = await compose_live(
+        tmp_path, broker, now_ms=NOW_MS, live_state_root=live_state_root, with_seals=False
+    )
+    try:
+        assert runtime.clerk is not None and runtime.envelope_sync is not None
+        seal = record_sealed_binding(
+            live_state_root, strategy_instance_id=LIVE_SID, sealed_account_id=LIVE_ACCT
+        )
+        _arm(tmp_path, seal.bot_configuration_hash)
+        await runtime.envelope_sync.tick()
+
+        snapshot = runtime.clerk.live_arming.latest_snapshot() if runtime.clerk.live_arming else None
+        assert snapshot is not None
+        assert snapshot.seals == {}
+        assert snapshot.armed_instance_ids(NOW_MS) == frozenset()
+    finally:
+        await runtime.close()
 
 
 async def test_an_unreadable_activation_record_refuses_the_live_boot(
@@ -405,7 +430,7 @@ async def test_an_unreadable_activation_record_refuses_the_live_boot(
         activation_store=_ActivationStore(None, invalid=True),
         repository_opener=pinned_repository(NOW_MS),
         live_envelope_values=TEST_ENVELOPE_VALUES,
-        live_state_root=lambda: live_state_root,
+        instance_seals=instance_seals_over(live_state_root),
     )
     assert runtime.authority_kind == "unavailable"
     assert runtime.startup_failure is not None

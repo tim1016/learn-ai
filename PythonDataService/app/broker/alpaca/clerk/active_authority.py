@@ -43,7 +43,10 @@ from app.broker.alpaca.clerk.active_runtime import (
     open_repository,
     unavailable_runtime,
 )
-from app.broker.alpaca.clerk.live_authority import select_live_clerk_runtime
+from app.broker.alpaca.clerk.live_authority import (
+    InstanceSealsForAccount,
+    select_live_clerk_runtime,
+)
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
@@ -110,7 +113,7 @@ async def select_active_clerk_runtime(
     stream_health_gate: StreamHealthGate | None = None,
     roster_symbols: Callable[[], Sequence[str]] | None = None,
     live_envelope_values: LiveEnvelopeValues | None = None,
-    live_state_root: Callable[[], Path] | None = None,
+    instance_seals: InstanceSealsForAccount | None = None,
     control_unauthenticated: bool = False,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
@@ -124,11 +127,12 @@ async def select_active_clerk_runtime(
     (ADR 0059 D4). The paper authority below never composes an envelope, so a
     caller may offer values on any boot without changing what paper admits.
 
-    ``live_state_root`` resolves the runner's bindings root lazily -- the live
-    authority's arming gate reads sealed bindings beside the ledger every tick
-    (slice 7). ``control_unauthenticated`` is the data plane's open-control
-    flag; a live account refuses to install behind it (design R14). Both are
-    inert on a paper boot.
+    ``instance_seals`` answers the runner's sealed bindings for one live
+    account -- the live authority's arming gate reads them beside the ledger
+    every tick (slice 7). Built in the composition root and injected, so the
+    clerk layer never learns the runner's root. ``control_unauthenticated`` is
+    the data plane's open-control flag; a live account refuses to install
+    behind it (design R14). Both are inert on a paper boot.
     """
     try:
         account = await read.get_account()
@@ -190,7 +194,7 @@ async def select_active_clerk_runtime(
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
             live_envelope_values=live_envelope_values,
-            live_state_root=live_state_root,
+            instance_seals=instance_seals,
             control_unauthenticated=control_unauthenticated,
         )
     try:

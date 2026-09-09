@@ -89,6 +89,10 @@ def _fact(
     ("binding", "custody", "custody_world"),
     [
         pytest.param(_binding(), _custody("PA-TEST", "paper"), "real_paper", id="paper_custody_on_real_paper"),
+        # The world-table leg on its own: the real-live world admits only a
+        # `live` account mode, so a paper custody under it is not an arming
+        # question at all (`world_admits_account_mode`, ADR 0059 D1 R8).
+        pytest.param(_binding(), _custody("PA-TEST", "paper"), "real_live", id="paper_custody_on_real_live"),
         pytest.param(_binding(), _custody(), "shadow", id="live_custody_on_shadow"),
         pytest.param(
             _binding().model_copy(update={"mode": "dry_run", "sealed_account_id": f"sim:{SID}"}),
