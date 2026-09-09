@@ -386,6 +386,11 @@ class ClerkSqliteRepositoryReadApi:
                 for order in reads.external_orders(self._conn)
             ]
 
+    def external_orders_observed_since(self: ClerkSqliteRepository, *, since_ms: int) -> int:
+        """Count foreign orders observed at or after ``since_ms`` (ADR 0059 D4)."""
+        with self._write_lock:
+            return reads.external_orders_observed_since(self._conn, since_ms=since_ms)
+
     def effect_operation(
         self: ClerkSqliteRepository,
         effect_operation_id: str,

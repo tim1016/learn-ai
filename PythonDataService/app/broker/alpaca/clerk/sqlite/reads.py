@@ -313,6 +313,21 @@ def external_order_page(
     return [_external_order_resource(row) for row in rows]
 
 
+def external_orders_observed_since(conn: sqlite3.Connection, *, since_ms: int) -> int:
+    """How many foreign orders were observed at or after ``since_ms``.
+
+    The day-P&L fact reads this to decide whether it can vouch for the day at
+    all: an order the Clerk did not place has no journaled fills, so its P&L
+    is not in the FIFO and the day's number would be quietly wrong.
+    """
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) FROM external_orders WHERE observed_at_ms >= ?",
+            (since_ms,),
+        ).fetchone()[0]
+    )
+
+
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:
     row = conn.execute(
         f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",

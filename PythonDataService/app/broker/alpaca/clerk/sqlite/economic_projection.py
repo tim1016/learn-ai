@@ -625,6 +625,32 @@ class SqliteEconomicProjectionReader:
             },
         )
 
+    def account_net_cash_spent_usd(self) -> float:
+        """Σ BUY notional − Σ SELL notional over every effective fill, lifetime.
+
+        The cash the Clerk's own fills would have taken from the account.
+        Under simulated custody (ADR 0059 D2) the broker's cash never moved,
+        so the envelope subtracts this to rehearse the cash bound honestly
+        (plan R2); under real custody the broker's cash already reflects it.
+        """
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_fill_rows(
+                strategy_instance_ids=None,
+                from_ms=None,
+                to_ms=None,
+                cursor_key=None,
+                limit=None,
+            )
+        total = 0.0
+        for record in (
+            _to_fill_record(row, account_id=self._account_id, custody_subject_identity=True)
+            for row in rows
+        ):
+            notional = record.quantity * record.fill_price
+            total += notional if record.side is OrderSide.BUY else -notional
+        return total
+
     def effective_execution_summaries(
         self,
         order_refs: Sequence[str],
