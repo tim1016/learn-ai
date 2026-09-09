@@ -64,6 +64,25 @@ class ExtendedHoursAdmissionFact(BaseModel):
     observed_at_ms: int = Field(ge=0)
 
 
+class ArmingAdmissionFact(BaseModel):
+    """Whether the sealed instance is armed on the live account it will trade (ADR 0059 D3/D11, slice 7).
+
+    Present only on the real-live custody world; ``None`` on the facts model
+    means the world has no arming to consult (paper, shadow, Dry Run).
+    ``UNREADABLE`` refuses a launch; ``NOT_ARMED`` admits it and rides the
+    decision's explanation — submission, not the launch, is what arming
+    gates, and every ENTER of an unarmed instance refuses at the Clerk.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["ARMED", "NOT_ARMED", "UNREADABLE"]
+    reason_code: str | None = None
+    explanation: str
+    next_step: str | None = None
+    observed_at_ms: int = Field(ge=0)
+
+
 class StartRuntimeAdmissionFact(BaseModel):
     """Runner-owned recovery and restart-intensity evidence for Start."""
 
@@ -128,6 +147,14 @@ CORPUS_UNCOVERED_EXPLANATION = (
 CORPUS_UNCOVERED_NEXT_STEP = (
     "Deploy at the registered validated settings, or run golden qualification for these "
     "parameters, before citing this run as evidence."
+)
+ARMING_NEXT_STEP = (
+    "Arm this instance with scripts.manage_alpaca_arming plan, then apply; until then the "
+    "Clerk refuses every ENTER it makes."
+)
+ARMING_REQUIRED_ADMITTED_NOTE = (
+    "The instance is not armed: this launch may run and manage exposure, and every ENTER "
+    "it makes is refused until an operator arms it (ADR 0059 D11)."
 )
 
 
@@ -253,6 +280,7 @@ class StartRunFacts(BaseModel):
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
     extended_hours: ExtendedHoursAdmissionFact
+    arming: ArmingAdmissionFact | None = None
 
 
 class ResumeCheckpointAdmissionFact(BaseModel):
@@ -314,6 +342,7 @@ class ResumeRunFacts(BaseModel):
     exposure_carryover_supported: bool
     checkpoint: ResumeCheckpointAdmissionFact | None
     terminal_evidence: TerminalEvidenceAdmissionFact
+    arming: ArmingAdmissionFact | None = None
 
 
 RunAdmissionFacts = StartRunFacts | ResumeRunFacts

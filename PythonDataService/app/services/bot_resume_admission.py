@@ -39,6 +39,7 @@ from app.services.bot_start_admission import (
     new_run_binding,
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
+from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.signal_program_admission import (
@@ -123,6 +124,7 @@ class BotResumeAdmission:
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
         legacy_migration_repository: LegacyMigrationLineageWriter | None = None,
         program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
+        arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -140,6 +142,7 @@ class BotResumeAdmission:
         self._session_capability = session_capability
         self._market_liveness = market_liveness
         self._program_leg_policy = program_leg_policy
+        self._arming_fact = arming_fact
         # PRD Sec 11.5 legacy migration (#1728): only ``resume()`` persists
         # clone lineage evidence (``preview()`` stays mutation-free). ``None``
         # keeps every existing caller working unchanged for the common
@@ -341,6 +344,7 @@ class BotResumeAdmission:
                     ),
                     checkpoint=self._checkpoint(prior),
                     terminal_evidence=self._terminal_evidence(prior),
+                    arming=self._arming_fact(proposed, custody, observed_at_ms),
                 )
                 yield (
                     proposed,

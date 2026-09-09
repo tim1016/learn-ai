@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 
+from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.program_leg import (
     EXTENDED_HOURS_ALLOWANCE_UNSET,
@@ -18,6 +19,8 @@ from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
 )
 from app.schemas.run_admission import (
+    ARMING_NEXT_STEP,
+    ARMING_REQUIRED_ADMITTED_NOTE,
     CORPUS_UNCOVERED_NEXT_STEP,
     ResumeRunFacts,
     RunAdmissionDecision,
@@ -237,6 +240,16 @@ def evaluate_run_admission(
                 "cover, and only a proven paper account may run an uncovered parameter point."
             ),
             next_step=CORPUS_UNCOVERED_NEXT_STEP,
+        )
+    # ADR 0059 D11 (slice 7): a launch under arming evidence nobody can verify
+    # is refused, not parked. A merely unarmed instance is admitted — the
+    # Clerk refuses its every ENTER — and told so below.
+    if bot.arming is not None and bot.arming.state == "UNREADABLE":
+        return decide(
+            allowed=False,
+            reason_code=bot.arming.reason_code or LIVE_ARMING_LEDGER_INVALID,
+            explanation=bot.arming.explanation,
+            next_step=bot.arming.next_step or ARMING_NEXT_STEP,
         )
     if bot.validation.state != "VERIFIED":
         return decide(
@@ -474,17 +487,19 @@ def evaluate_run_admission(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
         explanation=_admitted_explanation(bot),
-        next_step=None,
+        next_step=ARMING_NEXT_STEP if bot.arming is not None and bot.arming.state == "NOT_ARMED" else None,
     )
 
 
 def _admitted_explanation(bot: RunAdmissionFacts) -> str:
-    """The admitted sentence, carrying the corpus-coverage stamp when one applies."""
+    """The admitted sentence, carrying the corpus-coverage and not-armed stamps when they apply."""
     admitted = (
         "The process slot is absent, market data is ready, and the Clerk proves flat custody."
         if bot.operation == "START"
         else "The prior run is terminal, market data is ready, and the Clerk proves resumable custody."
     )
-    if bot.program_build.corpus_coverage != "UNCOVERED":
-        return admitted
-    return f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
+    if bot.program_build.corpus_coverage == "UNCOVERED":
+        admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
+    if bot.arming is not None and bot.arming.state == "NOT_ARMED":
+        admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
+    return admitted
