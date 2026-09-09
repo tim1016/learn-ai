@@ -156,9 +156,32 @@ def test_invalid_integer_and_hash_facts_are_refused() -> None:
         _armed(seal="not-a-sha")
 
 
+@pytest.mark.parametrize("value", [1.0, True])
+def test_an_integer_fact_that_is_a_float_or_a_bool_is_refused(value: object) -> None:
+    """A dataclass does not enforce its annotations, and ``True`` is an ``int``.
+
+    A row whose digest was recomputed over the tampered value verifies, so the
+    range checks are the only thing between ``1.0`` / ``True`` and the calendar
+    conversion that reads ``armed_at_ms`` as ``int64 ms UTC``. Both compare
+    fine against a bound, so the type has to be asked for by name.
+    """
+    with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):
+        _armed(max_sessions=value)  # type: ignore[arg-type]
+    with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):
+        _armed(armed_at_ms=value)  # type: ignore[arg-type]
+    with pytest.raises(LiveArmingInvalid, match="invalid kind or schema version"):
+        LiveArmingRecord.from_payload({**asdict(_armed()), "schema_version": value})
+
+    record = _armed()
+    with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):
+        _disarmed(record, at_ms=value)  # type: ignore[arg-type]
+    with pytest.raises(LiveArmingInvalid, match="invalid kind or schema version"):
+        LiveDisarmRecord.from_payload({**asdict(_disarmed(record)), "schema_version": value})
+
+
 def test_a_type_confused_row_leaves_by_this_modules_own_error() -> None:
     payload = {**asdict(_armed()), "armed_at_ms": str(FRIDAY_MS)}
-    with pytest.raises(LiveArmingInvalid, match="invalid shape"):
+    with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):
         LiveArmingRecord.from_payload(payload)
     with pytest.raises(LiveArmingInvalid, match="invalid shape"):
         LiveArmingRecord.from_payload({"kind": "armed"})

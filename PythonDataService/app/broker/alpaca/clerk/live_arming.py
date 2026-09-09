@@ -209,9 +209,22 @@ def _require_real(account_id: str) -> None:
         raise LiveArmingInvalid("live arming record names a reserved account identity as real") from exc
 
 
+def _is_int(value: object) -> bool:
+    """Whether ``value`` is an ``int`` and nothing that merely behaves like one.
+
+    A frozen dataclass does not enforce its annotations, so a row read off disk
+    -- or a ``create`` call -- can carry ``1.0`` or ``True`` where this record
+    promises an integer, and a re-sealed row's digest verifies over exactly the
+    value it carries. Neither an ``isinstance`` test (``True`` is an ``int``)
+    nor a range check (``1.0`` compares equal to ``1``) excludes them, so the
+    type is asked for by name before any bound is applied.
+    """
+    return type(value) is int
+
+
 def _require_kind(kind: str, expected: str, schema_version: int) -> None:
     """A row of the wrong shape is named as such, not as a bad number."""
-    if kind != expected or schema_version != 1:
+    if kind != expected or not _is_int(schema_version) or schema_version != 1:
         raise LiveArmingInvalid("live arming record has an invalid kind or schema version")
 
 
@@ -225,6 +238,8 @@ def _validate_armed(record: LiveArmingRecord) -> None:
     _require_kind(record.kind, "armed", record.schema_version)
     if (
         not record.strategy_instance_id
+        or not _is_int(record.max_sessions)
+        or not _is_int(record.armed_at_ms)
         or record.max_sessions < 1
         or not 0 <= record.armed_at_ms <= MAX_TIMESTAMP_MS
     ):
@@ -248,6 +263,7 @@ def _validate_disarmed(record: LiveDisarmRecord) -> None:
     _require_kind(record.kind, "disarmed", record.schema_version)
     if (
         not record.strategy_instance_id
+        or not _is_int(record.disarmed_at_ms)
         or not 0 <= record.disarmed_at_ms <= MAX_TIMESTAMP_MS
     ):
         raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
