@@ -60,6 +60,7 @@ from app.schemas.run_admission import (
     StrategyValidationAdmissionFact,
 )
 from app.services.bot_binding_repository import alpaca_v1_action_plan
+from app.services.bot_boot_recovery import BootRecoveryReport
 from app.services.bot_start_admission import (
     RECOVERY_EVALUATION_WINDOW_MS,
     RECOVERY_SWEEP_LIVENESS_BOUND_MS,
@@ -766,7 +767,7 @@ async def _runtime_fact_with_unresolved_intent(
         strategy_instance_id=_SID,
         observed_at_ms=observed_at_ms,
         boot_recovery_required=False,
-        boot_recovery_complete=True,
+        boot_recovery_report=None,
         unresolved_intents_probe=one_unresolved,
         recovery_evaluation=((lambda: recovery_evaluation) if wired else None),
         projected_start_count=0,
@@ -845,7 +846,7 @@ async def test_probe_failure_reports_recovery_uncertain_even_mid_evaluation() ->
         strategy_instance_id=_SID,
         observed_at_ms=_ANCHOR_MS + 1_000,
         boot_recovery_required=False,
-        boot_recovery_complete=True,
+        boot_recovery_report=None,
         unresolved_intents_probe=raising_probe,
         recovery_evaluation=lambda: _evaluation(),
         projected_start_count=0,
@@ -855,3 +856,60 @@ async def test_probe_failure_reports_recovery_uncertain_even_mid_evaluation() ->
 
     assert fact.state == "RECOVERY_UNCERTAIN"
     assert "could not prove recovery completeness" in fact.explanation
+
+
+# ── The boot sweep's report is the start gate ──────────────────────────────
+
+
+def _boot_report(*unprojected: str) -> BootRecoveryReport:
+    return BootRecoveryReport(
+        interrupted_instances=(),
+        unresolved_intents=0,
+        completed_at_ms=_ANCHOR_MS,
+        authority_unavailable_instances=unprojected,
+    )
+
+
+async def _boot_gate_fact(report: BootRecoveryReport | None) -> StartRuntimeAdmissionFact:
+    return await resolve_start_runtime_fact(
+        strategy_instance_id=_SID,
+        observed_at_ms=_ANCHOR_MS,
+        boot_recovery_required=True,
+        boot_recovery_report=report,
+        unresolved_intents_probe=None,
+        projected_start_count=0,
+        restart_threshold=100,
+        restart_window_ms=60_000,
+    )
+
+
+async def test_no_boot_report_yet_says_wait_for_the_sweep() -> None:
+    fact = await _boot_gate_fact(None)
+
+    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
+    assert fact.next_step is not None and "Wait" in fact.next_step
+
+
+async def test_degraded_boot_report_replaces_the_wait_remedy() -> None:
+    """When the boot sweep ran but could not project this process's bots
+    (no lifecycle authority installed), "wait for the sweep" is the wrong
+    remedy: the gate must carry the sweep's reason and point at restoring
+    the authority and restarting."""
+    fact = await _boot_gate_fact(_boot_report("alpaca-drill-bot"))
+
+    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
+    assert fact.explanation.startswith("No Alpaca lifecycle authority")
+    assert "alpaca-drill-bot" in fact.explanation
+    assert fact.next_step is not None
+    assert "restart" in fact.next_step
+    assert "Wait" not in fact.next_step
+
+
+async def test_degraded_boot_report_names_a_few_bots_and_counts_the_rest() -> None:
+    """The refusal an operator reads must stay legible for a large roster."""
+    fact = await _boot_gate_fact(_boot_report(*(f"bot-{index}" for index in range(7))))
+
+    assert "7 bot(s)" in fact.explanation
+    assert "bot-0, bot-1, bot-2, bot-3, bot-4" in fact.explanation
+    assert "and 2 more" in fact.explanation
+    assert "bot-5" not in fact.explanation

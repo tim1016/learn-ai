@@ -437,6 +437,9 @@ async def lifespan(app: FastAPI):
             ),
         )
     else:
+        # No Clerk (invalid ALPACA_* settings): the sweep leaves any
+        # pre-existing Alpaca binding unprojected and keeps the start gate
+        # closed, instead of aborting the lifespan into a restart loop.
         await bot_task_registry.run_boot_recovery()
 
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
