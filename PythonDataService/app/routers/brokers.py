@@ -73,6 +73,7 @@ from app.schemas.account_pnl_attribution import (
     PortfolioHistoryProofResponse,
 )
 from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
+from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.schemas.manual_orders import (
@@ -90,6 +91,7 @@ from app.security.data_plane_control import (
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
+from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
 from app.services.alpaca_live_verdict import alpaca_live_verdict, observe_shadow_state
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
@@ -713,6 +715,24 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
             None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
         ),
     )
+
+
+@router.post(
+    "/{broker}/live-envelope/loss-hold/clear",
+    response_model=LossHoldClearOutcome,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def clear_live_loss_hold(broker: str) -> LossHoldClearOutcome:
+    """The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands."""
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail={"reason": "live_envelope_unsupported_broker", "message": f"No live envelope for broker '{broker}'."})
+    runtime = get_active_clerk_runtime()
+    if runtime is None:
+        raise HTTPException(status_code=503, detail={"reason": "live_envelope_not_installed", "message": "No Alpaca Clerk authority is installed."})
+    try:
+        return await clear_loss_hold(runtime, now_ms=now_ms_utc())
+    except LiveEnvelopeNotInstalled as exc:
+        raise HTTPException(status_code=503, detail={"reason": "live_envelope_not_installed", "message": str(exc)}) from exc
 
 
 @router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)

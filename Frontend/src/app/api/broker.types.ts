@@ -1527,6 +1527,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/live-envelope/loss-hold/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear Live Loss Hold
+         * @description The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands.
+         */
+        post: operations["clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/live-verdict": {
         parameters: {
             query?: never;
@@ -13827,6 +13847,27 @@ export interface components {
              */
             logic: "AND" | "OR";
         };
+        /** LossHoldClearOutcome */
+        LossHoldClearOutcome: {
+            /** Day Pnl Usd */
+            day_pnl_usd: number | null;
+            /** Detail */
+            detail: string;
+            /** Loss Limit Usd */
+            loss_limit_usd: number | null;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "cleared" | "no_hold" | "refused";
+            /** Reason Code */
+            reason_code: string | null;
+        };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
             /** Broker Order Id */
@@ -25406,6 +25447,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionFeeReconciliation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LossHoldClearOutcome"];
                 };
             };
             /** @description Validation Error */
