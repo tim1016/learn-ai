@@ -266,6 +266,11 @@ def _read_cutover_evidence(path: Path, account_id: str) -> BrokerCutoverEvidence
         raise ValueError("cutover broker evidence fields do not match schema version 1")
     if payload.get("account_id") != account_id:
         raise ValueError("broker evidence account_id does not match CLI account")
+    if payload.get("account_mode") == "live" and get_alpaca_settings().mode != "live":
+        raise ValueError(
+            "broker evidence names a live account but ALPACA_MODE is not live; the ceremony "
+            "runs only under the mode it activates (ADR 0059 D1)"
+        )
     return BrokerCutoverEvidence(
         account_id=payload["account_id"],
         account_mode=payload["account_mode"],

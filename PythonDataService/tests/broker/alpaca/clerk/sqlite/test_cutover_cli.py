@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
 from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
 from app.broker.alpaca.clerk.sqlite.dev_reset import DeveloperCleanSlateResetRefused
+from app.broker.alpaca.config import AlpacaSettings
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_catalog_quarantine_plan,
     _read_cutover_evidence,
@@ -22,6 +23,7 @@ from scripts.manage_alpaca_sqlite_clerk import (
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
+from tests.broker.alpaca.clerk.live_arming_fixtures import live_settings
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     PLAN_MS,
     write_stopped_runner_bot,
@@ -234,6 +236,36 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
     assert not hasattr(reset, "account_mode")
     with pytest.raises(ValueError, match="cutover broker evidence"):
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+
+def test_read_cutover_evidence_refuses_live_evidence_under_non_live_alpaca_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "account_id": ACCOUNT_ID,
+        "account_mode": "live",
+        "observed_at_ms": PLAN_MS,
+        "proof_reference": "fake-cli-proof",
+        "positions": {},
+        "open_order_ids": [],
+    }
+    evidence_path = tmp_path / "live-broker-evidence.json"
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        recovery_cli_module,
+        "get_alpaca_settings",
+        lambda: AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+    )
+    with pytest.raises(ValueError, match="ALPACA_MODE"):
+        _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+    monkeypatch.setattr(recovery_cli_module, "get_alpaca_settings", live_settings)
+
+    evidence = _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+    assert evidence.account_mode == "live"
 
 
 def test_v9_upgrade_and_rollback_cli_require_account_bound_process_stop_evidence(
