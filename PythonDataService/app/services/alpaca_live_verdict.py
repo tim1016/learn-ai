@@ -9,6 +9,7 @@ it only reads.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -162,7 +163,7 @@ class ArmingObservation:
 def observe_arming(
     runtime: ActiveClerkRuntime | None,
     artifacts_root: Path,
-    live_state_root: Path,
+    live_state_root: Callable[[], Path],
     *,
     settings: AlpacaSettings,
     now_ms: int,
@@ -174,6 +175,14 @@ def observe_arming(
     only inputs. Fails closed -- a ledger that will not verify counts no
     instance and says so in the detail, rather than reporting an account as
     unarmed for a reason nobody can see.
+
+    ``live_state_root`` is a callable, not a path, because resolving the
+    runner's root reads legacy ``IbkrSettings`` and can therefore refuse. An
+    argument is evaluated before this function can take its paper /
+    absent-authority early return, so an eagerly resolved root turned an
+    invalid legacy IBKR environment into a 500 on a paper verdict that reads
+    no arming evidence at all. Nothing under the root is touched unless the
+    shadow branch below is taken.
     """
     if (
         runtime is None
@@ -194,7 +203,7 @@ def observe_arming(
         arming = account_arming(
             live_account_id=live_account_id,
             artifacts_root=artifacts_root,
-            live_state_root=live_state_root,
+            live_state_root=live_state_root(),
             configured_envelope=LiveEnvelopeValues.from_settings(settings),
             now_ms=now_ms,
         )

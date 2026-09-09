@@ -743,7 +743,10 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
             else observe_arming(
                 runtime,
                 alpaca_settings.clerk_dir,
-                live_artifacts_root(),
+                # The resolver, not its result: resolving the runner's root
+                # reads legacy ``IbkrSettings`` and can refuse, and a paper or
+                # absent-authority verdict reads nothing under it.
+                live_artifacts_root,
                 settings=alpaca_settings,
                 now_ms=observed_at_ms,
             )

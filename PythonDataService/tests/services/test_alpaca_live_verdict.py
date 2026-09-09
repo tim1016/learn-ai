@@ -369,7 +369,7 @@ def test_observe_arming_counts_the_ledgers_armed_instances(tmp_path: Path) -> No
     observation = observe_arming(
         _shadow_runtime(),
         artifacts_root,
-        live_state_root,
+        lambda: live_state_root,
         settings=live_settings(),
         now_ms=ARMED_AT_MS,
     )
@@ -385,7 +385,7 @@ def test_observe_arming_names_a_lapsed_instance_and_counts_it_out(tmp_path: Path
     observation = observe_arming(
         _shadow_runtime(),
         artifacts_root,
-        live_state_root,
+        lambda: live_state_root,
         settings=live_settings(),
         now_ms=MONDAY_MS,
     )
@@ -408,7 +408,7 @@ def test_observe_arming_fails_closed_on_an_unreadable_ledger(tmp_path: Path) -> 
     observation = observe_arming(
         _shadow_runtime(),
         artifacts_root,
-        live_state_root,
+        lambda: live_state_root,
         settings=live_settings(),
         now_ms=ARMED_AT_MS,
     )
@@ -428,7 +428,7 @@ def test_observe_arming_on_a_never_armed_account_claims_nothing(tmp_path: Path) 
     observation = observe_arming(
         _shadow_runtime(),
         artifacts_root,
-        live_state_root,
+        lambda: live_state_root,
         settings=live_settings(),
         now_ms=ARMED_AT_MS,
     )
@@ -437,6 +437,31 @@ def test_observe_arming_on_a_never_armed_account_claims_nothing(tmp_path: Path) 
     assert observation.envelope_state == "configured_unsealed"
     # No instance is named: there is no row to report as not-armed.
     assert observation.detail == ""
+
+
+def test_observe_arming_never_resolves_the_bindings_root_it_will_not_read(tmp_path: Path) -> None:
+    """The runner root is resolved from legacy IBKR settings, which can refuse.
+
+    ``live_artifacts_root()`` constructs ``IbkrSettings``, so an invalid legacy
+    IBKR environment raises. Nothing under that root can change a paper or
+    absent-authority observation, and resolving it eagerly as a call argument
+    turned the Alpaca live-verdict endpoint into a 500 for a perfectly valid
+    paper configuration.
+    """
+    artifacts_root = tmp_path / "clerk"
+
+    def _refuses() -> Path:
+        pytest.fail("the bindings root was resolved for an observation that reads none")
+
+    for runtime, settings in (
+        (None, live_settings()),
+        (ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001"), live_settings()),
+        (_shadow_runtime(), paper_settings()),
+    ):
+        assert (
+            observe_arming(runtime, artifacts_root, _refuses, settings=settings, now_ms=ARMED_AT_MS)
+            == ArmingObservation.none()
+        )
 
 
 def test_observe_arming_reads_nothing_off_a_paper_or_absent_authority(tmp_path: Path) -> None:
@@ -453,7 +478,7 @@ def test_observe_arming_reads_nothing_off_a_paper_or_absent_authority(tmp_path: 
     ):
         assert (
             observe_arming(
-                runtime, artifacts_root, live_state_root, settings=settings, now_ms=ARMED_AT_MS
+                runtime, artifacts_root, lambda: live_state_root, settings=settings, now_ms=ARMED_AT_MS
             )
             == ArmingObservation.none()
         )
