@@ -21,7 +21,7 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     SHADOW_ACCOUNT_PREFIX,
@@ -48,6 +48,8 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRefused,
     LiveDisarmRecord,
     arming_status,
+    instance_ids,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
@@ -399,7 +401,32 @@ def disarm(
     return record
 
 
-def account_arming_statuses(
+@dataclass(frozen=True)
+class AccountArming:
+    """One live account's arming evidence, from a single read of its ledger.
+
+    Every fact R11 publishes about an account -- the per-instance statuses, the
+    record that sealed its envelope, the armed count and the envelope state --
+    is derived here from the same ``records()`` tuple. Two readers of one
+    verdict can therefore never describe two different snapshots of a file an
+    operator may be appending to while the verdict is being composed.
+    """
+
+    statuses: dict[str, ArmingStatus]
+    sealed: LiveArmingRecord | None
+
+    @property
+    def armed_instance_count(self) -> int:
+        """How many of the named instances are armed at the judged instant (R11)."""
+        return sum(1 for status in self.statuses.values() if status.state == "armed")
+
+    @property
+    def envelope_state(self) -> Literal["configured_unsealed", "sealed"]:
+        """Whether any arming record has sealed this account's envelope (R11)."""
+        return "configured_unsealed" if self.sealed is None else "sealed"
+
+
+def account_arming(
     *,
     live_account_id: str,
     artifacts_root: Path,
@@ -407,18 +434,28 @@ def account_arming_statuses(
     configured_envelope: LiveEnvelopeValues,
     now_ms: int,
     strategy_instance_ids: Sequence[str] | None = None,
-) -> dict[str, ArmingStatus]:
-    """Every named instance's arming status, reading the ledger and bindings once.
+) -> AccountArming:
+    """This account's arming evidence, reading the ledger file exactly once.
 
     ``strategy_instance_ids=None`` means "every instance with a row in the
     ledger" -- the set an operator's ``status`` and the live verdict both want.
     An instance whose sealed binding has gone gets ``seal_hash=None``, which
     ``arming_status`` reads as a change from what was armed.
+
+    The runner's bindings are read only when the ledger actually knows one of
+    the wanted instances: nothing under ``live_state_root`` can change the
+    answer for an instance that was never armed, so a ``status`` on a
+    never-armed account touches no bindings root at all -- which on a fresh
+    installation may not exist yet.
     """
-    ledger = LiveArmingLedger(artifacts_root, live_account_id=live_account_id)
-    records = ledger.records()
-    seals = instance_seal_hashes(live_account_id=live_account_id, live_state_root=live_state_root)
-    wanted = ledger.instance_ids() if strategy_instance_ids is None else tuple(strategy_instance_ids)
+    records = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).records()
+    known = instance_ids(records)
+    wanted = known if strategy_instance_ids is None else tuple(strategy_instance_ids)
+    seals = (
+        instance_seal_hashes(live_account_id=live_account_id, live_state_root=live_state_root)
+        if any(sid in known for sid in wanted)
+        else {}
+    )
     statuses: dict[str, ArmingStatus] = {}
     for sid in wanted:
         seal = seals.get(sid)
@@ -430,15 +467,16 @@ def account_arming_statuses(
             configured_envelope=configured_envelope,
             now_ms=now_ms,
         )
-    return statuses
+    return AccountArming(statuses=statuses, sealed=latest_arming(records))
 
 
 __all__ = [
+    "AccountArming",
     "ArmingInputs",
     "ArmingObserver",
     "InstanceSeal",
     "LiveArmingPlan",
-    "account_arming_statuses",
+    "account_arming",
     "apply_arming",
     "configured_envelope",
     "custody_account_ids_for",

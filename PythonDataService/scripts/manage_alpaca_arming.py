@@ -45,14 +45,13 @@ from app.broker.alpaca.clerk.live_arming import (
 )
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
-    account_arming_statuses,
+    account_arming,
     apply_arming,
     configured_envelope,
     disarm,
     live_account_id_for,
     plan_arming,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
@@ -223,7 +222,7 @@ def _status(
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
     live_account_id = live_account_id_for(artifacts_root)
-    statuses = account_arming_statuses(
+    arming = account_arming(
         live_account_id=live_account_id,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
@@ -233,16 +232,15 @@ def _status(
             None if args.strategy_instance_id is None else [args.strategy_instance_id]
         ),
     )
-    sealed = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).latest_arming()
     _write(
         {
             "now_ms": now_ms,
             "live_account_id": live_account_id,
-            "envelope_state": "configured_unsealed" if sealed is None else "sealed",
-            "armed_instance_count": sum(1 for status in statuses.values() if status.state == "armed"),
+            "envelope_state": arming.envelope_state,
+            "armed_instance_count": arming.armed_instance_count,
             "instances": [
                 _instance_payload(status, strategy_instance_id=sid)
-                for sid, status in sorted(statuses.items())
+                for sid, status in sorted(arming.statuses.items())
             ],
         }
     )

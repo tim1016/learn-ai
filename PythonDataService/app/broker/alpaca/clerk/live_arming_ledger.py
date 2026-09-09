@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingInvalid,
     LiveArmingRecord,
     LiveDisarmRecord,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sealed_ledger import (
@@ -111,23 +112,16 @@ class LiveArmingLedger:
         rows = self.records_for(strategy_instance_id)
         return rows[-1] if rows else None
 
-    def latest_arming(self) -> LiveArmingRecord | None:
-        """The account's newest arming record, ignoring revocations (R10).
-
-        A disarm withdraws one instance's permission; it does not unseal the
-        account's envelope, which stays whatever the last arming ceremony read
-        out of the environment until another ceremony replaces it.
-        """
-        armings = [row for row in self.records() if isinstance(row, LiveArmingRecord)]
-        return armings[-1] if armings else None
-
     def sealed_envelope(self) -> LiveEnvelopeValues | None:
-        latest = self.latest_arming()
-        return None if latest is None else latest.envelope
+        """The envelope the account's newest arming record sealed (R10), in one read.
 
-    def instance_ids(self) -> tuple[str, ...]:
-        """Every instance with a row here, in first-appearance order."""
-        return tuple(dict.fromkeys(row.strategy_instance_id for row in self.records()))
+        The envelope-sync tick wants only this one fact, so it stays a method;
+        every reader that wants more than one derived answer takes the
+        ``records()`` tuple and asks ``live_arming``'s pure questions of it,
+        rather than re-reading the file once per question.
+        """
+        latest = latest_arming(self.records())
+        return None if latest is None else latest.envelope
 
 
 __all__ = ["LIVE_ARMING_FILENAME", "LiveArmingLedger"]

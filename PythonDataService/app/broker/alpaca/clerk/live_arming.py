@@ -297,6 +297,22 @@ class ArmingStatus:
     sessions_remaining: int
 
 
+def latest_arming(records: Sequence[LedgerRecord]) -> LiveArmingRecord | None:
+    """The account's newest arming record, ignoring revocations (R10).
+
+    A disarm withdraws one instance's permission; it does not unseal the
+    account's envelope, which stays whatever the last arming ceremony read out
+    of the environment until another ceremony replaces it.
+    """
+    armings = [row for row in records if isinstance(row, LiveArmingRecord)]
+    return armings[-1] if armings else None
+
+
+def instance_ids(records: Sequence[LedgerRecord]) -> tuple[str, ...]:
+    """Every instance with a row in ``records``, in first-appearance order."""
+    return tuple(dict.fromkeys(row.strategy_instance_id for row in records))
+
+
 def _live_state(
     latest: LiveArmingRecord,
     *,
@@ -401,5 +417,7 @@ __all__ = [
     "LiveArmingRefused",
     "LiveDisarmRecord",
     "arming_status",
+    "instance_ids",
+    "latest_arming",
     "sessions_used",
 ]

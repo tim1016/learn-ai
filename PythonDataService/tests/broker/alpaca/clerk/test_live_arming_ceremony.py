@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import app.broker.alpaca.clerk.live_arming_ceremony as ceremony_module
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INPUTS_CHANGED,
     LIVE_ARMING_INSTANCE_UNSEALED,
@@ -24,7 +25,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     ArmingInputs,
     ArmingObserver,
     LiveArmingPlan,
-    account_arming_statuses,
+    account_arming,
     apply_arming,
     custody_account_ids_for,
     disarm,
@@ -508,13 +509,13 @@ def test_disarm_revokes_the_latest_record_and_needs_no_confirmation(roots: tuple
     assert isinstance(revocation, LiveDisarmRecord)
     assert revocation.revokes_record_sha256 == armed.record_sha256
     assert revocation.disarmed_at_ms == ARMED_AT_MS + 5_000
-    statuses = account_arming_statuses(
+    statuses = account_arming(
         live_account_id=LIVE_ACCT,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
         configured_envelope=TEST_ENVELOPE_VALUES,
         now_ms=ARMED_AT_MS + 5_000,
-    )
+    ).statuses
     assert statuses[ARMING_SID].state == "disarmed"
     assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_REVOKED"
 
@@ -551,26 +552,67 @@ def test_account_statuses_answer_every_instance_with_a_row_and_named_ones_beside
         clock=_Clock(ARMED_AT_MS),
     )
 
-    every = account_arming_statuses(
+    every = account_arming(
         live_account_id=LIVE_ACCT,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
         configured_envelope=TEST_ENVELOPE_VALUES,
         now_ms=ARMED_AT_MS,
-    )
+    ).statuses
     assert set(every) == {ARMING_SID}
     assert every[ARMING_SID].state == "armed"
     assert (every[ARMING_SID].sessions_used, every[ARMING_SID].sessions_remaining) == (1, 19)
 
-    named = account_arming_statuses(
+    named = account_arming(
         live_account_id=LIVE_ACCT,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
         configured_envelope=TEST_ENVELOPE_VALUES,
         now_ms=ARMED_AT_MS,
         strategy_instance_ids=["never-armed"],
-    )
+    ).statuses
     assert named["never-armed"].state == "unarmed"
+
+
+def test_a_never_armed_account_is_answered_without_reading_the_bindings_root(
+    roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing under ``live_state_root`` can change an unarmed answer.
+
+    A fresh installation may have no runner root at all, so a ``status`` on an
+    account nobody has armed must neither depend on one nor fail for its
+    absence.
+    """
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    monkeypatch.setattr(
+        ceremony_module,
+        "instance_seal_hashes",
+        lambda **_kwargs: pytest.fail("the bindings root was read for a never-armed account"),
+    )
+    absent_root = artifacts_root / "no-runner-root-here"
+
+    every = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=absent_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+    )
+    named = account_arming(
+        live_account_id=LIVE_ACCT,
+        artifacts_root=artifacts_root,
+        live_state_root=absent_root,
+        configured_envelope=TEST_ENVELOPE_VALUES,
+        now_ms=ARMED_AT_MS,
+        strategy_instance_ids=[ARMING_SID],
+    )
+
+    assert every.statuses == {}
+    assert (every.armed_instance_count, every.envelope_state) == (0, "configured_unsealed")
+    assert named.statuses[ARMING_SID].state == "unarmed"
+    assert (named.armed_instance_count, named.envelope_state) == (0, "configured_unsealed")
+    assert not absent_root.exists()
 
 
 def test_a_size_change_alone_disarms_because_arming_binds_the_whole_seal(
@@ -599,13 +641,13 @@ def test_a_size_change_alone_disarms_because_arming_binds_the_whole_seal(
     )
     assert resized.bot_configuration_hash != plan.seal_hash
 
-    statuses = account_arming_statuses(
+    statuses = account_arming(
         live_account_id=LIVE_ACCT,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root / "resized",
         configured_envelope=TEST_ENVELOPE_VALUES,
         now_ms=ARMED_AT_MS,
-    )
+    ).statuses
 
     assert statuses[ARMING_SID].state == "disarmed"
     assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_SEAL_CHANGED"

@@ -14,6 +14,8 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingInvalid,
     LiveArmingRecord,
     LiveDisarmRecord,
+    instance_ids,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LIVE_ARMING_FILENAME, LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
@@ -65,8 +67,8 @@ def test_the_ledger_is_account_rooted_outside_every_custody_namespace(tmp_path: 
     # Not under accounts/alpaca/ and not inside a custody namespace directory:
     # no cutover or latent-database check can mistake this tree for an authority.
     assert "alpaca" not in ledger.path.parts
-    assert ledger.records() == () and ledger.instance_ids() == ()
-    assert ledger.latest(SID) is None and ledger.latest_arming() is None
+    assert ledger.records() == () and instance_ids(ledger.records()) == ()
+    assert ledger.latest(SID) is None and latest_arming(ledger.records()) is None
     assert ledger.sealed_envelope() is None
 
 
@@ -86,8 +88,8 @@ def test_append_and_read_keep_file_order_and_survive_a_reopen(tmp_path: Path) ->
     assert reopened.records() == (first, second)
     assert reopened.records_for(SID) == (first,)
     assert reopened.latest(SID) == first
-    assert reopened.latest_arming() == second
-    assert reopened.instance_ids() == (SID, "ema-shadow-2")
+    assert latest_arming(reopened.records()) == second
+    assert instance_ids(reopened.records()) == (SID, "ema-shadow-2")
     assert len(reopened.path.read_text(encoding="utf-8").splitlines()) == 2
 
 
@@ -116,7 +118,7 @@ def test_a_disarm_never_unseals_the_account_level_envelope(tmp_path: Path) -> No
     )
 
     assert isinstance(ledger.latest(SID), LiveDisarmRecord)
-    assert ledger.latest_arming() == record
+    assert latest_arming(ledger.records()) == record
     assert ledger.sealed_envelope() == ENVELOPE
 
 
@@ -130,7 +132,7 @@ def test_a_foreign_accounts_row_is_ignored_rather_than_answered_for(tmp_path: Pa
     )
 
     assert ledger.records() == (_armed(),)
-    assert ledger.instance_ids() == (SID,)
+    assert instance_ids(ledger.records()) == (SID,)
 
 
 def test_appending_another_accounts_record_is_refused_before_the_write(tmp_path: Path) -> None:

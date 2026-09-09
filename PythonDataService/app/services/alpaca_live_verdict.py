@@ -16,8 +16,7 @@ from typing import Literal
 from app.broker.alpaca.clerk.account_authority import SHADOW_ACCOUNT_PREFIX
 from app.broker.alpaca.clerk.active_authority import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
-from app.broker.alpaca.clerk.live_arming_ceremony import account_arming_statuses
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
@@ -142,17 +141,17 @@ def observe_arming(
         return ArmingObservation.none()
     live_account_id = runtime.selected_account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
     try:
-        statuses = account_arming_statuses(
+        # One read of the ledger answers every question below: the count, the
+        # envelope state and the not-armed prose all come from the same
+        # snapshot, so a concurrent ``apply`` cannot make one verdict describe
+        # two.
+        arming = account_arming(
             live_account_id=live_account_id,
             artifacts_root=artifacts_root,
             live_state_root=live_state_root,
             configured_envelope=LiveEnvelopeValues.from_settings(settings),
             now_ms=now_ms,
         )
-        # A second read of the same small file, deliberately: "the ledger
-        # holds an arming record" is not "some instance is currently armed",
-        # and a disarmed account is still a sealed one.
-        sealed = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).latest_arming()
     except (LiveArmingInvalid, LiveEnvelopeIncomplete) as exc:
         logger.error(
             "the arming ledger cannot be read; the verdict counts no armed instance",
@@ -169,12 +168,12 @@ def observe_arming(
         )
     not_armed = [
         f"{strategy_instance_id} ({status.reason_code})"
-        for strategy_instance_id, status in sorted(statuses.items())
+        for strategy_instance_id, status in sorted(arming.statuses.items())
         if status.state != "armed" and status.reason_code is not None
     ]
     return ArmingObservation(
-        armed_instance_count=sum(1 for status in statuses.values() if status.state == "armed"),
-        envelope_state="configured_unsealed" if sealed is None else "sealed",
+        armed_instance_count=arming.armed_instance_count,
+        envelope_state=arming.envelope_state,
         detail="" if not not_armed else f" Not armed: {'; '.join(not_armed)}.",
     )
 
