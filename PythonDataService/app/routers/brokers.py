@@ -162,6 +162,19 @@ def _sqlite_projection_unavailable() -> HTTPException:
     )
 
 
+def _live_envelope_not_installed(message: str) -> HTTPException:
+    """The one 503 for "this authority carries no live envelope" (ADR 0059 D4).
+
+    Two seams reach it -- no active runtime at all, and a runtime whose
+    authority composed no envelope -- and an operator reads the same
+    condition either way, so they answer with one body.
+    """
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "live_envelope_not_installed", "message": message},
+    )
+
+
 async def _read_sqlite_account_projection(
     sqlite: SqliteAlpacaClerkFacade,
 ) -> ClerkProjection:
@@ -729,15 +742,23 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
 )
 async def clear_live_loss_hold(broker: str) -> LossHoldClearOutcome:
     """The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands."""
+    # This docstring is the route's published OpenAPI description; the two
+    # 503 seams below share one body via ``_live_envelope_not_installed``.
     if broker != "alpaca":
-        raise HTTPException(status_code=404, detail={"reason": "live_envelope_unsupported_broker", "message": f"No live envelope for broker '{broker}'."})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "live_envelope_unsupported_broker",
+                "message": f"No live envelope for broker '{broker}'.",
+            },
+        )
     runtime = get_active_clerk_runtime()
     if runtime is None:
-        raise HTTPException(status_code=503, detail={"reason": "live_envelope_not_installed", "message": "No Alpaca Clerk authority is installed."})
+        raise _live_envelope_not_installed("No Alpaca Clerk authority is installed.")
     try:
         return await clear_loss_hold(runtime, now_ms=now_ms_utc())
     except LiveEnvelopeNotInstalled as exc:
-        raise HTTPException(status_code=503, detail={"reason": "live_envelope_not_installed", "message": str(exc)}) from exc
+        raise _live_envelope_not_installed(str(exc)) from exc
 
 
 @router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)

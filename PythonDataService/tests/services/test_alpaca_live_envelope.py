@@ -94,6 +94,9 @@ async def test_the_clear_refuses_an_unknown_fact(
     _observe_foreign_order(runtime.sqlite_repository, observed_at_ms=TODAY_OPEN)
     refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
     assert refused.outcome == "refused" and refused.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
+    # R5: unknown is not a number. The detail says the day cannot be judged,
+    # so the figure beside it must be absent rather than plausible.
+    assert refused.day_pnl_usd is None
     assert _hold(runtime.sqlite_repository) is not None
 
 
