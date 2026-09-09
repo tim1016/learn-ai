@@ -256,6 +256,13 @@ def _validate_armed(record: LiveArmingRecord) -> None:
         raise LiveArmingInvalid("live arming record's sealed envelope has an invalid shape") from exc
     if sealed.sha != record.envelope_sha256:
         raise LiveArmingInvalid("live arming record's envelope sha does not match its sealed values")
+    # The lapse count is the sealed envelope's, not a second number beside it.
+    # ``arming_status`` counts off ``max_sessions`` while the operator confirmed
+    # -- and the sync publishes -- ``arming_max_sessions``, so a self-consistent
+    # row could otherwise stay armed for 100 sessions while its sealed envelope
+    # said 20. The envelope hash cannot catch that: both fields are inside it.
+    if record.max_sessions != sealed.arming_max_sessions:
+        raise LiveArmingInvalid("live arming record's max_sessions disagrees with the sealed envelope")
 
 
 def _validate_disarmed(record: LiveDisarmRecord) -> None:

@@ -160,7 +160,9 @@ def test_a_tampered_row_is_refused_rather_than_read(tmp_path: Path) -> None:
     ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     ledger.append(_armed())
     ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace('"max_sessions":20', '"max_sessions":90'),
+        ledger.path.read_text(encoding="utf-8").replace(
+            f'"armed_at_ms":{FRIDAY_MS}', f'"armed_at_ms":{FRIDAY_MS + 1}'
+        ),
         encoding="utf-8",
     )
 

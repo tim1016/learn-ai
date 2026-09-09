@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.live_arming import (
     sessions_used,
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.lean_sidecar.trading_calendar import is_trading_day, trading_session_count
 from app.services.session_authority import et_minute_of_day_ms
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -49,14 +50,20 @@ TUESDAY_MS = et_minute_of_day_ms(date(2026, 9, 15), 10 * 60)
 
 
 def _armed(*, max_sessions: int = 20, armed_at_ms: int = FRIDAY_MS, seal: str = SEAL, instance: str = SID,
-           account: str = ACCOUNT, envelope: LiveEnvelopeValues = ENVELOPE) -> LiveArmingRecord:
+           account: str = ACCOUNT, envelope: LiveEnvelopeValues | None = None) -> LiveArmingRecord:
+    """One armed row whose sealed envelope grants exactly what the row claims.
+
+    ``max_sessions`` and the sealed envelope's ``arming_max_sessions`` are one
+    number, so varying the grant here varies the envelope with it. Supplying
+    ``envelope`` explicitly is how a test forces the two apart.
+    """
     return LiveArmingRecord.create(
         live_account_id=account,
         strategy_instance_id=instance,
         seal_hash=seal,
         configured_signal_hash=SIGNAL,
         shadow_receipt_sha256=RECEIPT,
-        envelope=envelope,
+        envelope=replace(ENVELOPE, arming_max_sessions=max_sessions) if envelope is None else envelope,
         armed_at_ms=armed_at_ms,
         max_sessions=max_sessions,
     )
@@ -115,8 +122,12 @@ def test_tampering_with_any_sealed_field_is_refused(field: str, value: object) -
 
 
 def test_a_tampered_content_field_is_caught_by_the_record_digest() -> None:
-    """The digest is what catches an edit the per-field validators would allow."""
-    payload = {**asdict(_armed()), "max_sessions": 19}
+    """The digest is what catches an edit the per-field validators would allow.
+
+    ``armed_at_ms`` is such a field: one millisecond later is still a valid
+    instant, cross-checked against nothing else on the row.
+    """
+    payload = {**asdict(_armed()), "armed_at_ms": FRIDAY_MS + 1}
     with pytest.raises(LiveArmingInvalid, match="digest does not verify"):
         LiveArmingRecord.from_payload(payload)
 
@@ -139,6 +150,29 @@ def test_a_rewritten_envelope_is_caught_by_the_envelope_sha_before_the_digest() 
     payload = {**asdict(record), "envelope_values": {**record.envelope_values, "loss_usd": 4_000.0}}
     with pytest.raises(LiveArmingInvalid, match="envelope sha does not match"):
         LiveArmingRecord.from_payload(payload)
+
+
+def test_the_lapse_count_must_be_the_sealed_envelopes_own() -> None:
+    """``max_sessions`` is not a second, independent number.
+
+    ``arming_status`` counts the lapse off the record's own ``max_sessions``
+    while the envelope sealed beside it -- the one the operator confirmed, and
+    the one the sync publishes -- carries ``arming_max_sessions``. Nothing but
+    this check forces them to agree, so a record whose sealed envelope says 20
+    sessions could otherwise stay armed for 100.
+    """
+    with pytest.raises(LiveArmingInvalid, match="disagrees with the sealed envelope"):
+        _armed(max_sessions=ENVELOPE.arming_max_sessions + 1, envelope=ENVELOPE)
+
+
+def test_a_resealed_row_whose_lapse_count_was_widened_is_still_refused() -> None:
+    """The digest cannot catch this one: the row was re-sealed over the new number."""
+    unsigned = {name: value for name, value in asdict(_armed()).items() if name != "record_sha256"}
+    widened = {**unsigned, "max_sessions": 100}
+    resealed = {**widened, "record_sha256": canonical_sha256(widened)}
+
+    with pytest.raises(LiveArmingInvalid, match="disagrees with the sealed envelope"):
+        LiveArmingRecord.from_payload(resealed)
 
 
 def test_a_reserved_namespace_account_is_never_a_live_account() -> None:
@@ -267,7 +301,7 @@ def test_no_record_is_unarmed() -> None:
 def test_the_latest_record_decides_and_a_re_arm_supersedes() -> None:
     first = _armed(max_sessions=2)
     second = _armed(max_sessions=5, armed_at_ms=MONDAY_MS)
-    status = _status([first, second], now_ms=MONDAY_MS)
+    status = _status([first, second], now_ms=MONDAY_MS, configured_envelope=second.envelope)
     assert (status.state, status.record) == ("armed", second)
     assert (status.sessions_used, status.sessions_remaining) == (1, 4)
 
@@ -299,11 +333,12 @@ def test_a_changed_environment_disagrees_with_the_sealed_envelope() -> None:
 
 def test_the_arming_lapses_only_once_the_count_is_exceeded() -> None:
     records = [_armed(max_sessions=2)]
-    on_the_last_session = _status(records, now_ms=MONDAY_MS)
+    granted = records[0].envelope
+    on_the_last_session = _status(records, now_ms=MONDAY_MS, configured_envelope=granted)
     assert on_the_last_session.state == "armed"
     assert (on_the_last_session.sessions_used, on_the_last_session.sessions_remaining) == (2, 0)
 
-    lapsed = _status(records, now_ms=TUESDAY_MS)
+    lapsed = _status(records, now_ms=TUESDAY_MS, configured_envelope=granted)
     assert (lapsed.state, lapsed.reason_code) == ("lapsed", LIVE_ARMING_LAPSED)
     assert (lapsed.sessions_used, lapsed.sessions_remaining) == (3, 0)
 

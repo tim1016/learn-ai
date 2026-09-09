@@ -514,7 +514,9 @@ def test_a_ledger_row_that_will_not_verify_is_an_evidence_error_at_exit_one(
     _arm(roots, capsys)
     ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
     ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace('"max_sessions":20', '"max_sessions":90'),
+        ledger.path.read_text(encoding="utf-8").replace(
+            f'"armed_at_ms":{ARMED_AT_MS}', f'"armed_at_ms":{ARMED_AT_MS + 1}'
+        ),
         encoding="utf-8",
     )
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -261,7 +262,12 @@ def _arm_on_disk(
     armed_at_ms: int = ARMED_AT_MS,
     max_sessions: int = 20,
 ) -> LiveArmingRecord:
-    """One sealed instance and one arming record for it, both on disk."""
+    """One sealed instance and one arming record for it, both on disk.
+
+    The sealed envelope grants exactly ``max_sessions``: the record's lapse
+    count and the envelope's ``arming_max_sessions`` are one number, so an
+    observation of this ledger must be made against settings that say the same.
+    """
     seal = arming_ready(artifacts_root, live_state_root, strategy_instance_id=strategy_instance_id)
     record = LiveArmingRecord.create(
         live_account_id=LIVE_ACCT,
@@ -269,7 +275,7 @@ def _arm_on_disk(
         seal_hash=seal.bot_configuration_hash,
         configured_signal_hash=seal.configured_signal_hash,
         shadow_receipt_sha256="c" * 64,
-        envelope=TEST_ENVELOPE_VALUES,
+        envelope=replace(TEST_ENVELOPE_VALUES, arming_max_sessions=max_sessions),
         armed_at_ms=armed_at_ms,
         max_sessions=max_sessions,
     )
@@ -386,7 +392,9 @@ def test_observe_arming_names_a_lapsed_instance_and_counts_it_out(tmp_path: Path
         _shadow_runtime(),
         artifacts_root,
         lambda: live_state_root,
-        settings=live_settings(),
+        # The environment must grant what the record sealed, or the instance
+        # reports envelope disagreement before the lapse is ever counted.
+        settings=live_settings(live_arming_max_sessions=1),
         now_ms=MONDAY_MS,
     )
 
@@ -401,7 +409,9 @@ def test_observe_arming_fails_closed_on_an_unreadable_ledger(tmp_path: Path) -> 
     _arm_on_disk(artifacts_root, live_state_root)
     ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
     ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace('"max_sessions":20', '"max_sessions":90'),
+        ledger.path.read_text(encoding="utf-8").replace(
+            f'"armed_at_ms":{ARMED_AT_MS}', f'"armed_at_ms":{ARMED_AT_MS + 1}'
+        ),
         encoding="utf-8",
     )
 
