@@ -7,9 +7,10 @@ then appends the sealed record. ``disarm`` is the closed direction and takes no
 plan at all.
 
 Nothing here contacts a broker. The four inputs (design R8) are settings, the
-shadow activation proof, the instance's sealed binding, and a current shadow
-receipt -- all durable evidence already on disk. Mode agreement against the
-broker stays the runtime's job at boot, and (slice 7) at admission.
+shadow activation proof, and the instance's sealed binding; a current shadow
+receipt is recorded when one exists -- all durable evidence already on disk.
+Mode agreement against the broker stays the runtime's job at boot, and (slice 7)
+at admission.
 
 An arming record grants nothing in this slice: no path submits a real-money
 order until slice 7 opens one.
@@ -43,7 +44,6 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
     LIVE_ENVELOPE_MISSING,
-    LIVE_SHADOW_INCOMPLETE,
     ArmingStatus,
     LiveArmingRecord,
     LiveArmingRefused,
@@ -81,7 +81,7 @@ class ArmingInputs:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope: LiveEnvelopeValues
     max_sessions: int
 
@@ -102,7 +102,7 @@ class LiveArmingPlan:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope_values: dict[str, float | int]
     envelope_sha256: str
     max_sessions: int
@@ -198,30 +198,19 @@ def observe_arming_inputs(
         configured_signal_hash=seal.configured_signal_hash,
         required_sessions=envelope.shadow_sessions,
     )
-    if receipt is None:
-        raise LiveArmingRefused(
-            LIVE_SHADOW_INCOMPLETE,
-            f"{strategy_instance_id} has no current shadow receipt for this seal over "
-            f"{envelope.shadow_sessions} session(s)",
-        )
-    # The receipt store filters by instance, signal hash and session count only,
-    # so a receipt sealed on another live account would otherwise prove this
-    # one's gate. Two accounts can carry the same instance id and the same
-    # configured signal; only the account the activation proof named was
-    # actually rehearsed.
-    if receipt.live_account_id != live_account_id:
-        raise LiveArmingRefused(
-            LIVE_SHADOW_INCOMPLETE,
-            f"{strategy_instance_id}'s current shadow receipt was sealed for "
-            f"{receipt.live_account_id}, not {live_account_id}; the shadow gate must "
-            "have run on the account being armed",
-        )
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # current receipt for this instance on THIS account is recorded; its
+    # absence arms nothing less. A receipt sealed for another account is not
+    # this account's rehearsal and is not recorded either.
+    shadow_receipt_sha256 = (
+        receipt.receipt_sha256 if receipt is not None and receipt.live_account_id == live_account_id else None
+    )
     return ArmingInputs(
         live_account_id=live_account_id,
         strategy_instance_id=strategy_instance_id,
         seal_hash=seal.seal_hash,
         configured_signal_hash=seal.configured_signal_hash,
-        shadow_receipt_sha256=receipt.receipt_sha256,
+        shadow_receipt_sha256=shadow_receipt_sha256,
         envelope=envelope,
         max_sessions=envelope.arming_max_sessions,
     )

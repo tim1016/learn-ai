@@ -17,8 +17,8 @@ the fence.
 Exit codes: ``0`` the command answered; ``1`` the command cannot be run as asked
 -- a plan file that is not one, a ledger row that will not verify, or a usage
 refusal (an absent flag, an unknown subcommand, a flag outside its bound); ``2``
-the ceremony refused, under a named ``LIVE_ARMING_*`` / ``LIVE_SHADOW_INCOMPLETE``
-/ ``LIVE_ENVELOPE_MISSING`` code.
+the ceremony refused, under a named ``LIVE_ARMING_*`` / ``LIVE_ENVELOPE_MISSING``
+code.
 
 Every invocation writes exactly one JSON object to stdout, every temporal value
 in it is ``int64 ms UTC``, and every object carries ``"submission_admitted":

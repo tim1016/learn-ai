@@ -393,3 +393,34 @@ def test_another_accounts_or_another_instances_record_never_answers_here() -> No
     foreign_account = _armed(account="9LIVE0002")
     foreign_instance = _armed(instance="other")
     assert _status([foreign_account, foreign_instance]).state == "unarmed"
+
+
+def test_a_record_without_a_receipt_seals_round_trips_and_still_detects_tampering() -> None:
+    """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
+    record = LiveArmingRecord.create(
+        live_account_id=ACCOUNT,
+        strategy_instance_id=SID,
+        seal_hash=SEAL,
+        configured_signal_hash=SIGNAL,
+        shadow_receipt_sha256=None,
+        envelope=ENVELOPE,
+        armed_at_ms=FRIDAY_MS,
+        max_sessions=ENVELOPE.arming_max_sessions,
+    )
+    payload = asdict(record)
+    assert payload["shadow_receipt_sha256"] is None
+    assert LiveArmingRecord.from_payload(payload) == record
+    with pytest.raises(LiveArmingInvalid):
+        LiveArmingRecord.from_payload({**payload, "shadow_receipt_sha256": "e" * 64})
+    with pytest.raises(LiveArmingInvalid):
+        LiveArmingRecord.from_payload({**payload, "seal_hash": "f" * 64})
+    # A receipt-less record still grants exactly what an armed row grants.
+    status = arming_status(
+        (record,),
+        live_account_id=ACCOUNT,
+        strategy_instance_id=SID,
+        seal_hash=SEAL,
+        configured_envelope=ENVELOPE,
+        now_ms=FRIDAY_MS,
+    )
+    assert status.state == "armed"

@@ -213,7 +213,7 @@ def test_applying_after_the_confirmation_window_refuses_at_exit_two(
     assert _last_object(capsys)["error"] == "LIVE_ARMING_PLAN_EXPIRED"
 
 
-def test_planning_without_a_current_shadow_receipt_refuses_by_the_adrs_code(
+def test_planning_without_a_current_shadow_receipt_plans_with_a_null_receipt(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifacts_root, live_state_root = roots
@@ -225,11 +225,11 @@ def test_planning_without_a_current_shadow_receipt_refuses_by_the_adrs_code(
             [*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID, "--now-ms", str(ARMED_AT_MS)],
             settings=SETTINGS,
         )
-        == 2
+        == 0
     )
 
     report = _last_object(capsys)
-    assert report["error"] == "LIVE_SHADOW_INCOMPLETE"
+    assert report["shadow_receipt_sha256"] is None
     assert report["submission_admitted"] is False
 
 

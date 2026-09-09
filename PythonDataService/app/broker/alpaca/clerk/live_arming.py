@@ -127,7 +127,8 @@ class LiveArmingRefused(ValueError):
 
 @dataclass(frozen=True)
 class LiveArmingRecord:
-    """One instance armed on one live account, under one sealed envelope (R1)."""
+    """One instance armed on one live account, under one sealed envelope (R1);
+    ``shadow_receipt_sha256`` is null when the instance holds no receipt."""
 
     kind: Literal["armed"]
     schema_version: int
@@ -135,7 +136,7 @@ class LiveArmingRecord:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope_values: dict[str, float | int]
     envelope_sha256: str
     armed_at_ms: int
@@ -150,7 +151,7 @@ class LiveArmingRecord:
         strategy_instance_id: str,
         seal_hash: str,
         configured_signal_hash: str,
-        shadow_receipt_sha256: str,
+        shadow_receipt_sha256: str | None,
         envelope: LiveEnvelopeValues,
         armed_at_ms: int,
         max_sessions: int,
@@ -279,12 +280,11 @@ def _validate_armed(record: LiveArmingRecord) -> None:
         or not 0 <= record.armed_at_ms <= MAX_TIMESTAMP_MS
     ):
         raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
-    _require_hashes(
-        record.seal_hash,
-        record.configured_signal_hash,
-        record.shadow_receipt_sha256,
-        record.envelope_sha256,
-    )
+    _require_hashes(record.seal_hash, record.configured_signal_hash, record.envelope_sha256)
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # receipt is recorded when the instance holds one, and null otherwise.
+    if record.shadow_receipt_sha256 is not None:
+        _require_hashes(record.shadow_receipt_sha256)
     try:
         sealed = LiveEnvelopeValues(**record.envelope_values)
     except TypeError as exc:
