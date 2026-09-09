@@ -3864,7 +3864,10 @@ install the authority; the second is already refused by `injection_permitted`).
 ## Residuals
 
 - One primary authority per process (R1): a graduated account cannot shadow
-  a new instance until a secondary-authority seam exists.
+  a new instance until a secondary-authority seam (a shadow facade per
+  `shadow:` binding beside the live primary, the way `sim:` is selected per
+  instance) lands — a named follow-up slice, deferred by the owner on
+  2026-09-09. Rehearsal is optional, so this blocks nothing.
 - Graduation has no reversal (R1).
 - The arming gate is a 15 s cache of local evidence (R5).
 - The halt writes no desired state (R10) — owner question E1.
@@ -3998,7 +4001,7 @@ From the worktree root: `git diff --stat origin/master..HEAD` — every path mus
 
 - [ ] **Step 4: Hand off**
 
-The branch is ready for the independent thermo review the repo requires before its first push (`feedback_pr_workflow`, `feedback_independent_review_never_self`): a fresh reviewer, read-only, over `git diff origin/master...HEAD`, with the design spec beside it. The PR body must name the three owner-facing rulings (R1, R10, R14), the eight owner questions E1–E8, the file-size numbers, and the operator's `.env` facts (two `ALPACA_MODE` lines, both flags `true`, the six `ALPACA_LIVE_*` lines in the wrong file).
+The branch is ready for the independent thermo review the repo requires before its first push (`feedback_pr_workflow`, `feedback_independent_review_never_self`): a fresh reviewer, read-only, over `git diff origin/master...HEAD`, with the design spec beside it. The PR body must name the three owner-facing rulings (R1, R10, R14), the eight owner questions E1–E8, the file-size numbers, and the operator's `.env` facts (two `ALPACA_MODE` lines, both flags `true`, the six `ALPACA_LIVE_*` lines in the wrong file). It must also carry the owner's three 2026-09-09 decisions and one accepted risk, verbatim in substance: (1) no `desired_state = PAUSED` — the halt is the ENTER refusal, one warning per transition and the verdict (ADR 0059 D8 amended); (2) shadow is a mode, not a requirement — no `LIVE_SHADOW_INCOMPLETE` refusal to arm or to graduate, `shadow_receipt_sha256` optional on the arming record (D2/D3 amended); (3) **accepted risk — one primary authority per process (R1):** "After graduation the process runs the live authority; shadow mode is no longer offered on that account until the secondary-authority seam lands in a follow-up slice. Rehearsal is optional, so this blocks nothing; anyone who wants it rehearses before graduating." Name that follow-up slice explicitly under a "Follow-ups" heading beside `LiveDeactivationRecord` (graduation reversal).
 
 ---
 
