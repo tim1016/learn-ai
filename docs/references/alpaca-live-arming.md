@@ -39,7 +39,7 @@ field and a `note`.
   ledger for an authority.
 - `PythonDataService/app/broker/alpaca/clerk/live_arming_ceremony.py` —
   `observe_arming_inputs`, `plan_arming`, `apply_arming`, `disarm`,
-  `account_arming_statuses`.
+  `account_arming`.
 - `PythonDataService/app/broker/alpaca/clerk/ceremony.py` — the plan token, the
   TTL bounds and the three confirmation checks, shared with
   `clerk/sqlite/cutover.py`, which invented the shape.
