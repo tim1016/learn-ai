@@ -1,0 +1,45 @@
+<form class="news-form" (submit)="$event.preventDefault(); submit()">
+  <fieldset class="news-form__group">
+    <legend>Ticker</legend>
+    @for (spec of tickerFields; track spec.field) {
+      <label class="news-form__field">
+        <span>{{ spec.label }}</span>
+        <input type="text" [value]="valueOf(spec.field)" [placeholder]="spec.placeholder" (input)="setField(spec.field, inputValue($event))" />
+      </label>
+    }
+  </fieldset>
+
+  <fieldset class="news-form__group">
+    <legend>Published</legend>
+    @for (spec of dateFields; track spec.field) {
+      <label class="news-form__field">
+        <span>{{ spec.label }}</span>
+        <input type="text" [value]="valueOf(spec.field)" [placeholder]="spec.placeholder" (input)="setField(spec.field, inputValue($event))" />
+      </label>
+    }
+  </fieldset>
+
+  <fieldset class="news-form__group">
+    <legend>Ordering</legend>
+    <label class="news-form__field">
+      <span>Sort</span>
+      <input type="text" [value]="sort()" placeholder="published_utc" (input)="setSort(inputValue($event))" />
+    </label>
+    <label class="news-form__field">
+      <span>Order</span>
+      <select [value]="order()" (change)="setOrder(inputValue($event))">
+        <option value="desc">Newest first</option>
+        <option value="asc">Oldest first</option>
+      </select>
+    </label>
+    <label class="news-form__field">
+      <span>Limit</span>
+      <input type="number" min="1" max="1000" [value]="limit()" (input)="setLimit(inputValue($event))" />
+    </label>
+  </fieldset>
+
+  <div class="news-form__actions">
+    <button type="submit" [disabled]="busy()">{{ busy() ? 'Fetching…' : 'Fetch news' }}</button>
+    <button type="button" (click)="reset()" [disabled]="busy()">Reset to SPY</button>
+  </div>
+</form>

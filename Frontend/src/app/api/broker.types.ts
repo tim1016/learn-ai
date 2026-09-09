@@ -3390,6 +3390,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/news": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List News
+         * @description Fetch ticker news with vendor sentiment insights.
+         */
+        get: operations["list_news_api_news_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/options/contracts": {
         parameters: {
             query?: never;
@@ -14601,6 +14621,88 @@ export interface components {
              * @enum {string}
              */
             selector: "nearest_weekly";
+        };
+        /** NewsArticle */
+        NewsArticle: {
+            /** Amp Url */
+            amp_url?: string | null;
+            /** Article Url */
+            article_url?: string | null;
+            /** Author */
+            author?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Id */
+            id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /** Insights */
+            insights?: components["schemas"]["NewsInsight"][];
+            /** Keywords */
+            keywords?: string[];
+            /**
+             * Published Utc Ms
+             * @description Canonical int64 ms UTC. Null when the vendor string was unparseable.
+             */
+            published_utc_ms?: number | null;
+            publisher?: components["schemas"]["NewsPublisher"] | null;
+            /** Tickers */
+            tickers?: string[];
+            /** Title */
+            title?: string | null;
+        };
+        /**
+         * NewsInsight
+         * @description One vendor-asserted sentiment reading for one ticker in one article.
+         */
+        NewsInsight: {
+            /** Sentiment */
+            sentiment?: string | null;
+            /** Sentiment Reasoning */
+            sentiment_reasoning?: string | null;
+            /** Ticker */
+            ticker?: string | null;
+        };
+        /** NewsPublisher */
+        NewsPublisher: {
+            /** Favicon Url */
+            favicon_url?: string | null;
+            /** Homepage Url */
+            homepage_url?: string | null;
+            /** Logo Url */
+            logo_url?: string | null;
+            /** Name */
+            name?: string | null;
+        };
+        /** NewsResponse */
+        NewsResponse: {
+            /** Articles */
+            articles: components["schemas"]["NewsArticle"][];
+            /** Count */
+            count: number;
+            /**
+             * Fetched At Ms
+             * @description When this platform fetched the page — not when the vendor scored the sentiment.
+             */
+            fetched_at_ms: number;
+            /**
+             * Sentiment Provenance
+             * @default vendor_asserted
+             * @constant
+             */
+            sentiment_provenance?: "vendor_asserted";
+            /**
+             * Vendor
+             * @default polygon
+             * @constant
+             */
+            vendor?: "polygon";
+            /**
+             * Vendor Endpoint
+             * @default /v2/reference/news
+             * @constant
+             */
+            vendor_endpoint?: "/v2/reference/news";
         };
         /** NonSessionRecord */
         NonSessionRecord: {
@@ -27968,6 +28070,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketStatusResponse"];
+                };
+            };
+        };
+    };
+    list_news_api_news_get: {
+        parameters: {
+            query?: {
+                /** @description Exact ticker, case-sensitive (e.g. SPY). */
+                ticker?: string | null;
+                /** @description Ticker range: greater than or equal. */
+                ticker_gte?: string | null;
+                /** @description Ticker range: strictly greater than. */
+                ticker_gt?: string | null;
+                /** @description Ticker range: less than or equal. */
+                ticker_lte?: string | null;
+                /** @description Ticker range: strictly less than. */
+                ticker_lt?: string | null;
+                /** @description Exact publication date (YYYY-MM-DD or RFC3339). */
+                published_utc?: string | null;
+                /** @description Published on or after. */
+                published_utc_gte?: string | null;
+                /** @description Published strictly after. */
+                published_utc_gt?: string | null;
+                /** @description Published on or before. */
+                published_utc_lte?: string | null;
+                /** @description Published strictly before. */
+                published_utc_lt?: string | null;
+                /** @description Field to order by; upstream supports published_utc. */
+                sort?: string | null;
+                /** @description Sort direction. */
+                order?: ("asc" | "desc") | null;
+                /** @description Max articles; upstream ceiling is 1000. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

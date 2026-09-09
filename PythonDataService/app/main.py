@@ -53,6 +53,7 @@ from app.routers import (
     market_data_feed,
     market_monitor,
     monte_carlo,
+    news,
     options,
     portfolio,
     quantlib_options,
@@ -603,6 +604,7 @@ app.include_router(options.router, prefix="/api/options", tags=["options"])
 app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
 app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
 app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
+app.include_router(news.router, prefix="/api/news", tags=["news"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])

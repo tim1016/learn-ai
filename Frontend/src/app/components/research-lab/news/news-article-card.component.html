@@ -1,0 +1,67 @@
+<article class="news-card">
+  @if (article().image_url; as image) {
+    <img class="news-card__image" [src]="image" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
+  }
+
+  <div class="news-card__body">
+    <header class="news-card__head">
+      <span class="news-card__publisher">{{ publisherName() }}</span>
+      <app-timestamp-display [value]="article().published_utc_ms" mode="local" fallback="undated" />
+    </header>
+
+    @if (article().article_url; as url) {
+      <a class="news-card__title" [href]="url" target="_blank" rel="noopener noreferrer">{{ article().title ?? 'Untitled' }}</a>
+    } @else {
+      <span class="news-card__title">{{ article().title ?? 'Untitled' }}</span>
+    }
+
+    @if (article().author; as author) {
+      <p class="news-card__author">By {{ author }}</p>
+    }
+    @if (article().description; as description) {
+      <p class="news-card__description">{{ description }}</p>
+    }
+
+    @if (tickers().length > 0) {
+      <ul class="news-card__tickers">
+        @for (symbol of tickers(); track symbol) {
+          <li><app-asset-identity [symbol]="symbol" size="xs" [showTitle]="false" /></li>
+        }
+      </ul>
+    }
+
+    @if (insights().length > 0) {
+      <section class="news-card__insights">
+        <h3 class="news-card__insights-heading">Vendor sentiment</h3>
+        <p class="news-card__asserted-note" id="asserted-note-{{ article().id }}">
+          Asserted by the vendor's own model — recorded, not derived, and not validated by us.
+        </p>
+        @for (insight of insights(); track insight.key) {
+          <div class="news-card__insight">
+            <span
+              class="news-card__sentiment"
+              [class.news-card__sentiment--positive]="insight.isPositive"
+              [class.news-card__sentiment--negative]="insight.isNegative"
+              [class.news-card__sentiment--neutral]="insight.isNeutral"
+              [class.news-card__sentiment--unknown]="insight.isUnknown"
+              [attr.aria-describedby]="'asserted-note-' + article().id"
+            >
+              {{ insight.ticker }}: {{ insight.sentiment }}
+            </span>
+            @if (insight.reasoning; as reasoning) {
+              <p class="news-card__reasoning">{{ reasoning }}</p>
+            }
+          </div>
+        }
+      </section>
+    }
+
+    @if (keywords().length > 0) {
+      <ul class="news-card__keywords">
+        @for (keyword of keywords(); track keyword) {
+          <li class="news-card__keyword">{{ keyword }}</li>
+        }
+      </ul>
+    }
+  </div>
+</article>

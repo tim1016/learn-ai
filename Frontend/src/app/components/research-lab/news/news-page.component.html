@@ -1,0 +1,49 @@
+<section class="news-page">
+  <header class="news-page__head">
+    @if (focusTicker(); as symbol) {
+      <app-asset-identity [symbol]="symbol" size="lg" />
+    }
+    @if (result(); as loaded) {
+      <div class="news-page__provenance">
+        <span class="news-page__vendor">{{ loaded.vendor }} {{ loaded.vendor_endpoint }}</span>
+        <span class="news-page__asserted">sentiment: {{ loaded.sentiment_provenance }}</span>
+        <span class="news-page__fetched">
+          fetched <app-timestamp-display [value]="loaded.fetched_at_ms" mode="local" />
+        </span>
+      </div>
+    }
+  </header>
+
+  <p class="news-page__caveat">
+    Sentiment below is produced by the vendor's own unpublished model — recorded, not derived, and never
+    validated against a fixture. It is scored when the vendor runs the model, not when the article was
+    published, so backfilled sentiment is not a point-in-time input.
+  </p>
+
+  <app-news-query-form
+    [initial]="defaultQuery"
+    [busy]="isLoading()"
+    (submitted)="onSubmitted($event)"
+    (cleared)="onCleared()"
+  />
+
+  @if (error(); as failure) {
+    <app-section-error
+      [error]="failure"
+      contextWhat="Could not fetch news."
+      [retrying]="isLoading()"
+      (retry)="reload()"
+    />
+  } @else if (isLoading()) {
+    <p class="news-page__status">Fetching news…</p>
+  } @else if (hasArticles()) {
+    <p class="news-page__count">{{ articles().length }} articles</p>
+    <ul class="news-page__list">
+      @for (article of articles(); track articleKey(article.id, article.article_url, $index)) {
+        <li><app-news-article-card [article]="article" [focusTicker]="focusTicker()" /></li>
+      }
+    </ul>
+  } @else {
+    <p class="news-page__status">No articles matched this query.</p>
+  }
+</section>

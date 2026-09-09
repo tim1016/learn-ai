@@ -1,0 +1,67 @@
+:host {
+  display: block;
+  padding: 1rem;
+}
+
+.news-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__provenance {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  &__vendor,
+  &__fetched {
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-pill);
+    background: var(--bg-sunken);
+  }
+
+  // The lineage label: asserted vendor data, never a derived feature.
+  &__asserted {
+    padding: 0.1rem 0.45rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-pill);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  &__caveat {
+    max-width: 78ch;
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  &__status,
+  &__count {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}

@@ -27,6 +27,10 @@ export const RESEARCH_LAB_NAV: readonly NavGroup[] = [
     ],
   },
   {
+    label: 'Market',
+    items: [{ path: 'market/news', label: 'Ticker News' }],
+  },
+  {
     label: 'Backtests',
     items: [
       { path: 'backtests/reliability', label: 'Reliability' },

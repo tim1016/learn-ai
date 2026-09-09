@@ -1,0 +1,159 @@
+:host {
+  display: block;
+}
+
+.news-card {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+
+  &__image {
+    flex: 0 0 8rem;
+    width: 8rem;
+    height: 8rem;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  &__publisher {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  &__title {
+    font-size: 1.02rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--text-primary);
+    text-decoration: none;
+
+    &:hover,
+    &:focus-visible {
+      color: var(--accent-text);
+      text-decoration: underline;
+    }
+  }
+
+  &__author,
+  &__description {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  &__tickers,
+  &__keywords {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0.15rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__keyword {
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-pill);
+    background: var(--bg-sunken);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  &__insights {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.3rem;
+    padding: 0.5rem 0.6rem;
+    border-left: 3px solid var(--border-strong);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--bg-sunken);
+  }
+
+  &__insights-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+  }
+
+  // Vendor-asserted, never derived. Visible text rather than a `title`
+  // tooltip so it is reachable by keyboard and touch (WCAG AA).
+  &__asserted-note {
+    margin: 0;
+    font-size: 0.68rem;
+    line-height: 1.35;
+    color: var(--text-muted);
+  }
+
+  &__sentiment {
+    align-self: flex-start;
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.75rem;
+    font-weight: 600;
+
+    &--positive {
+      background: var(--bull-soft);
+      color: var(--bull);
+    }
+
+    &--negative {
+      background: var(--bear-soft);
+      color: var(--bear);
+    }
+
+    &--neutral {
+      background: var(--bg-hover);
+      color: var(--text-secondary);
+    }
+
+    &--unknown {
+      background: var(--bg-hover);
+      color: var(--text-muted);
+    }
+  }
+
+  &__reasoning {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+  }
+}
+
+@media (max-width: 640px) {
+  .news-card {
+    flex-direction: column;
+
+    &__image {
+      flex-basis: auto;
+      width: 100%;
+      height: 10rem;
+    }
+  }
+}

@@ -92,6 +92,14 @@ export const researchLabRoutes: Routes = [
         data: { title: 'Signal History' },
       },
 
+      // Market
+      {
+        path: 'market/news',
+        loadComponent: () =>
+          import('./news/news-page.component').then((m) => m.NewsPageComponent),
+        data: { title: 'Ticker News' },
+      },
+
       // Backtests
       {
         path: 'backtests/reliability',
