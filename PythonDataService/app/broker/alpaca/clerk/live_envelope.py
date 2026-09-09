@@ -181,8 +181,15 @@ class LiveEnvelopeGate:
         return self._observation
 
     def fresh_observation(self, now_ms: int) -> AccountObservation | None:
+        """The published observation, if its age at ``now_ms`` is in range.
+
+        Fresh means ``0 <= age <= max_age``: an observation dated *after* the
+        admission clock is not fresh either. A backward clock step would
+        otherwise make a negative age look fresh indefinitely, and ENTERs
+        would keep bounding against obsolete cash for the whole rollback.
+        """
         observation = self._observation
-        if observation is None or now_ms - observation.observed_at_ms > self._max_age_ms:
+        if observation is None or not (0 <= now_ms - observation.observed_at_ms <= self._max_age_ms):
             return None
         return observation
 

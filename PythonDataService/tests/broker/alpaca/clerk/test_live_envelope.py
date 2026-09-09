@@ -90,6 +90,19 @@ def test_the_gate_serves_only_a_fresh_observation() -> None:
     assert gate.latest_observation() == _observation(1_000)
 
 
+def test_an_observation_dated_after_the_clock_is_not_fresh() -> None:
+    """A backward clock step makes the age negative, not the observation new.
+
+    Left as ``age > max_age``, a rollback would serve an obsolete observation
+    indefinitely — the one window where ENTERs bound against stale cash and
+    the 45 s limit says nothing.
+    """
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
+    gate.publish(_observation(1_000))
+    assert gate.fresh_observation(1_000 - 1) is None
+    assert gate.fresh_observation(1_000) is not None
+
+
 def test_withdrawing_drops_the_observation_at_once() -> None:
     """An account the sync could not judge refuses every ENTER now, not once stale."""
     gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
