@@ -238,6 +238,27 @@ async def lifespan(app: FastAPI):
                 {binding.symbol for binding in bindings if binding.mode != "dry_run"}
             )
 
+        # ADR 0059 slice 7: the live authority's arming gate reads the runner's
+        # sealed bindings beside the ledger every tick. Built here, the same
+        # `roster_symbols` pattern and for the same reason -- the ceremony
+        # imports the runner's binding repository, and the clerk layer must
+        # never learn the runner's root. Resolved per call, so a bot deployed
+        # after boot is seen without a restart.
+        from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+
+        def _alpaca_instance_seals(live_account_id: str) -> dict[str, str]:
+            return {
+                sid: seal.seal_hash
+                for sid, seal in instance_seal_hashes(
+                    live_account_id=live_account_id,
+                    live_state_root=live_artifacts_root(),
+                    # This authority custodies the live id itself, so the
+                    # rehearsal's `shadow:`-sealed bindings are foreign to it
+                    # (design R15) and seal nothing the gate may admit.
+                    custody_world="real_live",
+                ).items()
+            }
+
         # ADR 0059 D4: the live world's risk envelope, read once from the
         # environment. Settings validation (`_enforce_mode_agreement`) already
         # refuses live mode without every ALPACA_LIVE_* value, so this cannot
@@ -256,6 +277,11 @@ async def lifespan(app: FastAPI):
             stream_health_gate=alpaca_stream_health_gate,
             roster_symbols=_alpaca_roster_symbols,
             live_envelope_values=live_envelope_values,
+            # ADR 0059 slice 7: the live authority reads sealed bindings beside
+            # the arming ledger every tick, and refuses to install behind an
+            # open control plane (R14).
+            instance_seals=_alpaca_instance_seals,
+            control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:

@@ -213,12 +213,18 @@ class _TestDecisionReceiptRepository:
 class _CustodyClerk:
     authority_kind = "sqlite"
     broker_id = "alpaca"
-    account_id = "PA-TEST"
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
     def __init__(self, proof: InstanceCustodyProof) -> None:
         self.proof = proof
+        # The custody account this authority holds, exposed where the real
+        # ``SqliteAlpacaClerkFacade`` exposes it and carrying the same id its
+        # own admission snapshots do -- so a caller that compares a binding's
+        # sealed account against this Clerk gets the answer Start gets. It
+        # used to be a fixed class attribute naming a *different* account
+        # from every snapshot the double yields.
+        self.account_id = proof.account_id
         self.repository = _TestDecisionReceiptRepository()
         self.cancel_calls: list[str] = []
         self.registered_runs: list[str] = []

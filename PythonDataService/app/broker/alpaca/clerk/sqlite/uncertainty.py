@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from app.broker.alpaca.clerk.live_arming import ARMING_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
@@ -757,7 +758,10 @@ class RefusalClass(StrEnum):
 # ops study §9 "classify snapshot-staleness admission blocks as
 # retry-on-next-clock in the runner's error taxonomy"). Every envelope refusal
 # joins them: ADR 0059 forbids halting or pausing a bot for an account-scoped
-# fact, so an envelope refusal retries on the next decision clock.
+# fact, so an envelope refusal retries on the next decision clock. Every
+# arming refusal joins them too (slice 7): a lost arming refuses that
+# instance's next ENTER, is warned about once per transition and is named in
+# the live verdict — nothing pauses, and nothing halts from admission.
 TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
     frozenset(
         {
@@ -767,6 +771,7 @@ TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
         }
     )
     | ENVELOPE_ADMISSION_REASON_CODES
+    | ARMING_ADMISSION_REASON_CODES
 )
 
 

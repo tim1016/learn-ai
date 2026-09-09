@@ -12,17 +12,18 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from app.broker.alpaca.clerk.account_authority import live_account_id_for_shadow_account
 from app.broker.alpaca.clerk.active_authority import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
-from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
+from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT, LiveArmingInvalid
 from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
 from app.broker.alpaca.config import AlpacaSettings
+from app.schemas.account_authority import CustodyWorld
 from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     ClerkAuthority,
@@ -35,7 +36,6 @@ from app.schemas.alpaca_live_verdict import (
 
 logger = logging.getLogger(__name__)
 
-_DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
 _UNOBSERVED_REASONS = frozenset({"BROKER_ACCOUNT_UNAVAILABLE"})
 
 _WHY_UNKNOWN: dict[str, str] = {
@@ -43,32 +43,105 @@ _WHY_UNKNOWN: dict[str, str] = {
     "unobserved": "the account has not been observed yet",
 }
 
-# The three situations a live, mode-agreed account can be in, and the operator
-# copy each one publishes. A table rather than nested conditionals: a fourth
-# situation is a row here, not a fourth arm inside two expressions.
-LiveSituation = Literal["armed", "shadow", "bare"]
+# The copy is a table keyed by situation, never arms inside two expressions:
+# a new situation is a new row here. Live custody (the real-live authority,
+# slice 7) earns its own rows because what an armed instance's ENTER does
+# there -- submitted, or held -- is the sentence an operator reads first.
+LiveSituation = Literal["live_armed", "live_held", "live_unarmed", "armed", "shadow", "bare"]
 
-_LIVE_COPY: dict[LiveSituation, tuple[str, str]] = {
-    "armed": (
-        "LIVE account {account} — {instances} armed, nothing submitted yet",
-        "This is a real-money Alpaca account and an operator has armed "
-        "{instances} on it. No path submits a real-money order in this slice: the "
-        "shadow authority still synthesizes every fill, and ADR 0059 slice 7 is what "
-        "opens submission.",
+
+class _HoldSuffix(NamedTuple):
+    """What a row appends when the account is in loss hold: headline, then detail."""
+
+    headline: str
+    detail: str
+
+
+# Empty, for a row whose own sentences already say the account is held -- and,
+# at the call site, for an account that is not held at all.
+_NO_HOLD_SUFFIX = _HoldSuffix("", "")
+_HOLD_SUFFIX = _HoldSuffix(
+    " — loss hold",
+    " The account is in loss hold: every ENTER is refused until an operator "
+    "clears it with POST /api/brokers/alpaca/live-envelope/loss-hold/clear; "
+    "exits still run.",
+)
+
+
+class _LiveCopy(NamedTuple):
+    """One situation's whole sentence, hold suffix included.
+
+    The suffix is row data because "does this row already mention the hold?"
+    is a fact about the copy, not about the call site: keeping it here is what
+    lets the caller append unconditionally instead of naming one row.
+    """
+
+    headline: str
+    detail: str
+    hold: _HoldSuffix
+
+
+_LIVE_COPY: dict[LiveSituation, _LiveCopy] = {
+    "live_armed": _LiveCopy(
+        "LIVE account {account} — {instances} armed, real-money submission open",
+        "This is a real-money Alpaca account custodied by its live authority, and an operator has "
+        "armed {instances} on it. An armed instance's ENTER passes the arming gate and is submitted "
+        "to Alpaca when the Clerk's holds and the risk envelope admit it; every other instance's "
+        "ENTER is refused.",
+        _HOLD_SUFFIX,
     ),
-    "shadow": (
+    "live_held": _LiveCopy(
+        "LIVE account {account} — {instances} armed, real-money submission held by the loss hold",
+        "This is a real-money Alpaca account custodied by its live authority, and an operator has "
+        "armed {instances} on it, but the account is in loss hold: every ENTER is refused until an "
+        "operator clears it with POST /api/brokers/alpaca/live-envelope/loss-hold/clear; exits and "
+        "operator reduce-only actions still run.",
+        _NO_HOLD_SUFFIX,
+    ),
+    "live_unarmed": _LiveCopy(
+        "LIVE account {account} — real-money authority installed, no instance armed",
+        "This is a real-money Alpaca account custodied by its live authority. No sealed instance "
+        "is armed, so every ENTER is refused; EXITs and operator reduce-only actions still run. "
+        "Arming is the supervised ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
+        _HOLD_SUFFIX,
+    ),
+    "armed": _LiveCopy(
+        "LIVE account {account} — {instances} armed under the shadow authority, nothing submitted",
+        "This is a real-money Alpaca account read by its shadow authority, and an operator has "
+        "armed {instances} on it. Nothing is submitted under the shadow authority: every fill is "
+        "synthesized. The live cutover (graduation) is what installs the authority that submits.",
+        _HOLD_SUFFIX,
+    ),
+    "shadow": _LiveCopy(
         "LIVE account {account} — shadow authority active, no instance armed",
-        "This is a real-money Alpaca account. Its shadow authority reads it and "
-        "synthesizes every fill; nothing is submitted. Arming requires a completed "
-        "shadow receipt and the supervised ceremony (ADR 0059).",
+        "This is a real-money Alpaca account. Its shadow authority reads it and synthesizes "
+        "every fill; nothing is submitted under the shadow authority. Arming is the supervised "
+        "ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
+        _HOLD_SUFFIX,
     ),
-    "bare": (
+    "bare": _LiveCopy(
         "LIVE account {account} — real money, no instance armed",
-        "This is a real-money Alpaca account. No sealed instance is armed, so "
-        "every order path refuses. Arming requires a completed shadow receipt "
-        "and the supervised ceremony (ADR 0059).",
+        "This is a real-money Alpaca account. No sealed instance is armed, so every order path "
+        "refuses. Arming is the supervised ceremony (ADR 0059 D3); a shadow rehearsal is optional.",
+        _HOLD_SUFFIX,
     ),
 }
+
+
+def _situation(
+    *, live_custody: bool, live_armed: bool, held: bool, shadow_active: bool
+) -> LiveSituation:
+    """Which row of :data:`_LIVE_COPY` this account's state names.
+
+    One dispatch over the four facts, so the table's keys and the conditions
+    that select them are read together instead of a ternary inside each arm.
+    """
+    if not live_custody:
+        return "armed" if live_armed else "shadow" if shadow_active else "bare"
+    if not live_armed:
+        return "live_unarmed"
+    return "live_held" if held else "live_armed"
+
 
 # R11 requires each non-armed instance to be named with its reason code, and
 # the banner renders that sentence verbatim in a tooltip. One closed map, here,
@@ -101,11 +174,24 @@ def _mode_agreement(
     account_id: str | None,
     refusal: str | None,
 ) -> ModeAgreement:
-    if refusal == _DISAGREEMENT:
+    if refusal == LIVE_MODE_DISAGREEMENT:
         return "disagreed"
     if account_id is None or refusal in _UNOBSERVED_REASONS:
         return "unobserved"
     return "agreed"
+
+
+def _mid_session_disagreement(runtime: ActiveClerkRuntime | None) -> bool:
+    """Whether the live authority's arming gate stands invalid under the mode-disagreement code.
+
+    The sync's 15 s account read is the one reader that sees the broker's
+    mode move after boot (design R2). It holds the gate under
+    ``LIVE_MODE_DISAGREEMENT`` until a read agrees again; the verdict reads
+    that fault as the disagreement it is, not as an unobserved envelope.
+    """
+    clerk = runtime.clerk if runtime is not None else None
+    gate = None if clerk is None else clerk.live_arming
+    return gate is not None and gate.invalid_reason_code == LIVE_MODE_DISAGREEMENT
 
 
 def observe_shadow_state(runtime: ActiveClerkRuntime | None, artifacts_root: Path) -> ShadowState:
@@ -126,9 +212,31 @@ def observe_shadow_state(runtime: ActiveClerkRuntime | None, artifacts_root: Pat
     return "none"
 
 
+def _is_live_custody(runtime: ActiveClerkRuntime | None) -> bool:
+    """Whether this runtime is the real-live authority — the one predicate, written once.
+
+    Three surfaces here ask it (the facade test below, the arming read's
+    custody world, and the verdict's own situation), and three spellings of
+    one question is three things that can drift apart.
+    """
+    return runtime is not None and runtime.selected_account_authority_kind == "real_live"
+
+
+def _live_custody_facade(runtime: ActiveClerkRuntime | None) -> bool:
+    """A facade authority that custodies a live account: the shadow authority, or the sqlite one on ``real_live``.
+
+    The ``sqlite`` authority kind is shared by the real-paper and the real-live
+    authority (slice 7, Task 4); only the latter reads a live account. Every
+    shadow authority reads a live account by construction.
+    """
+    if runtime is None or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES:
+        return False
+    return runtime.authority_kind != "sqlite" or _is_live_custody(runtime)
+
+
 def observe_loss_hold(runtime: ActiveClerkRuntime | None) -> LossHoldState:
     """Whether the durable loss hold stands on the installed authority (read-only)."""
-    if runtime is None or runtime.authority_kind != "shadow":
+    if not _live_custody_facade(runtime):
         return "not_applicable"
     repo = runtime.sqlite_repository
     if repo is None:
@@ -170,6 +278,9 @@ def observe_arming(
 ) -> ArmingObservation:
     """Count this live account's armed instances from durable evidence (read-only).
 
+    Reads on the shadow authority and on the real-live authority (slice 7);
+    paper and unavailable runtimes report nothing.
+
     No database is opened and the broker is never contacted: the arming
     ledger, the runner's sealed bindings and the configured envelope are the
     only inputs. Fails closed -- a ledger that will not verify counts no
@@ -184,17 +295,15 @@ def observe_arming(
     no arming evidence at all. Nothing under the root is touched unless the
     shadow branch below is taken.
     """
-    if (
-        runtime is None
-        # This slice's only custody path is the shadow authority; slice 7's
-        # real ``sqlite`` live authority is the widening point that lets this
-        # gate open for a genuinely live account, not just a rehearsing one.
-        or runtime.authority_kind != "shadow"
-        or runtime.selected_account_id is None
-        or settings.is_paper
-    ):
+    if not _live_custody_facade(runtime) or runtime.selected_account_id is None or settings.is_paper:
         return ArmingObservation.none()
     live_account_id = live_account_id_for_shadow_account(runtime.selected_account_id)
+    # On the graduated account the rehearsal's ``shadow:``-sealed bindings and
+    # their slice-6 arming records are still on disk (design R15). They are
+    # foreign to the live authority and refused on every Start, so counting
+    # them here would publish "N instances armed, real-money submission open"
+    # for instances that can never submit.
+    custody_world: CustodyWorld | None = "real_live" if _is_live_custody(runtime) else None
     try:
         # One read of the ledger answers every question below: the count, the
         # envelope state and the not-armed prose all come from the same
@@ -205,6 +314,7 @@ def observe_arming(
             artifacts_root=artifacts_root,
             live_state_root=live_state_root(),
             configured_envelope=LiveEnvelopeValues.from_settings(settings),
+            custody_world=custody_world,
             now_ms=now_ms,
         )
     except (LiveArmingInvalid, LiveEnvelopeIncomplete) as exc:
@@ -282,7 +392,11 @@ def alpaca_live_verdict(
         account_id = failure.account_id
     authority = _clerk_authority(runtime)
 
-    agreement = _mode_agreement(account_id=account_id, refusal=refusal)
+    if _mid_session_disagreement(runtime):
+        agreement: ModeAgreement = "disagreed"
+        refusal = LIVE_MODE_DISAGREEMENT
+    else:
+        agreement = _mode_agreement(account_id=account_id, refusal=refusal)
     mode: Literal["paper", "live"] = "paper" if settings.is_paper else "live"
 
     # Fail closed (ADR 0011 / ADR 0059 D8): a disagreement is unknown under
@@ -352,10 +466,17 @@ def alpaca_live_verdict(
     # permission nothing can act on, and must not read as the loudest state.
     observed_arming = arming if arming is not None else ArmingObservation.none()
     armed = observed_arming.armed_instance_count
-    live_armed = armed >= 1 and authority in SQLITE_FACADE_AUTHORITIES
+    live_armed = armed >= 1 and _live_custody_facade(runtime)
     instances = f"{armed} instance{'' if armed == 1 else 's'}"
-    situation: LiveSituation = "armed" if live_armed else "shadow" if shadow_active else "bare"
-    headline, detail = _LIVE_COPY[situation]
+    copy = _LIVE_COPY[
+        _situation(
+            live_custody=_is_live_custody(runtime),
+            live_armed=live_armed,
+            held=held,
+            shadow_active=shadow_active,
+        )
+    ]
+    hold_suffix = copy.hold if held else _NO_HOLD_SUFFIX
     return AlpacaLiveVerdict(
         configured_mode="live",
         observed_account_id=account_id,
@@ -368,16 +489,8 @@ def alpaca_live_verdict(
         loss_hold=observed_loss_hold,
         shadow_state=observed_shadow,
         final_verdict="live-armed" if live_armed else "live-unarmed",
-        headline=headline.format(account=named_account_id, instances=instances)
-        + (" — loss hold" if held else ""),
-        detail=detail.format(instances=instances)
-        + observed_arming.detail
-        + (
-            " The account is in loss hold: every ENTER is refused until an operator "
-            "clears it with POST /api/brokers/alpaca/live-envelope/loss-hold/clear; "
-            "exits still run."
-            if held
-            else ""
-        ),
+        headline=copy.headline.format(account=named_account_id, instances=instances)
+        + hold_suffix.headline,
+        detail=copy.detail.format(instances=instances) + observed_arming.detail + hold_suffix.detail,
         observed_at_ms=now_ms,
     )

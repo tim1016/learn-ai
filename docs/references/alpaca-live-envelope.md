@@ -46,9 +46,10 @@ notional cap, no symbol allowlist, no session restriction.
   the `ALPACA_LIVE_*` environment once at startup, only when the configured
   mode is not paper, and passes them down through `select_active_clerk_runtime`.
 - Shadow rehearsal: `PythonDataService/app/broker/alpaca/clerk/shadow_authority.py::select_shadow_clerk_runtime`
-  is the only consumer of a non-`None` `live_envelope_values` today —
-  `real_live` custody stays unconstructible until slice 7, so every live-mode
-  boot rehearses the envelope under the Shadow Account Authority instead. It
+  is the only consumer of a non-`None` `live_envelope_values` today — an
+  activated live account composes the envelope on its live authority with
+  `custody_is_simulated=False` (slice 7); an unactivated one rehearses it
+  under the Shadow Account Authority. It
   composes `LiveEnvelopeGate(values=live_envelope_values,
   custody_is_simulated=True)` and passes the *live* account's own read port
   as `envelope_read=read` — not the shadow composite — so the sync observes
@@ -78,9 +79,10 @@ notional cap, no symbol allowlist, no session restriction.
 - **Cash observation.** `LiveEnvelopeSync.observe`
   (`PythonDataService/app/broker/alpaca/clerk/sqlite/live_envelope_sync.py`)
   reads `account.cash` every tick. Under simulated custody
-  (`custody_is_simulated=True`, always true today) it subtracts
-  `account_net_cash_spent_usd()` — what the Clerk's own synthesized fills
-  would have spent — to get `cash_available_usd`; under real custody the
+  (`custody_is_simulated=True`, true under shadow; false on the live
+  authority, whose broker cash already reflects the Clerk's own fills) it
+  subtracts `account_net_cash_spent_usd()` — what the Clerk's own synthesized
+  fills would have spent — to get `cash_available_usd`; under real custody the
   broker's own cash already reflects it.
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
@@ -115,7 +117,7 @@ notional cap, no symbol allowlist, no session restriction.
 | `LIVE_ENVELOPE_CASH_EXCEEDED` | The ENTER's notional plus reserved notional would exceed cash available | ENTER refusal |
 | `LIVE_ENVELOPE_DISAGREEMENT` | The envelope sealed by the account's newest arming record disagrees with the current `ALPACA_LIVE_*` environment values ([alpaca-live-arming](alpaca-live-arming.md)) | ENTER refusal |
 | `LIVE_ENVELOPE_LOSS_HOLD` | The account-wide loss hold stands — checked earlier, by `require_admission` | ENTER refusal |
-| `LIVE_ENVELOPE_MISSING` | At least one `ALPACA_LIVE_*` value is absent for a live-mode boot | startup refusal of the Shadow Account Authority — never an ENTER refusal |
+| `LIVE_ENVELOPE_MISSING` | At least one `ALPACA_LIVE_*` value is absent for a live-mode boot | startup refusal of the shadow and live authorities — never an ENTER refusal |
 
 All four ENTER-time codes are transient at the runner: none disarms an
 instance or stops a bot, and the same decision can be re-admitted once the
@@ -183,7 +185,7 @@ carries it.
 | | `unsealed` | An envelope is installed and this account's arming ledger holds no arming record, so nothing has sealed its values yet. |
 | | `agreed` | The sealed values and the current `ALPACA_LIVE_*` environment have the same sha. |
 | | `disagreed` | They differ; every ENTER is refused `LIVE_ENVELOPE_DISAGREEMENT` until the account is re-armed. |
-| `loss_hold` | `not_applicable` | The hold is not observed here: no runtime, or an authority that is not the shadow one (paper, synthetic, unavailable). |
+| `loss_hold` | `not_applicable` | The hold is not observed here: no runtime, or an authority with no envelope (paper, synthetic, unavailable). |
 | | `clear` | The hold is observed and no `LIVE_ENVELOPE_LOSS_HOLD` episode is active. |
 | | `held` | The account-wide loss hold stands: every ENTER is refused, every EXIT still runs, and only the guarded clear above releases it. |
 
@@ -193,8 +195,8 @@ different and much less alarming thing than "this live boot installed no
 envelope at all".
 
 Under the current ruling the hold is observed only for a `shadow` authority
-(`alpaca_live_verdict.py::observe_loss_hold`, one predicate); slice 7 widens
-that one line when `real_live` custody becomes constructible.
+(`alpaca_live_verdict.py::observe_loss_hold`, one predicate); slice 7 widened
+it to every facade authority.
 
 ## Residuals
 

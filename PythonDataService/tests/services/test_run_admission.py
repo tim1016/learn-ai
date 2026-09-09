@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -18,7 +19,9 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import (
+    ARMING_REQUIRED_ADMITTED_NOTE,
     CORPUS_UNCOVERED_NEXT_STEP,
+    ArmingAdmissionFact,
     ExtendedHoursAdmissionFact,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
@@ -83,6 +86,7 @@ def _bot(
     observed_at_ms: int = _NOW - 1_000,
     mode: str = "trade",
     extended_hours_state: str = "NOT_REQUESTED",
+    arming: ArmingAdmissionFact | None = None,
 ) -> StartRunFacts:
     return StartRunFacts(
         strategy_instance_id=_SID,
@@ -114,6 +118,7 @@ def _bot(
         ),
         market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms),
         extended_hours=ExtendedHoursAdmissionFact(state=extended_hours_state, observed_at_ms=observed_at_ms),
+        arming=arming,
     )
 
 
@@ -1203,3 +1208,61 @@ def test_uncovered_corpus_on_paper_trade_still_requires_the_canary_pairing(
 
     assert admitted.allowed is True
     assert CORPUS_UNCOVERED_ADMITTED_NOTE in admitted.explanation
+
+
+def _arming(state: str, *, reason_code: str | None = None, observed_at_ms: int = _NOW - 500) -> ArmingAdmissionFact:
+    return ArmingAdmissionFact(
+        state=state,
+        reason_code=reason_code,
+        explanation={"ARMED": "The instance is armed.", "NOT_ARMED": "The instance has never been armed.", "UNREADABLE": "The arming ledger does not verify."}[state],
+        next_step=None if state == "ARMED" else "Run scripts.manage_alpaca_arming plan, then apply.",
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def test_an_unreadable_arming_ledger_refuses_a_live_launch_after_the_corpus_gate() -> None:
+    decision = evaluate_run_admission(
+        _bot(arming=_arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID)),
+        _clerk(account_mode="live"),
+        evaluated_at_ms=_NOW,
+    )
+    assert decision.allowed is False
+    assert decision.reason_code == LIVE_ARMING_LEDGER_INVALID
+    assert "does not verify" in decision.explanation
+
+
+def test_the_build_proof_gate_still_comes_first() -> None:
+    bot = _bot(arming=_arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID))
+    bot = bot.model_copy(update={"program_build": _program_build(_NOW - 1_000, state="UNPROVEN")})
+    decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+
+
+def test_the_corpus_gate_still_comes_first() -> None:
+    """R6: an uncovered corpus refuses before the arming ledger is even consulted."""
+    bot = _uncovered_bot(mode="dry_run").model_copy(
+        update={"arming": _arming("UNREADABLE", reason_code=LIVE_ARMING_LEDGER_INVALID)}
+    )
+    decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+
+
+def test_a_not_armed_live_launch_is_admitted_and_says_every_enter_will_refuse() -> None:
+    decision = evaluate_run_admission(
+        _bot(arming=_arming("NOT_ARMED", reason_code=LIVE_ARMING_REQUIRED)),
+        _clerk(account_mode="live"),
+        evaluated_at_ms=_NOW,
+    )
+    assert decision.allowed is True
+    assert decision.reason_code == "START_ADMITTED"
+    assert ARMING_REQUIRED_ADMITTED_NOTE in decision.explanation
+    assert decision.next_step is not None and "manage_alpaca_arming" in decision.next_step
+
+
+def test_an_armed_or_not_applicable_launch_carries_no_arming_note() -> None:
+    for arming in (None, _arming("ARMED")):
+        decision = evaluate_run_admission(_bot(arming=arming), _clerk(), evaluated_at_ms=_NOW)
+        assert decision.allowed is True
+        assert ARMING_REQUIRED_ADMITTED_NOTE not in decision.explanation
+        assert decision.next_step is None

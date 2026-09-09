@@ -5396,7 +5396,7 @@ export interface components {
              * @default paper
              * @enum {string}
              */
-            execution_mode?: "paper" | "dry_run" | "shadow";
+            execution_mode?: "paper" | "dry_run" | "shadow" | "live";
             /** Explanation */
             explanation: string;
             /** Message */
@@ -5446,7 +5446,7 @@ export interface components {
              * @default paper
              * @enum {string}
              */
-            execution_mode?: "paper" | "dry_run" | "shadow";
+            execution_mode?: "paper" | "dry_run" | "shadow" | "live";
             /** Parameters */
             parameters?: Record<string, never>;
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
@@ -5486,7 +5486,7 @@ export interface components {
          */
         AlpacaPaperDeployStrategy: {
             /** Admissible Modes */
-            admissible_modes: ("dry_run" | "paper" | "shadow")[];
+            admissible_modes: ("dry_run" | "paper" | "shadow" | "live")[];
             /** Blocked Explanation */
             blocked_explanation?: string | null;
             /**

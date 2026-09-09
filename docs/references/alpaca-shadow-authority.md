@@ -21,10 +21,12 @@ the vendor's write API), and `ShadowAccountReadPort` (the composite read port).
 `compose_shadow_ports` binds one live read port into that world for one live
 account. `app/broker/alpaca/clerk/shadow_authority.py` is the boot story:
 `select_shadow_clerk_runtime` is what `active_authority.select_active_clerk_runtime`
-calls when the broker-observed account resolves `account_mode == "live"`, and it
+calls when the broker-observed account resolves `account_mode == "live"` and no
+live activation record exists for it; with one, the live authority is composed
+instead (graduation, [alpaca-live-authority](alpaca-live-authority.md)). It
 returns an `ActiveClerkRuntime` with `authority_kind="shadow"` — or a typed
 `unavailable` runtime, never an aborted data-plane startup. `real_live` custody
-stays unconstructible until slice 7 (ruling R1).
+is the live authority's (slice 7).
 
 **2. The activation fence.** `app/broker/alpaca/clerk/shadow_activation.py`
 gives the `shadow:` world its own append-only, sha256-sealed activation ledger,
@@ -364,6 +366,9 @@ because a corrupt proof is not the absence of one and must never render as "no
 progress yet". Only invalid Alpaca settings are absorbed, into the
 `"unconfigured"` verdict.
 
+Graduation — the live cutover — is the step after the receipt; stop the shadow
+instances first, because after it they are foreign to the live authority.
+
 ## Validation
 
 `PythonDataService/tests/broker/alpaca/clerk/test_shadow_broker.py`,
@@ -392,10 +397,10 @@ progress yet". Only invalid Alpaca settings are absorbed, into the
   decision phase, so not a shadow phase.
 - **Per-instance shadow progress on the live verdict.** `shadow_state` is
   account-wide today (see "Operator recipe").
-- **Slice 6 arming consumes `ShadowReceiptStore.current`.** Arming without a
-  current receipt is `LIVE_SHADOW_INCOMPLETE` — a real reason code since ADR
-  0059 slice 6, defined in
-  `PythonDataService/app/broker/alpaca/clerk/live_arming.py` and raised by
-  `live_arming_ceremony.observe_arming_inputs`. This slice produces the receipt
+- **Slice 6 arming consumes `ShadowReceiptStore.current`.** Since slice 7 the
+  arming ceremony records a current receipt when the instance holds one and
+  arms without one (shadow is a mode, not a requirement — owner decision
+  2026-09-09); `LIVE_SHADOW_INCOMPLETE` stays defined in `live_arming.py` for
+  the verdict's vocabulary. This slice produces the receipt
   that gate reads; the gate itself is
   [alpaca-live-arming](alpaca-live-arming.md).

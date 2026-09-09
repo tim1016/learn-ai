@@ -304,6 +304,13 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "safe_canary",
         "custom",
     ]
+    # The same form is served on the live world (R12), so its sizing copy
+    # names no mode: "the first paper deployment" on a real-money form was
+    # the lying label the whole-branch review found.
+    assert [row["explanation"] for row in body["sizing_options"]] == [
+        "Fixed one-share sizing for a first deployment.",
+        "Whole-share sizing, bounded from 1 through 100 shares.",
+    ]
     assert "enter" in body["action_plan_explanation"].lower()
     assert "close" in body["action_plan_explanation"].lower()
     assert body["carryover_available"] is False
@@ -372,7 +379,7 @@ async def test_evidence_only_strategy_requires_the_durable_override_for_paper(
 
     assert response.status_code == 409
     assert response.json()["detail"]["message"] == (
-        "This evidence-only strategy requires the durable evidence override for Paper / Shadow deployment."
+        "This evidence-only strategy requires the durable evidence override for Alpaca deployment."
     )
     assert registry.deploy_calls == []
 
@@ -511,7 +518,7 @@ async def test_accepted_strategy_rejects_unnecessary_evidence_override(
         )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["message"] == "An evidence override is not valid for Paper / Shadow deployment."
+    assert response.json()["detail"]["message"] == "An evidence override is not valid for this deployment."
     assert registry.deploy_calls == []
 
 

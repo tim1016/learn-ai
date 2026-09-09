@@ -1,14 +1,16 @@
 """Boot-time selection and process registry for the SQLite Alpaca Clerk.
 
 The broker account is resolved before any writer is constructed. A paper
-account with a valid activation record selects SQLite; a live account selects
-the Shadow Account Authority behind its own activation fence (ADR 0059 D2),
-which reads the live account but submits nothing. Every other activation state
-selects no custody authority.
+account with a valid activation record selects SQLite. A live account selects
+on its own cutover record (ADR 0059 D1, slice 7): with one, the real-money
+Live Account Authority; without one, the Shadow Account Authority behind its
+own activation fence (ADR 0059 D2), which reads the live account but submits
+nothing. Every other activation state selects no custody authority.
 
-The composition each selection ends in lives in ``active_runtime``, and the
-shadow world's own boot story in ``shadow_authority``; both are re-exported
-here so this module stays the single import surface callers already use.
+The composition each selection ends in lives in ``active_runtime``, the shadow
+world's own boot story in ``shadow_authority`` and the live world's in
+``live_authority``; all are re-exported here so this module stays the single
+import surface callers already use.
 """
 
 from __future__ import annotations
@@ -35,9 +37,15 @@ from app.broker.alpaca.clerk.active_runtime import (
     AuthorityKind,
     ClerkStartupFailure,
     activate_isolated_authority,
+    compose_failure_refusal,
     compose_repository_runtime,
+    developer_reset_refusal,
     open_repository,
     unavailable_runtime,
+)
+from app.broker.alpaca.clerk.live_authority import (
+    InstanceSealsForAccount,
+    select_live_clerk_runtime,
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -51,9 +59,6 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationStore,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
-from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
-    DeveloperCleanSlateResetRegistry,
-)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
@@ -85,6 +90,16 @@ class ActivationResolver(Protocol):
     ) -> ActivationRecord | None: ...
 
 
+def _activation_record_invalid(account_id: str, exc: ActivationRecordInvalid) -> ActiveClerkRuntime:
+    """The one refusal for an unreadable cutover record, on either side of the live fork."""
+    return unavailable_runtime(
+        "ACTIVATION_RECORD_INVALID",
+        account_id=account_id,
+        recovery=str(exc),
+        activation_detected=True,
+    )
+
+
 async def select_active_clerk_runtime(
     *,
     read: BrokerReadPort,
@@ -98,6 +113,8 @@ async def select_active_clerk_runtime(
     stream_health_gate: StreamHealthGate | None = None,
     roster_symbols: Callable[[], Sequence[str]] | None = None,
     live_envelope_values: LiveEnvelopeValues | None = None,
+    instance_seals: InstanceSealsForAccount | None = None,
+    control_unauthenticated: bool = False,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
 
@@ -109,6 +126,13 @@ async def select_active_clerk_runtime(
     ``live_envelope_values`` reach only the live world's shadow authority
     (ADR 0059 D4). The paper authority below never composes an envelope, so a
     caller may offer values on any boot without changing what paper admits.
+
+    ``instance_seals`` answers the runner's sealed bindings for one live
+    account -- the live authority's arming gate reads them beside the ledger
+    every tick (slice 7). Built in the composition root and injected, so the
+    clerk layer never learns the runner's root. ``control_unauthenticated`` is
+    the data plane's open-control flag; a live account refuses to install
+    behind it (design R14). Both are inert on a paper boot.
     """
     try:
         account = await read.get_account()
@@ -133,10 +157,35 @@ async def select_active_clerk_runtime(
             account_id=None,
             recovery=f"Restore the Alpaca account identity probe: {exc}",
         )
+    store = activation_store or ActivationStore(artifacts_root / "accounts" / "alpaca")
     if account.account_mode == "live":
-        return await select_shadow_clerk_runtime(
+        # ADR 0059 D1 / slice 7 R1: graduation is a boot-time selection. The
+        # cutover's activation record for this exact account is the second
+        # leg of mode agreement; present, the real-money authority is
+        # composed; absent, the account is shadowed exactly as slice 4 built.
+        try:
+            live_activation = store.latest(account.account_id)
+        except ActivationRecordInvalid as exc:
+            return _activation_record_invalid(account.account_id, exc)
+        if live_activation is None:
+            return await select_shadow_clerk_runtime(
+                account=account,
+                read=read,
+                artifacts_root=artifacts_root,
+                repository_opener=repository_opener,
+                startup_recovery_timeout_s=startup_recovery_timeout_s,
+                execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
+                execution_lease_retry_interval_s=execution_lease_retry_interval_s,
+                stream_health_gate=stream_health_gate,
+                roster_symbols=roster_symbols,
+                live_envelope_values=live_envelope_values,
+            )
+        return await select_live_clerk_runtime(
             account=account,
+            activation=live_activation,
+            activation_store=store,
             read=read,
+            trade=trade,
             artifacts_root=artifacts_root,
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
@@ -145,12 +194,15 @@ async def select_active_clerk_runtime(
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
             live_envelope_values=live_envelope_values,
+            instance_seals=instance_seals,
+            control_unauthenticated=control_unauthenticated,
         )
     try:
         ports = bind_real_alpaca_ports(
             account_id=account.account_id,
             read=read,
             trade=trade,
+            account_mode="paper",
         )
     except AccountAuthorityIdentityError as exc:
         return unavailable_runtime(
@@ -159,35 +211,21 @@ async def select_active_clerk_runtime(
             recovery=str(exc),
         )
 
-    store = activation_store or ActivationStore(artifacts_root / "accounts" / "alpaca")
     try:
         activation = store.latest(account.account_id)
     except ActivationRecordInvalid as exc:
-        return unavailable_runtime(
-            "ACTIVATION_RECORD_INVALID",
-            account_id=account.account_id,
-            recovery=str(exc),
-            activation_detected=True,
-        )
+        return _activation_record_invalid(account.account_id, exc)
 
-    if activation is not None and DeveloperCleanSlateResetRegistry(
-        artifacts_root / "accounts" / "alpaca"
-    ).authorizes_reinitialize(
-        account_id=account.account_id,
-        prior_authority_generation=activation.authority_generation,
-        artifacts_root=artifacts_root,
-    ):
-        return unavailable_runtime(
-            "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+    if activation is not None:
+        reset_refusal = developer_reset_refusal(
             account_id=account.account_id,
-            recovery=(
-                "This activated authority was moved aside by a developer clean-slate "
-                "reset. Regenerate it, then complete a new paper cutover before startup."
-            ),
-            activation_detected=True,
+            artifacts_root=artifacts_root,
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,
+            cutover_noun="paper",
         )
+        if reset_refusal is not None:
+            return reset_refusal
 
     if activation is None:
         return unavailable_runtime(
@@ -234,15 +272,9 @@ async def select_active_clerk_runtime(
             },
             exc_info=True,
         )
-        return unavailable_runtime(
-            (
-                "ACTIVATION_RECORD_INVALID"
-                if isinstance(exc, ActivationRecordInvalid)
-                else "SQLITE_CLERK_STARTUP_FAILED"
-            ),
+        return compose_failure_refusal(
+            exc,
             account_id=account.account_id,
-            recovery=str(exc),
-            activation_detected=True,
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,
         )
@@ -457,7 +489,7 @@ def primary_custody_world() -> CustodyWorld | None:
     """
     runtime = get_active_clerk_runtime()
     kind = None if runtime is None else runtime.selected_account_authority_kind
-    return kind if kind in ("real_paper", "shadow") else None
+    return kind if kind in ("real_paper", "shadow", "real_live") else None
 
 
 def custody_world_or_paper(world: CustodyWorld | None) -> CustodyWorld:
@@ -466,10 +498,9 @@ def custody_world_or_paper(world: CustodyWorld | None) -> CustodyWorld:
     ``None`` from :func:`primary_custody_world` means no authority is
     installed, so there is no world to name; the label falls back to the
     paper world because no other world is constructible without one (the
-    synthetic world is never primary, and ``real_live`` is unconstructible
-    until ADR 0059 slice 7). Takes the already-read world rather than
-    re-reading it, so one surface's answer cannot change mid-request — and
-    so the coercion is written here once instead of at each caller.
+    synthetic world is never primary). Takes the already-read world rather
+    than re-reading it, so one surface's answer cannot change mid-request —
+    and so the coercion is written here once instead of at each caller.
 
     Labelling only. A caller that would have to *guess where evidence goes*
     must refuse on ``None`` instead (``bot_binding_authority.primary_custody_kind``).
@@ -563,6 +594,7 @@ __all__ = [
     "register_clerk_runtime",
     "reset_alpaca_clerk_for_testing",
     "select_active_clerk_runtime",
+    "select_live_clerk_runtime",
     "select_synthetic_clerk_runtime",
     "set_active_clerk_runtime",
     "set_alpaca_clerk",

@@ -35,6 +35,7 @@ from app.services.broker_v2_panel.panel_scope import (
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
     ResolvedDeployParams,
+    broker_mode_for,
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
     resolve_deploy_strategy_params,
@@ -67,17 +68,22 @@ async def get_alpaca_paper_deploy_view(
             f"Account '{account_id}' is not the account for broker '{broker}'.",
             detail=f"The broker's account is '{account.account_id}'.",
         )
-    custody_world = custody_world_or_paper(primary_custody_world())
+    installed_world = primary_custody_world()
+    custody_world = custody_world_or_paper(installed_world)
     if not world_admits_account_mode(custody_world, account.account_mode):
+        world_noun = broker_mode_for(custody_world)
         raise PanelUnavailableError(
-            "Alpaca live-account deployment is refused.",
+            "Alpaca account deployment is refused.",
             detail=(
-                "Real-money custody is not constructible until an armed instance exists "
-                "(ADR 0059 slice 7); a live account deploys only through its shadow authority."
+                f"No Alpaca authority is installed, so deployment assumes the paper world, which does "
+                f"not admit an account Alpaca reports as {account.account_mode} (ADR 0059 D1)."
+                if installed_world is None
+                else f"The active {world_noun} authority does not admit an account Alpaca reports as "
+                f"{account.account_mode} (ADR 0059 D1)."
             ),
             next_action=(
-                "Activate the shadow authority for this account, or reconnect with "
-                "Alpaca paper credentials, then refresh."
+                "Reconnect with credentials for the account this authority custodies, or activate "
+                "the authority for this account, then refresh."
             ),
         )
     registry = get_bot_task_registry()
@@ -311,17 +317,17 @@ def _require_broker_deploy_request(
         )
     if strategy.evidence_status == "evidence_only" and request.evidence_override is None:
         raise PanelRunnerError(
-            "This evidence-only strategy requires the durable evidence override for Paper / Shadow deployment.",
+            "This evidence-only strategy requires the durable evidence override for Alpaca deployment.",
             detail=(
                 "Its behavioral evidence has not been reconciled to the reference implementation. "
-                "Record the paper-mode evidence override (acknowledgement + reason) to accept that risk."
+                "Record the evidence override (acknowledgement + reason) to accept that risk."
             ),
             next_action="Record the evidence override and resubmit the deployment.",
             http_status=409,
         )
     if strategy.evidence_status != "evidence_only" and request.evidence_override is not None:
         raise PanelRunnerError(
-            "An evidence override is not valid for Paper / Shadow deployment.",
+            "An evidence override is not valid for this deployment.",
             detail=(
                 "This strategy's validation proof is fully accepted; the evidence-only override "
                 "applies only to strategies whose behavioral evidence is not accepted."
@@ -331,7 +337,7 @@ def _require_broker_deploy_request(
         )
     if request.carryover_policy == "ALLOW" and not view.carryover_available:
         raise PanelRunnerError(
-            "Exposure carryover is globally disabled for Alpaca paper bots.",
+            "Exposure carryover is globally disabled for Alpaca bots.",
             detail=view.carryover_explanation,
             next_action="Deploy with carryover disabled; per-program qualification is not available yet.",
             http_status=409,

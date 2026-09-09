@@ -479,7 +479,7 @@ def _execution_policy(mode: str) -> str:
         "log_only": (
             "Observation only. Decisions are recorded, but the Clerk will not place orders."
         ),
-        "trade": "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders.",
+        "trade": "Broker execution through the Clerk. Only the Clerk may submit, cancel, or reduce broker orders.",
     }
     return policies[mode]
 

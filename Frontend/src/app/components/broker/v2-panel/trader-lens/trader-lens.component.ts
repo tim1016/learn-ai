@@ -70,7 +70,7 @@ export class TraderLensComponent {
   // ── Derived ───────────────────────────────────────────────────────────────
 
   protected readonly isLogOnly = computed(() => this.panel().mode === 'log_only');
-  protected readonly isPaperExecution = computed(() => this.panel().mode === 'trade');
+  protected readonly isBrokerExecution = computed(() => this.panel().mode === 'trade');
   protected readonly isDryRun = computed(() => this.panel().mode === 'dry_run');
   protected readonly recentDecisions = computed(() => this.panel().recent_decisions);
 

@@ -54,6 +54,23 @@ LIVE_ARMING_FUTURE_DATED = "LIVE_ARMING_FUTURE_DATED"
 # nothing read the receipt yet. This is the first code that does.
 LIVE_SHADOW_INCOMPLETE = "LIVE_SHADOW_INCOMPLETE"
 
+# Slice 7 (ADR 0059 D11): the admission-time codes. ``REQUIRED`` is an instance
+# the ledger has never named; ``UNOBSERVED`` is a gate with no fresh snapshot;
+# ``LEDGER_INVALID`` is a snapshot the last refresh could not verify. The
+# fourth is ADR 0059 D8's own name for the *transition* a lost arming makes:
+# it is the sync's once-per-transition log action, never a receipt code — the
+# refused ENTER carries the instance's own arming code (owner decision
+# 2026-09-09: the halt is the refusal, the warning and the verdict; no
+# ``desired_state`` is written).
+LIVE_ARMING_REQUIRED = "LIVE_ARMING_REQUIRED"
+LIVE_ARMING_UNOBSERVED = "LIVE_ARMING_UNOBSERVED"
+LIVE_ARMING_LEDGER_INVALID = "LIVE_ARMING_LEDGER_INVALID"
+LIVE_VERDICT_TRANSITION_HALT = "LIVE_VERDICT_TRANSITION_HALT"
+# The adapter's own refusal (`BrokerAccountModeDisagreement.reason_code`),
+# restated so the gate can name it when the broker's mode moves mid-session
+# (design R2); a test pins the two strings equal.
+LIVE_MODE_DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
+
 ARMING_REASON_CODES: frozenset[str] = frozenset(
     {
         LIVE_ARMING_LAPSED,
@@ -69,6 +86,29 @@ ARMING_REASON_CODES: frozenset[str] = frozenset(
         LIVE_SHADOW_INCOMPLETE,
         LIVE_ENVELOPE_DISAGREEMENT,
         LIVE_ENVELOPE_MISSING,
+        LIVE_ARMING_REQUIRED,
+        LIVE_ARMING_UNOBSERVED,
+        LIVE_ARMING_LEDGER_INVALID,
+        LIVE_VERDICT_TRANSITION_HALT,
+    }
+)
+
+# What ``sqlite/arming_admission.require_arming_admission`` may refuse with —
+# the three codes above plus the per-instance states ``arming_status`` names.
+# ``uncertainty.py`` classifies all of them transient: a lost arming refuses
+# the next ENTER and retries on the next decision clock — it never pauses the
+# instance and never halts it from inside admission.
+ARMING_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
+    {
+        LIVE_ARMING_REQUIRED,
+        LIVE_ARMING_UNOBSERVED,
+        LIVE_ARMING_LEDGER_INVALID,
+        LIVE_ARMING_LAPSED,
+        LIVE_ARMING_REVOKED,
+        LIVE_ARMING_SEAL_CHANGED,
+        LIVE_ARMING_FUTURE_DATED,
+        LIVE_ENVELOPE_DISAGREEMENT,
+        LIVE_MODE_DISAGREEMENT,
     }
 )
 
@@ -92,7 +132,8 @@ class LiveArmingRefused(ValueError):
 
 @dataclass(frozen=True)
 class LiveArmingRecord:
-    """One instance armed on one live account, under one sealed envelope (R1)."""
+    """One instance armed on one live account, under one sealed envelope (R1);
+    ``shadow_receipt_sha256`` is null when the instance holds no receipt."""
 
     kind: Literal["armed"]
     schema_version: int
@@ -100,7 +141,7 @@ class LiveArmingRecord:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope_values: dict[str, float | int]
     envelope_sha256: str
     armed_at_ms: int
@@ -115,7 +156,7 @@ class LiveArmingRecord:
         strategy_instance_id: str,
         seal_hash: str,
         configured_signal_hash: str,
-        shadow_receipt_sha256: str,
+        shadow_receipt_sha256: str | None,
         envelope: LiveEnvelopeValues,
         armed_at_ms: int,
         max_sessions: int,
@@ -244,12 +285,11 @@ def _validate_armed(record: LiveArmingRecord) -> None:
         or not 0 <= record.armed_at_ms <= MAX_TIMESTAMP_MS
     ):
         raise LiveArmingInvalid("live arming record has invalid integer or identity facts")
-    _require_hashes(
-        record.seal_hash,
-        record.configured_signal_hash,
-        record.shadow_receipt_sha256,
-        record.envelope_sha256,
-    )
+    _require_hashes(record.seal_hash, record.configured_signal_hash, record.envelope_sha256)
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # receipt is recorded when the instance holds one, and null otherwise.
+    if record.shadow_receipt_sha256 is not None:
+        _require_hashes(record.shadow_receipt_sha256)
     try:
         sealed = LiveEnvelopeValues(**record.envelope_values)
     except TypeError as exc:
@@ -414,20 +454,26 @@ def arming_status(
 
 
 __all__ = [
+    "ARMING_ADMISSION_REASON_CODES",
     "ARMING_REASON_CODES",
     "LIVE_ARMING_FUTURE_DATED",
     "LIVE_ARMING_INPUTS_CHANGED",
     "LIVE_ARMING_INSTANCE_UNSEALED",
     "LIVE_ARMING_LAPSED",
+    "LIVE_ARMING_LEDGER_INVALID",
     "LIVE_ARMING_NOT_ARMED",
     "LIVE_ARMING_PLAN_EXPIRED",
+    "LIVE_ARMING_REQUIRED",
     "LIVE_ARMING_REVOKED",
     "LIVE_ARMING_SEAL_CHANGED",
     "LIVE_ARMING_TOKEN_INVALID",
     "LIVE_ARMING_TTL_INVALID",
+    "LIVE_ARMING_UNOBSERVED",
     "LIVE_ENVELOPE_DISAGREEMENT",
     "LIVE_ENVELOPE_MISSING",
+    "LIVE_MODE_DISAGREEMENT",
     "LIVE_SHADOW_INCOMPLETE",
+    "LIVE_VERDICT_TRANSITION_HALT",
     "ArmingState",
     "ArmingStatus",
     "LedgerRecord",

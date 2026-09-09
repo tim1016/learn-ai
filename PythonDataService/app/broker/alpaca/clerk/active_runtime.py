@@ -3,7 +3,14 @@
 Selection-free on purpose: this module knows how to open an account's
 repository and stand up its Clerk, sweep and hold sync, but never which
 account or authority a boot should choose. That keeps it importable by
-every selector -- real paper, shadow and synthetic -- with no import cycle.
+every selector -- real paper, shadow, real live and synthetic -- with no
+import cycle.
+
+It also hosts the two refusal shapes those selectors share --
+``compose_failure_refusal`` and ``developer_reset_refusal`` -- for that same
+reason: they are used by ``active_authority`` and by ``live_authority``, and
+``live_authority`` is imported *by* ``active_authority``, so either selector
+owning them would put the shared shape downstream of one of its two callers.
 """
 
 from __future__ import annotations
@@ -20,9 +27,13 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
     guard_broker_read_port,
+)
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
@@ -62,8 +73,10 @@ if TYPE_CHECKING:
     # sort order, is the thing to fix, and it is not this slice's to fix.
     # ``live_arming_ledger`` imports ``live_envelope``, so it is here for
     # exactly the same reason.
+    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
     from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
     from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+    from app.broker.alpaca.clerk.sqlite.live_envelope_sync import InstanceSeals
 
 AuthorityKind = Literal["sqlite", "synthetic", "shadow", "unavailable"]
 # The authorities whose read model is one account-scoped SQLite database.
@@ -257,6 +270,8 @@ async def compose_repository_runtime(
     live_envelope: LiveEnvelopeGate | None = None,
     envelope_read: BrokerReadPort | None = None,
     arming_ledger: LiveArmingLedger | None = None,
+    arming_gate: ArmingGate | None = None,
+    instance_seals: InstanceSeals | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -272,6 +287,12 @@ async def compose_repository_runtime(
     ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
     envelope sync re-reads it every tick so an arming performed by the
     out-of-process CLI reaches the running gate within one cadence.
+
+    ``arming_gate`` and ``instance_seals`` exist only on the live authority
+    (ADR 0059 D11, slice 7): the gate the facade admits ENTERs against, and
+    the runner's sealed bindings the sync reads beside the ledger every tick
+    — injected as a callable, the ``roster_symbols`` pattern, so the clerk
+    layer never learns the runner's root.
     """
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
@@ -303,6 +324,7 @@ async def compose_repository_runtime(
             account_mode=account_mode,
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
+            live_arming=arming_gate,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -368,6 +390,8 @@ async def compose_repository_runtime(
                 ),
                 envelope=live_envelope,
                 arming_ledger=arming_ledger,
+                arming_gate=arming_gate,
+                instance_seals=instance_seals,
             )
         )
         await asyncio.wait_for(
@@ -416,6 +440,72 @@ def unavailable_runtime(
             authority_generation=authority_generation,
             db_identity_token=db_identity_token,
         ),
+    )
+
+
+def developer_reset_refusal(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    authority_generation: int,
+    db_identity_token: str,
+    cutover_noun: Literal["paper", "live"],
+) -> ActiveClerkRuntime | None:
+    """Refuse an activation a developer clean-slate reset moved aside, or admit it.
+
+    ``None`` means the registry authorizes nothing against this generation and
+    the boot may continue. Both sides of the live fork ask the same question of
+    the same registry and answer with the same sentence; only the cutover the
+    operator must redo differs, so ``cutover_noun`` is the whole difference and
+    the guard is written once (ADR 0059 D10).
+    """
+    authorized = DeveloperCleanSlateResetRegistry(
+        artifacts_root / "accounts" / "alpaca"
+    ).authorizes_reinitialize(
+        account_id=account_id,
+        prior_authority_generation=authority_generation,
+        artifacts_root=artifacts_root,
+    )
+    if not authorized:
+        return None
+    return unavailable_runtime(
+        "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+        account_id=account_id,
+        recovery=(
+            "This activated authority was moved aside by a developer clean-slate reset. "
+            f"Regenerate it, then complete a new {cutover_noun} cutover before startup."
+        ),
+        activation_detected=True,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
+    )
+
+
+def compose_failure_refusal(
+    exc: BaseException,
+    *,
+    account_id: str,
+    authority_generation: int,
+    db_identity_token: str,
+) -> ActiveClerkRuntime:
+    """The one refusal for a composition that raised, on either side of the live fork.
+
+    An ``ActivationRecordInvalid`` is the cutover record's fault and names
+    itself; every other failure is the startup's. Both sides carried the same
+    six-keyword call with the same ternary, which is how the two sentences
+    would have drifted.
+    """
+    return unavailable_runtime(
+        (
+            "ACTIVATION_RECORD_INVALID"
+            if isinstance(exc, ActivationRecordInvalid)
+            else "SQLITE_CLERK_STARTUP_FAILED"
+        ),
+        account_id=account_id,
+        recovery=str(exc),
+        activation_detected=True,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
     )
 
 
@@ -477,7 +567,9 @@ __all__ = [
     "BackgroundSweep",
     "ClerkStartupFailure",
     "activate_isolated_authority",
+    "compose_failure_refusal",
     "compose_repository_runtime",
+    "developer_reset_refusal",
     "open_repository",
     "unavailable_runtime",
 ]

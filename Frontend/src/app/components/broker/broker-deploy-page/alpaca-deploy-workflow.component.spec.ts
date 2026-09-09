@@ -16,6 +16,7 @@ import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.componen
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
+  LIVE_DEPLOY_VIEW,
   SHADOW_DEPLOY_VIEW,
   SMA_OVERRIDE_STRATEGY,
   VALIDATION_STRATEGY,
@@ -605,6 +606,102 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).execution_mode)
       .toBe('shadow');
+  });
+
+  it('on a live view the Live mode is offered, selected by default, and submitted', async () => {
+    const service = mockService(RECEIPT, LIVE_DEPLOY_VIEW);
+    await renderWorkflow(service);
+
+    expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    expect(live.checked).toBe(true);
+    expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/paper/i);
+    expect(document.body.textContent).not.toMatch(/shadow/i);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-live-01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy live bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.execution_mode).toBe('live');
+  });
+
+  it('leaves a planned Live card governed by availability alone when the strategy is blocked', async () => {
+    // Whole-branch Important 2: the blocked reason belongs to the card this
+    // world actually offers. On the paper world Live is `planned`, so it
+    // keeps reading Planned with its own copy — not Unavailable with Paper's
+    // blocked explanation.
+    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await renderWorkflow(service);
+
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    const liveCard = live.closest<HTMLElement>('.mode-option');
+    if (liveCard === null) throw new Error('Live mode-option container not found');
+    expect(within(liveCard).getByText('Planned')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'About Live: Live Alpaca execution is planned.',
+    })).toBeTruthy();
+
+    // The card this world does offer still inherits the strategy's reason.
+    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    const paperCard = paper.closest<HTMLElement>('.mode-option');
+    if (paperCard === null) throw new Error('Paper mode-option container not found');
+    expect(within(paperCard).getByText('Unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: `About Paper: ${BLOCKED_EXPLANATION}`,
+    })).toBeTruthy();
+  });
+
+  it('on the live view a blocked strategy makes the Live card carry the blocked reason', async () => {
+    const service = mockService(RECEIPT, { ...LIVE_DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await renderWorkflow(service);
+
+    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
+    expect(live.disabled).toBe(true);
+    const liveCard = live.closest<HTMLElement>('.mode-option');
+    if (liveCard === null) throw new Error('Live mode-option container not found');
+    expect(within(liveCard).getByText('Unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: `About Live: ${BLOCKED_EXPLANATION}`,
+    })).toBeTruthy();
+  });
+
+  it('leaves an available card that is not this world\'s broker card governed by availability alone', async () => {
+    // The section is *told* which card is this world's rather than reading
+    // `availability` as an identity. Nothing enforces "exactly one available
+    // broker card": if a second one is ever emitted, it must not inherit this
+    // world's blocked reason — which would disable a radio the backend has
+    // said nothing about.
+    const service = mockService(RECEIPT, {
+      ...LIVE_DEPLOY_VIEW,
+      strategies: [BLOCKED_STRATEGY],
+      execution_modes: [
+        ...LIVE_DEPLOY_VIEW.execution_modes,
+        {
+          mode: 'paper',
+          label: 'Paper',
+          availability: 'available',
+          explanation: 'Available through the Alpaca Clerk.',
+        },
+      ],
+    });
+    await renderWorkflow(service);
+
+    // This world's card carries the blocked reason, as before.
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Live/ }).disabled).toBe(true);
+
+    const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    const paperCard = paper.closest<HTMLElement>('.mode-option');
+    if (paperCard === null) throw new Error('Paper mode-option container not found');
+    expect(paper.disabled).toBe(false);
+    expect(within(paperCard).getByText('Available')).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'About Paper: Available through the Alpaca Clerk.',
+    })).toBeTruthy();
   });
 
   it('still requires the durable override for an evidence-only Shadow deploy', async () => {

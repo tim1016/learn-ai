@@ -151,7 +151,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     strategy_key: str = Field(min_length=1, max_length=128)
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
-    execution_mode: Literal["paper", "dry_run", "shadow"] = "paper"
+    execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     # Every tunable the strategy author exposed (EMA gap, RSI range, ADX
@@ -243,7 +243,7 @@ class AlpacaPaperDeployStrategy(BaseModel):
     # parsing backend-authored blocker prose.
     paper_access_state: Literal["not_required", "blocked", "available", "enabled"]
     selectable: bool
-    admissible_modes: tuple[Literal["dry_run", "paper", "shadow"], ...]
+    admissible_modes: tuple[Literal["dry_run", "paper", "shadow", "live"], ...]
     override_explanation: str | None = None
     blocked_explanation: str | None = None
     # This strategy's registered tunables as JSON schema — the same schema
@@ -290,12 +290,13 @@ class AlpacaPaperDeployStrategy(BaseModel):
         # except that the account's custody world names which single
         # broker-contacting mode the second one is: `paper` in the real-paper
         # world, `shadow` when a shadow authority reads a live account
-        # (ADR 0059 D2). Never both: one account has exactly one such mode.
+        # (ADR 0059 D2), or `live` on the real-live authority (ADR 0059 D11,
+        # slice 7). Never more than one: one account has exactly one such mode.
         if self.selectable:
-            if self.admissible_modes not in (("dry_run", "paper"), ("dry_run", "shadow")):
+            if self.admissible_modes not in (("dry_run", "paper"), ("dry_run", "shadow"), ("dry_run", "live")):
                 raise ValueError(
                     "A selectable strategy row must admit exactly dry_run and its "
-                    "account's one broker-contacting mode (paper or shadow)."
+                    "account's one broker-contacting mode (paper, shadow or live)."
                 )
             return self
         if self.admissible_modes not in ((), ("dry_run",)):
@@ -500,7 +501,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     next_action: str
     panel_path: str
     account_id: str
-    execution_mode: Literal["paper", "dry_run", "shadow"] = "paper"
+    execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
     sizing: AlpacaPaperSizingSelection
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None = None

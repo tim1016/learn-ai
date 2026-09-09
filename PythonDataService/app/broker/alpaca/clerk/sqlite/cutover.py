@@ -128,7 +128,7 @@ def _developer_reset_replaces_activation(
 @dataclass(frozen=True)
 class BrokerCutoverEvidence:
     account_id: str
-    account_mode: Literal["paper"]
+    account_mode: Literal["paper", "live"]
     observed_at_ms: int
     proof_reference: str
     positions: Mapping[str, float]
@@ -239,6 +239,7 @@ def _initialize_cutover_authority_locked(
     clock: Clock,
 ) -> CutoverInitializationReceipt:
     """Initialize or resume while holding the account's cutover lock."""
+    live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)
     now = clock()
     registry = EstablishedAccountsRegistry(accounts_root)
     established = registry.latest(account_id)
@@ -266,7 +267,7 @@ def _initialize_cutover_authority_locked(
     legacy = _legacy_artifact_evidence(
         artifacts_root,
         account_id,
-        allow_empty=reset_authorized,
+        allow_empty=reset_authorized or live_evidence,
     )
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
@@ -275,7 +276,7 @@ def _initialize_cutover_authority_locked(
             artifacts_root,
             account_id,
         ),
-        allow_empty=reset_authorized,
+        allow_empty=reset_authorized or live_evidence,
     )
     intended_generation = (
         1
@@ -472,15 +473,17 @@ def plan_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    legacy = _legacy_artifact_evidence(
-        artifacts_root,
-        account_id,
-        allow_empty=_developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=account_id,
-            artifacts_root=artifacts_root,
-        ),
+    # One question, asked once: may the legacy and roster sets be empty? Both
+    # evidence reads below take the same answer, and the developer-reset half
+    # is a registry read that need not happen twice.
+    allow_empty = _live_evidence_permits_empty_legacy(
+        normalized_broker
+    ) or _developer_reset_replaces_activation(
+        accounts_root=accounts_root,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
     )
+    legacy = _legacy_artifact_evidence(artifacts_root, account_id, allow_empty=allow_empty)
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
@@ -488,11 +491,7 @@ def plan_cutover(
             artifacts_root,
             account_id,
         ),
-        allow_empty=_developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=account_id,
-            artifacts_root=artifacts_root,
-        ),
+        allow_empty=allow_empty,
     )
     draft = CutoverPlan(
         schema_version=3,
@@ -554,14 +553,16 @@ def apply_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
+    # The same one question the plan asked, re-asked against current evidence.
+    allow_empty = _live_evidence_permits_empty_legacy(
+        normalized_broker
+    ) or _developer_reset_replaces_activation(
+        accounts_root=accounts_root,
+        account_id=plan.account_id,
+        artifacts_root=artifacts_root,
+    )
     current_legacy = _legacy_artifact_evidence(
-        artifacts_root,
-        plan.account_id,
-        allow_empty=_developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=plan.account_id,
-            artifacts_root=artifacts_root,
-        ),
+        artifacts_root, plan.account_id, allow_empty=allow_empty
     )
     current_roster = _runner_roster_evidence(
         runner_artifacts_root,
@@ -570,11 +571,7 @@ def apply_cutover(
             artifacts_root,
             plan.account_id,
         ),
-        allow_empty=_developer_reset_replaces_activation(
-            accounts_root=accounts_root,
-            account_id=plan.account_id,
-            artifacts_root=artifacts_root,
-        ),
+        allow_empty=allow_empty,
     )
     if current_database != plan.database:
         raise CutoverRefused("SQLite database changed after cutover planning")
@@ -686,8 +683,8 @@ def _normalize_broker_evidence(evidence: BrokerCutoverEvidence) -> BrokerCutover
         or not evidence.proof_reference
     ):
         raise CutoverRefused("broker evidence fields have invalid types")
-    if evidence.account_mode != "paper":
-        raise CutoverRefused("cutover requires broker evidence from a paper account")
+    if evidence.account_mode not in ("paper", "live"):
+        raise CutoverRefused("cutover requires broker evidence naming a paper or live account mode")
     if any(
         not isinstance(symbol, str)
         or not symbol
@@ -706,6 +703,19 @@ def _normalize_broker_evidence(evidence: BrokerCutoverEvidence) -> BrokerCutover
         positions=dict(sorted((symbol, float(qty)) for symbol, qty in evidence.positions.items())),
         open_order_ids=tuple(sorted(evidence.open_order_ids)),
     )
+
+
+def _live_evidence_permits_empty_legacy(broker_evidence: BrokerCutoverEvidence) -> bool:
+    """Whether live evidence may stand in for legacy artifacts (ADR 0059 slice 7, design R3).
+
+    A never-legacy live account has nothing to quarantine and no prior
+    activation to have reset, so live evidence permits (does not require) the
+    empty legacy set; a live account that does carry legacy artifacts is
+    quarantined exactly like a paper one. Shadow rehearsal is a mode, not a
+    requirement (owner decision 2026-09-09); the flat, order-free check is
+    what still guards graduation. For a paper account nothing changes.
+    """
+    return broker_evidence.account_mode == "live"
 
 
 def _validate_cutover_safety(

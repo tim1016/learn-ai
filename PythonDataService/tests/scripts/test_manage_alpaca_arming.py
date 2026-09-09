@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME, ActivationStore
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from scripts.manage_alpaca_arming import main
+from scripts.manage_alpaca_arming import _SUBMISSION_ADMITTED_NOTE, _SUBMISSION_UNVERIFIED_NOTE, main
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -20,6 +22,7 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     live_settings,
     record_sealed_binding,
 )
+from tests.broker.alpaca.clerk.live_authority_fixtures import live_activation
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT
 
 SETTINGS = live_settings()
@@ -118,7 +121,7 @@ def test_status_on_an_account_with_no_records_answers_unarmed(
     assert report["envelope_state"] == "configured_unsealed"
     assert report["instances"] == []
     assert report["submission_admitted"] is False
-    assert "Slice 7" in report["note"]
+    assert "no live authority is activated for this account" in report["note"]
 
 
 def test_plan_writes_only_the_plan_file_and_apply_writes_the_sealed_record(
@@ -213,7 +216,7 @@ def test_applying_after_the_confirmation_window_refuses_at_exit_two(
     assert _last_object(capsys)["error"] == "LIVE_ARMING_PLAN_EXPIRED"
 
 
-def test_planning_without_a_current_shadow_receipt_refuses_by_the_adrs_code(
+def test_planning_without_a_current_shadow_receipt_plans_with_a_null_receipt(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifacts_root, live_state_root = roots
@@ -225,11 +228,11 @@ def test_planning_without_a_current_shadow_receipt_refuses_by_the_adrs_code(
             [*_flags(roots), "plan", "--strategy-instance-id", ARMING_SID, "--now-ms", str(ARMED_AT_MS)],
             settings=SETTINGS,
         )
-        == 2
+        == 0
     )
 
     report = _last_object(capsys)
-    assert report["error"] == "LIVE_SHADOW_INCOMPLETE"
+    assert report["shadow_receipt_sha256"] is None
     assert report["submission_admitted"] is False
 
 
@@ -523,3 +526,53 @@ def test_a_ledger_row_that_will_not_verify_is_an_evidence_error_at_exit_one(
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 1
 
     assert "digest does not verify" in _last_object(capsys)["error"]
+
+
+def test_an_unverifiable_activation_ledger_reports_not_admitted_and_logs_a_warning(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt activation ledger is a note, never a traceback (Task 10 review, Finding 3).
+
+    ``ActivationStore.latest`` raises ``ActivationRecordInvalid`` on malformed
+    JSON; that must not break this module's one-JSON-object contract, worst of
+    all on ``apply`` after the arming record has already been sealed.
+    """
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    ledger_path = artifacts_root / "accounts" / "alpaca" / ACTIVATION_FILENAME
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text("not-json\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+
+    report = _last_object(capsys)
+    assert report["submission_admitted"] is False
+    assert report["note"] == _SUBMISSION_UNVERIFIED_NOTE
+    (warning,) = [
+        record for record in caplog.records if getattr(record, "action", None) == "arming_cli_activation_record_invalid"
+    ]
+    assert warning.levelno == logging.WARNING
+    assert warning.live_account_id == LIVE_ACCT  # type: ignore[attr-defined]
+
+
+def test_a_real_activation_record_reports_submission_admitted(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI reports what it read -- a live activation record -- not a booted authority.
+
+    The record is on disk; whether the live authority actually installed is a
+    boot-time fact this read-only command cannot observe, and the note names
+    the one condition (an open control plane) that stops it (slice 7 R14).
+    """
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    ActivationStore(artifacts_root / "accounts" / "alpaca").append(live_activation())
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+
+    report = _last_object(capsys)
+    assert report["submission_admitted"] is True
+    assert report["note"] == _SUBMISSION_ADMITTED_NOTE
+    assert "a live activation record exists for this account" in report["note"]
+    assert "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true" in report["note"]

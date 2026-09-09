@@ -54,10 +54,10 @@ engineer to register one.
 Admission is tiered by execution mode (ADR 0034's mode-tiered-admission
 amendment). A strategy with current `accepted_for_deploy` evidence follows
 the normal path in every mode. A strategy whose behavioral verdict is
-`evidence_only` is Paper-selectable on the human-validated flag alone — no
+`evidence_only` is selectable on the human-validated flag alone — no
 risk acknowledgement or operator reason is required, and the behavioral
-verdict displays for information only; it does not gate Paper. Do not treat
-a successful paper launch as numerical-equivalence evidence.
+verdict displays for information only; it does not gate deployment. Do not
+treat a successful paper launch as numerical-equivalence evidence.
 
 Dry Run is more permissive again: it admits any runtime-backed strategy
 regardless of the human-validated flag or behavioral verdict, and needs only

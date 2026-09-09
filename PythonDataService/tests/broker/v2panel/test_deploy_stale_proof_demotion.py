@@ -18,7 +18,7 @@ from httpx import ASGITransport
 
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.broker_v2_panel import panel_deploy, strategy_catalog
-from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
+from app.services.broker_v2_panel.paper_deploy_service import _strategy_views, strategy_gate_recovery
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
     load_strategy_validation_entries,
@@ -222,7 +222,10 @@ def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
     assert row.admissible_modes == ("dry_run",)
     assert row.override_explanation is not None
     assert row.blocked_explanation is not None
-    assert "Review and enable Paper access" in row.blocked_explanation
+    # Both sentences render on a live account's deploy form as well as a
+    # paper one, so neither names the Paper mode (slice 7 last mile).
+    assert "Review and enable broker access" in row.blocked_explanation
+    assert strategy_gate_recovery((row,)) == "Review and enable broker access for a strategy below."
 
 
 def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:

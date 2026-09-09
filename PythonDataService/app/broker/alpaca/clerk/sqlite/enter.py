@@ -67,7 +67,9 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.sqlite.arming_admission import require_arming_admission
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.envelope_admission import require_envelope_admission
@@ -155,6 +157,7 @@ def accept_enter(
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
     decision_receipt: AtomicDecisionReceipt | None = None,
+    arming: ArmingGate | None = None,
     envelope: LiveEnvelopeGate | None = None,
     reference_price: float | None = None,
 ) -> EnterSubmission:
@@ -172,6 +175,11 @@ def accept_enter(
     accepted operation" means for recovery: nothing about a broker call is
     durable yet, so there is nothing for recovery to duplicate, only to
     resolve.
+
+    ``arming`` is the live authority's per-instance arming gate (ADR 0059
+    D11). When supplied it runs after ``require_admission`` and **before**
+    the envelope, so an unarmed instance never reserves cash; ``None`` means
+    no arming check runs (paper, shadow).
 
     ``envelope`` is the ADR 0059 risk envelope (see
     :func:`~.envelope_admission.require_envelope_admission`). When supplied it
@@ -200,6 +208,8 @@ def accept_enter(
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         require_admission(repo, strategy_instance_id=strategy_instance_id)
+        if arming is not None:
+            require_arming_admission(arming, strategy_instance_id=strategy_instance_id, now_ms=repo.clock())
         reservation = (
             None
             if envelope is None

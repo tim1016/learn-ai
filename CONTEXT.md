@@ -457,14 +457,16 @@ so they survive a broker change.
   is known rather than foreign, yet blocks ordinary account trading until
   revived, resolved, or explicitly overridden.
 
-## Live account, shadow, and risk envelope (sharpened 2026-09-08)
+## Live account, shadow, and risk envelope (sharpened 2026-09-09)
 
 **Lineage: live.** Decision record: ADR 0059.
 
 - **Live Account Authority** — the Broker Account Authority for one
   broker-reported real-money account. It is the same seam as a paper authority
   with a different world label; nothing about it is a separate runtime.
-  _Avoid_: live mode, production account, real account
+  Selected at boot when the account's live activation record exists — its
+  **graduation** — and otherwise shadowed. _Avoid_: live mode, production
+  account, real account, real_live custody (say *live authority*)
 - **Shadow Account Authority** — an isolated `shadow:` custody authority that
   reads one real-money account and synthesizes every fill under an explicit
   fill model. It never submits. This is an *account world*, not the IBKR-era
@@ -503,6 +505,22 @@ so they survive a broker change.
   and look" fence rather than a failure: renewing is the same ceremony run
   again. _Avoid_: expiry, timeout, TTL (the confirmation window is the TTL;
   this is not)
+- **Graduation** — the live cutover: the supervised ceremony that writes a
+  real-money account's activation record, after which the account boots its
+  live authority instead of its shadow authority. It requires a flat,
+  order-free account; a shadow rehearsal is a mode the operator may choose,
+  not a requirement. _Avoid_: going live, flipping to live, promotion
+- **Arming gate** — the live authority's per-instance check at ENTER, between
+  the holds and the risk envelope, that the instance is armed right now. Its
+  evidence is a snapshot of the arming ledger and the sealed bindings the
+  sync refreshes every tick. _Avoid_: arming check, arming lock
+- **Live verdict transition halt** — what happens when an instance stops being
+  armed while it runs: its ENTERs refuse under its arming code, the event is
+  logged once, and the verdict names it. No desired state is written; its EXITs
+  keep running. _Avoid_: kill switch, auto-pause, emergency stop
+- **Live evidence namespace** — `live-evidence:<strategy_instance_id>`, the
+  retained-bar ledger of one instance on the live authority; the same shape as
+  `paper:` and `shadow-evidence:`, read under the same rule it is written under.
 - **Risk envelope** — the account-scoped pair of bounds every live ENTER is
   admitted against: the cash bound and the daily loss limit. Its values are
   operator environment settings, required when live and sealed at arming; a

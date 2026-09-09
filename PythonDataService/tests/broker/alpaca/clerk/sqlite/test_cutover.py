@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.live.desired_state import DesiredState, DesiredStateRecord
+from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     PLAN_MS,
 )
@@ -87,30 +88,33 @@ class _StartupBroker:
 
 def _setup(
     tmp_path: Path,
+    *,
+    account_id: str = ACCOUNT_ID,
+    account_mode: str = "paper",
 ) -> tuple[Path, Path, Path, BrokerCutoverEvidence, _Clock]:
     clock = _Clock(PLAN_MS)
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(runner_root)
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir = clerk_root / "accounts" / "alpaca" / account_id
     account_dir.mkdir(parents=True)
     (account_dir / "order_inbox.jsonl").write_text('{"legacy":1}\n', encoding="utf-8")
     (account_dir / "order_journal.jsonl").write_text('{"legacy":1}\n', encoding="utf-8")
-    legacy_bot_dir = clerk_root / "accounts" / ACCOUNT_ID / "bots" / "spy"
+    legacy_bot_dir = clerk_root / "accounts" / account_id / "bots" / "spy"
     legacy_bot_dir.mkdir(parents=True)
     (legacy_bot_dir / "decision_journal.jsonl").write_text(
         '{"legacy":1}\n', encoding="utf-8"
     )
     evidence = BrokerCutoverEvidence(
-        account_id=ACCOUNT_ID,
-        account_mode="paper",
+        account_id=account_id,
+        account_mode=account_mode,
         observed_at_ms=PLAN_MS,
         proof_reference="fake-alpaca-account-snapshot",
         positions={"SPY": 0.0},
         open_order_ids=(),
     )
     initialize_cutover_authority(
-        account_id=ACCOUNT_ID,
+        account_id=account_id,
         artifacts_root=clerk_root,
         runner_artifacts_root=runner_root,
         broker_evidence=evidence,
@@ -501,7 +505,7 @@ def test_initialize_refuses_wrong_clerk_root_without_creating_authority(
     assert not (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
 
 
-def test_initialize_refuses_non_paper_broker_evidence(tmp_path: Path) -> None:
+def test_initialize_refuses_unknown_broker_evidence_mode(tmp_path: Path) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(runner_root)
@@ -509,14 +513,14 @@ def test_initialize_refuses_non_paper_broker_evidence(tmp_path: Path) -> None:
     account_dir.mkdir(parents=True)
     (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(CutoverRefused, match="paper account"):
+    with pytest.raises(CutoverRefused, match="paper or live"):
         initialize_cutover_authority(
             account_id=ACCOUNT_ID,
             artifacts_root=clerk_root,
             runner_artifacts_root=runner_root,
             broker_evidence=BrokerCutoverEvidence(
                 account_id=ACCOUNT_ID,
-                account_mode="live",
+                account_mode="sandbox",
                 observed_at_ms=PLAN_MS,
                 proof_reference="wrong-mode-account",
                 positions={},
@@ -1175,6 +1179,69 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts(tmp_path:
         quarantine_dir
         / "accounts"
         / ACCOUNT_ID
+        / "bots"
+        / "spy"
+        / "decision_journal.jsonl"
+    ).is_file()
+
+
+def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts_for_a_graduating_live_account(
+    tmp_path: Path,
+) -> None:
+    """Same activation outcome as the paper happy path, for live evidence (ADR 0059 slice 7, R3).
+
+    A sibling test rather than a parametrization of the paper test above: the
+    paper test's assertions are hardcoded to the module-level ``ACCOUNT_ID``,
+    and rewriting them to a parametrized account id would touch every one of
+    its existing lines. This reuses ``_setup`` (extended with optional
+    ``account_id``/``account_mode`` keywords, defaulted to preserve the paper
+    call sites byte-for-byte) instead.
+    """
+    clerk_root, account_dir, runner_root, evidence, clock = _setup(
+        tmp_path, account_id=LIVE_ACCT, account_mode="live"
+    )
+    plan = plan_cutover(
+        account_id=LIVE_ACCT,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+
+    receipt = apply_cutover(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+
+    assert not (account_dir / "order_inbox.jsonl").exists()
+    assert not (account_dir / "order_journal.jsonl").exists()
+    store = ActivationStore(clerk_root / "accounts" / "alpaca")
+    resolved = store.resolve(
+        LIVE_ACCT,
+        plan.database.authority_generation,
+        plan.database.db_identity_token,
+        artifacts_root=clerk_root,
+    )
+    assert resolved == receipt.activation
+    assert (clerk_root / receipt.receipt_reference).is_file()
+    quarantine_manifest = clerk_root / receipt.activation.legacy_quarantine_manifest
+    quarantine_dir = quarantine_manifest.parent
+    assert (
+        quarantine_dir / "accounts" / "alpaca" / LIVE_ACCT / "order_inbox.jsonl"
+    ).is_file()
+    assert (
+        quarantine_dir / "accounts" / "alpaca" / LIVE_ACCT / "order_journal.jsonl"
+    ).is_file()
+    assert (
+        quarantine_dir
+        / "accounts"
+        / LIVE_ACCT
         / "bots"
         / "spy"
         / "decision_journal.jsonl"

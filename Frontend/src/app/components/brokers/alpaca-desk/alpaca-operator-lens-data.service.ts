@@ -24,9 +24,10 @@ import { BrokersService } from '../../../services/brokers.service';
  * `active_runtime.py`). A shadow authority reads a live account through a
  * `shadow:` custody id and still has a SQLite projection, so gating on
  * `real_paper` alone would leave the Operator lens dark on exactly the
- * real-money-adjacent account it most needs to describe (ADR 0059 D2).
+ * real-money-adjacent account it most needs to describe (ADR 0059 D2), and
+ * `real_live` once the live authority is installed (slice 7).
  */
-const SQLITE_PROJECTION_AUTHORITIES: ReadonlySet<string> = new Set(['real_paper', 'shadow']);
+const SQLITE_PROJECTION_AUTHORITIES: ReadonlySet<string> = new Set(['real_paper', 'shadow', 'real_live']);
 
 @Injectable()
 export class AlpacaOperatorLensDataService {

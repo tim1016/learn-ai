@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
 )
-from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
+from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT, LiveArmingRecord
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.alpaca_live_verdict import ShadowState
@@ -30,8 +30,14 @@ from tests.broker.alpaca.clerk.live_arming_fixtures import (
     arming_ready,
     live_settings,
     paper_settings,
+    record_sealed_binding,
 )
-from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    LIVE_ACCT,
+    SHADOW_ACCT,
+    TEST_ENVELOPE_VALUES,
+    _LiveBroker,
+)
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import shadow_runtime  # noqa: F401
 
 _NOW = 1_800_000_000_000
@@ -251,6 +257,17 @@ async def test_observe_loss_hold_reads_the_durable_hold_on_a_composed_shadow_run
     assert observe_loss_hold(None) == "not_applicable"
 
 
+def test_observe_loss_hold_is_not_applicable_on_a_real_paper_sqlite_runtime() -> None:
+    """The ``sqlite`` authority kind is shared by real-paper and real-live (slice 7, Task 4);
+
+    only the latter custodies a live account. A real-paper runtime must not open its
+    repository and answer a loss-hold state for an account this observation never reads.
+    """
+    runtime = ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001")
+
+    assert observe_loss_hold(runtime) == "not_applicable"
+
+
 MONDAY_MS = et_minute_of_day_ms(date(2026, 9, 14), 10 * 60)
 
 
@@ -306,8 +323,8 @@ def test_one_armed_instance_makes_the_verdict_live_armed_and_the_envelope_sealed
     assert verdict.final_verdict == "live-armed"
     assert "1 instance armed" in verdict.headline
     assert "LIVE account 9LIVE0001 " in verdict.headline
-    assert "no real-money order" in verdict.detail or "No path submits a real-money order" in verdict.detail
-    assert "slice 7" in verdict.detail
+    assert "armed under the shadow authority, nothing submitted" in verdict.headline
+    assert "under the shadow authority" in verdict.detail
 
 
 def test_the_headline_counts_more_than_one_armed_instance_in_the_plural() -> None:
@@ -492,3 +509,157 @@ def test_observe_arming_reads_nothing_off_a_paper_or_absent_authority(tmp_path: 
             )
             == ArmingObservation.none()
         )
+
+
+class _LiveClerk:
+    """The two facts the verdict reads off a live facade: its envelope and its kind."""
+
+    authority_kind = "sqlite"
+    account_id = LIVE_ACCT
+
+    def __init__(self) -> None:
+        from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
+        from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+
+        self.live_envelope = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=False)
+        self.live_arming = ArmingGate()
+
+
+def _live_runtime() -> ActiveClerkRuntime:
+    return ActiveClerkRuntime(
+        authority_kind="sqlite",
+        clerk=_LiveClerk(),
+        account_id=LIVE_ACCT,
+        account_authority_kind="real_live",
+    )
+
+
+def test_the_verdict_counts_arming_on_the_real_live_authority(tmp_path: Path) -> None:
+    """Slice 6 counted only under shadow; the live authority is the widening point it named."""
+    live_state_root = tmp_path / "runner"
+    seal = record_sealed_binding(live_state_root, strategy_instance_id="ema-live-1", sealed_account_id=LIVE_ACCT)
+    LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT).append(
+        LiveArmingRecord.create(
+            live_account_id=LIVE_ACCT,
+            strategy_instance_id="ema-live-1",
+            seal_hash=seal.bot_configuration_hash,
+            configured_signal_hash=seal.configured_signal_hash,
+            shadow_receipt_sha256="e" * 64,
+            envelope=TEST_ENVELOPE_VALUES,
+            armed_at_ms=ARMED_AT_MS,
+            max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
+        )
+    )
+    observation = observe_arming(
+        _live_runtime(), tmp_path, lambda: live_state_root, settings=live_settings(), now_ms=ARMED_AT_MS + 60_000
+    )
+    assert observation.armed_instance_count == 1
+    assert observation.envelope_state == "sealed"
+
+
+def test_the_real_live_count_ignores_the_rehearsals_shadow_sealed_instance(tmp_path: Path) -> None:
+    """After graduation the rehearsal's rows are still in the same ledger; they are not armed here.
+
+    A `shadow:`-sealed binding is foreign to the live authority (design R15)
+    and is refused on every Start, so counting it would make the verdict say
+    "2 instances armed, real-money submission open" about an instance that can
+    never submit. The shadow authority's own counting is unchanged --
+    ``test_observe_arming_counts_the_ledgers_armed_instances`` pins it.
+    """
+    live_state_root = tmp_path / "runner"
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    for strategy_instance_id, sealed_account_id in (
+        ("ema-live-1", LIVE_ACCT),
+        ("ema-shadow-1", SHADOW_ACCT),
+    ):
+        seal = record_sealed_binding(
+            live_state_root,
+            strategy_instance_id=strategy_instance_id,
+            sealed_account_id=sealed_account_id,
+        )
+        ledger.append(
+            LiveArmingRecord.create(
+                live_account_id=LIVE_ACCT,
+                strategy_instance_id=strategy_instance_id,
+                seal_hash=seal.bot_configuration_hash,
+                configured_signal_hash=seal.configured_signal_hash,
+                shadow_receipt_sha256=None,
+                envelope=TEST_ENVELOPE_VALUES,
+                armed_at_ms=ARMED_AT_MS,
+                max_sessions=TEST_ENVELOPE_VALUES.arming_max_sessions,
+            )
+        )
+
+    observation = observe_arming(
+        _live_runtime(), tmp_path, lambda: live_state_root, settings=live_settings(), now_ms=ARMED_AT_MS + 60_000
+    )
+
+    assert observation.armed_instance_count == 1
+    assert "ema-shadow-1" in observation.detail
+    assert "ema-live-1" not in observation.detail
+
+
+def test_a_live_armed_real_live_account_says_submission_is_open() -> None:
+    verdict = alpaca_live_verdict(
+        settings=live_settings(),
+        runtime=_live_runtime(),
+        now_ms=_NOW,
+        arming=ArmingObservation(armed_instance_count=2, envelope_state="sealed", detail=""),
+        loss_hold="clear",
+    )
+    assert verdict.final_verdict == "live-armed"
+    assert verdict.clerk_authority == "sqlite"
+    assert verdict.headline == f"LIVE account {LIVE_ACCT} — 2 instances armed, real-money submission open"
+    assert "submitted to Alpaca" in verdict.detail
+    assert "nothing submitted" not in verdict.detail.lower()
+
+
+def test_a_live_armed_account_in_loss_hold_says_submission_is_held() -> None:
+    verdict = alpaca_live_verdict(
+        settings=live_settings(),
+        runtime=_live_runtime(),
+        now_ms=_NOW,
+        arming=ArmingObservation(armed_instance_count=2, envelope_state="sealed", detail=""),
+        loss_hold="held",
+    )
+    assert verdict.final_verdict == "live-armed"
+    assert verdict.headline == (
+        f"LIVE account {LIVE_ACCT} — 2 instances armed, real-money submission held by the loss hold"
+    )
+    assert "every ENTER is refused" in verdict.detail
+    assert "is submitted to Alpaca" not in verdict.detail
+    assert verdict.detail.count("loss hold") == 1
+
+
+def test_a_real_live_account_with_nothing_armed_says_every_enter_refuses() -> None:
+    verdict = alpaca_live_verdict(settings=live_settings(), runtime=_live_runtime(), now_ms=_NOW)
+    assert verdict.final_verdict == "live-unarmed"
+    assert verdict.headline == f"LIVE account {LIVE_ACCT} — real-money authority installed, no instance armed"
+    assert "every ENTER" in verdict.detail
+
+
+def test_the_shadow_rows_no_longer_promise_a_future_slice(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+) -> None:
+    runtime, _broker = shadow_runtime
+    verdict = alpaca_live_verdict(
+        settings=live_settings(),
+        runtime=runtime,
+        now_ms=_NOW,
+        arming=ArmingObservation(armed_instance_count=1, envelope_state="sealed", detail=""),
+    )
+    assert "slice 7" not in verdict.detail
+    assert "under the shadow authority" in verdict.detail
+
+
+def test_a_mid_session_mode_disagreement_is_the_verdicts_disagreement_not_an_unobserved_envelope() -> None:
+    """Owner decision 2026-09-09 / design R2: the gate's fault is the verdict's fact."""
+    runtime = _live_runtime()
+    runtime.clerk.live_arming.invalidate("the broker answered paper", reason_code=LIVE_MODE_DISAGREEMENT)
+
+    verdict = alpaca_live_verdict(settings=live_settings(), runtime=runtime, now_ms=_NOW)
+
+    assert verdict.mode_agreement == "disagreed"
+    assert verdict.clerk_refusal_reason_code == LIVE_MODE_DISAGREEMENT
+    assert verdict.final_verdict == "unknown"
+    assert "disagree" in verdict.detail

@@ -313,8 +313,11 @@ async def test_live_account_with_no_shadow_world_is_still_refused(
     monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "account", _live_account())
     monkeypatch.setattr(panel_deploy, "primary_custody_world", lambda: None)
 
-    with pytest.raises(PanelUnavailableError, match=r"Alpaca live-account deployment is refused\."):
+    with pytest.raises(PanelUnavailableError, match=r"Alpaca account deployment is refused\.") as refused:
         await panel_deploy.get_alpaca_paper_deploy_view("alpaca", LIVE_ACCT)
+
+    assert refused.value.detail is not None
+    assert "No Alpaca authority is installed" in refused.value.detail
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -323,3 +326,18 @@ async def test_live_account_with_no_shadow_world_is_still_refused(
         )
 
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_shadow_authority_refuses_a_paper_account_by_name(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shadow authority only admits a live account; the refusal names the shadow world, not `real_paper`."""
+    monkeypatch.setattr(panel_deploy, "primary_custody_world", lambda: "shadow")
+
+    with pytest.raises(PanelUnavailableError, match=r"Alpaca account deployment is refused\.") as refused:
+        await panel_deploy.get_alpaca_paper_deploy_view("alpaca", ACCT)
+
+    assert refused.value.detail is not None
+    assert "The active shadow authority does not admit" in refused.value.detail

@@ -7,12 +7,15 @@ then appends the sealed record. ``disarm`` is the closed direction and takes no
 plan at all.
 
 Nothing here contacts a broker. The four inputs (design R8) are settings, the
-shadow activation proof, the instance's sealed binding, and a current shadow
-receipt -- all durable evidence already on disk. Mode agreement against the
-broker stays the runtime's job at boot, and (slice 7) at admission.
+shadow activation proof, and the instance's sealed binding; a current shadow
+receipt is recorded when one exists -- all durable evidence already on disk.
+Mode agreement against the broker stays the runtime's job at boot, and (slice 7)
+at admission.
 
-An arming record grants nothing in this slice: no path submits a real-money
-order until slice 7 opens one.
+An arming record is a permission, never an authority. On an ungraduated
+account it grants nothing at all; on a graduated one (slice 7) it is what
+lets the live authority's arming gate admit that instance's ENTER — and only
+that instance's, and only while the record still stands.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
+    custody_account_id_for,
     custody_account_ids_for,
     live_account_id_for_shadow_account,
 )
@@ -43,7 +47,6 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
     LIVE_ENVELOPE_MISSING,
-    LIVE_SHADOW_INCOMPLETE,
     ArmingStatus,
     LiveArmingRecord,
     LiveArmingRefused,
@@ -57,6 +60,7 @@ from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEn
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid, ShadowActivationStore
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
 from app.broker.alpaca.config import AlpacaSettings
+from app.schemas.account_authority import CustodyWorld
 from app.services.bot_binding_repository import live_state_binding_repository
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -81,7 +85,7 @@ class ArmingInputs:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope: LiveEnvelopeValues
     max_sessions: int
 
@@ -102,7 +106,7 @@ class LiveArmingPlan:
     strategy_instance_id: str
     seal_hash: str
     configured_signal_hash: str
-    shadow_receipt_sha256: str
+    shadow_receipt_sha256: str | None
     envelope_values: dict[str, float | int]
     envelope_sha256: str
     max_sessions: int
@@ -135,14 +139,36 @@ def live_account_id_for(artifacts_root: Path) -> str:
     return live_account_id_for_shadow_account(shadow_ids[0])
 
 
-def instance_seal_hashes(*, live_account_id: str, live_state_root: Path) -> dict[str, InstanceSeal]:
+def instance_seal_hashes(
+    *,
+    live_account_id: str,
+    live_state_root: Path,
+    custody_world: CustodyWorld | None = None,
+) -> dict[str, InstanceSeal]:
     """Every sealed Alpaca instance bound to this live account, by instance id.
 
     A binding with no v2 program seal is skipped rather than refused: it is a
     legacy record that cannot be armed, and its presence must not stop a sealed
     sibling from arming.
+
+    ``custody_world`` narrows the admissible custody ids to that world's own
+    -- whatever ``custody_account_id_for`` answers for it, so ``real_live``
+    means the live id alone. After graduation the rehearsal's ``shadow:``-sealed
+    bindings stay on disk (design R15) and their slice-6 arming records stay
+    in the same account-rooted ledger, so a reader that counts them would
+    report instances the live authority does not custody -- and refuses on
+    every Start -- as armed under it. ``None`` (the ceremony, the operator
+    CLI) keeps both ids: arming a shadow-sealed instance under a graduated
+    account grants nothing and is refused at Start anyway.
     """
-    admissible = custody_account_ids_for(live_account_id)
+    # The world-to-custody-id rule is ``custody_account_id_for``'s, so naming a
+    # world here narrows to that world's own id for *any* world rather than
+    # re-spelling the ``real_live`` half of the table in a feature module.
+    admissible = (
+        custody_account_ids_for(live_account_id)
+        if custody_world is None
+        else frozenset({custody_account_id_for(custody_world, live_account_id)})
+    )
     seals: dict[str, InstanceSeal] = {}
     for binding in live_state_binding_repository(live_state_root).list_for_broker("alpaca"):
         seal = binding.sealed_program
@@ -198,30 +224,19 @@ def observe_arming_inputs(
         configured_signal_hash=seal.configured_signal_hash,
         required_sessions=envelope.shadow_sessions,
     )
-    if receipt is None:
-        raise LiveArmingRefused(
-            LIVE_SHADOW_INCOMPLETE,
-            f"{strategy_instance_id} has no current shadow receipt for this seal over "
-            f"{envelope.shadow_sessions} session(s)",
-        )
-    # The receipt store filters by instance, signal hash and session count only,
-    # so a receipt sealed on another live account would otherwise prove this
-    # one's gate. Two accounts can carry the same instance id and the same
-    # configured signal; only the account the activation proof named was
-    # actually rehearsed.
-    if receipt.live_account_id != live_account_id:
-        raise LiveArmingRefused(
-            LIVE_SHADOW_INCOMPLETE,
-            f"{strategy_instance_id}'s current shadow receipt was sealed for "
-            f"{receipt.live_account_id}, not {live_account_id}; the shadow gate must "
-            "have run on the account being armed",
-        )
+    # Shadow is a mode, not a requirement (owner decision 2026-09-09): a
+    # current receipt for this instance on THIS account is recorded; its
+    # absence arms nothing less. A receipt sealed for another account is not
+    # this account's rehearsal and is not recorded either.
+    shadow_receipt_sha256 = (
+        receipt.receipt_sha256 if receipt is not None and receipt.live_account_id == live_account_id else None
+    )
     return ArmingInputs(
         live_account_id=live_account_id,
         strategy_instance_id=strategy_instance_id,
         seal_hash=seal.seal_hash,
         configured_signal_hash=seal.configured_signal_hash,
-        shadow_receipt_sha256=receipt.receipt_sha256,
+        shadow_receipt_sha256=shadow_receipt_sha256,
         envelope=envelope,
         max_sessions=envelope.arming_max_sessions,
     )
@@ -451,6 +466,7 @@ def account_arming(
     configured_envelope: LiveEnvelopeValues,
     now_ms: int,
     strategy_instance_ids: Sequence[str] | None = None,
+    custody_world: CustodyWorld | None = None,
 ) -> AccountArming:
     """This account's arming evidence, reading the ledger file exactly once.
 
@@ -464,12 +480,20 @@ def account_arming(
     answer for an instance that was never armed, so a ``status`` on a
     never-armed account touches no bindings root at all -- which on a fresh
     installation may not exist yet.
+
+    ``custody_world`` passes straight through to :func:`instance_seal_hashes`:
+    a caller that knows it reads the ``real_live`` world counts only
+    live-sealed instances.
     """
     records = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).records()
     known = instance_ids(records)
     wanted = known if strategy_instance_ids is None else tuple(strategy_instance_ids)
     seals = (
-        instance_seal_hashes(live_account_id=live_account_id, live_state_root=live_state_root)
+        instance_seal_hashes(
+            live_account_id=live_account_id,
+            live_state_root=live_state_root,
+            custody_world=custody_world,
+        )
         if any(sid in known for sid in wanted)
         else {}
     )

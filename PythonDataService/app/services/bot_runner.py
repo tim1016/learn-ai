@@ -156,6 +156,7 @@ from app.services.bot_start_admission import (
 )
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
+from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_replay_proof import RunReplayProofService, RunReplayUnavailableError
@@ -258,6 +259,7 @@ class BotTaskRegistry:
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
         symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
+        arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -319,6 +321,8 @@ class BotTaskRegistry:
             manages_instance=self._manages_boot_recovery,
             is_running=self._is_running,
             now_ms=self._now_ms,
+            binding_for=self._read_binding,
+            installed_custody_account_id=lambda: None if (c := get_alpaca_clerk()) is None else c.account_id,
         )
         self._start_admission = BotStartAdmission(
             now_ms=self._now_ms,
@@ -331,6 +335,7 @@ class BotTaskRegistry:
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
             program_leg_policy=active_program_leg_policy,
+            arming_fact=arming_fact,
         )
         self._resume_admission = BotResumeAdmission(
             now_ms=self._now_ms,
@@ -348,6 +353,7 @@ class BotTaskRegistry:
             market_liveness=self._market_liveness,
             legacy_migration_repository=self._bindings,
             program_leg_policy=active_program_leg_policy,
+            arming_fact=arming_fact,
         )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,

@@ -16,10 +16,10 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
     LIVE_ENVELOPE_MISSING,
-    LIVE_SHADOW_INCOMPLETE,
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     ArmingInputs,
@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
+from app.schemas.account_authority import CustodyWorld
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -248,32 +249,59 @@ def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[
     assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
 
 
-def test_no_current_shadow_receipt_is_the_adrs_own_refusal(roots: tuple[Path, Path]) -> None:
-    artifacts_root, live_state_root = roots
-    activate_shadow_fence(artifacts_root)
-    record_sealed_binding(live_state_root)
-    # A receipt for a different configured signal is not this seal's proof.
-    seal_receipt(artifacts_root, configured_signal_hash="f" * 64)
+def test_a_named_custody_world_admits_only_that_worlds_own_custody_id(roots: tuple[Path, Path]) -> None:
+    """The narrowing is ``custody_account_id_for``'s answer, not a ``real_live`` special case.
 
-    with pytest.raises(LiveArmingRefused) as caught:
-        observe_arming_inputs(
-            strategy_instance_id=ARMING_SID,
-            artifacts_root=artifacts_root,
-            live_state_root=live_state_root,
-            settings=live_settings(),
+    Both bindings sit in the same runner root on the same live account -- the
+    shape design R15 leaves behind after graduation. Naming a world must pick
+    exactly that world's custody id, whichever world is named.
+    """
+    _artifacts_root, live_state_root = roots
+    record_sealed_binding(live_state_root, strategy_instance_id="rehearsed")
+    record_sealed_binding(live_state_root, strategy_instance_id="graduated", sealed_account_id=LIVE_ACCT)
+
+    def _seals(custody_world: CustodyWorld | None) -> set[str]:
+        return set(
+            instance_seal_hashes(
+                live_account_id=LIVE_ACCT,
+                live_state_root=live_state_root,
+                custody_world=custody_world,
+            )
         )
 
-    assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
+    assert _seals("real_live") == {"graduated"}
+    assert _seals("shadow") == {"rehearsed"}
+    assert _seals(None) == {"graduated", "rehearsed"}
 
 
-def test_a_receipt_sealed_for_another_live_account_never_arms_this_one(
+def test_an_instance_with_no_receipt_arms_and_records_none(roots: tuple[Path, Path]) -> None:
+    """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    seal = record_sealed_binding(live_state_root)
+    # A receipt for a different configured signal is not this seal's, and is not recorded.
+    seal_receipt(artifacts_root, configured_signal_hash="f" * 64)
+
+    inputs = observe_arming_inputs(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+    )
+
+    assert inputs.seal_hash == seal.bot_configuration_hash
+    assert inputs.shadow_receipt_sha256 is None
+
+
+def test_a_receipt_sealed_for_another_live_account_is_not_recorded_on_this_one(
     roots: tuple[Path, Path],
 ) -> None:
     """The receipt store filters by instance, seal and count -- not by account.
 
     Two live accounts can carry the same instance id and the same configured
-    signal, so a receipt proving the gate ran on account A would otherwise arm
-    the same instance bound on account B.
+    signal; only the account the activation proof named was rehearsed, so
+    another account's receipt is not this account's fact and the record
+    carries none.
     """
     artifacts_root, live_state_root = roots
     activate_shadow_fence(artifacts_root)
@@ -285,18 +313,41 @@ def test_a_receipt_sealed_for_another_live_account_never_arms_this_one(
         sessions=TEST_ENVELOPE_VALUES.shadow_sessions,
     )
 
-    with pytest.raises(LiveArmingRefused) as caught:
-        plan_arming(
-            strategy_instance_id=ARMING_SID,
-            artifacts_root=artifacts_root,
-            live_state_root=live_state_root,
-            settings=live_settings(),
-            clock=_Clock(ARMED_AT_MS),
-        )
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
 
-    assert caught.value.reason_code == LIVE_SHADOW_INCOMPLETE
-    assert "9LIVE0002" in str(caught.value) and LIVE_ACCT in str(caught.value)
-    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
+    assert plan.shadow_receipt_sha256 is None
+    assert plan.seal_hash == seal.bot_configuration_hash
+
+
+def test_a_receipt_less_arming_applies_and_its_record_carries_null(roots: tuple[Path, Path]) -> None:
+    artifacts_root, live_state_root = roots
+    activate_shadow_fence(artifacts_root)
+    record_sealed_binding(live_state_root)
+    plan = plan_arming(
+        strategy_instance_id=ARMING_SID,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    record = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 1_000),
+    )
+
+    assert record.shadow_receipt_sha256 is None
+    assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == (record,)
 
 
 def test_plan_writes_nothing_and_its_two_ids_are_its_own_content_hash(roots: tuple[Path, Path]) -> None:
@@ -367,7 +418,8 @@ def test_apply_arms_the_instance_and_appends_exactly_one_sealed_record(roots: tu
     assert record.envelope_sha256 == TEST_ENVELOPE_VALUES.sha
     ledger = LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT)
     assert ledger.records() == (record,)
-    assert ledger.sealed_envelope() == TEST_ENVELOPE_VALUES
+    sealed = latest_arming(ledger.records())
+    assert sealed is not None and sealed.envelope == TEST_ENVELOPE_VALUES
 
 
 def test_apply_refuses_a_token_that_is_not_the_plans(roots: tuple[Path, Path]) -> None:

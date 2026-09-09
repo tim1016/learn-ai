@@ -217,6 +217,15 @@ def test_account_artifacts_root_rejects_path_like_account_id(
         account_artifacts_root(tmp_path, account_id)
 
 
+@pytest.mark.parametrize("account_id", ["9LIVE0001", "DU123456", "123456789"])
+def test_account_artifacts_root_accepts_uppercase_alphanumeric_account_ids(
+    tmp_path: Path, account_id: str
+) -> None:
+    """Digit-led ids are real Alpaca live account ids (ADR 0059 slice 7); the segment stays safe."""
+    root = account_artifacts_root(tmp_path, account_id)
+    assert root == (tmp_path / "accounts" / account_id).resolve()
+
+
 def test_account_artifacts_registry_compatibility_exports_are_read_only() -> None:
     assert account_artifacts.AccountInstanceBinding is account_registry.AccountInstanceBinding
     assert account_artifacts.read_account_instance_registry is account_registry.read_account_instance_registry

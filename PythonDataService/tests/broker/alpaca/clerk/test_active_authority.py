@@ -16,7 +16,6 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
-    ActivationRecordInvalid,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
@@ -29,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.trade_evidence import NullTradeUpdateEvidenceSink
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder
+from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 
 
@@ -92,43 +92,6 @@ class _Broker:
 
     async def get_order_by_client_order_id(self, _client_order_id: str) -> None:
         return None
-
-
-class _ActivationStore:
-    def __init__(
-        self,
-        record: object | None,
-        *,
-        invalid: bool = False,
-        resolve_invalid: bool = False,
-    ) -> None:
-        self.record = record
-        self.invalid = invalid
-        self.resolve_invalid = resolve_invalid
-        self.resolved: tuple[str, int, str, Path] | None = None
-
-    def latest(self, _account_id: str) -> object | None:
-        if self.invalid:
-            raise ActivationRecordInvalid("tampered activation")
-        return self.record
-
-    def resolve(
-        self,
-        account_id: str,
-        authority_generation: int,
-        db_identity_token: str,
-        artifacts_root: Path,
-    ) -> object:
-        if self.resolve_invalid:
-            raise ActivationRecordInvalid("activation does not match SQLite identity")
-        self.resolved = (
-            account_id,
-            authority_generation,
-            db_identity_token,
-            artifacts_root,
-        )
-        assert self.record is not None
-        return self.record
 
 
 async def test_no_activation_installs_no_custody_authority(tmp_path: Path) -> None:

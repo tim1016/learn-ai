@@ -28,7 +28,11 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectionGuidance,
     RecoveryCapability,
 )
-from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
+from app.schemas.account_authority import (
+    CustodyWorld,
+    admitted_account_mode_for_world,
+    world_admits_account_mode,
+)
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
     AccountOperatorPosture,
@@ -327,16 +331,21 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             evidence={"account_evidence_unavailable": True},
         )
     if not world_admits_account_mode(ctx.custody_world, ctx.account_mode):
+        # The refusal names the world it is judging. A shadow or live authority
+        # reads a real-money account, so telling its operator the account "is
+        # not in paper mode" states the requirement backwards (design R8 #8).
+        admitted = admitted_account_mode_for_world(ctx.custody_world)
         return _eligibility_posture(
             condition_id="alpaca_account_wrong_execution_mode",
             severity="blocking",
-            headline="This account is not in paper mode",
+            headline=f"This account is not in {admitted} mode",
             detail=(
-                "Paper deployment and manual orders require a paper-mode "
-                f"account; Alpaca reports {ctx.account_mode!r} mode for this account. "
-                "This will not resolve by waiting — the account mode must be changed."
+                f"Deployment and manual orders on this authority require a {admitted}-mode "
+                f"account; Alpaca reports {ctx.account_mode} mode for this account. "
+                "This will not resolve by waiting — reconnect with the account this "
+                "authority custodies, or activate the authority for this account."
             ),
-            evidence={"account_mode": ctx.account_mode},
+            evidence={"account_mode": ctx.account_mode, "custody_world": ctx.custody_world},
             account_desk=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
             fleet_roster=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
         )

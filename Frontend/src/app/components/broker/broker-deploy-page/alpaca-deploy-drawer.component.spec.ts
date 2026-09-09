@@ -63,15 +63,17 @@ describe('AlpacaDeployDrawerComponent', () => {
     expect(await screen.findByText('Deploy · PA9 · paper')).toBeTruthy();
   });
 
-  it('names the shadow world in its header on a live account', async () => {
-    // ADR 0059 D2: this header is the Shadow form's only title. A literal
-    // `paper` here is the false safety signal slice 4 exists to remove.
+  it('names no world in its header on a live account until the deploy view says which', async () => {
+    // ADR 0059 D2/D11: a live account is shadowed or live-custodied, and the
+    // drawer does not know which until the deploy view says — so it names no
+    // world rather than a wrong one. A literal `paper` here is the false
+    // safety signal slice 4 exists to remove.
     await renderDrawer(
       fakeAccount({ account_id: '9LIVE0001', account_mode: 'live' }),
       SHADOW_DEPLOY_VIEW,
     );
 
-    expect(await screen.findByText('Deploy · 9LIVE0001 · shadow')).toBeTruthy();
+    expect(await screen.findByText('Deploy · 9LIVE0001')).toBeTruthy();
     expect(screen.queryByText(/· paper/)).toBeNull();
   });
 

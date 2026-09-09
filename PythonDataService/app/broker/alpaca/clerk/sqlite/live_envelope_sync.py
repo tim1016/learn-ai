@@ -1,9 +1,17 @@
-"""Independent fixed-cadence lifecycle for the live envelope (ADR 0059 D4).
+"""Independent fixed-cadence lifecycle for the live envelope and the arming refresh (ADR 0059 D4, D11).
 
 Modelled on ``StreamHealthHoldSync``: one background tap produces the
 account observation and the loss hold; ``accept_enter`` consumes them and
 never contacts the broker. Decoupled from the reconciliation pass, whose
 backoff reaches 300 s on failure — exactly when a loss hold matters most.
+
+Two subjects share the cadence, and only the cadence. The envelope's own —
+observe the account, publish or withdraw the observation, raise the loss
+hold — is this module's. The arming half (slice 7: read the ledger once,
+seal the envelope from it, refresh the per-instance gate) belongs to
+``ArmingRefresh`` in ``sqlite/arming_refresh.py``; the sync holds one
+reference to it, calls it once per tick, and assigns ``envelope.sealed``
+from what it returns.
 
 The sync raises the loss hold and never releases it: only the guarded
 operator action does (plan R6, R12).
@@ -27,15 +35,18 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
+from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
+from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import (
     ENVELOPE_SYNC_INTERVAL_S,
     AccountObservation,
     LiveEnvelopeGate,
+    LiveEnvelopeValues,
     loss_breached,
     loss_limit_usd,
 )
+from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
 from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -44,13 +55,15 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError
 from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
 
 type Sleep = Callable[[float], Awaitable[None]]
-EnvelopeSyncAction = Literal["observed", "hold_raised", "hold_stands", "unknown", "read_failed"]
+EnvelopeSyncAction = Literal[
+    "observed", "hold_raised", "hold_stands", "unknown", "read_failed", "mode_disagreed"
+]
 
 # What each verdict says to an operator, and how loudly. The three warnings
 # are the ones that change what the account will accept.
@@ -60,8 +73,11 @@ _ACTION_MESSAGES: dict[EnvelopeSyncAction, str] = {
     "hold_stands": "live envelope loss hold still stands",
     "unknown": "live envelope cannot judge the account; every ENTER is refused",
     "read_failed": "live envelope could not read the account; the observation will age out",
+    "mode_disagreed": "live envelope read a broker mode that no longer agrees; every ENTER is refused",
 }
-_WARNING_ACTIONS: frozenset[str] = frozenset({"hold_raised", "read_failed", "unknown"})
+_WARNING_ACTIONS: frozenset[str] = frozenset(
+    {"hold_raised", "read_failed", "unknown", "mode_disagreed"}
+)
 
 
 @dataclass(frozen=True)
@@ -166,6 +182,8 @@ class LiveEnvelopeSync:
         sleep: Sleep = asyncio.sleep,
         max_ticks: int | None = None,
         arming_ledger: LiveArmingLedger | None = None,
+        arming_gate: ArmingGate | None = None,
+        instance_seals: InstanceSeals | None = None,
     ) -> None:
         self._repo = repo
         self._read = read
@@ -173,10 +191,20 @@ class LiveEnvelopeSync:
         self._interval_s = interval_s
         self._sleep = sleep
         self._max_ticks = max_ticks
-        self._arming_ledger = arming_ledger
-        # Whether the last refresh found the ledger unreadable, so the error is
-        # logged once per transition rather than four times a minute.
-        self._arming_ledger_invalid = False
+        self._arming_gate = arming_gate
+        # The arming half of this cadence, or ``None`` where no ledger exists.
+        # One collaborator, called once per tick: it owns the single ledger
+        # read that feeds both the seal and the gate's snapshot.
+        self._arming = (
+            None
+            if arming_ledger is None
+            else ArmingRefresh(
+                ledger=arming_ledger,
+                gate=arming_gate,
+                instance_seals=instance_seals,
+                account_id=repo.account_id,
+            )
+        )
         self._reader = SqliteEconomicProjectionReader.from_repository(repo)
         # The previous tick's verdict, so an unchanged one is not re-logged.
         self._last_action: EnvelopeSyncAction | None = None
@@ -262,45 +290,18 @@ class LiveEnvelopeSync:
             self.envelope.withdraw()
         return reading
 
-    def _refresh_sealed_envelope(self) -> None:
-        """Re-read the account's sealed envelope from the arming ledger (ADR 0059 D3/R10).
-
-        The envelope a live ENTER is admitted against is the one an operator
-        sealed at arming, not the one this process booted with -- so an edit to
-        the ``ALPACA_LIVE_*`` environment after an arming is
-        ``LIVE_ENVELOPE_DISAGREEMENT`` at every ENTER until a re-arm.
-
-        Read on every tick rather than once at composition because an arming can
-        happen while the service is running: the ceremony is an out-of-process
-        CLI, and one sync cadence is the whole latency between an operator's
-        ``apply`` and the gate that enforces it.
-
-        A ledger nobody can read seals nothing: the gate returns to unsealed and
-        the fault is logged at error level, once per transition. The account
-        level is all this slice enforces; per-instance arming is consulted at
-        admission in slice 7.
-        """
-        if self._arming_ledger is None:
+    def _refresh_arming(self) -> None:
+        """Run the arming half of this tick, and seal the envelope from what it read."""
+        if self._arming is None:
             return
-        try:
-            sealed = self._arming_ledger.sealed_envelope()
-        except LiveArmingInvalid as exc:
-            sealed = None
-            if not self._arming_ledger_invalid:
-                logger.error(
-                    "live arming ledger cannot be read; the envelope is unsealed",
-                    exc_info=True,
-                    extra={
-                        "action": "live_arming_ledger_invalid",
-                        "account_id": self._repo.account_id,
-                        "live_account_id": self._arming_ledger.live_account_id,
-                        "path": str(self._arming_ledger.path),
-                        "why": str(exc),
-                    },
-                )
-            self._arming_ledger_invalid = True
-        else:
-            self._arming_ledger_invalid = False
+        self._assign_sealed(self._arming.refresh(self._repo.clock(), self.envelope.values))
+
+    def _assign_sealed(self, sealed: LiveEnvelopeValues | None) -> None:
+        """Assign the sealed envelope, logging each transition once (slice 6 R10).
+
+        Called only from :meth:`_refresh_arming`, past its no-ledger return,
+        so ``self._arming`` is never ``None`` here.
+        """
         if sealed == self.envelope.sealed:
             return
         self.envelope.sealed = sealed
@@ -311,14 +312,11 @@ class LiveEnvelopeSync:
             else "live envelope is no longer sealed by any arming record",
             extra={
                 "action": "live_envelope_sealed" if sealed is not None else "live_envelope_unsealed",
-                # Two ids, because under shadow they are two different
-                # accounts: the custody namespace the hold is written against,
-                # and the live account the ledger is rooted on. The broker
-                # account is deliberately absent -- this refresh is the first
-                # statement of ``tick()`` and ``observe()`` has not run yet, so
-                # on the first transition after boot it would always be null.
+                # Two ids, always: under shadow the custody id this Clerk
+                # writes against is ``shadow:<id>`` while the ledger the
+                # envelope was sealed from is rooted at the live ``<id>``.
                 "account_id": self._repo.account_id,
-                "live_account_id": self._arming_ledger.live_account_id,
+                "live_account_id": self._arming.live_account_id,
                 "agreement": self.envelope.agreement,
             },
         )
@@ -331,11 +329,27 @@ class LiveEnvelopeSync:
         it with a later tick's numbers would churn the control revision and
         overwrite the evidence the operator is reading.
         """
-        self._refresh_sealed_envelope()
+        self._refresh_arming()
         try:
             reading = await self.observe()
+        except BrokerAccountModeDisagreement as exc:
+            # Design R2: the account the read answered is not the one this
+            # authority was composed for. Withdraw the observation (no ENTER
+            # bounds against it) and hold the gate under the disagreement's
+            # own code. The hold is the gate's own sticky fault, so the
+            # refresh above may publish freely and the recovery below is not
+            # one tick late: this tick's read is what raises it and this
+            # tick's read is what releases it.
+            self.envelope.withdraw()
+            if self._arming_gate is not None:
+                self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))
+            return self._acted("mode_disagreed", {"why": exc.detail or str(exc)})
         except BrokerError as exc:
+            # Not a verdict on the mode either way: a failed read leaves a
+            # standing disagreement standing, and the observation ages out.
             return self._acted("read_failed", {"why": str(exc)})
+        if self._arming_gate is not None:
+            self._arming_gate.release()
         if self._hold_stands():
             # A hold standing over an account that *also* cannot be judged is a
             # different operator situation from one over a judgeable account:
@@ -457,4 +471,4 @@ class LiveEnvelopeSync:
         self._reader.close()
 
 
-__all__ = ["EnvelopeReading", "EnvelopeSyncAction", "LiveEnvelopeSync"]
+__all__ = ["EnvelopeReading", "EnvelopeSyncAction", "InstanceSeals", "LiveEnvelopeSync"]

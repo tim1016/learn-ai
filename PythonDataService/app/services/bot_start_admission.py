@@ -33,6 +33,7 @@ from app.schemas.run_admission import (
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
+from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.session_authority import session_state_at_ms
@@ -458,6 +459,7 @@ class BotStartAdmission:
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
         program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
+        arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -469,6 +471,7 @@ class BotStartAdmission:
         self._session_capability = session_capability
         self._market_liveness = market_liveness
         self._program_leg_policy = program_leg_policy
+        self._arming_fact = arming_fact
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -564,6 +567,7 @@ class BotStartAdmission:
                     extended_hours=extended_hours_admission_fact(
                         use_rth=binding.use_rth, policy=policy, observed_at_ms=observed_at_ms
                     ),
+                    arming=self._arming_fact(binding, custody, observed_at_ms),
                 )
                 yield (
                     binding,

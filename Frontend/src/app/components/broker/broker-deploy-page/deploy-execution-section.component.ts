@@ -28,14 +28,20 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
   // Backend-authored reason this account's broker-contacting mode — Paper on
-  // a paper account, Shadow on a live one (ADR 0059 D2) — is unreachable for
-  // the selected strategy (#1702). `null` when it is admissible or no
-  // strategy is selected. Only one of the two is ever on offer at a time.
+  // a paper account, Shadow or Live on a live one (ADR 0059 D2, slice 7) — is
+  // unreachable for the selected strategy (#1702). `null` when it is
+  // admissible or no strategy is selected. Only one of the three is ever on
+  // offer at a time; the other two are `planned` cards this reason never
+  // reaches.
   readonly brokerModeUnavailableReason = input<string | null>(null);
+  // Which card is this account's own broker-contacting mode — the parent's
+  // `brokerMode()`. Told, not inferred: `availability` is a display state, and
+  // reading it as an identity would drop the blocked reason (and enable the
+  // radio) the moment the backend emitted this world's card as anything else.
+  readonly brokerMode = input.required<DeployExecutionMode['mode']>();
   // Backend-authored reason Dry Run is unreachable for the selected strategy
   // (#1703) — `null` unless the strategy has no registered runtime at all;
   // every other row stays Dry-Run-admissible regardless of validation state.
-  // Live stays governed by `availability` alone, not by either input.
   readonly dryRunUnavailableReason = input<string | null>(null);
   readonly selectedMode = input.required<DeployExecutionMode['mode']>();
   readonly actionPlanExplanation = input.required<string>();
@@ -76,9 +82,10 @@ export class DeployExecutionSectionComponent {
   }
 
   private strategyUnavailableReason(mode: DeployExecutionMode): string | null {
-    if (mode.mode === 'paper' || mode.mode === 'shadow') return this.brokerModeUnavailableReason();
     if (mode.mode === 'dry_run') return this.dryRunUnavailableReason();
-    return null;
+    // Only the card this world actually offers inherits the strategy's blocked
+    // reason; every other broker card is governed by `availability` alone.
+    return mode.mode === this.brokerMode() ? this.brokerModeUnavailableReason() : null;
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {

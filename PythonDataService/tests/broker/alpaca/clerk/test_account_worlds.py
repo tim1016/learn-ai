@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.account_authority import (
     SHADOW_EVIDENCE_ACCOUNT_PREFIX,
     AccountAuthorityIdentityError,
     authority_kind_for_account,
+    bind_real_alpaca_ports,
     bind_shadow_ports,
     custody_account_id_for,
     custody_account_ids_for,
@@ -31,6 +32,7 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort, compose_shadow_ports
 from app.broker.contract.capabilities import BrokerCapabilities
+from app.schemas.account_authority import world_admits_account_mode
 
 
 def test_shadow_prefix_is_reserved_and_distinct_from_sim() -> None:
@@ -177,3 +179,89 @@ def test_a_shadow_composition_binds_only_the_no_submit_trade_port(tmp_path: Path
             read=ports.read,
             trade=_LiveTradePort(),  # type: ignore[arg-type]
         )
+
+
+def test_each_world_admits_exactly_one_account_mode() -> None:
+    """ADR 0059 D1 / slice 7 R8 #13: one closed table, no world admits two modes."""
+    assert world_admits_account_mode("real_paper", "paper") is True
+    assert world_admits_account_mode("real_paper", "live") is False
+    assert world_admits_account_mode("shadow", "live") is True
+    assert world_admits_account_mode("shadow", "paper") is False
+    assert world_admits_account_mode("real_live", "live") is True
+    assert world_admits_account_mode("real_live", "paper") is False
+    assert world_admits_account_mode("real_live", None) is False
+
+
+def test_real_ports_bind_the_live_world_only_when_told_the_learned_mode() -> None:
+    live = bind_real_alpaca_ports(account_id="9LIVE0001", read=object(), trade=object(), account_mode="live")
+    paper = bind_real_alpaca_ports(account_id="PA-TEST", read=object(), trade=object())
+    assert live.authority_kind == "real_live"
+    assert paper.authority_kind == "real_paper"
+
+
+def test_a_live_instance_retains_its_bars_under_its_own_namespace() -> None:
+    assert (
+        evidence_account_id_for(mode="trade", strategy_instance_id="ema-live-1", custody_kind="real_live")
+        == "live-evidence:ema-live-1"
+    )
+    with pytest.raises(AccountAuthorityIdentityError):
+        require_real_account_id("live-evidence:ema-live-1")
+
+
+@pytest.mark.parametrize(
+    ("account_id", "world", "expected"),
+    [
+        ("PA-TEST", "real_paper", "real_paper"),
+        ("shadow:9LIVE0001", "shadow", "shadow"),
+        ("9LIVE0001", "real_live", "real_live"),
+        # The id's own namespace wins over a world label that cannot apply to it.
+        ("shadow:9LIVE0001", "real_live", "shadow"),
+        ("sim:ema-1", "real_paper", "synthetic"),
+    ],
+)
+def test_authority_kind_in_world_follows_the_world_never_a_default(account_id: str, world: str, expected: str) -> None:
+    from app.broker.alpaca.clerk.account_authority import authority_kind_in_world
+
+    assert authority_kind_in_world(account_id, world) == expected
+
+
+@pytest.mark.parametrize("world", ["real_paper", "shadow", "real_live"])
+def test_the_kind_derivation_and_the_admitted_mode_table_are_one_rule(world: str) -> None:
+    """One closed world-to-mode table, read by both, so the two cannot drift.
+
+    ``authority_kind_in_world`` computed its own ``"live" if world ==
+    "real_live"`` while ``_MODE_ADMITTED_BY_WORLD`` said ``shadow -> "live"``:
+    two maps of the same fact, disagreeing on one world.
+    """
+    from app.broker.alpaca.clerk.account_authority import authority_kind_in_world
+    from app.schemas.account_authority import admitted_account_mode_for_world
+
+    admitted = admitted_account_mode_for_world(world)
+    expected = "real_live" if admitted == "live" else "real_paper"
+
+    assert authority_kind_in_world("9LIVE0001", world) == expected
+    # A reserved namespace is still decided by its prefix in every world.
+    assert authority_kind_in_world("shadow:9LIVE0001", world) == "shadow"
+    assert authority_kind_in_world("sim:ema-1", world) == "synthetic"
+
+
+@pytest.mark.parametrize(("world", "expected"), [("real_live", "live-evidence:ema-live-1"), ("real_paper", "paper:ema-live-1")])
+def test_a_bindings_replay_ledger_is_read_where_the_primary_world_wrote_it(
+    monkeypatch: pytest.MonkeyPatch, world: str, expected: str
+) -> None:
+    """R13: the writer (`PrimaryAccountBindingAuthority.source_bars`) and the reader name one namespace."""
+    from app.services import run_replay_proof
+    from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+
+    monkeypatch.setattr(run_replay_proof, "primary_custody_world", lambda: world)
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-live-1",
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        sealed_account_id="9LIVE0001",
+        run_id="ema-live-1-run-1",
+        created_at_ms=1_757_000_000_000,
+    )
+    assert run_replay_proof.ledger_account_id_for(binding) == expected

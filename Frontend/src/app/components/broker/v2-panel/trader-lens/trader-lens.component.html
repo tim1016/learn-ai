@@ -30,7 +30,7 @@
   <aside class="trader-rail" aria-label="Trader summary">
     <app-trader-metrics [panel]="panel()" />
 
-    @if (isPaperExecution()) {
+    @if (isBrokerExecution()) {
       <app-trades-today-list
         [fills]="liveFillMarkers()"
         [fillCount]="panel().fills_today"
