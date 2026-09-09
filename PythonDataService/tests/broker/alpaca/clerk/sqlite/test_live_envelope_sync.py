@@ -209,15 +209,22 @@ async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
     assert repo.control_meta_snapshot().control_revision == revision
 
 
-async def test_a_standing_hold_still_publishes_the_observation(
+async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
     make_sync: Callable[..., LiveEnvelopeSync],
 ) -> None:
-    """The hold refuses the ENTER; the cash fact stays true while it stands."""
+    """Ruling R-A′: publish only when the reading is judgeable AND not breached.
+
+    Nothing may take new exposure while the account is over its loss limit,
+    so a published observation buys nothing — and publishing one *before*
+    ``raise_account_hold`` succeeds would leave the gate admitting ENTERs on
+    the cash bound alone if that raise threw.
+    """
     sync = make_sync(repo, _Read(unrealized=-5_000.0))
     assert await sync.tick() == "hold_raised"
+    assert sync.envelope.fresh_observation(NOON) is None
     assert await sync.tick() == "hold_stands"
-    assert sync.envelope.fresh_observation(NOON) is not None
+    assert sync.envelope.fresh_observation(NOON) is None
 
 
 async def test_an_unknown_fact_raises_nothing(

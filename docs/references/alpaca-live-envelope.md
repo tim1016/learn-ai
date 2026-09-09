@@ -90,7 +90,7 @@ notional cap, no symbol allowlist, no session restriction.
 
 | Code | Fires when | Scope |
 |---|---|---|
-| `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the day-P&L/`last_equity` fact was unjudgeable so the sync withdrew its last observation | ENTER refusal |
+| `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the sync withdrew its last observation because the reading was unjudgeable (day P&L / `last_equity`) **or breached** | ENTER refusal |
 | `LIVE_ENVELOPE_CASH_EXCEEDED` | The ENTER's notional plus reserved notional would exceed cash available | ENTER refusal |
 | `LIVE_ENVELOPE_DISAGREEMENT` | The sealed envelope (slice 6 arming) disagrees with the current `ALPACA_LIVE_*` environment values | ENTER refusal |
 | `LIVE_ENVELOPE_LOSS_HOLD` | The account-wide loss hold stands — checked earlier, by `require_admission` | ENTER refusal |
@@ -107,7 +107,13 @@ sync republishes a judgeable observation.
 the only writer that raises the hold, via `raise_account_hold(...,
 reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE)`; it never releases one it
 raised — a standing hold is left alone (`_hold_stands`) so its cause keeps
-naming the breach it was raised on, not a later tick's numbers.
+naming the breach it was raised on, not a later tick's numbers. The sync
+publishes an observation only when the reading can be judged AND is not
+breached (ruling R-A′): a breached reading withdraws exactly like an
+unjudgeable one, so a raise that failed cannot leave the gate admitting
+ENTERs on the cash bound alone. The cost is that the first ENTER after a
+clear waits for the next judgeable observation (≤ one 15 s tick, or the
+clear's own re-observation).
 `require_admission`
 (`PythonDataService/app/broker/alpaca/clerk/sqlite/uncertainty.py`) blocks
 `NEW_EXPOSURE` under this reason code exactly like any other account hold,
@@ -165,7 +171,7 @@ data-plane control mutation.
 [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md)
 Decision 4 (the risk envelope); owner rulings 2026-09-08 fix the reservation
 shape (a working *or filled* order reserves; a dead order reserves only its
-post-observation fills), the simulated-custody cash subtraction, unjudgeable-tick
-withdrawal on a missing `last_equity` or an external order, the sync as the
+post-observation fills), the simulated-custody cash subtraction, withdrawal on
+a missing `last_equity`, an external order or a breach (R-A′), the sync as the
 loss hold's sole raiser that never releases it, and every ENTER-time refusal
 staying transient at the runner.

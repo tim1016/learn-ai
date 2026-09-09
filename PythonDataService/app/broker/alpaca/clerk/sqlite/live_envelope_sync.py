@@ -154,12 +154,17 @@ class LiveEnvelopeSync:
     async def observe(self) -> EnvelopeReading:
         """One broker read → the day-P&L reading, and the gate's observation.
 
-        The observation is published only when the reading can be *judged*.
-        A missing ``last_equity`` (plan R3) or an external order observed
-        today (plan R5) leaves the account unjudgeable, and an unjudgeable
-        account must refuse every ENTER at once rather than let one be
-        bounded against a cash figure nothing can vouch for — so such a tick
-        withdraws whatever the last one published instead of republishing it.
+        The observation is published only when the reading can be *judged*
+        AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3)
+        or an external order observed today (plan R5) leaves the account
+        unjudgeable, and an unjudgeable account must refuse every ENTER at
+        once rather than let one be bounded against a cash figure nothing can
+        vouch for — so such a tick withdraws whatever the last one published
+        instead of republishing it. A *breached* reading withdraws for the
+        same reason: nothing may take new exposure while the account is over
+        its loss limit, so a fresh observation buys nothing, and publishing
+        one before ``raise_account_hold`` has succeeded would leave the gate
+        admitting on the cash bound alone if that raise failed.
 
         Raises ``BrokerError``: a failed read is not a verdict at all, so it
         never touches the gate and the last observation ages out on its own.
@@ -195,10 +200,10 @@ class LiveEnvelopeSync:
                 else loss_limit_usd(self.envelope.values, last_equity_usd=account.last_equity)
             ),
         )
-        if reading.breached is None:
-            self.envelope.withdraw()
-        else:
+        if reading.breached is False:
             self.envelope.publish(observation)
+        else:
+            self.envelope.withdraw()
         return reading
 
     async def tick(self) -> EnvelopeSyncAction:
