@@ -291,3 +291,22 @@ async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offere
         assert runtime.clerk.live_envelope is None
     finally:
         await runtime.close()
+
+
+async def test_a_second_enter_inside_one_sync_interval_is_refused_by_the_first_ones_unrecorded_fill(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+) -> None:
+    """The shadow book fills at submit; until the sweep records that fill the reservation must carry it."""
+    runtime, broker = shadow_runtime
+    broker.cash = 5_000.0
+    assert runtime.envelope_sync is not None
+    assert await runtime.envelope_sync.tick() == "observed"
+
+    first = await _enter(runtime, registered_running_bot, quantity=50)
+    assert first.state.value == "submitted", first.explanation
+
+    second = await _enter(runtime, registered_running_bot, quantity=50, decision_id="d2")
+    assert second.state.value == "rejected"
+    assert second.explanation.startswith("LIVE_ENVELOPE_CASH_EXCEEDED:")
+    assert "5000.00 USD reserved by working entries" in second.explanation, second.explanation

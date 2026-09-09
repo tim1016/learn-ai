@@ -370,8 +370,12 @@ def test_the_reservation_never_enters_the_hash_chain(
         ("new", [(4, T0 + 1)], T0, 1_000.0),  # filled after: cash cannot reflect it yet
         ("filled", [(10, T0 - 1)], T0, 0.0),  # done and observed
         ("filled", [(10, T0 + 1)], T0, 1_000.0),  # done, not yet observed
+        ("filled", [], T0, 1_000.0),  # filled at submit, fill not yet recorded (the shadow case): whole notional
+        ("filled", [(4, T0 - 1)], T0, 600.0),  # filled, 4 recorded before the observation, rest unrecorded: remainder
         ("canceled", [], T0, 0.0),  # dead, nothing to reserve
         ("canceled", [(3, T0 + 1)], T0, 300.0),  # dead with a fill after the observation
+        ("expired", [], T0, 0.0),  # dead, nothing recorded: nothing
+        ("rejected", [], T0, 0.0),  # dead: nothing
     ],
 )
 def test_reserved_cash_prices_only_what_the_observation_cannot_see(

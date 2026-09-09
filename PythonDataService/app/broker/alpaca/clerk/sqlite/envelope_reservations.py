@@ -2,8 +2,14 @@
 
 A reservation prices the part of an ENTER the latest cash observation
 cannot see: the unfilled remainder of a working order, plus any fill the
-Clerk recorded at or after the observation. A terminal order reserves only
-its post-observation fills.
+Clerk recorded at or after the observation. A filled order reserves
+everything not recorded before the observation — its later fills and its
+not-yet-recorded ones alike, because a filled order's quantity is known. A
+dead order (canceled, expired, rejected, replaced) reserves only its
+post-observation fills; its unrecorded remainder is cancelled quantity,
+never cash. The shadow book fills at submit while the sweep records the
+fill later, so a filled order with no fill row is the common case there,
+not a corner.
 
 Corrections (``event_kind='correction'``, and any ``is_correction`` fill) are
 ignored, and that is safe in one direction only. A correction restates the
@@ -26,7 +32,7 @@ import sqlite3
 
 from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 
-_TERMINAL_ORDER_STATES = ("filled", "canceled", "expired", "rejected", "replaced")
+_DEAD_ORDER_STATES = ("canceled", "expired", "rejected", "replaced")
 
 
 def append_envelope_reservation_row(
@@ -53,8 +59,9 @@ def append_envelope_reservation_row(
 def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float:
     """The reserved notional an observation taken at ``observed_at_ms`` misses.
 
-    Every reservation is summed; a terminal order with no post-observation
-    fill contributes zero on its own arithmetic. Nothing is pruned on
+    Every reservation is summed; a dead order with no post-observation fill
+    contributes zero on its own arithmetic; a filled order with no recorded
+    fill contributes its whole notional. Nothing is pruned on
     ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill without
     touching ``orders``, and the websocket's acknowledgement is skipped when
     the snapshot has not moved, so a terminal order's ``updated_at_ms`` can
@@ -75,7 +82,7 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
     ).fetchall()
     total = 0.0
     for row in rows:
-        dead = row["state"] in _TERMINAL_ORDER_STATES
+        dead = row["state"] in _DEAD_ORDER_STATES
         open_quantity = (
             row["filled_after"] if dead else max(0.0, row["quantity"] - row["filled_before"])
         )
