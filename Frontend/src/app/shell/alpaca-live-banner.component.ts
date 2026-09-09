@@ -28,6 +28,7 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
     .alpaca-banner.is-unknown { background: var(--bg-sunken); color: var(--text-secondary); border-style: dashed; }
     .alpaca-banner__kicker { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.68rem; }
     .alpaca-banner__armed { opacity: 0.85; }
+    .alpaca-banner__hold { font-weight: 700; color: var(--bear); }
   `],
   template: `
     @let v = verdict();
@@ -45,6 +46,9 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
         <span>{{ v.headline }}</span>
         @if (v.configured_mode === 'live') {
           <span class="alpaca-banner__armed">· {{ v.armed_instance_count }} armed</span>
+        }
+        @if (v.loss_hold === 'held') {
+          <span class="alpaca-banner__hold">· loss hold</span>
         }
         @if (v.clerk_refusal_reason_code && v.final_verdict === 'unknown') {
           <span>· {{ v.clerk_refusal_reason_code | receiptLabel }}</span>

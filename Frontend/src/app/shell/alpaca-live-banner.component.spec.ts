@@ -15,7 +15,9 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
     clerk_refusal_reason_code: null,
     armed_instance_count: 0,
     envelope_state: 'not_applicable',
+    envelope_agreement: 'unsealed',
     shadow_state: 'not_applicable',
+    loss_hold: 'clear',
     final_verdict: 'paper',
     headline: 'Paper account PA9 — no real money at risk',
     detail: 'ALPACA_MODE=paper.',
@@ -60,6 +62,38 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('0 armed');
     expect(status.textContent).toContain('real money');
+  });
+
+  it('shows the loss hold on a live account when held', async () => {
+    await renderWith(
+      verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        envelope_state: 'configured_unsealed',
+        shadow_state: 'none',
+        final_verdict: 'live-unarmed',
+        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
+        detail: 'Every order path refuses.',
+        loss_hold: 'held',
+      }),
+    );
+    expect(screen.getByRole('status').textContent).toContain('loss hold');
+  });
+
+  it('shows nothing extra on a live account when the loss hold is clear', async () => {
+    await renderWith(
+      verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        envelope_state: 'configured_unsealed',
+        shadow_state: 'none',
+        final_verdict: 'live-unarmed',
+        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
+        detail: 'Every order path refuses.',
+        loss_hold: 'clear',
+      }),
+    );
+    expect(screen.getByRole('status').textContent).not.toContain('loss hold');
   });
 
   it('renders unknown as a warning that names the disagreement code', async () => {
