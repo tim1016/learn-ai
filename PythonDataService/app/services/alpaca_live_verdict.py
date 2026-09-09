@@ -20,6 +20,7 @@ from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.alpaca_live_verdict import (
     AlpacaLiveVerdict,
     ClerkAuthority,
+    EnvelopeAgreement,
     LossHoldState,
     ModeAgreement,
     ShadowState,
@@ -176,10 +177,13 @@ def alpaca_live_verdict(
     # runtime's custody namespace for the same account, not part of its number,
     # and it reads as a different account in a sentence beginning "LIVE account".
     named_account_id = account_id.removeprefix(SHADOW_ACCOUNT_PREFIX) if account_id is not None else account_id
-    envelope_agreement = (
+    # ``not_applicable``, not ``unsealed``, when no envelope object exists: a
+    # live boot the composition refused ``LIVE_ENVELOPE_MISSING`` has no
+    # envelope at all, and ``unsealed`` reads as "configured, not yet sealed".
+    envelope_agreement: EnvelopeAgreement = (
         runtime.clerk.live_envelope.agreement
         if runtime is not None and runtime.clerk is not None and runtime.clerk.live_envelope is not None
-        else "unsealed"
+        else "not_applicable"
     )
     observed_loss_hold: LossHoldState = loss_hold if loss_hold is not None else "not_applicable"
     held = observed_loss_hold == "held"

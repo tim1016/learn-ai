@@ -197,11 +197,19 @@ def test_paper_reports_the_envelope_as_not_applicable() -> None:
     assert (verdict.envelope_agreement, verdict.loss_hold) == ("not_applicable", "not_applicable")
 
 
-def test_an_agreed_live_account_is_unsealed_until_arming_and_shows_the_hold() -> None:
+def test_a_live_account_with_no_envelope_installed_says_not_applicable_and_shows_the_hold() -> None:
+    """``_shadow_runtime()`` carries no clerk, so it carries no envelope object.
+
+    That is exactly the shape of a live boot the composition refused
+    ``LIVE_ENVELOPE_MISSING``, and it must not read as ``unsealed`` --
+    "configured, not yet sealed" is a different and far less alarming thing
+    than "no envelope at all". The composed ASGI test pins ``unsealed`` for
+    the case where a real gate *is* installed.
+    """
     clear = alpaca_live_verdict(
         settings=_live(), runtime=_shadow_runtime(), now_ms=_NOW, shadow_state="none", loss_hold="clear"
     )
-    assert (clear.envelope_agreement, clear.loss_hold) == ("unsealed", "clear")
+    assert (clear.envelope_agreement, clear.loss_hold) == ("not_applicable", "clear")
 
     held = alpaca_live_verdict(
         settings=_live(), runtime=_shadow_runtime(), now_ms=_NOW, shadow_state="none", loss_hold="held"

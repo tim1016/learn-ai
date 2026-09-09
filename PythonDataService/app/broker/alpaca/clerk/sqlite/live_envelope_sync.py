@@ -151,6 +151,11 @@ class LiveEnvelopeSync:
         self._last_action: EnvelopeSyncAction | None = None
         self._task: asyncio.Task[None] | None = None
         self._stopped = False
+        # The broker account the last successful read described. Under shadow
+        # that is the LIVE account, while ``self._repo.account_id`` is the
+        # ``shadow:`` custody namespace -- and every figure on a log line here
+        # is the former's. ``None`` until the first read returns.
+        self._observed_account_id: str | None = None
 
     async def observe(self) -> EnvelopeReading:
         """One broker read → the day-P&L reading, and the gate's observation.
@@ -173,6 +178,7 @@ class LiveEnvelopeSync:
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
+        self._observed_account_id = account.account_id
         observed_at_ms = self._repo.clock()
         # Under simulated custody the broker's cash never moved, so the
         # envelope subtracts what the Clerk's own fills would have spent
@@ -267,7 +273,13 @@ class LiveEnvelopeSync:
                 _ACTION_MESSAGES[action],
                 extra={
                     "action": f"live_envelope_{action}",
+                    # Both, always: the custody account the hold is written
+                    # against, and the broker account the cash, equity and
+                    # positions were read from. Under shadow they differ, and
+                    # correlating a figure to the wrong ledger is a wasted
+                    # incident.
                     "account_id": self._repo.account_id,
+                    "observed_account_id": self._observed_account_id,
                     **detail,
                 },
             )

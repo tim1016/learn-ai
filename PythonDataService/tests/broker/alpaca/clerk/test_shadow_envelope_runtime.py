@@ -216,6 +216,35 @@ async def test_after_one_tick_the_cash_bound_admits_what_cash_covers_and_refuses
     assert admitted.state.value == "submitted", admitted.explanation
 
 
+async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
+    registered_running_bot: RetainedSourceBar,
+) -> None:
+    """R3 and R5, joined: unknown at the sync ⇒ UNOBSERVED at the ENTER seam.
+
+    Both halves are pinned on their own -- the sync answers ``unknown`` and
+    withdraws, and an unobserved gate refuses -- but the chain between them is
+    the gate's contract, and a regression that broke the join would leave both
+    halves green. This drives one composed runtime through the whole of it.
+    """
+    runtime, broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    # A judgeable tick first, so the refusal below cannot pass merely because
+    # nothing was ever observed.
+    assert await runtime.envelope_sync.tick() == "observed"
+    admitted = await _enter(runtime, registered_running_bot, quantity=1)
+    assert admitted.state.value == "submitted", admitted.explanation
+
+    # No previous-close equity: there is no loss limit to judge against, so
+    # the account is unjudgeable and the observation is withdrawn (plan R3).
+    broker.last_equity_known = False
+    assert await runtime.envelope_sync.tick() == "unknown"
+
+    refused = await _enter(runtime, registered_running_bot, quantity=1, decision_id="d2")
+    assert refused.state.value == "rejected"
+    assert refused.explanation.startswith("LIVE_ENVELOPE_UNOBSERVED:"), refused.explanation
+
+
 async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offered(
     tmp_path: Path,
 ) -> None:
