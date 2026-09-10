@@ -21,6 +21,7 @@ from app.broker.ibkr.client import (
     set_client,
 )
 from app.broker_configuration.errors import BrokerConfigurationError
+from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
 from app.config import settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
@@ -131,10 +132,8 @@ async def _install_alpaca_binding() -> BoundWorker | None:
         refuse_active_alpaca_binding,
         set_active_alpaca_binding,
     )
-    from app.broker_configuration.worker_binding import BoundWorker
     from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
     from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
-    from app.broker_configuration.worker_binding import resolve_worker_binding
 
     set_active_clerk_runtime(None)
     # The switch preflight's evidence. Without it the fail-closed default
@@ -219,7 +218,6 @@ async def lifespan(app: FastAPI):
         select_active_clerk_runtime,
         set_active_clerk_runtime,
     )
-
     from app.broker_configuration.worker_binding import acknowledge_worker_binding
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None

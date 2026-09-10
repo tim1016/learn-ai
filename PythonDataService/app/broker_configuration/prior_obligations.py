@@ -140,6 +140,13 @@ class ClerkPriorAccountObligations:
         live_state_root = (
             self._live_state_root if self._live_state_root is not None else live_artifacts_root()
         )
+        # Only the *live* account's own custody database is read. A shadow
+        # rehearsal has a second one at ``accounts/alpaca/shadow:<account>/``
+        # behind its own ``ShadowActivationStore``, and it is deliberately not
+        # consulted: that world's trade port is ``NoSubmitAlpacaTradePort``, so
+        # nothing it holds is exposure at the broker that a switch could strand.
+        # A rehearsal bot still attached to the account is caught anyway, by
+        # ``custody_account_ids_for`` on the binding side below.
         accounts_root, account_dir = account_paths(clerk_dir, account_id)
         # ``confined_account_file`` rather than ``account_dir / DB_FILENAME``:
         # a legitimate account directory can still hold a symlink named
@@ -251,15 +258,30 @@ def _custody_facts(db_path: Path) -> tuple[str, ...]:
 
     facts: list[str] = []
     if positions:
-        facts.append(_quantified(len(positions), "open position", names=sorted(positions)))
+        facts.append(
+            _quantified(len(positions), "open position", "open positions", names=sorted(positions))
+        )
     if operations:
-        facts.append(_quantified(len(operations), "unresolved order"))
+        facts.append(_quantified(len(operations), "unresolved order", "unresolved orders"))
     if manual_order_open:
         facts.append("an unfinished manual order")
     if live_custody:
-        facts.append(_quantified(len(live_custody), "bot holding live custody", names=live_custody))
+        facts.append(
+            _quantified(
+                len(live_custody),
+                "bot holding live custody",
+                "bots holding live custody",
+                names=live_custody,
+            )
+        )
     if unreviewed:
-        facts.append(_quantified(len(unreviewed), "unreviewed order placed outside the bots"))
+        facts.append(
+            _quantified(
+                len(unreviewed),
+                "unreviewed order placed outside the bots",
+                "unreviewed orders placed outside the bots",
+            )
+        )
     return tuple(facts)
 
 
@@ -284,7 +306,7 @@ def _binding_facts(account_id: str, *, live_state_root: Path) -> tuple[str, ...]
         _quantified(
             len(bound),
             "bot still bound to it",
-            plural="bots still bound to it",
+            "bots still bound to it",
             names=[binding.strategy_instance_id for binding in bound],
         ),
     )
@@ -330,11 +352,14 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
     return bound
 
 
-def _quantified(
-    count: int, singular: str, *, plural: str | None = None, names: Sequence[str] = ()
-) -> str:
-    """One blocking fact, phrased to sit inside ``"account X still has ..."``."""
-    noun = singular if count == 1 else (plural or f"{singular}s")
+def _quantified(count: int, singular: str, plural: str, *, names: Sequence[str] = ()) -> str:
+    """One blocking fact, phrased to sit inside ``"account X still has ..."``.
+
+    Both forms are spelled out rather than derived. Every noun here is a phrase
+    ("bot holding live custody"), and an ``f"{singular}s"`` rule pluralises the
+    wrong word in each of them.
+    """
+    noun = singular if count == 1 else plural
     if not names:
         return f"{count} {noun}"
     listed = sorted(names)

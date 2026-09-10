@@ -20,12 +20,15 @@ from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord, Activati
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
+from app.broker_configuration.worker_binding import PriorAccountObligations
 from app.services.bot_binding_repository import (
     STRATEGY_INSTANCE_FILENAME,
     BrokerBotBinding,
@@ -198,6 +201,49 @@ def _fill_an_enter(repository: ClerkSqliteRepository) -> None:
     assert outcome == "appended"
 
 
+def _accept_a_manual_order(repository: ClerkSqliteRepository) -> None:
+    """One operator ticket leg, finalized locally and never settled."""
+    accept_manual_order(
+        repository,
+        account_id=ACCOUNT_ID,
+        operator_id="operator-1",
+        ticket_id="ticket-1",
+        leg_id="leg-1",
+        leg=BrokerOrderLeg(symbol=SYMBOL, side="buy", quantity=1),
+    )
+
+
+def _observe_a_foreign_order(repository: ClerkSqliteRepository) -> None:
+    """One order the Clerk did not place, and nobody has reviewed."""
+    observe_external_order(
+        repository,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="external-order-1",
+            client_order_id="alpaca-console:external-1",
+            symbol="MSFT",
+            asset_class="us_equity",
+            side="buy",
+            order_type="market",
+            time_in_force="day",
+            quantity=3.0,
+            filled_quantity=3.0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=50.0,
+            status="filled",
+            submitted_at_ms=NOW_MS,
+            created_at_ms=NOW_MS,
+            updated_at_ms=NOW_MS,
+            filled_at_ms=NOW_MS,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            events=[],
+            observed_at_ms=NOW_MS,
+        ),
+    )
+
+
 def _record_binding(
     live_state_root: Path,
     *,
@@ -224,6 +270,13 @@ def _record_binding(
 
 
 # ── Never activated ───────────────────────────────────────────────────────────
+
+
+def test_the_probe_satisfies_the_preflight_protocol(
+    probe: ClerkPriorAccountObligations,
+) -> None:
+    """``resolve_worker_binding`` accepts it wherever ``UnprovableObligations`` goes."""
+    assert isinstance(probe, PriorAccountObligations)
 
 
 async def test_observe_never_activated_account_is_clear(
@@ -375,6 +428,32 @@ async def test_observe_account_with_a_running_bot_is_not_clear(
     assert "live custody" in observed.describe()
 
 
+async def test_observe_account_with_an_unfinished_manual_order_is_not_clear(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path
+) -> None:
+    """An operator ticket belongs to no bot, so only the account-wide read sees it."""
+    _activate(clerk_dir, seed=_accept_a_manual_order)
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.readable
+    assert not observed.is_clear
+    assert "unfinished manual order" in observed.describe()
+
+
+async def test_observe_account_with_an_unreviewed_external_order_is_not_clear(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path
+) -> None:
+    """Activity the Clerk did not originate is still unfinished business here."""
+    _activate(clerk_dir, seed=_observe_a_foreign_order)
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.readable
+    assert not observed.is_clear
+    assert "outside the bots" in observed.describe()
+
+
 # ── Sealed bot bindings, on their own volume ──────────────────────────────────
 
 
@@ -405,6 +484,21 @@ async def test_observe_account_with_a_shadow_sealed_binding_is_not_clear(
     observed = await probe.observe(ACCOUNT_ID)
 
     assert not observed.is_clear
+
+
+async def test_observe_describes_several_bindings_in_readable_prose(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
+) -> None:
+    """The refusal is operator copy: every noun here is a phrase, not a word + "s"."""
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID, strategy_instance_id="bot-a")
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID, strategy_instance_id="bot-b")
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.describe() == (
+        f"account {ACCOUNT_ID} still has 2 bots still bound to it (bot-a, bot-b)"
+    )
 
 
 async def test_observe_ignores_a_binding_sealed_to_another_account(
