@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.account_authority import require_real_account_id
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INSTANCE_UNSEALED,
     LIVE_ARMING_NOT_ARMED,
+    LIVE_ARMING_REVOKED,
     LedgerRecord,
     LiveArmingInvalid,
     LiveArmingRecord,
@@ -102,11 +103,22 @@ class LiveArmingLedger:
             self.append(record)
             return record
         with advisory_file_lock(self._path):
-            for existing in self.records_for(record.strategy_instance_id):
+            rows = self.records_for(record.strategy_instance_id)
+            for existing in rows:
                 if (
                     isinstance(existing, LiveArmingRecord)
                     and existing.originating_plan_id == record.originating_plan_id
                 ):
+                    if any(
+                        isinstance(later, LiveDisarmRecord)
+                        and later.revokes_record_sha256 == existing.record_sha256
+                        for later in rows
+                    ):
+                        raise LiveArmingRefused(
+                            LIVE_ARMING_REVOKED,
+                            f"{record.strategy_instance_id} was disarmed after this plan was applied; "
+                            "create and review a new plan",
+                        )
                     return existing
             self._append_locked(record)
         return record

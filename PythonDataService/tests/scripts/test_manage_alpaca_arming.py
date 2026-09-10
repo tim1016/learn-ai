@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_INSTANCE_UNSEALED
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME, ActivationStore
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
@@ -396,10 +397,10 @@ def test_a_plan_file_that_cannot_be_written_is_one_json_refusal_at_exit_one(
     assert LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records() == ()
 
 
-def test_status_for_an_instance_the_ledger_has_never_seen_is_unarmed_at_exit_zero(
+def test_status_for_an_instance_without_a_binding_refuses_instead_of_using_another_account(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Not knowing an instance is an answer, not a refusal."""
+    """A named instance cannot inherit the account-wide Shadow activation."""
     artifacts_root, live_state_root = roots
     arming_ready(artifacts_root, live_state_root)
     _arm(roots, capsys)
@@ -410,17 +411,12 @@ def test_status_for_an_instance_the_ledger_has_never_seen_is_unarmed_at_exit_zer
              "--now-ms", str(ARMED_AT_MS)],
             settings=SETTINGS,
         )
-        == 0
+        == 2
     )
 
-    report = _last_object(capsys)
-    assert report["armed_instance_count"] == 0
-    # The account is still sealed by the arming the other instance holds.
-    assert report["envelope_state"] == "sealed"
-    (instance,) = report["instances"]
-    assert instance["strategy_instance_id"] == "never-seen"
-    assert (instance["state"], instance["reason_code"]) == ("unarmed", None)
-    assert instance["armed_at_ms"] is None
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "never-seen has no sealed alpaca binding" in refusal["detail"]
 
 
 def test_a_confirmation_token_that_is_not_ascii_refuses_at_exit_two(

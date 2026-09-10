@@ -68,7 +68,6 @@ from app.broker.alpaca.config import (
     get_alpaca_settings,
 )
 from app.broker.ibkr.config import live_artifacts_root
-from app.services.bot_binding_repository import live_state_binding_repository
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
@@ -285,20 +284,14 @@ def _status(
     args: argparse.Namespace, *, artifacts_root: Path, live_state_root: Path, settings: AlpacaSettings
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    binding = (
-        None
-        if args.strategy_instance_id is None
-        else live_state_binding_repository(live_state_root).read(args.strategy_instance_id)
-    )
-    live_account_id = (
-        live_account_id_for(artifacts_root)
-        if binding is None
-        else live_account_id_for_instance(
+    if args.strategy_instance_id is None:
+        live_account_id = live_account_id_for(artifacts_root)
+    else:
+        live_account_id = live_account_id_for_instance(
             strategy_instance_id=args.strategy_instance_id,
             artifacts_root=artifacts_root,
             live_state_root=live_state_root,
         )
-    )
     arming = account_arming(
         live_account_id=live_account_id,
         artifacts_root=artifacts_root,

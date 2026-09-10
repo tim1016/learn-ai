@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INSTANCE_UNSEALED,
     LIVE_ARMING_NOT_ARMED,
     LIVE_ARMING_PLAN_EXPIRED,
+    LIVE_ARMING_REVOKED,
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
     LIVE_ENVELOPE_MISSING,
@@ -298,6 +299,51 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
     )
     assert retry == armed
     assert len(LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records_for("live-successor")) == 1
+
+    disarm(
+        strategy_instance_id="live-successor",
+        artifacts_root=artifacts_root,
+        clock=_Clock(ARMED_AT_MS + 2),
+    )
+    with pytest.raises(LiveArmingRefused) as revoked:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + 3),
+        )
+    assert revoked.value.reason_code == LIVE_ARMING_REVOKED
+
+    renewal = plan_arming(
+        strategy_instance_id="live-successor",
+        predecessor_strategy_instance_id="rehearsal",
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 4),
+    )
+    renewed = apply_arming(
+        plan=renewal,
+        confirmation_token=renewal.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 4),
+    )
+    assert renewed.originating_plan_id == renewal.plan_id
+
+    with pytest.raises(LiveArmingRefused) as still_revoked:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + 5),
+        )
+    assert still_revoked.value.reason_code == LIVE_ARMING_REVOKED
 
 
 def test_a_shadow_rehearsal_with_a_different_quantity_cannot_promote(
