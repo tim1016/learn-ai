@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
@@ -131,6 +131,15 @@ class LiveArmingRefused(ValueError):
 
 
 @dataclass(frozen=True)
+class RehearsalPredecessor:
+    """The immutable Shadow evidence reviewed for a new Live instance."""
+
+    strategy_instance_id: str
+    seal_hash: str
+    receipt_sha256: str
+
+
+@dataclass(frozen=True)
 class LiveArmingRecord:
     """One instance armed on one live account, under one sealed envelope (R1);
     ``shadow_receipt_sha256`` is null when the instance holds no receipt."""
@@ -147,6 +156,8 @@ class LiveArmingRecord:
     armed_at_ms: int
     max_sessions: int
     record_sha256: str
+    predecessor: RehearsalPredecessor | None = None
+    originating_plan_id: str | None = None
 
     @classmethod
     def create(
@@ -160,10 +171,12 @@ class LiveArmingRecord:
         envelope: LiveEnvelopeValues,
         armed_at_ms: int,
         max_sessions: int,
+        predecessor: RehearsalPredecessor | None = None,
+        originating_plan_id: str | None = None,
     ) -> LiveArmingRecord:
         unsigned: dict[str, Any] = {
             "kind": "armed",
-            "schema_version": 1,
+            "schema_version": 2 if predecessor is not None else 1,
             "live_account_id": live_account_id,
             "strategy_instance_id": strategy_instance_id,
             "seal_hash": seal_hash,
@@ -174,13 +187,45 @@ class LiveArmingRecord:
             "armed_at_ms": armed_at_ms,
             "max_sessions": max_sessions,
         }
-        record = cls(**unsigned, record_sha256=canonical_sha256(unsigned))
+        if predecessor is not None:
+            unsigned["predecessor"] = asdict(predecessor)
+            unsigned["originating_plan_id"] = originating_plan_id
+        record = cls(
+            **{
+                **unsigned,
+                "predecessor": predecessor,
+                "originating_plan_id": originating_plan_id,
+            },
+            record_sha256=canonical_sha256(unsigned),
+        )
         _validate_armed(record)
         return record
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> LiveArmingRecord:
-        return _verified(cls, payload, _validate_armed)
+        try:
+            raw_predecessor = payload.get("predecessor")
+            predecessor = (
+                None
+                if raw_predecessor is None
+                else RehearsalPredecessor(**raw_predecessor)
+            )
+            record = cls(**{**payload, "predecessor": predecessor})
+            _validate_armed(record)
+            unsigned = asdict(record)
+            del unsigned["record_sha256"]
+            # Version 1 rows predate predecessor evidence. They remain valid
+            # exactly as sealed instead of being rewritten during a read.
+            if record.schema_version == 1:
+                del unsigned["predecessor"]
+                del unsigned["originating_plan_id"]
+            if record.record_sha256 != canonical_sha256(unsigned):
+                raise LiveArmingInvalid("live arming record digest does not verify")
+        except LiveArmingInvalid:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LiveArmingInvalid("live arming record has an invalid shape") from exc
+        return record
 
     @property
     def envelope(self) -> LiveEnvelopeValues:
@@ -263,9 +308,11 @@ def _is_int(value: object) -> bool:
     return type(value) is int
 
 
-def _require_kind(kind: str, expected: str, schema_version: int) -> None:
+def _require_kind(
+    kind: str, expected: str, schema_version: int, *, allowed_versions: tuple[int, ...]
+) -> None:
     """A row of the wrong shape is named as such, not as a bad number."""
-    if kind != expected or not _is_int(schema_version) or schema_version != 1:
+    if kind != expected or not _is_int(schema_version) or schema_version not in allowed_versions:
         raise LiveArmingInvalid("live arming record has an invalid kind or schema version")
 
 
@@ -276,7 +323,7 @@ def _require_hashes(*values: str) -> None:
 
 def _validate_armed(record: LiveArmingRecord) -> None:
     _require_real(record.live_account_id)
-    _require_kind(record.kind, "armed", record.schema_version)
+    _require_kind(record.kind, "armed", record.schema_version, allowed_versions=(1, 2))
     if (
         not record.strategy_instance_id
         or not _is_int(record.max_sessions)
@@ -309,11 +356,28 @@ def _validate_armed(record: LiveArmingRecord) -> None:
     # said 20. The envelope hash cannot catch that: both fields are inside it.
     if record.max_sessions != sealed.arming_max_sessions:
         raise LiveArmingInvalid("live arming record's max_sessions disagrees with the sealed envelope")
+    if record.schema_version == 1 and record.predecessor is not None:
+        raise LiveArmingInvalid("version 1 live arming records cannot name a predecessor")
+    if record.schema_version == 2 and record.predecessor is None:
+        raise LiveArmingInvalid(
+            "live arming record has an invalid kind or schema version: "
+            "version 2 live arming records must name a predecessor"
+        )
+    if record.predecessor is not None:
+        if not record.predecessor.strategy_instance_id:
+            raise LiveArmingInvalid("live arming record predecessor has no strategy instance")
+        _require_hashes(record.predecessor.seal_hash, record.predecessor.receipt_sha256)
+    if record.schema_version == 1 and record.originating_plan_id is not None:
+        raise LiveArmingInvalid("version 1 live arming records cannot name an originating plan")
+    if record.schema_version == 2:
+        if record.originating_plan_id is None:
+            raise LiveArmingInvalid("version 2 live arming records must name an originating plan")
+        _require_hashes(record.originating_plan_id)
 
 
 def _validate_disarmed(record: LiveDisarmRecord) -> None:
     _require_real(record.live_account_id)
-    _require_kind(record.kind, "disarmed", record.schema_version)
+    _require_kind(record.kind, "disarmed", record.schema_version, allowed_versions=(1,))
     if (
         not record.strategy_instance_id
         or not _is_int(record.disarmed_at_ms)
@@ -481,6 +545,7 @@ __all__ = [
     "LiveArmingRecord",
     "LiveArmingRefused",
     "LiveDisarmRecord",
+    "RehearsalPredecessor",
     "arming_status",
     "instance_ids",
     "latest_arming",

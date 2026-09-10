@@ -197,6 +197,45 @@ def test_an_unknown_binding_is_an_evidence_error(
     assert TWIN in _last_object(capsys)["error"]
 
 
+def test_the_paper_twin_binding_can_live_under_a_separate_runner_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The Paper Clerk root and runner root are independently configurable.
+
+    A Paper host must not share the Shadow process's writable ``live_state``
+    just so a read-only comparison can find its immutable binding.
+    """
+    shadow_runner = tmp_path / "shadow-runner"
+    paper_runner = tmp_path / "paper-runner"
+    _record_binding(shadow_runner, SID)
+    _record_binding(paper_runner, TWIN)
+
+    argv = [
+        "--live-account-id",
+        LIVE_ACCOUNT,
+        "--artifacts-root",
+        str(tmp_path),
+        "--live-state-root",
+        str(shadow_runner),
+        "sessions",
+        "--strategy-instance-id",
+        SID,
+        "--twin-account-id",
+        "PA-TEST",
+        "--twin-strategy-instance-id",
+        TWIN,
+        "--twin-live-state-root",
+        str(paper_runner),
+        "--required-sessions",
+        "2",
+    ]
+
+    assert main(argv, evaluate=lambda **_kw: _evaluation(2, 2)) == 0
+    report = _last_object(capsys)
+    assert report["strategy_instance_id"] == SID
+    assert report["twin_strategy_instance_id"] == TWIN
+
+
 @pytest.mark.parametrize("operation", ["sessions", "receipt"])
 @pytest.mark.parametrize(
     ("flag", "value", "bound"),

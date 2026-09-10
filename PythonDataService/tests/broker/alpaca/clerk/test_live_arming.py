@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
+    RehearsalPredecessor,
     arming_status,
     sessions_used,
 )
@@ -97,6 +98,35 @@ def test_the_record_seals_every_field_and_round_trips() -> None:
     assert record.envelope_sha256 == ENVELOPE.sha
     assert record.envelope == ENVELOPE
     assert LiveArmingRecord.from_payload(asdict(record)) == record
+
+
+def test_a_successor_record_seals_its_shadow_predecessor_and_round_trips() -> None:
+    predecessor = RehearsalPredecessor(
+        strategy_instance_id="ema-shadow-rehearsal",
+        seal_hash="d" * 64,
+        receipt_sha256="e" * 64,
+    )
+    record = LiveArmingRecord.create(
+        live_account_id=ACCOUNT,
+        strategy_instance_id="ema-live-successor",
+        seal_hash=SEAL,
+        configured_signal_hash=SIGNAL,
+        shadow_receipt_sha256=None,
+        envelope=ENVELOPE,
+        armed_at_ms=FRIDAY_MS,
+        max_sessions=ENVELOPE.arming_max_sessions,
+        predecessor=predecessor,
+        originating_plan_id="f" * 64,
+    )
+
+    assert record.schema_version == 2
+    assert record.predecessor == predecessor
+    assert LiveArmingRecord.from_payload(asdict(record)) == record
+
+    with pytest.raises(LiveArmingInvalid, match="digest does not verify"):
+        LiveArmingRecord.from_payload(
+            {**asdict(record), "predecessor": {**asdict(predecessor), "seal_hash": "f" * 64}}
+        )
 
 
 @pytest.mark.parametrize(

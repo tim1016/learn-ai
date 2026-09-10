@@ -8,11 +8,10 @@ path. ``disarm`` appends a revocation; it is the closed direction and takes no
 plan.
 
 The live account is never supplied on the command line: it is observed from the
-shadow activation fence under ``--artifacts-root`` (and, for ``disarm`` alone
-when that fence is gone or ambiguous, from the arming ledger that already
-names the instance), so an arming can only name an account a shadow gate was
-actually run against. ``plan``, ``apply`` and ``status`` still observe only
-the fence.
+instance's sealed binding. A Shadow-bound instance must still prove its shadow
+activation fence; a Live-bound instance must prove its verified cutover
+activation. ``disarm`` alone may instead read the arming ledger that already
+names the instance.
 
 Exit codes: ``0`` the command answered; ``1`` the command cannot be run as asked
 -- a plan file that is not one, a ledger row that will not verify, or a usage
@@ -56,6 +55,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     configured_envelope,
     disarm,
     live_account_id_for,
+    live_account_id_for_instance,
     plan_arming,
 )
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
@@ -126,6 +126,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "plan", help="Re-observe every input and print a read-only arming plan.", exit_on_error=False
     )
     planner.add_argument("--strategy-instance-id", required=True)
+    planner.add_argument(
+        "--predecessor-strategy-instance-id",
+        help="the sealed Shadow rehearsal instance this new Live instance succeeds",
+    )
     planner.add_argument("--confirmation-ttl-ms", type=_confirmation_ttl_ms, default=DEFAULT_CONFIRMATION_TTL_MS)
     planner.add_argument("--plan-out", type=Path)
 
@@ -253,8 +257,8 @@ def _read_plan(path: Path) -> LiveArmingPlan:
     payload.pop("submission_admitted", None)
     payload.pop("note", None)
     try:
-        return LiveArmingPlan(**payload)
-    except TypeError as exc:
+        return LiveArmingPlan.from_payload(payload)
+    except (TypeError, ValueError) as exc:
         raise ArmingOperatorRefusal(f"arming plan file is not an arming plan: {exc}") from exc
 
 
@@ -271,6 +275,8 @@ def _instance_payload(status: ArmingStatus, *, strategy_instance_id: str) -> dic
         "seal_hash": None if record is None else record.seal_hash,
         "envelope_sha256": None if record is None else record.envelope_sha256,
         "record_sha256": None if record is None else record.record_sha256,
+        "predecessor": None if record is None or record.predecessor is None else asdict(record.predecessor),
+        "originating_plan_id": None if record is None else record.originating_plan_id,
     }
 
 
@@ -278,7 +284,14 @@ def _status(
     args: argparse.Namespace, *, artifacts_root: Path, live_state_root: Path, settings: AlpacaSettings
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    live_account_id = live_account_id_for(artifacts_root)
+    if args.strategy_instance_id is None:
+        live_account_id = live_account_id_for(artifacts_root)
+    else:
+        live_account_id = live_account_id_for_instance(
+            strategy_instance_id=args.strategy_instance_id,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+        )
     arming = account_arming(
         live_account_id=live_account_id,
         artifacts_root=artifacts_root,
@@ -315,6 +328,7 @@ def _plan(
         live_state_root=live_state_root,
         settings=settings,
         confirmation_ttl_ms=args.confirmation_ttl_ms,
+        predecessor_strategy_instance_id=args.predecessor_strategy_instance_id,
         clock=_clock(args.now_ms),
     )
     if args.plan_out is not None:

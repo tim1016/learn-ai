@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_INSTANCE_UNSEALED,
     LIVE_ARMING_NOT_ARMED,
     LIVE_ARMING_PLAN_EXPIRED,
+    LIVE_ARMING_REVOKED,
     LIVE_ARMING_TOKEN_INVALID,
     LIVE_ARMING_TTL_INVALID,
     LIVE_ENVELOPE_MISSING,
@@ -30,6 +31,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     disarm,
     instance_seal_hashes,
     live_account_id_for,
+    live_account_id_for_instance,
     observe_arming_inputs,
     plan_arming,
 )
@@ -206,6 +208,173 @@ def test_two_shadowed_accounts_refuse_rather_than_choosing_one(roots: tuple[Path
 
     assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
     assert "more than one shadowed live account" in str(caught.value)
+
+
+def test_a_graduated_live_binding_arms_without_a_shadow_activation_record(
+    roots: tuple[Path, Path],
+) -> None:
+    """A Live successor proves its own cutover instead of discovering any Shadow fence."""
+    artifacts_root, live_state_root = roots
+    from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
+        test_a_never_legacy_live_account_graduates_end_to_end,
+    )
+
+    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id="graduated",
+        sealed_account_id=LIVE_ACCT,
+    )
+
+    assert ShadowActivationStore(artifacts_root).account_ids() == ()
+    assert (
+        live_account_id_for_instance(
+            strategy_instance_id="graduated",
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+        )
+        == LIVE_ACCT
+    )
+    inputs = observe_arming_inputs(
+        strategy_instance_id="graduated",
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+    )
+    assert inputs.live_account_id == LIVE_ACCT
+    assert inputs.shadow_receipt_sha256 is None
+
+
+def test_a_live_successor_seals_its_matching_shadow_rehearsal(
+    roots: tuple[Path, Path],
+) -> None:
+    """A Live plan carries the particular verified Shadow receipt it succeeds."""
+    artifacts_root, live_state_root = roots
+    rehearsal = arming_ready(artifacts_root, live_state_root, strategy_instance_id="rehearsal")
+    from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
+        test_a_never_legacy_live_account_graduates_end_to_end,
+    )
+
+    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id="live-successor",
+        sealed_account_id=LIVE_ACCT,
+    )
+
+    plan = plan_arming(
+        strategy_instance_id="live-successor",
+        predecessor_strategy_instance_id="rehearsal",
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    assert plan.schema_version == 2
+    assert plan.predecessor is not None
+    assert plan.predecessor.strategy_instance_id == "rehearsal"
+    assert plan.predecessor.seal_hash == rehearsal.bot_configuration_hash
+
+    armed = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS),
+    )
+
+    assert armed.schema_version == 2
+    assert armed.predecessor == plan.predecessor
+    assert armed.originating_plan_id == plan.plan_id
+
+    retry = apply_arming(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 1),
+    )
+    assert retry == armed
+    assert len(LiveArmingLedger(artifacts_root, live_account_id=LIVE_ACCT).records_for("live-successor")) == 1
+
+    disarm(
+        strategy_instance_id="live-successor",
+        artifacts_root=artifacts_root,
+        clock=_Clock(ARMED_AT_MS + 2),
+    )
+    with pytest.raises(LiveArmingRefused) as revoked:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + 3),
+        )
+    assert revoked.value.reason_code == LIVE_ARMING_REVOKED
+
+    renewal = plan_arming(
+        strategy_instance_id="live-successor",
+        predecessor_strategy_instance_id="rehearsal",
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 4),
+    )
+    renewed = apply_arming(
+        plan=renewal,
+        confirmation_token=renewal.confirmation_token,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        settings=live_settings(),
+        clock=_Clock(ARMED_AT_MS + 4),
+    )
+    assert renewed.originating_plan_id == renewal.plan_id
+
+    with pytest.raises(LiveArmingRefused) as still_revoked:
+        apply_arming(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS + 5),
+        )
+    assert still_revoked.value.reason_code == LIVE_ARMING_REVOKED
+
+
+def test_a_shadow_rehearsal_with_a_different_quantity_cannot_promote(
+    roots: tuple[Path, Path],
+) -> None:
+    """A paper result cannot authorize a differently sized Live program."""
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root, strategy_instance_id="rehearsal")
+    from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
+        test_a_never_legacy_live_account_graduates_end_to_end,
+    )
+
+    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id="larger-live-successor",
+        sealed_account_id=LIVE_ACCT,
+        quantity=2,
+    )
+
+    with pytest.raises(LiveArmingRefused) as caught:
+        plan_arming(
+            strategy_instance_id="larger-live-successor",
+            predecessor_strategy_instance_id="rehearsal",
+            artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+            settings=live_settings(),
+            clock=_Clock(ARMED_AT_MS),
+        )
+
+    assert caught.value.reason_code == LIVE_ARMING_INSTANCE_UNSEALED
 
 
 def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[Path, Path]) -> None:

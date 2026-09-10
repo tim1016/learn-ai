@@ -527,3 +527,22 @@ is the durable index, the issue is the working brief.
   that converted the account strip's two banners into transient popovers.
   Whether it should match is a judgment call, not a bug — carried in **#1806**
   as a question to answer before any change.
+
+## 12. Alpaca Paper / Live workflow (verified 2026-09-09)
+
+Evidence and proposed sequencing are in the
+[Paper / Live workflow audit](audits/alpaca-paper-live-workflow-2026-09-09.md).
+The audit distinguishes defects from deliberately deferred capabilities; it
+does not change the accepted arming or custody policy.
+
+- **Guarded daily-loss-hold release has no frontend control (medium, F5).**
+  The authenticated `live-envelope/loss-hold/clear` endpoint and its guarded
+  re-observation exist, but only the generated contract references the
+  endpoint in Angular. The banner reports the hold without a recovery
+  control. Expose the existing operation without bypassing its refusal
+  while loss or unknown evidence remains.
+- **Current mode explanations disagree (medium, F6).** The operator manual
+  still calls Live unreachable and misstates the evidence-only override;
+  the Paper deploy card calls Live unimplemented; ADR 0059 and `CONTEXT.md`
+  retain mandatory-Shadow wording beside the September 9 optional-rehearsal
+  amendment. Current authority and operator copy need reconciliation.
