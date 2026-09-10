@@ -71,20 +71,50 @@ class ArmingRefresh:
     def live_account_id(self) -> str:
         return self._ledger.live_account_id
 
+    @property
+    def inputs_unreadable(self) -> bool:
+        """Whether the last refresh could not read this account's arming inputs.
+
+        Read by the envelope sync: an account whose seal cannot be read cannot
+        be *judged* either, because the sealed envelope is what its loss limit
+        comes from (ADR 0059 D3).
+        """
+        return self._ledger_invalid
+
+    def _read_seals(self) -> dict[str, str]:
+        """The runner's sealed bindings, or one named fault when they cannot be read.
+
+        The callable reaches the runner's binding store on disk, so it can fail
+        exactly the way the ledger can. A refresh that cannot read *either*
+        input knows nothing about what is armed, and must say so under this
+        module's own fault rather than escaping as an unhandled error: the
+        guarded loss-hold clear re-observes through this path, and an escaping
+        ``OSError`` would answer HTTP 500 where the contract is "refused, the
+        hold stands".
+        """
+        if self._instance_seals is None:
+            return {}
+        try:
+            return dict(self._instance_seals())
+        except (OSError, ValueError) as exc:
+            raise LiveArmingInvalid("the runner's sealed bindings cannot be read") from exc
+
     def refresh(self, now_ms: int, configured_envelope: LiveEnvelopeValues) -> LiveEnvelopeValues | None:
         """Read the ledger once; publish the snapshot and return the sealed envelope.
 
-        A ledger nobody can read seals nothing and admits nothing: the caller
+        Arming inputs nobody can read seal nothing and admit nothing: the caller
         gets ``None`` (the envelope returns to unsealed), the gate is
         invalidated with the fault, and the fault is logged at error level once
-        per transition.
+        per transition. Both inputs are read under one fault because a refresh
+        holding only half of them can describe neither.
         """
         try:
             records = tuple(self._ledger.records())
+            seals = self._read_seals()
         except LiveArmingInvalid as exc:
             if not self._ledger_invalid:
                 logger.error(
-                    "live arming ledger cannot be read; the envelope is unsealed and nothing is armed",
+                    "live arming inputs cannot be read; the envelope is unsealed and nothing is armed",
                     exc_info=True,
                     extra={
                         "action": "live_arming_ledger_invalid",
@@ -107,7 +137,7 @@ class ArmingRefresh:
             observed_at_ms=now_ms,
             live_account_id=self._ledger.live_account_id,
             records=records,
-            seals=dict(self._instance_seals()) if self._instance_seals is not None else {},
+            seals=seals,
             configured_envelope=configured_envelope,
         )
         self._gate.publish(snapshot)

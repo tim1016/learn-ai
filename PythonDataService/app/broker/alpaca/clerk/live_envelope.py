@@ -177,9 +177,15 @@ class LiveEnvelopeGate:
         and cleared against, and the allowance an extended-session leg is priced
         from, are therefore the newest arming record's -- not whatever the
         process happened to boot with. ``values`` is the fallback for an account
-        no ceremony has ever armed, which has nothing sealed to prefer; it is
-        never a *relaxation* of a seal, because a sealed envelope always wins
-        here.
+        no ceremony has ever armed, which has nothing sealed to prefer.
+
+        **The fallback is a relaxation when the seal is merely unreadable**, and
+        the caller owns that: ``sealed`` also returns to ``None`` when the
+        arming inputs cannot be read, so a caller who must not relax has to ask
+        whether they were. The loss judgement does
+        (``sqlite/live_envelope_sync.LiveEnvelopeSync._seal_unreadable`` makes
+        that account unjudgeable); extended-hours leg pricing deliberately does
+        not, because an EXIT must never be refused for want of a seal.
 
         ``values`` remains the right input for the two questions that are
         *about* the configured half: ``agreement`` (does the environment still

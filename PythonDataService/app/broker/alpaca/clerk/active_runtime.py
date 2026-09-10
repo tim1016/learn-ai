@@ -322,12 +322,7 @@ async def compose_repository_runtime(
             authority_kind=authority_kind,
             # Proven above from the broker's own account read, not inferred.
             account_mode=account_mode,
-            # The envelope rides along so an extended-session leg is priced
-            # from the *sealed* allowance where one exists (ADR 0059 D3); it is
-            # ``None`` on paper, which prices from the environment as before.
-            program_leg_policy=ProgramLegPolicy.from_read_port(
-                ports.read, envelope=live_envelope
-            ),
+            program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
             live_arming=arming_gate,
         )

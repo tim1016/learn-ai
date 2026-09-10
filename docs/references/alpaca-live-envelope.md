@@ -71,17 +71,38 @@ notional cap, no symbol allowlist, no session restriction.
 - **The sealed envelope is the source of the numbers, not only an equality
   gate** (fixed 2026-09-10; owner decision of the same date). `LiveEnvelopeGate.in_force`
   (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) answers
-  `sealed if sealed is not None else values`, and it is what every *judgement*
-  reads:
+  `sealed if sealed is not None else values`. It is the one place that rule is
+  written, and both *judgements* go through it:
   - the loss limit the sync raises the hold on, and the one the guarded clear
-    refuses against (`LiveEnvelopeSync.observe`);
+    refuses against — `LiveEnvelopeSync.observe`;
   - the extended-hours allowance a program leg is priced from, entry and exit
-    alike (`ProgramLegPolicy.allowances_in_force`).
+    alike — `sqlite/runtime.py::_leg_policy_in_force`, which resolves the
+    authority's `ProgramLegPolicy` per decision. The policy itself stays a
+    plain value and `shape_program_leg` a pure function of it; the authority,
+    which holds the envelope, is what applies the rule.
 
   The configured `values` stay the input to the two questions that are *about*
   the environment — `agreement`, and the arming snapshot's own disagreement
   check — and they are the fallback for an account no ceremony has ever armed,
   which has nothing sealed to prefer.
+- **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
+  to `None` when the arming inputs cannot be read (a corrupt ledger row, a
+  binding store that will not open), and *there* the fallback would be a
+  relaxation: loosen `ALPACA_LIVE_LOSS_USD`, corrupt the ledger, and the
+  account would be judged by the looser number. So
+  `LiveEnvelopeSync._seal_unreadable` makes such a tick unjudgeable — the
+  observation is withdrawn and every ENTER refuses `LIVE_ENVELOPE_UNOBSERVED`,
+  exactly as an unknown day P&L does. Extended-hours pricing takes the opposite
+  branch deliberately (see the allowances bullet below): an exit leaves the
+  account, so falling back can only help.
+- **Both arming inputs are read under one fault.** `ArmingRefresh` reads the
+  ledger *and* the runner's sealed bindings inside one `try`
+  (`sqlite/arming_refresh.py::_read_seals`), because a refresh holding only
+  half of them can describe neither. The bindings callable reaches disk, so an
+  `OSError` there is this module's own `LiveArmingInvalid` rather than an
+  escaping error — the guarded clear re-observes through this path, and an
+  unhandled error would answer HTTP 500 where the contract is "refused, the
+  hold stands".
 
   This used to be the other way around: the loss limit was computed from the
   configured values and the seal was only an equality gate. That was argued to
@@ -131,12 +152,23 @@ notional cap, no symbol allowlist, no session restriction.
 - **Extended-hours allowances.** `xh_entry_bps` / `xh_exit_bps` are sealed at
   arming with every other envelope value, so the marketable-limit anchor
   (`PythonDataService/app/broker/alpaca/marketable_limit.py`) widens from the
-  sealed pair. An **EXIT is never refused for want of a seal**: an account with
-  no arming record, or a tick that could not verify the ledger, prices from the
-  configured allowances and logs `extended_hours_allowances_unsealed`, rather
-  than stranding a position the operator is closing. Entries need no such
-  escape hatch — a live ENTER is already refused `LIVE_ENVELOPE_DISAGREEMENT`
-  whenever the environment and the seal differ.
+  pair `in_force`. An **EXIT is never refused or delayed for want of a seal**:
+  an account with no arming record, or one whose ledger this observation could
+  not read, prices from the configured allowances rather than stranding a
+  position the operator is closing. (The unsealed transition is already logged
+  once by the sync — `live_envelope_unsealed`, or `live_arming_ledger_invalid`
+  at error level — so the leg path adds no second line.) Entries need no such
+  escape hatch: a live ENTER is already refused `LIVE_ENVELOPE_DISAGREEMENT`
+  whenever the environment and the seal differ, and
+  `LIVE_ENVELOPE_UNOBSERVED` whenever the seal cannot be read.
+- **The sealed floats carry the environment's domains.** `AlpacaSettings`
+  refuses to boot on a `loss_fraction` outside (0, 1), a non-positive or
+  non-finite `loss_usd`, or a `*_bps` outside [0, 10000); `live_arming.py`'s
+  `_SEALED_ENVELOPE_DOMAINS` re-asserts each on the values a record *sealed*.
+  `LiveEnvelopeValues` is a plain dataclass with no field validation, and a row
+  re-sealed over a tampered value verifies both digests — so without this a
+  sealed `inf` loss limit (never breached) or a sealed 10000 bps exit anchor
+  (floors to zero, refuses the leg) would reach the money.
 
 ## Refusals
 

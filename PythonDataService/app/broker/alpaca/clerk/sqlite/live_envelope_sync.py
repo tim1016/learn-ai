@@ -17,13 +17,15 @@ from what it returns.
 The sync raises the loss hold and never releases it: only the guarded
 operator action does (plan R6, R12).
 
-Three facts leave the account *unjudgeable* rather than merely unlucky: a
+Four facts leave the account *unjudgeable* rather than merely unlucky: a
 broker snapshot with no ``last_equity`` has no loss limit to judge against
 (plan R3), an external order observed today makes the day's P&L unknowable
-(plan R5), and a non-finite cash, equity or unrealized figure makes every
-loss comparison meaningless. None may be read as "nothing breached", so an
-unjudgeable tick withdraws the gate's observation and every ENTER refuses
-``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one arrives.
+(plan R5), a non-finite cash, equity or unrealized figure makes every
+loss comparison meaningless, and arming inputs this observation could not
+read leave no sealed envelope to judge against at all. None may be read as
+"nothing breached", so an unjudgeable tick withdraws the gate's observation
+and every ENTER refuses ``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one
+arrives.
 """
 
 from __future__ import annotations
@@ -144,10 +146,11 @@ def _non_finite_risk_fields(
     )
 
 
-def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
+def _unknown_detail(reading: EnvelopeReading, *, seal_readable: bool) -> dict[str, Any]:
     """Which fact left the account unjudgeable — the operator's whole diagnosis."""
     day_pnl = reading.day_pnl
     return {
+        "sealed_envelope_readable": seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
         "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
         "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
@@ -272,12 +275,18 @@ class LiveEnvelopeSync:
         # Withholding both loss inputs is the whole treatment: ``breached`` is
         # then None, the tick withdraws on the existing path, and no new
         # refusal code has to exist for a broker that reported a NaN.
-        unjudgeable = self._noted_non_finite(
-            _non_finite_risk_fields(
-                cash=account.cash,
-                last_equity=account.last_equity,
-                unrealized_pl=unrealized_pl_usd,
+        # ``_noted_non_finite`` is evaluated first and unconditionally: it
+        # deduplicates its own log against the previous observation, and
+        # short-circuiting it would make that log depend on the seal.
+        unjudgeable = (
+            self._noted_non_finite(
+                _non_finite_risk_fields(
+                    cash=account.cash,
+                    last_equity=account.last_equity,
+                    unrealized_pl=unrealized_pl_usd,
+                )
             )
+            or self._seal_unreadable()
         )
         reading = EnvelopeReading(
             observation=observation,
@@ -295,6 +304,9 @@ class LiveEnvelopeSync:
                 # one only where nothing has ever been armed: raising the hold
                 # and clearing it are the same judgement and must read the same
                 # number, and neither may follow an unarmed environment edit.
+                # An account whose seal could not be *read* never reaches here
+                # -- it is unjudgeable above, because that fallback would be a
+                # relaxation.
                 else loss_limit_usd(self.envelope.in_force, last_equity_usd=account.last_equity)
             ),
         )
@@ -303,6 +315,23 @@ class LiveEnvelopeSync:
         else:
             self.envelope.withdraw()
         return reading
+
+    def _seal_unreadable(self) -> bool:
+        """Whether this observation could not read the account's arming inputs.
+
+        Such an account cannot be judged. ``LiveEnvelopeGate.in_force`` would
+        fall back to the configured values, and here that fallback is a
+        *relaxation*: an operator could loosen ``ALPACA_LIVE_LOSS_*``, corrupt
+        or delete the arming ledger, and clear a standing hold against the
+        looser limit -- the very drift this seal exists to stop. So it rides the
+        same withdrawal an unknown day P&L does, and every ENTER refuses
+        ``LIVE_ENVELOPE_UNOBSERVED`` until the inputs read again.
+
+        Pricing an extended-hours leg is the deliberate opposite
+        (``sqlite/runtime.py::_leg_policy_in_force``): it falls back and never
+        refuses, because an EXIT leaves the account.
+        """
+        return self._arming is not None and self._arming.inputs_unreadable
 
     def _refresh_arming(self) -> None:
         """Run the arming half of this observation, and seal the envelope from what it read.
@@ -378,10 +407,15 @@ class LiveEnvelopeSync:
                 "hold_stands",
                 {}
                 if reading.breached is not None
-                else {"why": "the account is also unjudgeable", **_unknown_detail(reading)},
+                else {
+                    "why": "the account is also unjudgeable",
+                    **_unknown_detail(reading, seal_readable=not self._seal_unreadable()),
+                },
             )
         if reading.breached is None:
-            return self._acted("unknown", _unknown_detail(reading))
+            return self._acted(
+                "unknown", _unknown_detail(reading, seal_readable=not self._seal_unreadable())
+            )
         cause = _breach_cause(reading)
         if cause is None:
             return self._acted("observed", _observed_detail(reading))
