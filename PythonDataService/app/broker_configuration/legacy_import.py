@@ -432,7 +432,7 @@ def apply_import(
     already = _already_imported(existing, plan.revision_content_sha256)
     if already is not None:
         owner = service.owner()
-        staged = _stage(service, already, plan=plan, existing=existing)
+        staged = _stage(service, already, plan=plan)
         return ImportReceipt(
             profile_id=already.profile_id,
             revision=already.revision,
@@ -463,7 +463,7 @@ def apply_import(
     _require_envelope_fidelity(plan, revision)
 
     reference = ImportedProfileRef(profile_id=created.profile.profile_id, revision=revision.revision)
-    staged = _stage(service, reference, plan=plan, existing=existing)
+    staged = _stage(service, reference, plan=plan)
     return ImportReceipt(
         profile_id=reference.profile_id,
         revision=reference.revision,
@@ -475,26 +475,28 @@ def apply_import(
     )
 
 
-def _stage(
-    service: BrokerConfigurationService,
-    reference: ImportedProfileRef,
-    *,
-    plan: ImportPlan,
-    existing: ExistingConfiguration,
-) -> bool:
+def _stage(service: BrokerConfigurationService, reference: ImportedProfileRef, *, plan: ImportPlan) -> bool:
     """Stage the imported revision, or leave the selection alone.
 
     Staging governs nothing (ADR 0060 Decision 4) — it records what the operator
     picked, and the Apply that makes it effective is pressed on the configuration
-    page. The generation fence is carried from the *plan*, so a selection changed
-    since the preview conflicts rather than being overwritten.
+    page.
+
+    The generation fence is `plan.expected_selection_generation`, deliberately,
+    and **not** the generation re-read a moment ago inside :func:`apply_import`.
+    The re-read one always matches, so it is not a fence at all: a selection
+    another browser tab staged between the preview and this apply would be
+    silently replaced, which is exactly what contract §5 forbids and what the
+    whole plan/apply ceremony exists to catch. Carrying the plan's generation
+    makes that a `selection_generation_conflict`, the same shape as the
+    environment-drift refusal beside it: re-run the plan.
     """
     if not plan.stage_selection:
         return False
     service.stage_selection(
         profile_id=reference.profile_id,
         revision=reference.revision,
-        expected_selection_generation=existing.selection_generation,
+        expected_selection_generation=plan.expected_selection_generation,
     )
     return True
 

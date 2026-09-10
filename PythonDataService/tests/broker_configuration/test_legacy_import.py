@@ -379,6 +379,46 @@ def test_an_environment_edited_after_planning_is_refused(
     assert service.list_profiles(include_archived=True) == []
 
 
+def test_a_selection_staged_since_the_preview_conflicts(
+    service: BrokerConfigurationService,
+) -> None:
+    """The staging fence is the plan's generation, not one re-read at apply time.
+
+    A generation re-read a moment earlier always matches, so it fences nothing.
+    Carrying the plan's makes a selection another browser tab staged between
+    preview and apply a `selection_generation_conflict` — contract §5's "two
+    browser tabs cannot silently clobber each other" — rather than a silent
+    replacement.
+    """
+    from app.broker_configuration.errors import SelectionGenerationConflict
+
+    plan = _plan(_live_values(), ExistingConfiguration.read(service))
+    # Someone else stages something in the confirmation window.
+    other = service.create_profile(
+        display_name="Staged by another tab",
+        credential_slot="default",
+        endpoint_mode="paper",
+        live_envelope=None,
+    )
+    service.stage_selection(
+        profile_id=other.profile.profile_id,
+        revision=1,
+        expected_selection_generation=service.selection().selection_generation,
+    )
+
+    with pytest.raises(SelectionGenerationConflict):
+        apply_import(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            service=service,
+            values=_live_values(),
+            now_ms=NOW_MS,
+        )
+
+    # The other tab's selection stands.
+    assert service.selection().staged_profile_id == other.profile.profile_id
+
+
 def test_an_unknown_credential_slot_never_becomes_a_lookup() -> None:
     with pytest.raises(ConfigurationImportRefused, match="allowlist"):
         _plan(
