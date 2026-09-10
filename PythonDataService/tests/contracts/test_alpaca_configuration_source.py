@@ -23,7 +23,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-APP_ROOT = Path(__file__).resolve().parents[2] / "app"
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+APP_ROOT = _SERVICE_ROOT / "app"
+SCRIPTS_ROOT = _SERVICE_ROOT / "scripts"
 
 # The only modules that may read the process-wide environment settings, and
 # why each one is admissible. Each is a *bootstrap*: a process resolving its
@@ -49,15 +51,15 @@ ADMITTED_ENVIRONMENT_READERS: dict[str, str] = {
 }
 
 
-def _modules_calling(function_name: str) -> set[str]:
-    """Every module under ``app/`` that *calls* ``function_name``.
+def _modules_calling(function_name: str, root: Path = APP_ROOT) -> set[str]:
+    """Every module under ``root`` that *calls* ``function_name``.
 
     Parsed rather than grepped so a mention in a docstring or a comment — of
     which there are several, deliberately, explaining this very rule — is not
     mistaken for a call.
     """
     callers: set[str] = set()
-    for path in APP_ROOT.rglob("*.py"):
+    for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -71,7 +73,7 @@ def _modules_calling(function_name: str) -> set[str]:
                 else None
             )
             if called == function_name:
-                callers.add(path.relative_to(APP_ROOT).as_posix())
+                callers.add(path.relative_to(root).as_posix())
     return callers
 
 
@@ -96,3 +98,27 @@ def test_the_admitted_readers_still_exist_and_are_documented() -> None:
     for module, reason in ADMITTED_ENVIRONMENT_READERS.items():
         assert (APP_ROOT / module).is_file(), f"{module} no longer exists"
         assert reason.strip(), f"{module} is admitted without a stated reason"
+
+
+def test_no_operator_script_reads_the_process_environment() -> None:
+    """The rule covers ``scripts/`` too, which is how the last one slipped through.
+
+    Package D migrated the three ``manage_alpaca_*`` CLIs to ``cli_binding`` but
+    the sweep above only walked ``app/``, so ``hitl_alpaca_capture.py`` kept
+    calling ``get_alpaca_settings`` directly and kept passing CI. An operator
+    script that reads ``.env`` on a cut-over installation answers for whatever
+    that file says — which after an applied profile switch is a different
+    account than the worker bound.
+
+    ``scripts/`` has no admitted readers at all: every one of these runs in its
+    own process and resolves through ``cli_binding``, which does the bootstrap
+    for them.
+    """
+    callers = _modules_calling("get_alpaca_settings", SCRIPTS_ROOT)
+
+    assert callers == set(), (
+        "An operator script started reading the Alpaca process environment "
+        "directly. Resolve through "
+        "app.broker_configuration.cli_binding.effective_alpaca_settings() "
+        f"instead. Unexpected: {sorted(callers)}"
+    )
