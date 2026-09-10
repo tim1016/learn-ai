@@ -15,6 +15,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.broker.alpaca.active_binding import BrokerUnbound
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
+from app.broker.alpaca.profile import BrokerProfileError
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -84,6 +85,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.utils.error_handlers import (
+    broker_profile_exception_handler,
     broker_unbound_exception_handler,
     catalog_schema_not_ready_exception_handler,
     clerk_sqlite_exception_handler,
@@ -879,6 +881,11 @@ app.add_exception_handler(
     BrokerConfigurationError,
     broker_configuration.broker_configuration_exception_handler,
 )
+# The configuration surface has a second refusal family: the account ceremonies
+# raise ``BrokerProfileError``, which carries the same contract vocabulary but
+# is not a ``BrokerConfigurationError``. Untranslated, "which credential is
+# missing" answered with a generic 500.
+app.add_exception_handler(BrokerProfileError, broker_profile_exception_handler)
 # Same reasoning for a worker that resolved no broker binding: the contract
 # has a 503 vocabulary for it (broker_unconfigured, profiles_database_unavailable,
 # account_pin_mismatch), and without this it fell through to the catch-all 500.

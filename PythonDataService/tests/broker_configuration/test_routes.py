@@ -195,6 +195,73 @@ async def test_pinning_an_account_nobody_observed_is_refused(client: AsyncClient
     assert response.json()["detail"]["reason"] == "account_pin_mismatch"
 
 
+class _RefusingVerifier:
+    """A verifier that refuses in package C's vocabulary, as the real one does.
+
+    ``AlpacaAccountVerifier`` (``app/broker_configuration/alpaca_seams.py``)
+    raises ``BrokerProfileError`` subclasses — the same ``reason`` strings as
+    ``BrokerConfigurationError`` but a different base class, and only the two
+    account ceremonies reach that family. This double is the smallest thing
+    that reproduces it without a broker.
+    """
+
+    async def observe_accounts(
+        self, *, credential_slot: str, endpoint_mode: str, live_envelope: object = None
+    ) -> tuple[ObservedAccount, ...]:
+        from app.broker.alpaca.profile import CredentialSlotUnavailable
+
+        del endpoint_mode, live_envelope
+        raise CredentialSlotUnavailable(credential_slot)
+
+
+@pytest.fixture
+async def refusing_client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[AsyncClient]:
+    from app.main import app
+
+    built = BrokerConfigurationService(
+        store=ProfilesStore.open(clerk_dir=clerk_dir),
+        operator_identity=OPERATOR_IDENTITY,
+        clock=clock,
+        credential_slots=slot_directory_for_tests(),
+        account_verifier=_RefusingVerifier(),
+    )
+    app.dependency_overrides[service_dependency] = lambda: built
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
+    app.dependency_overrides.pop(service_dependency, None)
+    built.close()
+    reset_broker_configuration_service_for_testing()
+
+
+@pytest.mark.parametrize(
+    ("suffix", "body"),
+    [("verify-account", None), ("account-pin", {"account_id": "PA000PAPER"})],
+)
+async def test_a_verifier_refusal_answers_in_the_contract_shape(
+    refusing_client: AsyncClient, suffix: str, body: dict | None
+) -> None:
+    """A credential refusal is a typed 409, never the catch-all 500.
+
+    ``BrokerProfileError`` already carries the contract §6 ``{reason, message,
+    next_step}`` payload and its own ``http_status``, but nothing translated
+    it: it is not a ``BrokerConfigurationError``, so it reached the ``Exception``
+    handler and the desk saw a generic fault on exactly the two routes that
+    exist to say which credential is missing.
+    """
+    profile_id = await _create_paper_profile(refusing_client)
+
+    response = await refusing_client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions/1/{suffix}", json=body
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["reason"] == "credential_slot_unavailable"
+    assert detail["message"]
+    assert detail["next_step"]
+
+
 async def test_account_nicknames_are_keyed_to_the_account(client: AsyncClient) -> None:
     put = await client.put(
         f"{PREFIX}/account-nicknames/PA000PAPER", json={"nickname": "Testing account"}

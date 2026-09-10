@@ -149,3 +149,29 @@ async def broker_unbound_exception_handler(request: Request, exc: Exception) -> 
         extra={"action": "broker_unbound_request", "reason_code": exc.reason},
     )
     return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})
+
+
+async def broker_profile_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer a credential/verification refusal in the configuration's vocabulary.
+
+    ``BrokerProfileError`` is the second refusal family on the configuration
+    surface: same contract §6 ``reason`` strings as ``BrokerConfigurationError``
+    but a separate base class, raised by the account ceremonies behind
+    ``/profiles/{id}/revisions/{n}/verify-account`` and ``/account-pin`` when a
+    slot is unavailable, a revision will not resolve, or the observed account
+    contradicts the revision's mode.
+
+    Without this it reached the catch-all ``Exception`` handler, so the two
+    routes that exist to say *which* credential is missing answered with a
+    generic 500 — the same gap ``broker_unbound_exception_handler`` above
+    closed for its own family.
+    """
+    from app.broker.alpaca.profile import BrokerProfileError
+
+    if not isinstance(exc, BrokerProfileError):  # pragma: no cover - registration is exact
+        raise exc
+    logger.warning(
+        "Broker configuration ceremony refused",
+        extra={"action": "broker_profile_refusal", "reason_code": exc.reason},
+    )
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})
