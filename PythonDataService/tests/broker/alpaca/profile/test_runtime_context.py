@@ -23,6 +23,7 @@ from app.broker.alpaca.profile.errors import (
 )
 from app.broker.alpaca.profile.runtime_context import (
     LIVE_ENVELOPE_FIELDS,
+    is_exactly_int,
     resolve_runtime_context,
 )
 from tests.broker.alpaca.profile.conftest import (
@@ -54,9 +55,9 @@ def test_a_paper_revision_resolves_without_an_envelope(
         revision=1,
     )
 
-    assert context.mode == "paper"
-    assert context.is_paper is True
-    assert context.base_url == "https://paper-api.alpaca.markets"
+    assert context.settings.mode == "paper"
+    assert context.settings.is_paper is True
+    assert context.settings.base_url == "https://paper-api.alpaca.markets"
     assert context.live_envelope is None
     assert context.credential_slot == "default"
     assert context.settings.api_key_id == DEFAULT_SLOT_KEY
@@ -73,8 +74,8 @@ def test_a_live_revision_resolves_its_envelope_and_live_endpoint(
         environment=both_slots_injected,
     )
 
-    assert context.is_live is True
-    assert context.base_url == "https://api.alpaca.markets"
+    assert context.settings.is_live is True
+    assert context.settings.base_url == "https://api.alpaca.markets"
     assert context.live_envelope == LiveEnvelopeValues(
         loss_fraction=0.02,
         loss_usd=500.0,
@@ -223,6 +224,25 @@ def test_the_envelope_field_names_are_the_dataclass_field_names() -> None:
     assert set(LIVE_ENVELOPE_FIELDS) == set(LiveEnvelopeValues.__dataclass_fields__)
 
 
+@pytest.mark.parametrize(
+    "value", [1, 0, -3, True, False, 1.0, 20.0, "5", None, 10**20]
+)
+def test_the_integer_predicate_agrees_with_the_sealed_record_validator(
+    value: object,
+) -> None:
+    """Parity test for the duplicate named in ``runtime_context.is_exactly_int``.
+
+    Canonical implementation: ``app/broker/alpaca/clerk/live_arming.py::_is_int``.
+    The resolver restates it rather than importing it, because ``live_arming``
+    drags ``app.lean_sidecar.trading_calendar`` and the market-calendar
+    dependency onto the credential-resolution path. This pins the two together
+    so the restatement cannot drift (CLAUDE.md guiding philosophy #5).
+    """
+    from app.broker.alpaca.clerk.live_arming import _is_int
+
+    assert is_exactly_int(value) == _is_int(value)
+
+
 def test_two_revisions_bind_distinct_credentials_without_cross_contamination(
     both_slots_injected: AlpacaCredentialEnvironment,
 ) -> None:
@@ -243,7 +263,7 @@ def test_two_revisions_bind_distinct_credentials_without_cross_contamination(
     assert paper.settings.api_key_id == DEFAULT_SLOT_KEY
     assert live.settings.api_key_id == LIVE_SLOT_KEY
     assert paper.settings.api_secret_key != live.settings.api_secret_key
-    assert paper.base_url != live.base_url
+    assert paper.settings.base_url != live.settings.base_url
     assert paper.live_envelope is None
     assert live.live_envelope is not None
 

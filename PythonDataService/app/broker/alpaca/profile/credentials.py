@@ -41,7 +41,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeGuard
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -149,14 +149,7 @@ def _environment(environment: AlpacaCredentialEnvironment | None) -> AlpacaCrede
     return environment if environment is not None else AlpacaCredentialEnvironment()
 
 
-def _injected_pair(
-    environment: AlpacaCredentialEnvironment, slot: str
-) -> tuple[SecretStr | None, SecretStr | None]:
-    key_field, secret_field = _SLOT_FIELDS[slot]
-    return getattr(environment, key_field), getattr(environment, secret_field)
-
-
-def _is_present(value: SecretStr | None) -> bool:
+def _is_present(value: SecretStr | None) -> TypeGuard[SecretStr]:
     """Whether a half of a pair was actually injected.
 
     A blank or whitespace-only value is a placeholder line in ``.env``, not a
@@ -164,6 +157,23 @@ def _is_present(value: SecretStr | None) -> bool:
     and surface as an auth failure instead of an honest "not configured".
     """
     return value is not None and bool(value.get_secret_value().strip())
+
+
+def _injected_pair(
+    environment: AlpacaCredentialEnvironment, slot: str
+) -> tuple[SecretStr, SecretStr] | None:
+    """The slot's pair when both halves are injected, else ``None``.
+
+    One predicate answers both "is this slot available?" and "resolve it", so
+    the two can never disagree about what counts as provisioned. ``slot`` is
+    always an allowlisted constant here — the gate above ran first.
+    """
+    key_field, secret_field = _SLOT_FIELDS[slot]
+    key_id = getattr(environment, key_field)
+    secret_key = getattr(environment, secret_field)
+    if not (_is_present(key_id) and _is_present(secret_key)):
+        return None
+    return key_id, secret_key
 
 
 def credential_slot_available(
@@ -177,8 +187,7 @@ def credential_slot_available(
     unrecognised name is a refusal rather than a quiet ``False``.
     """
     known = require_known_credential_slot(slot)
-    key_id, secret_key = _injected_pair(_environment(environment), known)
-    return _is_present(key_id) and _is_present(secret_key)
+    return _injected_pair(_environment(environment), known) is not None
 
 
 def describe_credential_slots(
@@ -195,7 +204,7 @@ def describe_credential_slots(
     return tuple(
         CredentialSlotAvailability(
             slot=slot,
-            available=credential_slot_available(slot, environment=resolved),
+            available=_injected_pair(resolved, slot) is not None,
         )
         for slot in CREDENTIAL_SLOTS
     )
@@ -221,11 +230,10 @@ def resolve_credentials(
     once.
     """
     known = require_known_credential_slot(slot)
-    key_id, secret_key = _injected_pair(_environment(environment), known)
-    if key_id is None or secret_key is None:
+    pair = _injected_pair(_environment(environment), known)
+    if pair is None:
         raise CredentialSlotUnavailable(known)
-    if not (_is_present(key_id) and _is_present(secret_key)):
-        raise CredentialSlotUnavailable(known)
+    key_id, secret_key = pair
     return ResolvedCredentials(slot=known, api_key_id=key_id, api_secret_key=secret_key)
 
 

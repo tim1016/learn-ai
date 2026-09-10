@@ -74,12 +74,23 @@ class ObservedAccount:
 
 @dataclass(frozen=True)
 class AccountVerification:
-    """The result the operator picks from — observed candidates, never typed."""
+    """The result the operator picks from — observed candidates, never typed.
+
+    A verification always carries at least one candidate. Discovery that
+    resolved no account is ``account_verification_failed``, not an empty
+    success, and holding that as an invariant here means every consumer can
+    read ``candidates[0]`` without a "no account observed" branch that would
+    otherwise have to invent a placeholder ID.
+    """
 
     credential_slot: str
     endpoint_mode: EndpointMode
     candidates: tuple[ObservedAccount, ...]
     verified_at_ms: int
+
+    def __post_init__(self) -> None:
+        if not self.candidates:
+            raise ValueError("an account verification carries at least one candidate")
 
 
 @dataclass(frozen=True)
@@ -124,7 +135,7 @@ async def verify_account(
         snapshot = await port.get_account()
     except BrokerAccountModeDisagreement as exc:
         raise AccountModeDisagreement(
-            endpoint_mode=context.mode,
+            endpoint_mode=context.settings.mode,
             credential_slot=context.credential_slot,
         ) from exc
     except BrokerError as exc:
@@ -133,18 +144,24 @@ async def verify_account(
     observed = _observed_from_snapshot(snapshot)
     return AccountVerification(
         credential_slot=context.credential_slot,
-        endpoint_mode=context.mode,
+        endpoint_mode=context.settings.mode,
         candidates=(observed,),
         verified_at_ms=observed.observed_at_ms,
     )
 
 
-def _require_fresh(
-    verification: AccountVerification, *, now_ms: int, max_age_ms: int
-) -> None:
+def _require_fresh(verification: AccountVerification, *, now_ms: int) -> None:
+    """Refuse an observation dated too long ago — or after the pinning clock.
+
+    A backward clock step would otherwise make a negative age look fresh
+    indefinitely, the same reason ``LiveEnvelopeGate.fresh_observation`` bounds
+    its age below as well as above.
+    """
     age_ms = now_ms - verification.verified_at_ms
-    if age_ms < 0 or age_ms > max_age_ms:
-        raise AccountVerificationFailed.stale(age_ms=abs(age_ms), max_age_ms=max_age_ms)
+    if not (0 <= age_ms <= ACCOUNT_VERIFICATION_MAX_AGE_MS):
+        raise AccountVerificationFailed.stale(
+            age_ms=abs(age_ms), max_age_ms=ACCOUNT_VERIFICATION_MAX_AGE_MS
+        )
 
 
 def pin_observed_account(
@@ -153,7 +170,6 @@ def pin_observed_account(
     selected_account_id: str,
     existing_pin: str | None = None,
     now_ms: int | None = None,
-    max_age_ms: int = ACCOUNT_VERIFICATION_MAX_AGE_MS,
 ) -> AccountPin:
     """Pin one explicitly selected observed account.
 
@@ -166,11 +182,7 @@ def pin_observed_account(
     Refuses a stale verification: a pin is recorded against an observation the
     operator is actually looking at, not one from an hour ago.
     """
-    _require_fresh(
-        verification,
-        now_ms=now_ms if now_ms is not None else now_ms_utc(),
-        max_age_ms=max_age_ms,
-    )
+    _require_fresh(verification, now_ms=now_ms if now_ms is not None else now_ms_utc())
 
     observed_ids = {candidate.account_id for candidate in verification.candidates}
     if selected_account_id not in observed_ids:
@@ -202,10 +214,9 @@ def reverify_pinned_account(
     for candidate in verification.candidates:
         if candidate.account_id == pinned_account_id:
             return candidate
-    observed = verification.candidates[0].account_id if verification.candidates else "none"
     raise AccountPinMismatch(
         pinned_account_id=pinned_account_id,
-        observed_account_id=observed,
+        observed_account_id=verification.candidates[0].account_id,
     )
 
 

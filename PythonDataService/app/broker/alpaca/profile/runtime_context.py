@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import ValidationError
 
@@ -73,15 +73,30 @@ _CREDENTIAL_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
     {"api_key_id", "api_secret_key"}
 )
 
+# What a revision with no live envelope hands ``AlpacaSettings``: every live
+# field explicitly ``None``, so a stale ``ALPACA_LIVE_*`` in the environment
+# cannot contribute a value to a resolved revision (ADR 0060 Decision 7 — there
+# is no fallback to a stale user setting after cutover).
+_ABSENT_ENVELOPE_SETTINGS: Final[dict[str, None]] = {
+    settings_field: None for _, settings_field in ENVELOPE_SETTINGS_FIELDS
+}
 
-def _is_exactly_int(value: object) -> bool:
+
+def is_exactly_int(value: object) -> bool:
     """Whether ``value`` is an ``int`` and nothing that merely behaves like one.
 
     ``True`` is an ``int`` to ``isinstance`` and ``1.0`` compares equal to
-    ``1``, so the type is asked for by name. The same test guards a sealed
-    arming record in ``clerk/live_arming.py``; it is repeated rather than
-    imported because that one is private to the sealed-record validator and
-    this is a one-token predicate, not a helper that can drift.
+    ``1``, so the type is asked for by name.
+
+    **Duplicate, with a parity test.** ``clerk/live_arming.py::_is_int`` is the
+    canonical statement of this predicate for a sealed arming record, and this
+    file deliberately does not import it: ``live_arming`` pulls
+    ``app.lean_sidecar.trading_calendar`` and with it the market-calendar
+    dependency, which has no business on the credential-resolution path. The
+    parity test that pins the two against each other is
+    ``tests/broker/alpaca/profile/test_runtime_context.py::
+    test_the_integer_predicate_agrees_with_the_sealed_record_validator``
+    (CLAUDE.md guiding philosophy #5).
     """
     return type(value) is int
 
@@ -91,15 +106,18 @@ def _is_real_number(value: object) -> bool:
     return type(value) is int or type(value) is float
 
 
-def _validated_envelope(live_envelope: Mapping[str, object]) -> dict[str, float | int]:
-    """Check the stored envelope's keys and Python types (contract §2.4)."""
+def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float | int]:
+    """The stored envelope as ``AlpacaSettings`` keyword arguments.
+
+    Checks the keys and the Python types on the way (contract §2.4), and keys
+    the result by settings field so the caller does not walk the same pairing a
+    second time.
+    """
     supplied = set(live_envelope)
     expected = set(LIVE_ENVELOPE_FIELDS)
     missing = sorted(expected - supplied)
     if missing:
-        raise RevisionIncomplete(
-            "its live envelope is missing " + ", ".join(missing)
-        )
+        raise RevisionIncomplete("its live envelope is missing " + ", ".join(missing))
     unexpected = sorted(supplied - expected)
     if unexpected:
         raise RevisionIncomplete(
@@ -108,16 +126,16 @@ def _validated_envelope(live_envelope: Mapping[str, object]) -> dict[str, float 
         )
 
     values: dict[str, float | int] = {}
-    for field in LIVE_ENVELOPE_FIELDS:
+    for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
         value = live_envelope[field]
         if field in _INTEGER_ENVELOPE_FIELDS:
-            if not _is_exactly_int(value):
+            if not is_exactly_int(value):
                 raise RevisionIncomplete(f"its {field} is not stored as a whole number")
-            values[field] = value
+            values[settings_field] = value
             continue
         if not _is_real_number(value):
             raise RevisionIncomplete(f"its {field} is not stored as a number")
-        values[field] = float(value)
+        values[settings_field] = float(value)
     return values
 
 
@@ -127,10 +145,15 @@ class AlpacaRuntimeContext:
 
     ``settings`` is a fully-specified ``AlpacaSettings`` — the same type every
     existing consumer already accepts — built from this revision's values
-    rather than from the process environment. ``profile_id`` and ``revision``
-    are provenance for the surfaces that report staged-versus-effective; they
-    are never execution inputs, and a change to either alone alters no
-    execution identity.
+    rather than from the process environment. Package D's migration is
+    therefore ``get_alpaca_settings()`` → ``context.settings`` at each call
+    site, and ``mode`` / ``is_paper`` / ``is_live`` / ``base_url`` are read
+    through it, keeping ``AlpacaSettings`` the single place the endpoint is
+    derived from the mode.
+
+    ``profile_id`` and ``revision`` are provenance for the surfaces that report
+    staged-versus-effective; they are never execution inputs, and a change to
+    either alone alters no execution identity.
     """
 
     settings: AlpacaSettings
@@ -142,24 +165,8 @@ class AlpacaRuntimeContext:
 
     @property
     def credential_slot(self) -> str:
+        """The slot label this binding resolved through — never its variables."""
         return self.credentials.slot
-
-    @property
-    def mode(self) -> EndpointMode:
-        return self.settings.mode
-
-    @property
-    def is_paper(self) -> bool:
-        return self.settings.is_paper
-
-    @property
-    def is_live(self) -> bool:
-        return self.settings.is_live
-
-    @property
-    def base_url(self) -> str:
-        """Derived from the mode by ``AlpacaSettings``; never a profile field."""
-        return self.settings.base_url
 
     def __repr__(self) -> str:
         """Identify the binding without reproducing ``AlpacaSettings``.
@@ -171,7 +178,7 @@ class AlpacaRuntimeContext:
         """
         return (
             f"AlpacaRuntimeContext(profile_id={self.profile_id!r}, "
-            f"revision={self.revision!r}, mode={self.mode!r}, "
+            f"revision={self.revision!r}, mode={self.settings.mode!r}, "
             f"credential_slot={self.credential_slot!r}, "
             f"account_pin={self.account_pin!r})"
         )
@@ -200,31 +207,22 @@ def resolve_runtime_context(
     revision whose own values cannot make a runtime.
     """
     if endpoint_mode not in ("paper", "live"):
-        raise RevisionIncomplete(
-            "its endpoint mode is neither 'paper' nor 'live'"
-        )
+        raise RevisionIncomplete("its endpoint mode is neither 'paper' nor 'live'")
 
     credentials = resolve_credentials(credential_slot, environment=environment)
-    envelope_values = (
-        None if live_envelope is None else _validated_envelope(live_envelope)
+    envelope_settings = (
+        _ABSENT_ENVELOPE_SETTINGS
+        if live_envelope is None
+        else _envelope_settings(live_envelope)
     )
 
-    settings_kwargs: dict[str, Any] = {
-        "api_key_id": credentials.key_id(),
-        "api_secret_key": credentials.secret_key(),
-        "mode": endpoint_mode,
-    }
-    # Every live field is passed explicitly — ``None`` included — so a stale
-    # ``ALPACA_LIVE_*`` left in the environment can never contribute a value to
-    # a resolved revision. There is no fallback to the environment after
-    # cutover (ADR 0060 Decision 7).
-    for field, settings_field in ENVELOPE_SETTINGS_FIELDS:
-        settings_kwargs[settings_field] = (
-            None if envelope_values is None else envelope_values[field]
-        )
-
     try:
-        settings = AlpacaSettings(**settings_kwargs)
+        settings = AlpacaSettings(
+            api_key_id=credentials.key_id(),
+            api_secret_key=credentials.secret_key(),
+            mode=endpoint_mode,
+            **envelope_settings,
+        )
     except ValidationError as exc:
         detail = alpaca_configuration_error_detail(exc)
         credential_touched = any(
@@ -243,7 +241,7 @@ def resolve_runtime_context(
         settings=settings,
         credentials=credentials,
         live_envelope=(
-            None if envelope_values is None else LiveEnvelopeValues.from_settings(settings)
+            None if live_envelope is None else LiveEnvelopeValues.from_settings(settings)
         ),
         account_pin=account_pin,
         profile_id=profile_id,
@@ -255,5 +253,6 @@ __all__ = [
     "LIVE_ENVELOPE_FIELDS",
     "AlpacaRuntimeContext",
     "EndpointMode",
+    "is_exactly_int",
     "resolve_runtime_context",
 ]

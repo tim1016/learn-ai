@@ -151,6 +151,18 @@ async def test_verify_account_observes_one_candidate_and_calls_nothing_else() ->
     ]
 
 
+def test_a_verification_with_no_observed_account_cannot_be_constructed() -> None:
+    # Discovery that resolved no account is a failure, not an empty success —
+    # so no consumer needs a branch that invents a placeholder account ID.
+    with pytest.raises(ValueError, match="at least one candidate"):
+        AccountVerification(
+            credential_slot="default",
+            endpoint_mode="paper",
+            candidates=(),
+            verified_at_ms=_OBSERVED_AT_MS,
+        )
+
+
 async def test_verify_account_translates_a_mode_disagreement() -> None:
     discovery = _RecordingDiscovery(
         BrokerAccountModeDisagreement("mode disagreement", broker="alpaca")

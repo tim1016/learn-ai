@@ -29,10 +29,15 @@ class BrokerProfileError(Exception):
 
     ``reason`` and ``http_status`` are the contract §6 row for the subclass;
     ``message`` is the *what* and ``next_step`` the operator's way forward.
+
+    Both are declared without a default on purpose. A base-class fallback
+    would emit a ``reason`` outside the taxonomy — a code the Frontend's
+    ``receiptLabel`` pipe has no rendering for — so a subclass that forgets to
+    declare its row fails loudly instead.
     """
 
-    reason: ClassVar[str] = "broker_profile_error"
-    http_status: ClassVar[int] = 409
+    reason: ClassVar[str]
+    http_status: ClassVar[int]
 
     def __init__(self, message: str, *, next_step: str) -> None:
         super().__init__(message)

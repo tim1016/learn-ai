@@ -64,7 +64,13 @@ Secret hygiene is asserted, not assumed (contract §8):
 `resolve_runtime_context()` turns one revision's non-secret values plus a slot
 name into a frozen `AlpacaRuntimeContext`. It holds a fully-specified
 `AlpacaSettings` — the same type every existing consumer already accepts — so
-Package D changes *where the values come from*, not every consumer's signature.
+Package D changes *where the values come from*, not every consumer's signature:
+its migration is `get_alpaca_settings()` → `context.settings` at each call site.
+`mode`, `is_paper`, `is_live` and `base_url` are read through `.settings`
+rather than mirrored onto the context, keeping `AlpacaSettings` the single place
+the endpoint is derived from the mode. The context adds only what settings
+cannot carry: the resolved credentials, the slot label, the sealed-envelope
+values, the account pin, and the profile/revision provenance.
 
 Two decisions worth recording:
 

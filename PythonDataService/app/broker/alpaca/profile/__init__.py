@@ -52,6 +52,7 @@ from app.broker.alpaca.profile.credentials import (
     credential_slot_available,
     describe_credential_slots,
     is_known_credential_slot,
+    require_known_credential_slot,
     resolve_credentials,
 )
 from app.broker.alpaca.profile.errors import (
@@ -94,6 +95,7 @@ __all__ = [
     "describe_credential_slots",
     "is_known_credential_slot",
     "pin_observed_account",
+    "require_known_credential_slot",
     "resolve_credentials",
     "resolve_runtime_context",
     "reverify_pinned_account",
