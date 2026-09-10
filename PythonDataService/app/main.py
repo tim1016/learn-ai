@@ -133,10 +133,14 @@ async def _install_alpaca_binding() -> BoundWorker | None:
     )
     from app.broker_configuration.worker_binding import BoundWorker
     from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+    from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
     from app.broker_configuration.worker_binding import resolve_worker_binding
 
     set_active_clerk_runtime(None)
-    resolved = await resolve_worker_binding()
+    # The switch preflight's evidence. Without it the fail-closed default
+    # refuses every account switch, which is safe but would quietly make
+    # switching impossible — so the real probe is wired here, not defaulted.
+    resolved = await resolve_worker_binding(obligations=ClerkPriorAccountObligations())
     if not isinstance(resolved, BoundWorker):
         refuse_active_alpaca_binding(resolved.unbound)
         logger.warning(
