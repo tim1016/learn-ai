@@ -1,0 +1,340 @@
+"""The HTTP surface at ``/api/brokers/alpaca/configuration``.
+
+Contract shape, not business rules — those are pinned against the service in
+``test_profiles_service.py`` and ``test_selection_service.py``. What these
+assert is that the routes exist at the contract's paths and statuses, that a
+typed refusal arrives with its code-like ``reason``, that a body naming an
+identity the server resolves is refused rather than ignored, and that the
+control secret gates every route.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.broker_configuration.records import CredentialSlotStatus, ObservedAccount
+from app.broker_configuration.runtime import reset_broker_configuration_service_for_testing
+from app.broker_configuration.service import BrokerConfigurationService
+from app.broker_configuration.store import ProfilesStore
+from app.routers.broker_configuration import PREFIX
+from app.routers.broker_configuration import (
+    get_broker_configuration_service as service_dependency,
+)
+from tests.broker_configuration.conftest import (
+    LIVE_ENVELOPE_PAYLOAD,
+    OPERATOR_IDENTITY,
+    FakeAccountVerifier,
+    FakeSlotDirectory,
+    FrozenClock,
+)
+
+PAPER_BODY = {"credential_slot": "alpaca_paper_primary", "endpoint_mode": "paper"}
+
+
+@pytest.fixture
+async def client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[AsyncClient]:
+    from app.main import app
+
+    built = BrokerConfigurationService(
+        store=ProfilesStore.open(clerk_dir=clerk_dir),
+        operator_identity=OPERATOR_IDENTITY,
+        clock=clock,
+        credential_slots=FakeSlotDirectory(
+            CredentialSlotStatus(slot="alpaca_paper_primary", label="Paper — primary", available=True)
+        ),
+        account_verifier=FakeAccountVerifier(
+            ObservedAccount(account_id="PA000PAPER", account_mode="paper", account_status="ACTIVE")
+        ),
+    )
+    app.dependency_overrides[service_dependency] = lambda: built
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
+    app.dependency_overrides.pop(service_dependency, None)
+    built.close()
+    reset_broker_configuration_service_for_testing()
+
+
+async def _create_paper_profile(client: AsyncClient, name: str = "Paper — testing") -> str:
+    response = await client.post(f"{PREFIX}/profiles", json={**PAPER_BODY, "display_name": name})
+    assert response.status_code == 201, response.text
+    return response.json()["profile"]["profile_id"]
+
+
+async def test_owner_is_readable_and_renameable(client: AsyncClient) -> None:
+    read = await client.get(f"{PREFIX}/owner")
+    assert read.status_code == 200
+    assert read.json()["display_label"] == OPERATOR_IDENTITY
+
+    renamed = await client.patch(f"{PREFIX}/owner", json={"display_label": "Desk operator"})
+
+    assert renamed.status_code == 200
+    assert renamed.json()["owner_id"] == read.json()["owner_id"]
+    assert renamed.json()["display_label"] == "Desk operator"
+
+
+async def test_credential_slots_report_labels_and_availability_only(client: AsyncClient) -> None:
+    response = await client.get(f"{PREFIX}/credential-slots")
+
+    assert response.status_code == 200
+    assert response.json()["slots"] == [
+        {
+            "slot": "alpaca_paper_primary",
+            "label": "Paper — primary",
+            "available": True,
+            "verified_account_id": None,
+            "verified_at_ms": None,
+        }
+    ]
+
+
+async def test_profile_lifecycle_over_http(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+
+    listed = await client.get(f"{PREFIX}/profiles")
+    detail = await client.get(f"{PREFIX}/profiles/{profile_id}")
+    renamed = await client.patch(
+        f"{PREFIX}/profiles/{profile_id}", json={"display_name": "Paper — renamed"}
+    )
+    cloned = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/clone", json={"display_name": "Paper — copy"}
+    )
+
+    assert [profile["profile_id"] for profile in listed.json()["profiles"]] == [profile_id]
+    assert detail.json()["latest_revision"]["revision"] == 1
+    assert renamed.json()["display_name"] == "Paper — renamed"
+    assert cloned.status_code == 201
+    assert cloned.json()["latest_revision"]["account_pin"] is None
+
+
+async def test_archived_profiles_are_hidden_unless_requested(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+    await client.patch(f"{PREFIX}/profiles/{profile_id}", json={"archived": True})
+
+    default = await client.get(f"{PREFIX}/profiles")
+    included = await client.get(f"{PREFIX}/profiles", params={"include_archived": True})
+
+    assert default.json()["profiles"] == []
+    assert len(included.json()["profiles"]) == 1
+
+
+async def test_a_live_revision_round_trips_its_envelope(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+
+    created = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions",
+        json={
+            "expected_revision": 1,
+            "credential_slot": "alpaca_live_primary",
+            "endpoint_mode": "live",
+            "live_envelope": LIVE_ENVELOPE_PAYLOAD,
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["live_envelope"] == LIVE_ENVELOPE_PAYLOAD
+    history = await client.get(f"{PREFIX}/profiles/{profile_id}/revisions")
+    assert [revision["revision"] for revision in history.json()["revisions"]] == [1, 2]
+
+
+async def test_a_stale_revision_edit_returns_a_conflict_with_its_reason(
+    client: AsyncClient,
+) -> None:
+    profile_id = await _create_paper_profile(client)
+    await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions",
+        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "second"},
+    )
+
+    stale = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions",
+        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "third"},
+    )
+
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["reason"] == "revision_conflict"
+    assert stale.json()["detail"]["message"]
+    assert stale.json()["detail"]["next_step"]
+
+
+async def test_an_unknown_profile_is_a_404_with_its_reason(client: AsyncClient) -> None:
+    response = await client.get(f"{PREFIX}/profiles/profile_missing")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["reason"] == "profile_not_found"
+
+
+async def test_verify_and_pin_an_observed_account(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+
+    observed = await client.post(f"{PREFIX}/profiles/{profile_id}/revisions/1/verify-account")
+    pinned = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions/1/account-pin",
+        json={"account_id": "PA000PAPER"},
+    )
+
+    assert observed.status_code == 200
+    assert observed.json()["observed_accounts"][0]["account_id"] == "PA000PAPER"
+    assert pinned.status_code == 200
+    assert pinned.json()["account_pin"] == "PA000PAPER"
+
+
+async def test_pinning_an_account_nobody_observed_is_refused(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+
+    response = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions/1/account-pin",
+        json={"account_id": "TYPED-BY-HAND"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "account_pin_mismatch"
+
+
+async def test_account_nicknames_are_keyed_to_the_account(client: AsyncClient) -> None:
+    put = await client.put(
+        f"{PREFIX}/account-nicknames/PA000PAPER", json={"nickname": "Testing account"}
+    )
+    listed = await client.get(f"{PREFIX}/account-nicknames")
+
+    assert put.status_code == 200
+    assert listed.json()["nicknames"] == [
+        {"account_id": "PA000PAPER", "nickname": "Testing account", "updated_at_ms": put.json()["updated_at_ms"]}
+    ]
+
+
+async def test_selection_reports_staged_and_effective_and_apply_returns_202(
+    client: AsyncClient,
+) -> None:
+    profile_id = await _create_paper_profile(client)
+
+    staged = await client.put(
+        f"{PREFIX}/selection",
+        json={"profile_id": profile_id, "revision": 1, "expected_selection_generation": 0},
+    )
+    applied = await client.post(
+        f"{PREFIX}/selection/apply", json={"expected_selection_generation": 1}
+    )
+    read = await client.get(f"{PREFIX}/selection")
+
+    assert staged.status_code == 200
+    assert applied.status_code == 202
+    body = read.json()
+    assert body["staged_profile_id"] == profile_id
+    assert body["apply_requested"] is True
+    # Apply changed no runtime: nothing is effective until the worker says so.
+    assert body["effective_profile_id"] is None
+    assert body["effective_acknowledged_at_ms"] is None
+
+
+async def test_a_stale_staging_generation_returns_a_conflict(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+    await client.put(
+        f"{PREFIX}/selection",
+        json={"profile_id": profile_id, "revision": 1, "expected_selection_generation": 0},
+    )
+
+    stale = await client.put(
+        f"{PREFIX}/selection",
+        json={"profile_id": profile_id, "revision": 1, "expected_selection_generation": 0},
+    )
+
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["reason"] == "selection_generation_conflict"
+
+
+async def test_no_route_writes_the_effective_fields(client: AsyncClient) -> None:
+    """Only the worker writes them, so no request body may carry them."""
+    profile_id = await _create_paper_profile(client)
+
+    response = await client.put(
+        f"{PREFIX}/selection",
+        json={
+            "profile_id": profile_id,
+            "revision": 1,
+            "expected_selection_generation": 0,
+            "effective_profile_id": profile_id,
+        },
+    )
+
+    assert response.status_code == 422
+    assert (await client.get(f"{PREFIX}/selection")).json()["effective_profile_id"] is None
+
+
+@pytest.mark.parametrize("field", ["owner_id", "actor", "user_id"])
+async def test_a_body_claiming_a_server_resolved_identity_is_refused(
+    client: AsyncClient, field: str
+) -> None:
+    response = await client.post(
+        f"{PREFIX}/profiles",
+        json={**PAPER_BODY, "display_name": "Paper — forged", field: "someone-else"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "owner_field_not_accepted"
+    assert field in response.json()["detail"]["message"]
+    assert (await client.get(f"{PREFIX}/profiles")).json()["profiles"] == []
+
+
+async def test_the_events_route_pages_the_audit_log(client: AsyncClient) -> None:
+    profile_id = await _create_paper_profile(client)
+    await client.patch(f"{PREFIX}/profiles/{profile_id}", json={"display_name": "Renamed"})
+
+    newest = await client.get(f"{PREFIX}/events", params={"limit": 1})
+    older = await client.get(
+        f"{PREFIX}/events", params={"before_event_id": newest.json()["events"][0]["event_id"]}
+    )
+
+    assert [event["action"] for event in newest.json()["events"]] == ["profile_renamed"]
+    assert [event["action"] for event in older.json()["events"]] == ["profile_created"]
+
+
+async def test_an_unreadable_database_is_a_503_not_a_crash(
+    clerk_dir: Path, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0060 Decision 7: fail closed with a reason, never crash the boot."""
+    import app.broker_configuration.runtime as broker_configuration_runtime
+    from app.main import app
+
+    app.dependency_overrides.pop(service_dependency, None)
+    monkeypatch.setattr(
+        broker_configuration_runtime, "resolve_clerk_dir", lambda: clerk_dir / "corrupt"
+    )
+    reset_broker_configuration_service_for_testing()
+    corrupt = clerk_dir / "corrupt" / "broker_configuration" / "profiles.db"
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_bytes(b"this is not a SQLite database")
+
+    response = await client.get(f"{PREFIX}/profiles")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "profiles_database_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/owner", None),
+        ("GET", "/profiles", None),
+        ("GET", "/selection", None),
+        ("GET", "/events", None),
+        ("PATCH", "/owner", {"display_label": "x"}),
+        ("POST", "/profiles", {**PAPER_BODY, "display_name": "x"}),
+        ("POST", "/selection/apply", {"expected_selection_generation": 0}),
+    ],
+)
+async def test_every_route_requires_the_control_secret(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str, body: dict | None
+) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "a-configured-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    response = await client.request(method, f"{PREFIX}{path}", json=body)
+
+    assert response.status_code == 403, f"{method} {path} answered {response.status_code}"

@@ -20,6 +20,7 @@ from app.broker.ibkr.client import (
     IbkrClient,
     set_client,
 )
+from app.broker_configuration.errors import BrokerConfigurationError
 from app.config import settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
@@ -33,6 +34,7 @@ from app.routers import (
     broker,
     broker_bots,
     broker_capability,
+    broker_configuration,
     broker_v2_gallery,
     broker_v2_panel,
     brokers,
@@ -700,6 +702,14 @@ app.include_router(
     brokers.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
+# User-owned broker configuration profiles (ADR 0060). Storage and API only:
+# the router carries its own literal /api/brokers/alpaca/configuration prefix
+# and its own per-route auth dependencies (always-on secret on reads, the
+# mutating-control secret plus the server-resolved-field refusal on writes), so
+# it is registered without additional dependencies here. Registering it does
+# not change broker or worker startup — resolving an effective selection into a
+# running worker is a separate change.
+app.include_router(broker_configuration.router)
 # Broker-parameterized bot runner (Alpaca Bot Control v2, S2 — #1260).
 # Deploy/stop/list for in-container log-only bots; broker-tagged bindings.
 # Control actions on live broker state — always-on data-plane secret.
@@ -800,6 +810,13 @@ app.add_exception_handler(
 # Ordered before the catch-all: an unusable Clerk authority is a state, not a
 # fault, and must not be reported as an internal error.
 app.add_exception_handler(ClerkSqliteError, clerk_sqlite_exception_handler)
+# Same reasoning for the profiles database: a stale edit, an archived profile or
+# an unreadable configuration database is a state the contract has words for,
+# not an internal fault.
+app.add_exception_handler(
+    BrokerConfigurationError,
+    broker_configuration.broker_configuration_exception_handler,
+)
 # Same reasoning: a mid-deploy catalog-schema race (#1883 Codex P2 finding)
 # is a transient deploy-ordering state, not an unexpected fault.
 app.add_exception_handler(CatalogSchemaNotReadyError, catalog_schema_not_ready_exception_handler)

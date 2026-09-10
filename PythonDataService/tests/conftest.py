@@ -1,7 +1,7 @@
 """Shared test fixtures and helpers"""
 
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -160,6 +160,34 @@ def _isolate_canary_admission_ledger(
         "DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
         isolated_path,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_broker_configuration_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Keep every test's broker-configuration profiles database in tmp_path.
+
+    Same hazard as the fixtures above: unpinned, the profiles database resolves
+    under the real ``ALPACA_CLERK_DIR`` — a developer's actual Clerk volume,
+    holding the custody and arming records the profiles explain. A test must
+    never read or write that.
+
+    The resolver is patched rather than the environment variable, so nothing
+    else that reads ``ALPACA_CLERK_DIR`` (``AlpacaSettings`` included) changes
+    behaviour: this fixture's blast radius is exactly the profiles database.
+    A test that needs its own location patches ``resolve_clerk_dir`` again;
+    later patches win. Dropping the process-wide service on both sides keeps
+    one test's profiles out of the next test's reads.
+    """
+    import app.broker_configuration.runtime as broker_configuration_runtime
+
+    isolated_root = tmp_path / "alpaca-clerk-isolated"
+    monkeypatch.setattr(broker_configuration_runtime, "resolve_clerk_dir", lambda: isolated_root)
+    broker_configuration_runtime.reset_broker_configuration_service_for_testing()
+    yield
+    broker_configuration_runtime.reset_broker_configuration_service_for_testing()
 
 
 _CATALOG_TRUNCATING_FIXTURE_PREFIX = "clean_artifacts"
