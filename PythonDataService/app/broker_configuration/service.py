@@ -184,6 +184,16 @@ class BrokerConfigurationService:
             return recorded
         return candidate
 
+    def existing_owner(self) -> LocalOwner | None:
+        """The local owner if one has been generated, without generating one.
+
+        :meth:`owner` bootstraps on first read, which is right for every runtime
+        caller and wrong for a preview: package F's import plan has to report
+        whether it would *create* the owner record, and asking with :meth:`owner`
+        would create it while answering. The only read that must not write.
+        """
+        return self._store.read_owner()
+
     def rename_owner(self, *, display_label: str) -> LocalOwner:
         owner = self.owner()
         now = self._clock()
