@@ -1,0 +1,286 @@
+import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
+import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
+import axe from 'axe-core';
+import { describe, expect, it, vi } from 'vitest';
+
+import type {
+  BrokerAccountNickname,
+  BrokerCredentialSlot,
+  BrokerInstallationSelection,
+  BrokerObservedAccount,
+  BrokerProfile,
+  BrokerProfileDetail,
+  BrokerProfileRevision,
+} from '../../../../api/alpaca.types';
+import { AlpacaConfigurationPageComponent } from './alpaca-configuration-page.component';
+import { BrokerConfigurationService } from './broker-configuration.service';
+
+const SLOTS: readonly BrokerCredentialSlot[] = [
+  { slot: 'default', label: 'Default credentials', available: true },
+  { slot: 'live', label: 'Live credentials', available: false },
+];
+
+function revision(overrides: Partial<BrokerProfileRevision> = {}): BrokerProfileRevision {
+  return {
+    profile_id: 'profile-paper',
+    revision: 1,
+    schema_version: 1,
+    credential_slot: 'default',
+    endpoint_mode: 'paper',
+    account_pin: null,
+    account_pinned_at_ms: null,
+    live_envelope: null,
+    content_sha256: 'c'.repeat(64),
+    complete: true,
+    author_owner_id: 'owner-1',
+    created_at_ms: 1_757_000_000_000,
+    ...overrides,
+  };
+}
+
+function profile(overrides: Partial<BrokerProfile> = {}): BrokerProfile {
+  return {
+    profile_id: 'profile-paper',
+    owner_id: 'owner-1',
+    broker: 'alpaca',
+    display_name: 'Paper — strategy testing',
+    archived: false,
+    created_at_ms: 1_757_000_000_000,
+    updated_at_ms: 1_757_000_000_000,
+    ...overrides,
+  };
+}
+
+function selection(
+  overrides: Partial<BrokerInstallationSelection> = {},
+): BrokerInstallationSelection {
+  return {
+    staged_profile_id: null,
+    staged_revision: null,
+    apply_requested: false,
+    apply_requested_at_ms: null,
+    apply_requested_generation: null,
+    selection_generation: 0,
+    effective_profile_id: null,
+    effective_revision: null,
+    effective_account_id: null,
+    effective_acknowledged_at_ms: null,
+    last_apply_outcome: null,
+    last_apply_refusal_reason: null,
+    ...overrides,
+  };
+}
+
+/**
+ * A stand-in for the whole configuration surface, holding the state the real
+ * service persists so a test can reload the page against it.
+ */
+class FakeConfigurationService {
+  profiles: BrokerProfile[] = [];
+  revisions: BrokerProfileRevision[] = [];
+  nicknames: BrokerAccountNickname[] = [];
+  current: BrokerInstallationSelection = selection();
+  observed: readonly BrokerObservedAccount[] = [
+    { account_id: 'PA3ZK9QWERTY', account_mode: 'paper', account_status: 'ACTIVE' },
+  ];
+  readonly staged: { profileId: string; revision: number; generation: number }[] = [];
+  readonly applied: number[] = [];
+  stageRefusal: HttpErrorResponse | null = null;
+
+  listCredentialSlots = vi.fn(async () => SLOTS);
+  listNicknames = vi.fn(async () => this.nicknames);
+  listProfiles = vi.fn(async (options: { includeArchived?: boolean } = {}) =>
+    this.profiles.filter((entry) => options.includeArchived === true || !entry.archived),
+  );
+  listRevisions = vi.fn(async () => this.revisions);
+  readSelection = vi.fn(async () => this.current);
+
+  readProfile = vi.fn(async (profileId: string): Promise<BrokerProfileDetail> => {
+    const found = this.profiles.find((entry) => entry.profile_id === profileId);
+    if (found === undefined) throw new Error(`no profile ${profileId}`);
+    const latest = this.revisions.filter((entry) => entry.profile_id === profileId).at(-1) ?? null;
+    return { profile: found, latest_revision: latest };
+  });
+
+  createProfile = vi.fn(async (displayName: string): Promise<BrokerProfileDetail> => {
+    const created = profile({ profile_id: `profile-${this.profiles.length + 1}`, display_name: displayName });
+    this.profiles.push(created);
+    const first = revision({ profile_id: created.profile_id });
+    this.revisions.push(first);
+    return { profile: created, latest_revision: first };
+  });
+
+  updateProfile = vi.fn(async (profileId: string, patch: { displayName?: string; archived?: boolean }) => {
+    const index = this.profiles.findIndex((entry) => entry.profile_id === profileId);
+    const updated = {
+      ...this.profiles[index],
+      ...(patch.displayName === undefined ? {} : { display_name: patch.displayName }),
+      ...(patch.archived === undefined ? {} : { archived: patch.archived }),
+    };
+    this.profiles[index] = updated;
+    return updated;
+  });
+
+  cloneProfile = vi.fn(async () => ({ profile: this.profiles[0], latest_revision: null }));
+  createRevision = vi.fn(async () => revision({ revision: 2 }));
+  verifyAccount = vi.fn(async () => this.observed);
+  pinAccount = vi.fn(async () => revision({ account_pin: 'PA3ZK9QWERTY' }));
+  putNickname = vi.fn(async () => ({ account_id: 'PA3ZK9QWERTY', nickname: 'x', updated_at_ms: 1 }));
+
+  stageSelection = vi.fn(async (profileId: string, rev: number, generation: number) => {
+    if (this.stageRefusal !== null) throw this.stageRefusal;
+    this.staged.push({ profileId, revision: rev, generation });
+    this.current = {
+      ...this.current,
+      staged_profile_id: profileId,
+      staged_revision: rev,
+      selection_generation: generation + 1,
+    };
+    return this.current;
+  });
+
+  applySelection = vi.fn(async (generation: number) => {
+    this.applied.push(generation);
+    this.current = {
+      ...this.current,
+      apply_requested: true,
+      apply_requested_at_ms: 1_757_000_500_000,
+      selection_generation: generation + 1,
+    };
+    return this.current;
+  });
+}
+
+async function renderPage(service: FakeConfigurationService) {
+  return render(AlpacaConfigurationPageComponent, {
+    providers: [
+      provideRouter([]),
+      { provide: BrokerConfigurationService, useValue: service },
+    ],
+  });
+}
+
+async function saveProfile(name: string): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: 'New configuration profile' }));
+  await userEvent.type(screen.getByLabelText('Profile name'), name);
+  await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+}
+
+describe('AlpacaConfigurationPageComponent', () => {
+  it('saves a named profile, survives a reload, stages it, and applies it', async () => {
+    const service = new FakeConfigurationService();
+    const first = await renderPage(service);
+    await saveProfile('Paper — strategy testing');
+    expect(await screen.findByText('Paper — strategy testing')).toBeTruthy();
+
+    // "Reload the page" is a fresh component against the same stored state.
+    first.fixture.destroy();
+    TestBed.resetTestingModule();
+    await renderPage(service);
+    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+
+    expect(service.staged).toEqual([{ profileId: 'profile-1', revision: 1, generation: 0 }]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply staged revision' }));
+
+    expect(service.applied).toEqual([1]);
+    expect(screen.getByText(/nothing has changed yet/)).toBeTruthy();
+  });
+
+  it('surfaces a newer tab’s write as a reload, and never retries it', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    service.stageRefusal = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason: 'selection_generation_conflict',
+          message: 'The selection changed while this page was open.',
+          next_step: 'Reload the configuration and stage again.',
+        },
+      },
+    });
+    await renderPage(service);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+
+    // The code-like reason arrives through the shared `receiptLabel` pipe.
+    expect(screen.getByText('Selection Generation Conflict')).toBeTruthy();
+    expect(screen.getByText('The selection changed while this page was open.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reload configuration' })).toBeTruthy();
+    expect(service.stageSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('renames durably rather than only in the row it was typed in', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    await renderPage(service);
+
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    const nameField = await screen.findByLabelText('Profile name');
+    await userEvent.clear(nameField);
+    await userEvent.type(nameField, 'Paper — overnight');
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
+
+    expect(service.updateProfile).toHaveBeenCalledWith('profile-1', {
+      displayName: 'Paper — overnight',
+    });
+    expect(service.profiles[0].display_name).toBe('Paper — overnight');
+  });
+
+  it('says what an unavailable credential slot means and who can fix it', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1', credential_slot: 'live' }));
+    await renderPage(service);
+
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+
+    expect(await screen.findByText(/No credential pair is injected for this slot/)).toBeTruthy();
+    expect(screen.getByText(/this page cannot make it/)).toBeTruthy();
+  });
+
+  it('offers no credential field anywhere on the page', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+
+    expect(screen.queryAllByRole('textbox', { name: /key|secret|password/i })).toHaveLength(0);
+    expect(document.querySelectorAll('input[type="password"]')).toHaveLength(0);
+  });
+
+  it('has no detectable accessibility violations with a profile open and a form expanded', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    await userEvent.click(screen.getByRole('button', { name: 'New configuration profile' }));
+
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+
+    expect(results.violations).toEqual([]);
+  });
+
+  it('approves only an account the broker was observed to reach', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify account (read-only)' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve this account' }));
+
+    expect(service.pinAccount).toHaveBeenCalledWith('profile-1', 1, 'PA3ZK9QWERTY');
+  });
+});

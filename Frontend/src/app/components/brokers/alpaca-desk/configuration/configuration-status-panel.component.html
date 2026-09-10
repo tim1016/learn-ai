@@ -1,0 +1,70 @@
+@let current = selection();
+<section class="status" aria-label="Broker configuration status">
+  <h2 class="status__heading">Installation selection</h2>
+  <div class="status__states">
+    <div class="status__state">
+      <h3>Effective now</h3>
+      @if (effectiveLabel(); as label) {
+        <p class="status__value">{{ label }}</p>
+        @if (current.effective_account_id; as accountId) {
+          <p class="status__account">
+            Account <strong>{{ accountId }}</strong>
+            @if (effectiveNickname(); as nickname) { <span>· {{ nickname }}</span> }
+          </p>
+        }
+        @if (current.effective_acknowledged_at_ms) {
+          <p class="status__stamp">
+            A worker acknowledged this binding at
+            <app-timestamp-display [value]="current.effective_acknowledged_at_ms" mode="local" />.
+            That records a past boot, not that a worker is running now.
+          </p>
+        }
+      } @else {
+        <p class="status__value status__value--empty">
+          No revision has been applied, so no broker is bound.
+        </p>
+      }
+    </div>
+
+    <div class="status__state">
+      <h3>Staged</h3>
+      @if (stagedLabel(); as label) {
+        <p class="status__value">{{ label }}</p>
+      } @else {
+        <p class="status__value status__value--empty">Nothing is staged.</p>
+      }
+      <p class="status__stamp">Selection generation {{ current.selection_generation }}</p>
+    </div>
+  </div>
+
+  <div class="status__apply">
+    <p class="status__restart" role="status">{{ driftMessage() }}</p>
+    @if (current.apply_requested_at_ms) {
+      <p class="status__stamp">
+        Apply recorded at
+        <app-timestamp-display [value]="current.apply_requested_at_ms" mode="local" />
+      </p>
+    }
+
+    <button
+      type="button"
+      class="status__apply-button"
+      [disabled]="!canApply()"
+      (click)="applyRequested.emit()"
+    >Apply staged revision</button>
+
+    <p class="status__never-arms">
+      Apply never arms live trading and never changes an armed risk limit. Arming is a
+      ceremony the owner runs on the host.
+    </p>
+  </div>
+
+  @if (current.last_apply_outcome; as outcome) {
+    <div class="status__outcome" [class.status__outcome--refused]="outcome === 'refused'">
+      <h3>Last apply · {{ outcome | receiptLabel }}</h3>
+      @if (current.last_apply_refusal_reason; as reason) {
+        <p class="status__refusal">{{ reason }}</p>
+      }
+    </div>
+  }
+</section>

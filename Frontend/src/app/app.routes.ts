@@ -296,6 +296,17 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // User-owned broker configuration profiles (ADR 0060). Declared before the
+    // desk so the intent of the deeper path is readable next to it; Angular
+    // would backtrack to it either way, since the desk route consumes no
+    // trailing segments.
+    path: "brokers/alpaca/configuration",
+    loadComponent: () =>
+      import(
+        "./components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component"
+      ).then((m) => m.AlpacaConfigurationPageComponent),
+  },
+  {
     // Broker System v2 read-only desk — separate from every v1 broker page.
     path: "brokers/alpaca",
     loadComponent: () =>

@@ -64,3 +64,18 @@ export type HistoricalExecutionRecoveryPlan =
   components['schemas']['HistoricalExecutionRecoveryPlanResponse'];
 export type HistoricalExecutionRecoveryReceipt =
   components['schemas']['HistoricalExecutionRecoveryReceiptResponse'];
+
+// User-owned broker configuration profiles (ADR 0060). Staged, effective and
+// sealed are three different things; only `SelectionResponse` names the first
+// two, and nothing on this surface names the third.
+export type BrokerProfile = components['schemas']['ProfileResponse'];
+export type BrokerProfileDetail = components['schemas']['ProfileDetailResponse'];
+export type BrokerProfileRevision = components['schemas']['RevisionResponse'];
+export type BrokerCredentialSlot = components['schemas']['CredentialSlotResponse'];
+export type BrokerInstallationSelection = components['schemas']['SelectionResponse'];
+export type BrokerObservedAccount = components['schemas']['ObservedAccountResponse'];
+export type BrokerAccountNickname = components['schemas']['NicknameResponse'];
+export type BrokerLiveEnvelope = components['schemas']['LiveEnvelopePayload'];
+// The endpoint mode a revision declares — `paper` or `live`. Derived from the
+// revision field rather than named separately, so the closed set cannot drift.
+export type BrokerEndpointMode = BrokerProfileRevision['endpoint_mode'];

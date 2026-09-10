@@ -1,0 +1,47 @@
+@let fields = draftForm();
+<div class="revision-form">
+  <div class="revision-form__row">
+    <label class="revision-form__field">
+      <span>Credential slot</span>
+      <select [formField]="fields.credential_slot">
+        @for (slot of slots(); track slot.slot) {
+          <option [value]="slot.slot">
+            {{ slot.label }}{{ slot.available ? '' : ' — no credentials injected' }}
+          </option>
+        }
+      </select>
+    </label>
+
+    <label class="revision-form__field">
+      <span>Endpoint</span>
+      <select [formField]="fields.endpoint_mode">
+        <option value="paper">Paper</option>
+        <option value="live">Live</option>
+      </select>
+    </label>
+  </div>
+
+  @if (slotUnavailable()) {
+    <p class="revision-form__notice" role="status">
+      No credential pair is injected for this slot, so verifying an account and applying
+      this profile will both refuse. Injecting one is a change to the service's own
+      environment on the host — this page cannot make it.
+    </p>
+  }
+
+  @if (isLive()) {
+    <app-configuration-envelope-form [draftForm]="fields" />
+    <p class="revision-form__notice revision-form__notice--live" role="status">
+      Choosing Live selects which endpoint a future restart talks to. It does not arm live
+      trading and does not change any armed risk limit.
+    </p>
+  }
+
+  @if (problems().length > 0) {
+    <ul class="revision-form__problems">
+      @for (problem of problems(); track problem) {
+        <li>{{ problem }}</li>
+      }
+    </ul>
+  }
+</div>

@@ -1,0 +1,112 @@
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.status__states {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.status__heading {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.status__state h3,
+.status__outcome h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status__value {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.status__value--empty {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.status__account {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.status__stamp {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.status__apply {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+
+.status__restart {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.status__apply-button {
+  align-self: flex-start;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+}
+
+.status__apply-button:disabled {
+  background: var(--bg-canvas);
+  border-color: var(--border-light);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+.status__never-arms {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.status__outcome {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+
+.status__outcome--refused h3 {
+  color: var(--bear);
+}
+
+.status__refusal {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}

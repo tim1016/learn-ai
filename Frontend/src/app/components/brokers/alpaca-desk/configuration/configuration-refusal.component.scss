@@ -1,0 +1,37 @@
+.refusal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--bear);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.refusal__reason {
+  margin: 0;
+  color: var(--bear);
+  font-weight: var(--fw-bold);
+}
+
+.refusal__message,
+.refusal__next-step {
+  margin: 0;
+}
+
+.refusal__next-step {
+  color: var(--text-secondary);
+}
+
+.refusal__reload {
+  align-self: flex-start;
+  margin-top: var(--space-1);
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  cursor: pointer;
+}

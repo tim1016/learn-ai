@@ -1,0 +1,25 @@
+@if (!open()) {
+  <button type="button" class="create__toggle" (click)="open.set(true)">
+    New configuration profile
+  </button>
+} @else {
+  <form class="create" (submit)="$event.preventDefault(); submit()">
+    <h3>New configuration profile</h3>
+
+    <label class="create__field">
+      <span>Profile name</span>
+      <input type="text" [formField]="nameForm" placeholder="Paper — strategy testing" />
+    </label>
+
+    <app-configuration-revision-form
+      [draftForm]="draftForm"
+      [slots]="slots()"
+      [problems]="problems()"
+    />
+
+    <div class="create__actions">
+      <button type="submit" class="create__save" [disabled]="!canSave()">Save profile</button>
+      <button type="button" [disabled]="busy()" (click)="reset()">Cancel</button>
+    </div>
+  </form>
+}
