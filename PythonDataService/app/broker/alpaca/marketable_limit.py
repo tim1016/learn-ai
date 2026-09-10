@@ -30,16 +30,15 @@ returns validates as a ``BrokerOrderLeg.limit_price``.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import TYPE_CHECKING
 
-from pydantic import ValidationError
-
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
 from app.broker.contract.models import OrderSide
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+    from app.broker.alpaca.config import AlpacaSettings
 
 _BPS_PER_UNIT = Decimal(10_000)
 _DOLLAR_TICK = Decimal("0.01")
@@ -81,9 +80,14 @@ def marketable_limit_price(*, side: OrderSide, close: Decimal, allowance_bps: De
 class ExtendedHoursAllowances:
     """The operator's extended-session allowances, in basis points (ADR 0059 D4).
 
-    Both values come from the environment file; neither has a default in
-    code. ``None`` from the constructors means "not configured", which the
-    leg policy and Start admission refuse explicitly — never zero.
+    Neither value has a default in code. ``None`` from :meth:`from_settings`
+    means "not configured", which the leg policy and Start admission refuse
+    explicitly — never zero.
+
+    Two constructors, both pure, because there are two documents the same six
+    numbers can arrive in and *which one* an extended-session leg prices from
+    is a decision this type does not make: ``program_leg.resolve_extended_hours_allowances``
+    owns the order. This module only converts.
     """
 
     entry_bps: Decimal
@@ -99,20 +103,19 @@ class ExtendedHoursAllowances:
         )
 
     @classmethod
-    def from_environment(cls) -> ExtendedHoursAllowances | None:
-        """Read the process settings; absent credentials mean absent allowances.
+    def from_envelope(cls, envelope: LiveEnvelopeValues) -> ExtendedHoursAllowances:
+        """The two allowances a sealed or effective live envelope carries.
 
-        A synthetic (``sim:``) authority can be built in a process that has
-        no Alpaca credentials at all; that is not an error, it is "no
-        allowances", and it is logged so an operator can see why an
-        extended-hours leg was refused.
+        Never ``None``: a ``LiveEnvelopeValues`` cannot exist without all six
+        values, so unlike the settings constructor there is no "half
+        configured" case to answer for.
+
+        The conversion is ``Decimal(str(...))``, exactly as ``from_settings``
+        does it, so a sealed envelope and an environment-configured one at the
+        same numbers produce the same anchor. This is adapter-level only —
+        nothing here re-derives ``LiveEnvelopeValues.sha`` or a record's digest.
         """
-        try:
-            settings = get_alpaca_settings()
-        except ValidationError as exc:
-            logger.info(
-                "Extended-hours allowances are unavailable: Alpaca settings did not load",
-                extra={"action": "extended_hours_allowances_unavailable", "error": str(exc)},
-            )
-            return None
-        return cls.from_settings(settings)
+        return cls(
+            entry_bps=Decimal(str(envelope.xh_entry_bps)),
+            exit_bps=Decimal(str(envelope.xh_exit_bps)),
+        )
