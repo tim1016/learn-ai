@@ -1,13 +1,13 @@
 <main class="configuration">
   <header class="configuration__titlebar">
-    <div>
-      <a class="configuration__back" routerLink="/brokers/alpaca">← Alpaca desk</a>
-      <h1>Broker configuration</h1>
-      <p class="configuration__lede">
-        Named profiles this installation owns. A profile is inert until it is staged,
-        applied, and the worker is restarted — and no credential is ever entered here.
-      </p>
-    </div>
+    <a class="configuration__back" routerLink="/brokers/alpaca">
+      <span aria-hidden="true">←</span> Alpaca desk
+    </a>
+    <h1>Broker configuration</h1>
+    <p class="configuration__lede">
+      Named profiles this installation owns. A profile is inert until it is staged,
+      applied, and the worker is restarted — and no credential is ever entered here.
+    </p>
   </header>
 
   @if (refusal(); as detail) {
