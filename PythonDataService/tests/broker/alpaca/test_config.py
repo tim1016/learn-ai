@@ -16,7 +16,6 @@ from app.broker.alpaca.config import (
     AlpacaSettings,
     reset_alpaca_settings_for_testing,
 )
-from app.main import _alpaca_clerk_configuration_is_valid
 
 _LIVE_REQUIRED = {
     "live_loss_fraction": 0.02,
@@ -103,10 +102,21 @@ def test_missing_credentials_raise(monkeypatch: pytest.MonkeyPatch) -> None:
         AlpacaSettings(_env_file=None)
 
 
-def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
+async def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A half-edited ``.env`` on an installation with no profiles.
+
+    Under ADR 0060 the startup probe resolves a *binding* rather than reading
+    the environment, but this deployment shape — no profiles saved yet — still
+    bootstraps from the environment, so the diagnostic that names the missing
+    ``ALPACA_LIVE_*`` variables is still the true one and must survive. It
+    belongs in the log, never in the operator-facing refusal, and the
+    credential must not appear in either.
+    """
+    from app.main import _install_alpaca_binding
+
     secret = "must-not-appear-in-logs"
     set_alpaca_clerk(MagicMock())
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
@@ -116,7 +126,7 @@ def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
 
     try:
         with caplog.at_level("WARNING"):
-            assert _alpaca_clerk_configuration_is_valid() is False
+            assert await _install_alpaca_binding() is None
 
         assert get_alpaca_clerk() is None
         rendered = " ".join(

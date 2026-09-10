@@ -215,16 +215,31 @@ def _bootstrap_from_environment(
 ) -> ResolvedWorkerBinding:
     from pydantic import ValidationError
 
-    from app.broker.alpaca.config import get_alpaca_settings
+    from app.broker.alpaca.config import (
+        alpaca_configuration_error_detail,
+        get_alpaca_settings,
+    )
     from app.broker.alpaca.profile.credentials import resolve_credentials
 
     try:
         settings = get_alpaca_settings()
-    except ValidationError:
-        logger.info(
+    except ValidationError as exc:
+        # The detail names the missing ``ALPACA_LIVE_*`` variables, and on this
+        # path that is the true diagnostic: no profile exists, so the
+        # environment really is the source, and an operator with a half-edited
+        # ``.env`` needs to know which line is missing. It goes to the log
+        # only. The operator-facing ``message`` below stays in profile
+        # vocabulary, because contract §6 renders it verbatim in the UI and
+        # ADR 0060 supersedes exactly the environment-source rule that prose
+        # states. ``alpaca_configuration_error_detail`` keeps only Pydantic's
+        # ``msg`` text, which never echoes the credential-bearing input.
+        logger.warning(
             "No saved broker configuration and no usable environment settings; "
             "the broker gate is closed",
-            extra={"action": "worker_binding_bootstrap_unavailable"},
+            extra={
+                "action": "worker_binding_bootstrap_unavailable",
+                "detail": alpaca_configuration_error_detail(exc),
+            },
         )
         return _unconfigured(
             "No saved broker configuration exists and the environment does not "
