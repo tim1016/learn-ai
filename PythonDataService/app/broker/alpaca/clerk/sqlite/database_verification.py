@@ -41,10 +41,10 @@ def verify_database(
     cutover ``plan``: it neither acquires the execution lease nor updates
     ``last_open_at_ms``.
     """
-    resolved = path.resolve(strict=True)
-    immutable_option = "&immutable=1" if immutable else ""
     conn: sqlite3.Connection | None = None
     try:
+        resolved = path.resolve(strict=True)
+        immutable_option = "&immutable=1" if immutable else ""
         conn = sqlite3.connect(
             f"{resolved.as_uri()}?mode=ro{immutable_option}",
             uri=True,
@@ -75,39 +75,48 @@ def verify_database(
             f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} "
             "FROM custody_transitions ORDER BY sequence ASC"
         ).fetchall()
-    except sqlite3.DatabaseError as exc:
+        payloads = [writes.row_to_payload(row) for row in rows]
+        for expected, row in enumerate(payloads, start=1):
+            if row["sequence"] != expected:
+                raise DatabaseVerificationFailed(
+                    f"{path} transition sequence gap: expected {expected}, "
+                    f"found {row['sequence']}"
+                )
+            if row["authority_generation"] != control["authority_generation"]:
+                raise DatabaseVerificationFailed(
+                    f"{path} transition {expected} belongs to a different generation"
+                )
+        bad_sequence = verify_chain(payloads)
+        if bad_sequence is not None:
+            raise DatabaseVerificationFailed(
+                f"{path} hash-chain mismatch at sequence {bad_sequence}"
+            )
+        last_sequence = int(payloads[-1]["sequence"]) if payloads else 0
+        last_row_hash = str(payloads[-1]["row_hash"]) if payloads else GENESIS
+        return DatabaseVerification(
+            account_id=str(control["account_id"]),
+            authority_generation=int(control["authority_generation"]),
+            db_identity_token=str(control["db_identity_token"]),
+            schema_version=int(control["schema_version"]),
+            control_revision=int(control["control_revision"]),
+            transition_count=len(payloads),
+            last_sequence=last_sequence,
+            last_row_hash=last_row_hash,
+        )
+    except DatabaseVerificationFailed:
+        raise
+    except (
+        KeyError,
+        OSError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        sqlite3.DatabaseError,
+    ) as exc:
         raise DatabaseVerificationFailed(f"{path} cannot be verified: {exc}") from exc
     finally:
         if conn is not None:
             conn.close()
-
-    payloads = [writes.row_to_payload(row) for row in rows]
-    for expected, row in enumerate(payloads, start=1):
-        if row["sequence"] != expected:
-            raise DatabaseVerificationFailed(
-                f"{path} transition sequence gap: expected {expected}, found {row['sequence']}"
-            )
-        if row["authority_generation"] != control["authority_generation"]:
-            raise DatabaseVerificationFailed(
-                f"{path} transition {expected} belongs to a different generation"
-            )
-    bad_sequence = verify_chain(payloads)
-    if bad_sequence is not None:
-        raise DatabaseVerificationFailed(
-            f"{path} hash-chain mismatch at sequence {bad_sequence}"
-        )
-    last_sequence = int(payloads[-1]["sequence"]) if payloads else 0
-    last_row_hash = str(payloads[-1]["row_hash"]) if payloads else GENESIS
-    return DatabaseVerification(
-        account_id=str(control["account_id"]),
-        authority_generation=int(control["authority_generation"]),
-        db_identity_token=str(control["db_identity_token"]),
-        schema_version=int(control["schema_version"]),
-        control_revision=int(control["control_revision"]),
-        transition_count=len(payloads),
-        last_sequence=last_sequence,
-        last_row_hash=last_row_hash,
-    )
 
 
 def sha256_file(path: Path) -> str:

@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
-    AccountAuthorityIdentityError,
     custody_account_id_for,
     custody_account_ids_for,
     is_shadow_account_id,
@@ -184,25 +183,164 @@ def live_account_id_for_instance(
     account_id = binding.sealed_account_id
     if is_shadow_account_id(account_id):
         return live_account_id_for(artifacts_root)
+    return _verified_live_account_id(
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+        failure_detail=f"{strategy_instance_id} is not sealed to a verified Live account",
+    )
+
+
+def _verified_live_account_id(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    failure_detail: str,
+) -> str:
+    """Verify one graduated account's activation, artifacts, and database."""
     try:
-        live_account_id = require_real_account_id(account_id)
-        activation_store = ActivationStore(artifacts_root / "accounts" / "alpaca")
-        activation = activation_store.latest(live_account_id)
-        if activation is None:
+        if not live_account_activation_is_verified(
+            live_account_id=account_id,
+            artifacts_root=artifacts_root,
+        ):
             raise ActivationRecordInvalid("no live activation record names this account")
+    except ActivationRecordInvalid as exc:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"{failure_detail}: {exc}",
+        ) from exc
+    return account_id
+
+
+def live_account_activation_is_verified(
+    *,
+    live_account_id: str,
+    artifacts_root: Path,
+) -> bool:
+    """Whether one account has a fully verified Live authority activation.
+
+    A present activation row is not enough: its cutover artifacts and the
+    identity of its confined Clerk database must still verify. All malformed
+    evidence leaves through ``ActivationRecordInvalid`` so account resolution
+    and operator admission reporting share one failure contract.
+    """
+    try:
+        account_id = require_real_account_id(live_account_id)
+        activation_store = ActivationStore(artifacts_root / "accounts" / "alpaca")
+        activation = activation_store.latest(account_id)
+        if activation is None:
+            return False
         activation_store.validate_artifacts(activation, artifacts_root=artifacts_root)
         verify_database(
-            confined_account_file(artifacts_root, live_account_id, DB_FILENAME),
-            expected_account_id=live_account_id,
+            confined_account_file(artifacts_root, account_id, DB_FILENAME),
+            expected_account_id=account_id,
             expected_generation=activation.authority_generation,
             expected_db_identity=activation.db_identity_token,
         )
-    except (AccountAuthorityIdentityError, ActivationRecordInvalid, DatabaseVerificationFailed) as exc:
+    except ActivationRecordInvalid:
+        raise
+    except (ValueError, DatabaseVerificationFailed) as exc:
+        raise ActivationRecordInvalid(f"Live authority cannot be verified: {exc}") from exc
+    return True
+
+
+def live_account_id_for_status(
+    *,
+    strategy_instance_id: str | None,
+    artifacts_root: Path,
+    live_state_root: Path,
+) -> str:
+    """Resolve the exact account whose arming status can be reported.
+
+    A named instance ordinarily uses its sealed binding. If that binding or a
+    Shadow binding's activation fence has disappeared after arming, its unique
+    account-rooted ledger row is enough for the read-only status command to
+    report the recorded state; a never-armed instance still refuses instead of
+    inheriting another account.
+
+    List status retains the Shadow activation fence when present. A directly
+    graduated account has no such fence, so its durable Live activation is the
+    account evidence instead. Multiple candidates remain ambiguous and refuse.
+    """
+    if strategy_instance_id is not None:
+        binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
+        shadow_resolution_failure: LiveArmingRefused | ShadowActivationInvalid | None = None
+        if (
+            binding is not None
+            and binding.sealed_program is not None
+            and binding.sealed_account_id is not None
+        ):
+            try:
+                return live_account_id_for_instance(
+                    strategy_instance_id=strategy_instance_id,
+                    artifacts_root=artifacts_root,
+                    live_state_root=live_state_root,
+                )
+            except LiveArmingRefused as exc:
+                if (
+                    not is_shadow_account_id(binding.sealed_account_id)
+                    or exc.reason_code != LIVE_ARMING_INSTANCE_UNSEALED
+                ):
+                    raise
+                shadow_resolution_failure = exc
+            except ShadowActivationInvalid as exc:
+                if not is_shadow_account_id(binding.sealed_account_id):
+                    raise
+                shadow_resolution_failure = exc
+        try:
+            discovered = LiveArmingLedger.discover(
+                artifacts_root,
+                strategy_instance_id=strategy_instance_id,
+            )
+        except LiveArmingRefused:
+            raise
+        except ValueError as exc:
+            raise LiveArmingRefused(
+                LIVE_ARMING_INSTANCE_UNSEALED,
+                f"the arming ledger cannot be discovered safely: {exc}",
+            ) from exc
+        if discovered is not None:
+            return discovered.live_account_id
+        if isinstance(shadow_resolution_failure, LiveArmingRefused):
+            raise shadow_resolution_failure
+        if shadow_resolution_failure is not None:
+            raise LiveArmingRefused(
+                LIVE_ARMING_INSTANCE_UNSEALED,
+                f"{strategy_instance_id}'s Shadow activation proof cannot be verified: "
+                f"{shadow_resolution_failure}",
+            ) from shadow_resolution_failure
         raise LiveArmingRefused(
             LIVE_ARMING_INSTANCE_UNSEALED,
-            f"{strategy_instance_id} is not sealed to a verified Live account: {exc}",
+            f"{strategy_instance_id} has no sealed alpaca binding",
+        )
+
+    shadow_ids = ShadowActivationStore(artifacts_root).account_ids()
+    try:
+        live_ids = ActivationStore(artifacts_root / "accounts" / "alpaca").account_ids()
+    except ActivationRecordInvalid as exc:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"the Live activation ledger cannot be verified: {exc}",
         ) from exc
-    return live_account_id
+    shadow_live_ids = tuple(live_account_id_for_shadow_account(account_id) for account_id in shadow_ids)
+    candidates = tuple(dict.fromkeys((*shadow_live_ids, *live_ids)))
+    if not candidates:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"no Shadow or Live activation proof under {artifacts_root}",
+        )
+    if len(candidates) > 1:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "the Shadow and Live activation evidence names more than one account "
+            f"({', '.join(sorted(candidates))}); status cannot choose between them",
+        )
+    if not live_ids:
+        return live_account_id_for(artifacts_root)
+    return _verified_live_account_id(
+        account_id=candidates[0],
+        artifacts_root=artifacts_root,
+        failure_detail="the Live activation is not verified",
+    )
 
 
 def instance_seal_hashes(
@@ -691,8 +829,10 @@ __all__ = [
     "configured_envelope",
     "disarm",
     "instance_seal_hashes",
+    "live_account_activation_is_verified",
     "live_account_id_for",
     "live_account_id_for_instance",
+    "live_account_id_for_status",
     "observe_arming_inputs",
     "plan_arming",
 ]

@@ -61,7 +61,15 @@ def _verified_payload(record: LedgerRecord) -> dict[str, Any]:
         if isinstance(record, LiveArmingRecord)
         else LiveDisarmRecord.from_payload(payload)
     )
-    return asdict(verified)
+    canonical = asdict(verified)
+    if isinstance(verified, LiveArmingRecord) and verified.schema_version == 1:
+        # These fields were introduced by schema version 2. Keeping their
+        # dataclass defaults makes old rows readable, but writing them as null
+        # would widen a version-1 wire payload that older releases reject and
+        # would serialize bytes the row's digest never sealed.
+        del canonical["predecessor"]
+        del canonical["originating_plan_id"]
+    return canonical
 
 
 class LiveArmingLedger:
@@ -205,11 +213,11 @@ class LiveArmingLedger:
     def discover(cls, artifacts_root: Path, *, strategy_instance_id: str) -> LiveArmingLedger | None:
         """The one account whose arming ledger names this instance, from the tree alone.
 
-        ``disarm`` is the closed direction, and the shadow activation proof it
-        would normally read can be deleted or damaged after an arming --
-        precisely during the incident a revocation exists for. The arming rows
-        already name their own live account, so the tree can answer the
-        question the fence usually answers.
+        ``disarm`` is the closed direction and ``status`` is read-only. The
+        shadow activation proof or runner binding they would normally read can
+        be deleted or damaged after an arming -- precisely during the incident
+        those operations need to report. The arming rows already name their
+        own live account, so the tree can answer the question.
 
         A directory whose name is not a real, path-safe account id is not an
         arming ledger and is skipped; a ledger that will not verify is skipped
@@ -252,7 +260,7 @@ class LiveArmingLedger:
                 LIVE_ARMING_INSTANCE_UNSEALED,
                 f"{strategy_instance_id} is armed on more than one live account "
                 f"({', '.join(ledger.live_account_id for ledger in found)}); "
-                "disarm cannot choose between them",
+                "status or disarm cannot choose between them",
             )
         return found[0] if found else None
 

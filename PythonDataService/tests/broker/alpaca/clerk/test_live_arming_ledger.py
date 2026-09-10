@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.live_arming import (
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LIVE_ARMING_FILENAME, LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.services.session_authority import et_minute_of_day_ms
 from app.utils.advisory_lock import try_advisory_file_lock
 
@@ -96,6 +97,27 @@ def test_append_and_read_keep_file_order_and_survive_a_reopen(tmp_path: Path) ->
     assert latest_arming(reopened.records()) == second
     assert instance_ids(reopened.records()) == (SID, "ema-shadow-2")
     assert len(reopened.path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_appending_version_one_preserves_its_original_payload_and_digest(tmp_path: Path) -> None:
+    """A rollback must still read rows written by the widened model."""
+    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
+    record = _armed()
+
+    ledger.append(record)
+
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    unsigned = {
+        key: value
+        for key, value in asdict(record).items()
+        if key not in {"record_sha256", "predecessor", "originating_plan_id"}
+    }
+    expected = {**unsigned, "record_sha256": record.record_sha256}
+    assert payload == expected
+    assert ledger.path.read_text(encoding="utf-8") == (
+        json.dumps(expected, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
+    )
+    assert record.record_sha256 == canonical_sha256(unsigned)
 
 
 def test_the_sealed_envelope_is_the_latest_arming_records_own(tmp_path: Path) -> None:

@@ -133,6 +133,34 @@ def test_read_only_verification_rejects_a_data_bearing_v6_authority(tmp_path: Pa
         verify_database(db_path, expected_account_id=ACCOUNT_ID)
 
 
+def test_read_only_verification_reports_a_missing_database_as_verification_failure(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+
+    with pytest.raises(DatabaseVerificationFailed, match="cannot be verified"):
+        verify_database(missing, expected_account_id=ACCOUNT_ID)
+
+
+def test_read_only_verification_reports_a_malformed_schema_version_as_verification_failure(
+    tmp_path: Path,
+) -> None:
+    repository = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_seq(),
+    )
+    repository._conn.execute(
+        "UPDATE control_meta SET schema_version = 'not-a-version' WHERE id = 1"
+    )
+    repository._conn.commit()
+    repository.close()
+
+    database = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+    with pytest.raises(DatabaseVerificationFailed, match="cannot be verified"):
+        verify_database(database, expected_account_id=ACCOUNT_ID)
+
+
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
     assert schema.is_upgradable_to_current(6) is True
