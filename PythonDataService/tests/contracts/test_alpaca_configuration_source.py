@@ -3,8 +3,8 @@
 Package D's assignment includes "remove non-secret environment reads from
 migrated paths", and the property that actually protects a live worker is
 narrower and checkable: **after this package, the process environment is read
-in exactly two places, and every other consumer reads the binding the worker
-resolved.**
+only where a process bootstraps one, and every other consumer reads the
+binding the worker resolved.**
 
 That matters because the failure it prevents is silent. Two long-lived
 ``AlpacaBroker`` instances exist at runtime, both were settings-free, and both
@@ -25,8 +25,10 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[2] / "app"
 
-# The only two modules that may read the process-wide environment settings, and
-# why each one is admissible.
+# The only modules that may read the process-wide environment settings, and
+# why each one is admissible. Each is a *bootstrap*: a process resolving its
+# own binding before one exists. None of them is a fallback for a binding that
+# was attempted and refused — that raises.
 ADMITTED_ENVIRONMENT_READERS: dict[str, str] = {
     "broker/alpaca/active_binding.py": (
         "the holder's own fallback for 'nothing has attempted a binding in this "
@@ -37,6 +39,12 @@ ADMITTED_ENVIRONMENT_READERS: dict[str, str] = {
         "the pre-cutover bootstrap: an installation with no saved profiles at "
         "all has no user-owned configuration to prefer. Package F's import "
         "retires this branch by writing the first profile."
+    ),
+    "broker_configuration/cli_binding.py": (
+        "the same pre-cutover bootstrap, for the three operator CLIs. They run "
+        "in their own processes where no binding has been installed, so they "
+        "resolve one themselves; on a *configured* installation they refuse "
+        "rather than fall back, exactly as the worker does."
     ),
 }
 
@@ -67,7 +75,7 @@ def _modules_calling(function_name: str) -> set[str]:
     return callers
 
 
-def test_only_the_two_bootstrap_sites_read_the_process_environment() -> None:
+def test_only_the_bootstrap_sites_read_the_process_environment() -> None:
     """Every other consumer reads the binding the worker resolved."""
     callers = _modules_calling("get_alpaca_settings")
 
