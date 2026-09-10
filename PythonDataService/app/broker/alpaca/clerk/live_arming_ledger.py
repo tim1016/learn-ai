@@ -89,6 +89,28 @@ class LiveArmingLedger:
         with advisory_file_lock(self._path):
             self._append_locked(record)
 
+    def append_once_for_plan(self, record: LiveArmingRecord) -> LiveArmingRecord:
+        """Append one version-2 arming record only once for its reviewed plan.
+
+        A browser retry can arrive after the first response was lost.  The plan
+        ID is sealed into version 2 records, so the account-scoped ledger lock
+        can return that original grant rather than minting another permission.
+        A later disarm remains the latest state; this method never appends a
+        replacement record for a previously applied plan.
+        """
+        if record.originating_plan_id is None:
+            self.append(record)
+            return record
+        with advisory_file_lock(self._path):
+            for existing in self.records_for(record.strategy_instance_id):
+                if (
+                    isinstance(existing, LiveArmingRecord)
+                    and existing.originating_plan_id == record.originating_plan_id
+                ):
+                    return existing
+            self._append_locked(record)
+        return record
+
     def _append_locked(self, record: LedgerRecord) -> None:
         """The append itself; the caller already holds this ledger's advisory lock.
 

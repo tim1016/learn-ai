@@ -27,9 +27,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
+    AccountAuthorityIdentityError,
     custody_account_id_for,
     custody_account_ids_for,
+    is_shadow_account_id,
     live_account_id_for_shadow_account,
+    require_real_account_id,
 )
 from app.broker.alpaca.clerk.ceremony import (
     DEFAULT_CONFIRMATION_TTL_MS,
@@ -51,6 +54,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
+    RehearsalPredecessor,
     arming_status,
     instance_ids,
     latest_arming,
@@ -58,7 +62,14 @@ from app.broker.alpaca.clerk.live_arming import (
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid, ShadowActivationStore
-from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptStore
+from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid, ShadowReceiptStore
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
+from app.broker.alpaca.clerk.sqlite.database_verification import (
+    DatabaseVerificationFailed,
+    verify_database,
+)
+from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
+from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
 from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.account_authority import CustodyWorld
 from app.services.bot_binding_repository import live_state_binding_repository
@@ -88,6 +99,7 @@ class ArmingInputs:
     shadow_receipt_sha256: str | None
     envelope: LiveEnvelopeValues
     max_sessions: int
+    predecessor: RehearsalPredecessor | None = None
 
 
 type ArmingObserver = Callable[..., ArmingInputs]
@@ -110,6 +122,18 @@ class LiveArmingPlan:
     envelope_values: dict[str, float | int]
     envelope_sha256: str
     max_sessions: int
+    predecessor: RehearsalPredecessor | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> LiveArmingPlan:
+        """Rebuild nested predecessor evidence from a JSON plan payload."""
+        raw_predecessor = payload.get("predecessor")
+        predecessor = (
+            None
+            if raw_predecessor is None
+            else RehearsalPredecessor(**raw_predecessor)
+        )
+        return cls(**{**payload, "predecessor": predecessor})
 
 
 def _refused(reason_code: str) -> Callable[[str], LiveArmingRefused]:
@@ -137,6 +161,48 @@ def live_account_id_for(artifacts_root: Path) -> str:
             f"({', '.join(sorted(shadow_ids))}); arming cannot choose between them",
         )
     return live_account_id_for_shadow_account(shadow_ids[0])
+
+
+def live_account_id_for_instance(
+    *, strategy_instance_id: str, artifacts_root: Path, live_state_root: Path
+) -> str:
+    """Resolve one exact sealed instance to the account its ceremony may arm.
+
+    A Shadow-bound binding retains the original activation-fence rule. A
+    Live-bound binding instead proves its own account through the cutover
+    activation record and its sealed cutover artifacts. This lets a graduated
+    account arm a new Live instance without requiring an unrelated Shadow
+    activation record, while preserving the refusal for an unsealed, foreign,
+    or unverifiable instance.
+    """
+    binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
+    if binding is None or binding.sealed_program is None or binding.sealed_account_id is None:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"{strategy_instance_id} has no sealed alpaca binding",
+        )
+    account_id = binding.sealed_account_id
+    if is_shadow_account_id(account_id):
+        return live_account_id_for(artifacts_root)
+    try:
+        live_account_id = require_real_account_id(account_id)
+        activation_store = ActivationStore(artifacts_root / "accounts" / "alpaca")
+        activation = activation_store.latest(live_account_id)
+        if activation is None:
+            raise ActivationRecordInvalid("no live activation record names this account")
+        activation_store.validate_artifacts(activation, artifacts_root=artifacts_root)
+        verify_database(
+            confined_account_file(artifacts_root, live_account_id, DB_FILENAME),
+            expected_account_id=live_account_id,
+            expected_generation=activation.authority_generation,
+            expected_db_identity=activation.db_identity_token,
+        )
+    except (AccountAuthorityIdentityError, ActivationRecordInvalid, DatabaseVerificationFailed) as exc:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"{strategy_instance_id} is not sealed to a verified Live account: {exc}",
+        ) from exc
+    return live_account_id
 
 
 def instance_seal_hashes(
@@ -207,10 +273,15 @@ def observe_arming_inputs(
     artifacts_root: Path,
     live_state_root: Path,
     settings: AlpacaSettings,
+    predecessor_strategy_instance_id: str | None = None,
 ) -> ArmingInputs:
     """Read the four inputs R8 names, refusing by code when any one is absent."""
     envelope = configured_envelope(settings)
-    live_account_id = live_account_id_for(artifacts_root)
+    live_account_id = live_account_id_for_instance(
+        strategy_instance_id=strategy_instance_id,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+    )
     seal = instance_seal_hashes(
         live_account_id=live_account_id, live_state_root=live_state_root
     ).get(strategy_instance_id)
@@ -231,6 +302,16 @@ def observe_arming_inputs(
     shadow_receipt_sha256 = (
         receipt.receipt_sha256 if receipt is not None and receipt.live_account_id == live_account_id else None
     )
+    predecessor = _predecessor_for(
+        predecessor_strategy_instance_id=predecessor_strategy_instance_id,
+        live_account_id=live_account_id,
+        target_strategy_instance_id=strategy_instance_id,
+        target_seal_hash=seal.seal_hash,
+        target_configured_signal_hash=seal.configured_signal_hash,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+        required_sessions=envelope.shadow_sessions,
+    )
     return ArmingInputs(
         live_account_id=live_account_id,
         strategy_instance_id=strategy_instance_id,
@@ -239,12 +320,91 @@ def observe_arming_inputs(
         shadow_receipt_sha256=shadow_receipt_sha256,
         envelope=envelope,
         max_sessions=envelope.arming_max_sessions,
+        predecessor=predecessor,
+    )
+
+
+def _predecessor_for(
+    *,
+    predecessor_strategy_instance_id: str | None,
+    live_account_id: str,
+    target_strategy_instance_id: str,
+    target_seal_hash: str,
+    target_configured_signal_hash: str,
+    artifacts_root: Path,
+    live_state_root: Path,
+    required_sessions: int,
+) -> RehearsalPredecessor | None:
+    """Verify an explicitly selected Shadow predecessor for a Live successor."""
+    if predecessor_strategy_instance_id is None:
+        return None
+    if predecessor_strategy_instance_id == target_strategy_instance_id:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "a Live instance cannot name itself as its Shadow predecessor",
+        )
+    bindings = live_state_binding_repository(live_state_root)
+    predecessor_binding = bindings.read(predecessor_strategy_instance_id)
+    target_binding = bindings.read(target_strategy_instance_id)
+    if (
+        predecessor_binding is None
+        or predecessor_binding.sealed_program is None
+        or target_binding is None
+        or target_binding.sealed_program is None
+        or predecessor_binding.sealed_account_id
+        != custody_account_id_for("shadow", live_account_id)
+    ):
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "the selected Shadow predecessor is not a sealed instance on this Live account",
+        )
+    predecessor_seal = predecessor_binding.sealed_program
+    target_seal = target_binding.sealed_program
+    if (
+        target_binding.sealed_account_id != live_account_id
+        or target_seal.bot_configuration_hash != target_seal_hash
+        or target_seal.configured_signal_hash != target_configured_signal_hash
+        or predecessor_seal.configured_signal_hash != target_seal.configured_signal_hash
+        or predecessor_seal.action_plan != target_seal.action_plan
+        or predecessor_seal.quantity != target_seal.quantity
+        or predecessor_seal.carryover_policy != target_seal.carryover_policy
+        or predecessor_binding.use_rth != target_binding.use_rth
+    ):
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "the selected Shadow predecessor does not match this sealed Live instance",
+        )
+    try:
+        receipt = ShadowReceiptStore(artifacts_root).current(
+            predecessor_strategy_instance_id,
+            configured_signal_hash=predecessor_seal.configured_signal_hash,
+            required_sessions=required_sessions,
+        )
+    except ShadowReceiptInvalid as exc:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "the selected Shadow predecessor receipt does not verify",
+        ) from exc
+    if receipt is None or receipt.live_account_id != live_account_id:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            "the selected Shadow predecessor has no current receipt for this Live account",
+        )
+    return RehearsalPredecessor(
+        strategy_instance_id=predecessor_strategy_instance_id,
+        seal_hash=predecessor_seal.bot_configuration_hash,
+        receipt_sha256=receipt.receipt_sha256,
     )
 
 
 def _plan_payload(plan: LiveArmingPlan) -> dict[str, Any]:
+    if plan.schema_version not in (1, 2):
+        raise LiveArmingRefused(LIVE_ARMING_TOKEN_INVALID, f"{_LABEL} plan content hash does not verify")
     return plan_payload(
-        plan, schema_version=1, refused=_refused(LIVE_ARMING_TOKEN_INVALID), label=_LABEL
+        plan,
+        schema_version=plan.schema_version,
+        refused=_refused(LIVE_ARMING_TOKEN_INVALID),
+        label=_LABEL,
     )
 
 
@@ -255,6 +415,7 @@ def plan_arming(
     live_state_root: Path,
     settings: AlpacaSettings,
     confirmation_ttl_ms: int = DEFAULT_CONFIRMATION_TTL_MS,
+    predecessor_strategy_instance_id: str | None = None,
     clock: Clock = now_ms_utc,
     observe: ArmingObserver = observe_arming_inputs,
 ) -> LiveArmingPlan:
@@ -266,9 +427,10 @@ def plan_arming(
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
         settings=settings,
+        predecessor_strategy_instance_id=predecessor_strategy_instance_id,
     )
     draft = LiveArmingPlan(
-        schema_version=1,
+        schema_version=2 if inputs.predecessor is not None else 1,
         plan_id="",
         confirmation_token="",
         created_at_ms=now,
@@ -281,6 +443,7 @@ def plan_arming(
         envelope_values=inputs.envelope.to_mapping(),
         envelope_sha256=inputs.envelope.sha,
         max_sessions=inputs.max_sessions,
+        predecessor=inputs.predecessor,
     )
     token = plan_content_token(_plan_payload(draft))
     return replace(draft, plan_id=token, confirmation_token=token)
@@ -300,6 +463,7 @@ def _require_no_drift(plan: LiveArmingPlan, current: ArmingInputs) -> None:
     observed: dict[str, Any] = {
         name: value for name, value in asdict(current).items() if name != "envelope"
     }
+    observed["predecessor"] = current.predecessor
     observed["envelope_sha256"] = current.envelope.sha
     for name, value in observed.items():
         if value != getattr(plan, name):
@@ -339,6 +503,9 @@ def apply_arming(
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
         settings=settings,
+        predecessor_strategy_instance_id=(
+            None if plan.predecessor is None else plan.predecessor.strategy_instance_id
+        ),
     )
     _require_no_drift(plan, current)
     record = LiveArmingRecord.create(
@@ -350,8 +517,10 @@ def apply_arming(
         envelope=current.envelope,
         armed_at_ms=now,
         max_sessions=current.max_sessions,
+        predecessor=current.predecessor,
+        originating_plan_id=plan.plan_id if current.predecessor is not None else None,
     )
-    LiveArmingLedger(artifacts_root, live_account_id=record.live_account_id).append(record)
+    record = LiveArmingLedger(artifacts_root, live_account_id=record.live_account_id).append_once_for_plan(record)
     logger.warning(
         "live instance armed",
         extra={
@@ -523,6 +692,7 @@ __all__ = [
     "disarm",
     "instance_seal_hashes",
     "live_account_id_for",
+    "live_account_id_for_instance",
     "observe_arming_inputs",
     "plan_arming",
 ]

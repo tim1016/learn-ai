@@ -109,6 +109,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         gate.add_argument("--strategy-instance-id", required=True)
         gate.add_argument("--twin-account-id", required=True)
         gate.add_argument("--twin-strategy-instance-id", required=True)
+        gate.add_argument(
+            "--twin-live-state-root",
+            type=Path,
+            help=(
+                "Parent artifacts directory for the Paper twin's immutable runner binding. "
+                "Omit only when both bindings share one runner root."
+            ),
+        )
         gate.add_argument("--twin-artifacts-root", type=Path)
         gate.add_argument("--required-sessions", type=_required_session_count)
         gate.add_argument("--now-ms", type=timestamp_ms)
@@ -269,12 +277,16 @@ def _judge(
 ) -> int:
     required_sessions = _required_sessions(args.required_sessions)
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    bindings = live_state_binding_repository(args.live_state_root or live_artifacts_root())
-    shadow_binding = bindings.read(args.strategy_instance_id)
-    twin_binding = bindings.read(args.twin_strategy_instance_id)
-    if shadow_binding is None or twin_binding is None:
-        absent = args.strategy_instance_id if shadow_binding is None else args.twin_strategy_instance_id
-        raise ShadowOperatorRefusal(f"binding not found for {absent}")
+    shadow_bindings = live_state_binding_repository(args.live_state_root or live_artifacts_root())
+    twin_bindings = live_state_binding_repository(
+        args.twin_live_state_root or args.live_state_root or live_artifacts_root()
+    )
+    shadow_binding = shadow_bindings.read(args.strategy_instance_id)
+    if shadow_binding is None:
+        raise ShadowOperatorRefusal(f"binding not found for {args.strategy_instance_id}")
+    twin_binding = twin_bindings.read(args.twin_strategy_instance_id)
+    if twin_binding is None:
+        raise ShadowOperatorRefusal(f"binding not found for {args.twin_strategy_instance_id}")
     shadow_account_id = shadow_account_id_for_live_account(live_account_id)
     evaluation = evaluate(
         live_account_id=live_account_id,

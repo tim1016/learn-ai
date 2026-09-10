@@ -34,13 +34,19 @@ def roots(tmp_path: Path) -> tuple[Path, Path]:
 
 
 @pytest.fixture()
-def incomplete_live_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def incomplete_live_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[None]:
     """``ALPACA_MODE=live`` with no envelope values -- a half-edited live ``.env``.
 
     ``AlpacaSettings`` refuses to construct in this state, so every test using
     this fixture calls ``main`` with no injected ``settings`` and exercises the
     real ``get_alpaca_settings()`` boundary the CLI's contract depends on.
     """
+    # ``AlpacaSettings`` reads ``.env`` from the process working directory.
+    # A developer's complete local envelope must not fill the deliberate gaps
+    # below, so run this boundary test from its own empty directory.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     monkeypatch.setenv("ALPACA_MODE", "live")
