@@ -212,30 +212,62 @@ and rehearsal ENTERs are not gated on arming.
 Every command writes exactly one JSON object to stdout. Exit `0` answered,
 `1` the command cannot be run as asked, `2` the ceremony refused.
 
-```bash
-cd PythonDataService
+The Clerk authority this ceremony reads and writes lives on the VM-local
+`alpaca-clerk-data` named volume the running worker mounts at
+`/app/artifacts/alpaca_clerk` (see `compose.yaml`), not on the host tree at
+`PythonDataService/artifacts/alpaca_clerk` — that host tree is mounted
+read-only at `/app/alpaca_clerk_legacy` and normal runtime never reads
+authority from it. Run every command from the repo root (where
+`compose.yaml` lives) inside a one-shot `python-service` container against
+that same volume, the same pattern the
+[SQLite Clerk recovery/cutover runbook](../runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md)
+uses. A host-side `python -m scripts.manage_alpaca_arming` invocation writes
+into the unmounted legacy tree instead: the worker never sees it, `status`
+keeps reporting `unarmed`, and every live ENTER keeps refusing
+`LIVE_ARMING_REQUIRED` no matter what `apply` just wrote.
 
+```bash
 # What is armed on the shadowed live account, and how much of each grant is left.
-python -m scripts.manage_alpaca_arming status
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  status
 
 # Propose an arming. Read-only: it writes nothing but the optional plan file.
-python -m scripts.manage_alpaca_arming plan \
-    --strategy-instance-id ema-shadow-1 --plan-out /tmp/arming-plan.json
+# --plan-out must land under the host-bind-mounted /app/artifacts (not /tmp,
+# which is private to the --rm container and gone once it exits) so the
+# apply step below, run in its own container, can read the plan back.
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  plan --strategy-instance-id ema-shadow-1 --plan-out /app/artifacts/arming-plan.json
 
 # Confirm it, within 120 s, quoting the token the plan printed.
-python -m scripts.manage_alpaca_arming apply \
-    --plan-file /tmp/arming-plan.json --confirmation-token <confirmation_token>
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  apply --plan-file /app/artifacts/arming-plan.json --confirmation-token <confirmation_token>
 
 # Revoke before the lapse. One append, no confirmation: the closed direction.
-python -m scripts.manage_alpaca_arming disarm --strategy-instance-id ema-shadow-1
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  disarm --strategy-instance-id ema-shadow-1
 ```
 
 `--artifacts-root` and `--now-ms` exist for tests and for an operator pointing
-at a non-default tree. `--live-state-root` defaults to the runner's own
-`live_artifacts_root()` — where sealed bot bindings live, a different tree
-from the Clerk artifacts root the rest of arming's evidence sits under — and
-only needs overriding for the same reason. There is no force mode and no HTTP
-route: an arming is a supervised, out-of-process act.
+at a non-default tree; the invocations above pass `--artifacts-root`
+explicitly so the command is correct regardless of what the container
+image's own default resolves to. `--live-state-root` (accepted by `status`,
+`plan` and `apply`, not by `disarm` — the closed direction reads no binding)
+defaults to the runner's own `live_artifacts_root()` — where sealed bot
+bindings live, a different tree from the Clerk artifacts root the rest of
+arming's evidence sits under — and is passed explicitly above for the same
+reason. There is no force mode and no HTTP route: an arming is a supervised,
+out-of-process act.
 
 ## In the live verdict
 

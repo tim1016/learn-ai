@@ -294,27 +294,56 @@ naming activation as the next action. The paper twin runs on the paper host,
 over the same days, sharing the shadow instance's configured signal, action
 plan, size and carryover policy.
 
-The commands below run from `PythonDataService/`. Both custody databases are
-read `mode=ro` and no lease is taken; `sessions` writes nothing at all.
+The shadow custody database these commands read and write lives on the
+VM-local `alpaca-clerk-data` named volume the running worker mounts at
+`/app/artifacts/alpaca_clerk` (see `compose.yaml`), not on the host tree at
+`PythonDataService/artifacts/alpaca_clerk` — that host tree is mounted
+read-only at `/app/alpaca_clerk_legacy` and normal runtime never reads
+authority from it. Run every command below from the repo root (where
+`compose.yaml` lives) inside a one-shot `python-service` container against
+that same volume, the same pattern the
+[SQLite Clerk recovery/cutover runbook](../runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md)
+uses. A host-side `python -m scripts.manage_alpaca_shadow` invocation writes
+`activate`'s fence and `receipt`'s seal into the unmounted legacy tree
+instead: the worker never sees them, and slice 6's arming ceremony (which
+reads `ShadowReceiptStore.current(...)` from the same volume) never finds
+the receipt `apply` needs. Both custody databases are read `mode=ro` and no
+lease is taken; `sessions` writes nothing at all.
 
 ```bash
 # 1. Once per live account, before the first shadow boot.
-python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> activate
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  activate
 
 # 2. Any time: judge every trading day since the shadow instance first ran.
-python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> sessions \
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  sessions \
     --strategy-instance-id <SHADOW_SID> \
     --twin-account-id <PAPER_ACCOUNT> \
     --twin-strategy-instance-id <TWIN_SID> \
     --twin-artifacts-root <PAPER_HOST_CLERK_DIR>
 
 # 3. When the gate holds: seal the receipt.
-python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> receipt \
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  receipt \
     --strategy-instance-id <SHADOW_SID> \
     --twin-account-id <PAPER_ACCOUNT> \
     --twin-strategy-instance-id <TWIN_SID> \
     --twin-artifacts-root <PAPER_HOST_CLERK_DIR>
 ```
+
+`--twin-artifacts-root <PAPER_HOST_CLERK_DIR>` names the Paper twin's own
+Clerk root, read on whatever host or volume the Paper worker's deployment
+uses — a separate topology question from the live/shadow Clerk volume above,
+and outside this note's scope.
 
 **The data plane must stay up, and sweeping cleanly, until the declared
 window's close.** A day is journaled `session_closed_clean` only by a clean
