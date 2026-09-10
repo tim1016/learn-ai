@@ -281,48 +281,55 @@ async def _bind_applied(
     environment: AlpacaCredentialEnvironment | None,
 ) -> ResolvedWorkerBinding:
     """Bind a staged revision an Apply named, or refuse and boot last-effective."""
-    refusal = await _preflight(candidate, service=service, probe=probe, environment=environment)
-    if refusal is None:
-        return _bind_candidate(candidate, service=service, environment=environment)
+    outcome = await _attempt_apply(
+        candidate, service=service, probe=probe, environment=environment
+    )
+    if not isinstance(outcome, str):
+        return BoundWorker(context=outcome, candidate=candidate)
 
-    _record_refusal(service, candidate=candidate, reason=refusal)
+    _record_refusal(service, candidate=candidate, reason=outcome)
     return _boot_last_effective_after_refusal(
-        service=service, candidate=candidate, reason=refusal, environment=environment
+        service=service, candidate=candidate, reason=outcome, environment=environment
     )
 
 
-async def _preflight(
+async def _attempt_apply(
     candidate: BindingCandidate,
     *,
     service: BrokerConfigurationService,
     probe: PriorAccountObligations,
     environment: AlpacaCredentialEnvironment | None,
-) -> str | None:
-    """The switch preflight. ``None`` means the Apply may proceed."""
+) -> AlpacaRuntimeContext | str:
+    """The context an Apply would bind, or the reason it is refused.
+
+    Preflight and resolution are one step because on this path they have one
+    outcome: a staged revision that cannot be resolved must be *refused* —
+    recording the refusal and consuming the one-shot Apply — and not merely
+    fail, or every subsequent restart retries the same broken Apply.
+    """
     try:
         stored = _read_revision(service, candidate)
     except BrokerConfigurationError as exc:
         return f"the staged revision could not be read: {exc.message}"
 
     verdict = switch_verdict(candidate, candidate_account_pin=stored.account_pin)
-    if verdict.requires_prior_account_clear():
-        assert candidate.previous_account_id is not None  # the verdict implies it
-        prior = await probe.observe(candidate.previous_account_id)
+    previous_account_id = candidate.previous_account_id
+    # The second clause is implied by the first — a verdict can only require a
+    # clear prior account when there *is* one — and is written out rather than
+    # asserted, because an assertion is removed under ``python -O`` and this is
+    # the guard that keeps a live position from being stranded.
+    if verdict.requires_prior_account_clear() and previous_account_id is not None:
+        prior = await probe.observe(previous_account_id)
         if not prior.is_clear:
             return (
                 f"applying {candidate.profile_id}@{candidate.revision} would leave "
                 f"{prior.describe()}"
             )
 
-    # Resolving here as well as in ``_bind_candidate`` is deliberate: a revision
-    # that cannot resolve must be *refused* (recording the refusal and consuming
-    # the one-shot Apply), not merely fail — otherwise the same broken Apply is
-    # retried by every subsequent restart.
     try:
-        _resolve(stored, candidate, environment=environment)
+        return _resolve(stored, candidate, environment=environment)
     except BrokerProfileError as exc:
         return f"the staged revision could not be resolved: {exc.reason}"
-    return None
 
 
 def _bind_candidate(
