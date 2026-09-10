@@ -229,8 +229,8 @@ def resolve_runtime_context(
 
     try:
         settings = AlpacaSettings(
-            # The ``SecretStr`` objects go in unwrapped-never. Pydantic captures
-            # the *raw input* in a failed validation's ``input_value``, and for
+            # The ``SecretStr`` objects go in still wrapped, never unwrapped:
+            # Pydantic captures the *raw input* in ``input_value``, and for
             # a model-level validator that input is the whole kwargs dict with
             # ``loc == ()`` — so no per-field inspection could have filtered it.
             # Handing it ``SecretStr`` means the worst case renders
