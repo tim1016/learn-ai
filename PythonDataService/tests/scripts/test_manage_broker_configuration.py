@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker_configuration import runtime as broker_configuration_runtime
 from app.broker_configuration.store import profiles_database_path
 from scripts import manage_broker_configuration as cli
 
@@ -55,6 +56,22 @@ def _run_plan(tmp_path: Path, *extra: str) -> tuple[int, dict]:
     )
     payload = json.loads(_plan_file(tmp_path).read_text(encoding="utf-8"))
     return code, payload
+
+
+def _saved_profiles(tmp_path: Path) -> list[str]:
+    """Profiles actually in the database. A refused apply must add none.
+
+    Deliberately not "the database file does not exist": `apply` opens the store
+    before it can read what is already there, and opening creates and migrates
+    it. An empty schema is not state an operator can observe -- `has_any_profile`
+    is still false, so the installation is still pre-cutover. What must not
+    happen is a *profile* appearing.
+    """
+    service = broker_configuration_runtime.build_service(clerk_dir=tmp_path / "clerk")
+    try:
+        return [p.display_name for p in service.list_profiles(include_archived=True)]
+    finally:
+        service.close()
 
 
 @pytest.mark.usefixtures("legacy_environment")
@@ -203,6 +220,78 @@ def test_a_plan_file_with_an_unexpected_key_is_refused(tmp_path: Path) -> None:
     )
 
     assert code == 2
+
+
+@pytest.mark.usefixtures("legacy_environment")
+def test_a_plan_file_with_an_edited_live_limit_is_refused(tmp_path: Path) -> None:
+    """The tamper that matters: raising a loss limit in the file after review.
+
+    The token is the plan's own content hash, so the edited document no longer
+    hashes to the token the operator was given. And even a forger who recomputed
+    both ids would still meet `_require_environment_unchanged`, which re-reads
+    the environment and refuses a plan describing different numbers than the
+    ones actually configured.
+    """
+    _run_plan(tmp_path)
+    payload = json.loads(_plan_file(tmp_path).read_text(encoding="utf-8"))
+    payload["live_envelope"]["loss_usd"] = 500_000.0
+    _plan_file(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    code = cli.main(
+        [
+            "--clerk-dir",
+            str(tmp_path / "clerk"),
+            "apply",
+            "--plan-file",
+            str(_plan_file(tmp_path)),
+            "--confirmation-token",
+            payload["confirmation_token"],
+        ]
+    )
+
+    assert code == 2
+    assert _saved_profiles(tmp_path) == []
+
+
+@pytest.mark.usefixtures("legacy_environment")
+def test_a_forged_plan_is_still_caught_by_the_environment_re_read(
+    tmp_path: Path,
+) -> None:
+    """Defence in depth: recomputing the ids does not make a forged plan apply.
+
+    The token is a *confirmation* that a human read the document, not
+    authentication against someone who can write the file — the same model
+    `cutover.py` has always had. What stops a forged plan is the second gate:
+    apply re-reads the environment and refuses a plan whose numbers are not the
+    ones actually configured.
+    """
+    from dataclasses import asdict
+
+    from app.broker.alpaca.clerk.ceremony import plan_content_token
+
+    _run_plan(tmp_path)
+    plan = cli._read_plan(_plan_file(tmp_path))
+    forged = asdict(plan)
+    forged["live_envelope"]["loss_usd"] = 500_000.0
+    body = {k: v for k, v in forged.items() if k not in ("plan_id", "confirmation_token")}
+    token = plan_content_token(body)
+    forged["plan_id"] = forged["confirmation_token"] = token
+    _plan_file(tmp_path).write_text(json.dumps(forged), encoding="utf-8")
+
+    code = cli.main(
+        [
+            "--clerk-dir",
+            str(tmp_path / "clerk"),
+            "apply",
+            "--plan-file",
+            str(_plan_file(tmp_path)),
+            "--confirmation-token",
+            token,
+        ]
+    )
+
+    assert code == 2
+    assert _saved_profiles(tmp_path) == []
 
 
 @pytest.mark.usefixtures("legacy_environment")
