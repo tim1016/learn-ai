@@ -61,6 +61,12 @@ APPLY_PREFLIGHT_REFUSED: Final = "apply_preflight_refused"
 # Custody opened on an account the revision did not pin (contract §6). A 409
 # there, but here it is a boot-time refusal: the gate closes and stays closed.
 ACCOUNT_PIN_MISMATCH: Final = "account_pin_mismatch"
+# A variable the profiles database replaced is still set on an installation that
+# has cut over (ADR 0060 open question 1, resolved by the owner 2026-09-10:
+# refuse, do not ignore quietly). Not in contract §6's table, which was written
+# before that answer existed; the shape is the same and package F's
+# ``legacy_environment`` module is the only raiser.
+RETIRED_ENVIRONMENT_SETTINGS: Final = "retired_environment_settings"
 
 
 @dataclass(frozen=True)
@@ -165,6 +171,7 @@ __all__ = [
     "APPLY_PREFLIGHT_REFUSED",
     "BROKER_UNCONFIGURED",
     "PROFILES_DATABASE_UNAVAILABLE",
+    "RETIRED_ENVIRONMENT_SETTINGS",
     "BrokerUnbound",
     "UnboundBroker",
     "active_alpaca_binding_refusal",

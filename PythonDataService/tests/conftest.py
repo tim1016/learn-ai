@@ -190,6 +190,34 @@ def _isolate_broker_configuration_database(
     broker_configuration_runtime.reset_broker_configuration_service_for_testing()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_retired_alpaca_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin every test's view of the retired Alpaca settings to "absent".
+
+    Package F makes a cut-over installation refuse to bind while any of the
+    seven retired variables is still set, and the detector reads them exactly as
+    ``AlpacaSettings`` does -- process environment *and* ``PythonDataService/.env``,
+    case-insensitively. Unpinned, that makes the outcome of every binding test
+    depend on whether the developer running it happens to have a live rehearsal
+    ``.env`` on disk: green in CI and in a fresh worktree, red in the main
+    checkout. That is the "worktree verification false green" trap in reverse.
+
+    So the reader is neutered by default and a test that wants a stale variable
+    asks for one explicitly, by passing its own ``LegacyEnvironmentPresence``,
+    which bypasses this substitution entirely. Patching the reader -- rather than
+    deleting environment variables -- keeps the blast radius to this one
+    detector: ``AlpacaSettings`` and every other ``ALPACA_``-prefixed reader
+    still see whatever the test set up.
+    """
+    import app.broker_configuration.legacy_environment as legacy_environment
+
+    monkeypatch.setattr(
+        legacy_environment,
+        "current_retired_settings",
+        legacy_environment.no_retired_settings,
+    )
+
+
 _CATALOG_TRUNCATING_FIXTURE_PREFIX = "clean_artifacts"
 
 # A developer or CI job must set this to explicitly attest, out of band,

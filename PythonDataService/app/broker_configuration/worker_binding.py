@@ -60,6 +60,10 @@ from app.broker_configuration.binding_decision import (
     switch_verdict,
 )
 from app.broker_configuration.errors import BrokerConfigurationError
+from app.broker_configuration.legacy_environment import (
+    retired_environment_refusal,
+    stale_retired_settings,
+)
 from app.broker_configuration.records import InstallationSelection, ProfileRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.broker_configuration.service import BrokerConfigurationService
@@ -182,6 +186,32 @@ async def resolve_worker_binding(
     chosen = decide(selection, has_any_profile=has_any_profile)
     if isinstance(chosen, NothingToBind):
         return _bind_nothing(chosen, environment=environment)
+
+    # This installation has cut over: a saved revision is about to be bound, so
+    # the variables it replaced are stale by definition. The owner's resolution
+    # of ADR 0060 open question 1 (2026-09-10) is to refuse rather than ignore
+    # them quietly, which ``extra="ignore"`` would otherwise do.
+    #
+    # It is deliberately *this* refusal and not a raise: the gate closes with a
+    # named reason and the service still boots (#2014), so an operator who left
+    # a line behind fixes it by deleting the line, not by debugging a crash
+    # loop. The check sits above every broker and Clerk construction, so nothing
+    # takes an execution lease or reaches the network first.
+    #
+    # Order matters. It is *below* ``_bind_nothing`` because a pre-cutover
+    # installation legitimately runs on these variables, and above the two
+    # binding paths because both of them install a revision.
+    stale_refusal = retired_environment_refusal()
+    if stale_refusal is not None:
+        logger.error(
+            "Retired broker settings are still present; no broker binding installed",
+            extra={
+                "action": "worker_binding_retired_environment",
+                "reason_code": stale_refusal.reason,
+                "retired_variables": list(stale_retired_settings()),
+            },
+        )
+        return UnboundWorker(stale_refusal)
 
     if chosen.intent is BindingIntent.APPLY:
         return await _bind_applied(

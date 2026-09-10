@@ -38,6 +38,7 @@ from app.broker_configuration.errors import (
     BrokerConfigurationError,
     ProfilesDatabaseUnavailable,
 )
+from app.broker_configuration.legacy_environment import retired_environment_refusal
 from app.broker_configuration.records import InstallationSelection
 from app.broker_configuration.selection import reference as revision_reference
 from app.broker_configuration.service import BrokerConfigurationService
@@ -120,9 +121,10 @@ def effective_broker(
     into two different answers about what "effective" means.
 
     Raises :class:`BrokerUnbound` when the installation is configured but has
-    applied nothing, when its profiles database is unreadable, or when the
-    effective revision will not resolve -- there is no fallback to stale
-    environment settings on a configured installation (ADR 0060 Decision 7).
+    applied nothing, when its profiles database is unreadable, when a retired
+    environment setting is still present after cutover, or when the effective
+    revision will not resolve -- there is no fallback to stale environment
+    settings on a configured installation (ADR 0060 Decision 7).
     Lets ``pydantic.ValidationError`` out of the pre-cutover environment
     bootstrap, which every caller already translates into its own vocabulary.
     """
@@ -152,6 +154,15 @@ def effective_broker(
                 )
             )
         return EffectiveBroker(settings=get_alpaca_settings(), selection=selection)
+
+    # Same gate as the worker's, in the same place relative to ``decide``: this
+    # installation has cut over, so a variable the profiles database replaced is
+    # stale. Without it here, the operator CLIs would keep answering on an
+    # installation the worker itself refuses to bind -- and an arming ceremony
+    # is the last place two resolvers should disagree about what is in force.
+    stale_refusal = retired_environment_refusal()
+    if stale_refusal is not None:
+        raise BrokerUnbound(stale_refusal)
 
     try:
         stored = service.read_revision(chosen.profile_id, chosen.revision)
