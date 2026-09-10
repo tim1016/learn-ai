@@ -176,10 +176,47 @@ Neither are `ALPACA_CREDENTIAL_LIVE_*` (the `live` slot), `ALPACA_CLERK_DIR`
 `scripts.run_alpaca_sqlite_qualification` rather than the FastAPI app, and loads
 no profile — so the worker's refusal cannot reach it.
 
-Moving an existing deployment across is
-`python -m scripts.manage_broker_configuration plan --plan-out …` followed by
-`apply` with the printed token; the plan writes nothing, and its token is its
-own content hash, so the six numbers cannot change between review and import.
+### Cutting over
+
+Run in the data-plane image against the Clerk volume, the way the arming and
+shadow CLIs are run. `/app/artifacts` is host-bind-mounted; a plan written to
+`/tmp` inside a `--rm` container disappears before it can be applied.
+
+```
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_broker_configuration plan \
+  --plan-out /app/artifacts/broker-config-import.json
+```
+
+Review the six values it prints, then `apply` with the printed token. The order
+after that is fixed, and the middle step is what the refusal above enforces:
+
+1. Verify and approve the profile's broker account on the configuration page.
+   The import never observes or pins an account.
+2. Press **Apply**. The import stages; only the operator applies.
+3. Delete the retired lines from `PythonDataService/.env`.
+4. Restart the service so the worker binds the profile.
+
+Between steps 2 and 3 the worker would refuse — that is the intended order, and
+the refusal names exactly which lines are left. Re-running the whole ceremony
+after step 3 is a no-op: the already-imported check precedes the
+environment-drift check for exactly this reason.
+
+### Rolling back
+
+Stop the affected worker and reconcile its account obligations first; rollback
+is not a live operation. Then restore the prior reviewed deployment
+configuration — re-add the retired lines to `PythonDataService/.env` — and
+revert to the prior code, which does not consult the profiles database.
+
+**Keep the profile records.** They are additive and cost nothing to leave in
+place, and deleting them would discard the audit of what was configured when.
+Never roll back custody databases, activation generations, order journals or
+arming ledgers to undo this change: those are sealed or hash-chained, and an
+arming sealed over an envelope remains valid whichever source that envelope was
+read from — the values and their `sha` are identical either way, which is what
+ADR 0060 Decision 6 and
+`tests/broker_configuration/test_legacy_environment.py` exist to guarantee.
 
 ## Read-only account verification and pinning
 
