@@ -40,7 +40,16 @@ export class ConfigurationAccountEvidenceComponent {
   readonly pinRequested = output<string>();
   readonly nicknameSubmitted = output<string>();
 
-  protected readonly nicknameDraft = linkedSignal(() => this.nickname() ?? '');
+  // Seeded from a `computed` with an explicit `equal`, like every other draft on
+  // this surface: a `linkedSignal` source *function* re-seeds when its
+  // dependencies change even if its value has not, which discards typing.
+  private readonly storedNickname = computed(() => this.nickname() ?? '', {
+    equal: (a, b) => a === b,
+  });
+  protected readonly nicknameDraft = linkedSignal<string, string>({
+    source: this.storedNickname,
+    computation: (nickname) => nickname,
+  });
   protected readonly nicknameForm = form(this.nicknameDraft);
 
   protected readonly pinnedAccountId = computed(() => this.revision().account_pin);

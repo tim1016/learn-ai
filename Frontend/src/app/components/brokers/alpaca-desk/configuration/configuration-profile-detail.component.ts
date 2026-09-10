@@ -52,7 +52,8 @@ export interface RevisionSubmission {
 })
 export class ConfigurationProfileDetailComponent {
   readonly detail = input.required<BrokerProfileDetail>();
-  readonly revisions = input.required<readonly BrokerProfileRevision[]>();
+  /** `null` when the history has not been read — never rendered as "(0)". */
+  readonly revisions = input.required<readonly BrokerProfileRevision[] | null>();
   readonly slots = input.required<readonly BrokerCredentialSlot[]>();
   readonly observed = input<readonly BrokerObservedAccount[] | null>(null);
   readonly nickname = input<string | null>(null);
@@ -132,9 +133,15 @@ export class ConfigurationProfileDetailComponent {
   });
   protected readonly revisionForm = form(this.revisionDraft);
 
-  protected readonly revisionProblems = computed(() => draftProblems(this.revisionDraft()));
+  protected readonly revisionProblems = computed(() =>
+    draftProblems(this.revisionDraft(), this.slots()),
+  );
+  // The form's own validity matters as well as the draft's: Angular's number
+  // accessor reports `badInput` (e.g. "0.02e") *without writing the model*, so
+  // the draft would still hold the previously typed value and Save would submit
+  // a real-money limit that differs from what is on screen.
   protected readonly canSaveRevision = computed(
-    () => !this.busy() && this.revisionProblems().length === 0,
+    () => !this.busy() && this.revisionProblems().length === 0 && !this.revisionForm().invalid(),
   );
   protected readonly canRename = computed(
     () => !this.busy() && this.renameDraft().trim().length > 0,

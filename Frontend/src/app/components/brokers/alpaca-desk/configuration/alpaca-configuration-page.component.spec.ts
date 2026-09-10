@@ -296,6 +296,75 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
   });
 
+  it('keeps the endpoint on screen across an Apply, which changes neither side', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1', revision: 2, endpoint_mode: 'live' }));
+    service.current = selection({
+      staged_profile_id: 'profile-1',
+      staged_revision: 2,
+      effective_profile_id: 'profile-1',
+      effective_revision: 2,
+      selection_generation: 4,
+    });
+    const rendered = await renderPage(service);
+    expect(await screen.findAllByText('Live')).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply staged revision' }));
+    await rendered.fixture.whenStable();
+
+    // Apply replaces the selection object without changing either revision, so
+    // a params identity change would blank both reads to "endpoint unread".
+    expect(screen.queryByText('endpoint unread')).toBeNull();
+    expect(screen.getAllByText('Live')).toHaveLength(2);
+    expect(service.readRevision).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops an observation the moment it stops describing the revision on screen', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    const rendered = await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify account (read-only)' }));
+    expect(await screen.findByRole('button', { name: 'Approve this account' })).toBeTruthy();
+
+    // A new revision is now the latest; the observation belongs to the old one.
+    service.revisions.push(revision({ profile_id: 'profile-1', revision: 2 }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save revision 2' }));
+    await rendered.fixture.whenStable();
+
+    expect(screen.queryByRole('button', { name: 'Approve this account' })).toBeNull();
+  });
+
+  it('shows no observation at all when a verification is refused', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify account (read-only)' }));
+    expect(await screen.findByRole('button', { name: 'Approve this account' })).toBeTruthy();
+
+    service.verifyAccount = vi.fn(async () => {
+      throw new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason: 'credential_slot_unavailable',
+            message: 'No credential pair is injected for this slot.',
+            next_step: 'Inject the pair on the host and verify again.',
+          },
+        },
+      });
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Verify account (read-only)' }));
+
+    expect(screen.getByText('Credential Slot Unavailable')).toBeTruthy();
+    // Stale accounts left beside a refusal read as "those are still current".
+    expect(screen.queryByRole('button', { name: 'Approve this account' })).toBeNull();
+  });
+
   it('does not claim no profiles are saved before the list has been read', async () => {
     const service = new FakeConfigurationService();
     let release = (): void => {};

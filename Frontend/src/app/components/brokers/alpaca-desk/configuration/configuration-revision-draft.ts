@@ -120,15 +120,39 @@ function wholeAtLeastOne(value: number | null, label: string): string | null {
 }
 
 /**
+ * Whether the slot this draft names can be saved at all.
+ *
+ * An empty allowlist means the slot directory has not been read — which is not
+ * the same as the slot being unknown, and must not be reported as if it were.
+ * A slot the directory does list but that has no injected pair is *not* a
+ * problem here: saving such a revision is allowed, and the form says separately
+ * what it means.
+ */
+function slotProblemFor(
+  slot: string,
+  slots: readonly BrokerCredentialSlot[],
+): string | null {
+  if (slot.trim().length === 0) return 'Choose a credential slot.';
+  if (slots.length === 0) {
+    return 'The credential slots have not been read, so this revision cannot be saved yet.';
+  }
+  return slots.some((candidate) => candidate.slot === slot)
+    ? null
+    : 'This revision names a credential slot this deployment no longer lists.';
+}
+
+/**
  * What still stops this draft being saved. Empty means the request is worth
  * sending — the service stays the authority, and its refusal is rendered as it
  * arrives; these mirror its bounds only so an operator is not told "422" for a
  * blank field they can see.
  */
-export function draftProblems(draft: RevisionDraft): readonly string[] {
-  if (draft.credential_slot.trim().length === 0) {
-    return ['Choose a credential slot.'];
-  }
+export function draftProblems(
+  draft: RevisionDraft,
+  slots: readonly BrokerCredentialSlot[] = [],
+): readonly string[] {
+  const slotProblem = slotProblemFor(draft.credential_slot, slots);
+  if (slotProblem !== null) return [slotProblem];
   if (draft.endpoint_mode !== 'live') return [];
   return [
     betweenExclusive(draft.loss_fraction, ENVELOPE_LABELS.loss_fraction, 0, 1),

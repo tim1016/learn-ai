@@ -55,10 +55,15 @@ export class ConfigurationProfileCreateComponent {
 
   protected readonly problems = computed(() => {
     const named = this.displayName().trim().length > 0 ? [] : ['Give the profile a name.'];
-    return [...named, ...draftProblems(this.draft())];
+    return [...named, ...draftProblems(this.draft(), this.slots())];
   });
 
-  protected readonly canSave = computed(() => !this.busy() && this.problems().length === 0);
+  // `draftForm().invalid()` covers what the draft cannot see: Angular's number
+  // accessor rejects a malformed entry without writing the model, leaving the
+  // previously typed value in place while the field shows something else.
+  protected readonly canSave = computed(
+    () => !this.busy() && this.problems().length === 0 && !this.draftForm().invalid(),
+  );
 
   protected submit(): void {
     if (!this.canSave()) return;

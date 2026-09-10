@@ -22,13 +22,23 @@ import { ConfigurationRefusalComponent } from './configuration-refusal.component
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
 
 /** The `(profile, revision)` pair one side of the selection names, if it names one. */
+interface RevisionRef {
+  readonly profileId: string;
+  readonly revision: number;
+}
+
 function revisionRef(
   selection: BrokerInstallationSelection | null,
   side: 'staged' | 'effective',
-): { profileId: string; revision: number } | undefined {
+): RevisionRef | undefined {
   const profileId = selection?.[`${side}_profile_id`] ?? null;
   const revision = selection?.[`${side}_revision`] ?? null;
   return profileId === null || revision === null ? undefined : { profileId, revision };
+}
+
+/** Two refs naming the same revision are the same ref, whatever their identity. */
+function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined): boolean {
+  return a?.profileId === b?.profileId && a?.revision === b?.revision;
 }
 
 /**
@@ -71,7 +81,19 @@ export class AlpacaConfigurationPageComponent {
 
   protected readonly includeArchived = signal(false);
   protected readonly selectedProfileId = signal<string | null>(null);
-  protected readonly observedAccounts = signal<readonly BrokerObservedAccount[] | null>(null);
+  /**
+   * The last verification, carrying the exact revision it was taken for.
+   *
+   * An observation is evidence about *one* revision's credential slot and
+   * endpoint mode. Keying it to that revision — rather than clearing it on the
+   * actions that happen to change profiles — is what stops an "approve this
+   * account" button being offered for an account nobody observed under the
+   * revision now on screen. Every path that could leave the two out of step is
+   * then covered by construction, including the ones that forget to clear.
+   */
+  private readonly observation = signal<
+    { readonly ref: RevisionRef; readonly accounts: readonly BrokerObservedAccount[] } | null
+  >(null);
   protected readonly refusal = signal<ConfigurationRefusal | null>(null);
   protected readonly busy = signal(false);
 
@@ -93,21 +115,36 @@ export class AlpacaConfigurationPageComponent {
     params: () => this.selectedProfileId() ?? undefined,
     loader: ({ params }) => this.service.readProfile(params),
   });
+  // No `defaultValue`: a revision list that failed to load must not render as
+  // "Revision history (0)", which states a fact about a read that never landed.
   protected readonly revisions = resource({
     params: () => this.selectedProfileId() ?? undefined,
     loader: ({ params }) => this.service.listRevisions(params),
-    defaultValue: [],
   });
   // `GET /selection` names the staged and effective revisions but not what
   // they *are*, and paper-versus-live is the fact an operator most needs from
   // this page. Each is read as an exact revision: a profile's latest revision
   // is a different one the moment an edit is saved.
+  //
+  // Both refs are `computed`s carrying an explicit `equal`, for the same reason
+  // the form drafts are: `resource.params` is wrapped in a computed using
+  // `Object.is`, so a fresh-but-equal object literal counts as a params change.
+  // Every write replaces the selection object, so without this an Apply — which
+  // changes neither side — would restart both reads and blank the panel to
+  // "endpoint unread" at exactly the moment the operator pressed the button.
+  private readonly stagedRef = computed(() => revisionRef(this.currentSelection(), 'staged'), {
+    equal: sameRevisionRef,
+  });
+  private readonly effectiveRef = computed(
+    () => revisionRef(this.currentSelection(), 'effective'),
+    { equal: sameRevisionRef },
+  );
   private readonly stagedRevision = resource({
-    params: () => revisionRef(this.currentSelection(), 'staged'),
+    params: () => this.stagedRef(),
     loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
   });
   private readonly effectiveRevision = resource({
-    params: () => revisionRef(this.currentSelection(), 'effective'),
+    params: () => this.effectiveRef(),
     loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
   });
 
@@ -145,17 +182,26 @@ export class AlpacaConfigurationPageComponent {
     this.nicknameFor(this.currentSelection()?.effective_account_id ?? null),
   );
 
+  /**
+   * The observation, but only when it belongs to the revision now on screen.
+   * A verification taken for another revision is not evidence about this one,
+   * so it is not shown and its accounts offer no approve button.
+   */
+  protected readonly observedAccounts = computed(() => {
+    const observation = this.observation();
+    const target = this.verificationTarget();
+    return observation !== null && target !== null && sameRevisionRef(observation.ref, target)
+      ? observation.accounts
+      : null;
+  });
+
   protected openProfile(profileId: string): void {
     this.selectedProfileId.set(profileId === this.selectedProfileId() ? null : profileId);
-    // An observation belongs to the revision it was taken for; carrying it to
-    // another profile would offer an "approve this account" button for an
-    // account nobody observed under that profile's credentials.
-    this.observedAccounts.set(null);
   }
 
   protected reloadAll(): void {
     this.refusal.set(null);
-    this.observedAccounts.set(null);
+    this.observation.set(null);
     this.slots.reload();
     this.profiles.reload();
     this.nicknames.reload();
@@ -240,7 +286,6 @@ export class AlpacaConfigurationPageComponent {
     void this.run(async () => {
       const cloned = await this.service.cloneProfile(open.profileId, displayName);
       this.selectedProfileId.set(cloned.profile.profile_id);
-      this.observedAccounts.set(null);
       this.profiles.reload();
     });
   }
@@ -254,9 +299,6 @@ export class AlpacaConfigurationPageComponent {
         submission.expectedRevision,
         submission.content,
       );
-      // The new revision carries no approved account, so the previous
-      // revision's observation is no longer evidence about what is open.
-      this.observedAccounts.set(null);
       this.detail.reload();
       this.revisions.reload();
     });
@@ -266,9 +308,12 @@ export class AlpacaConfigurationPageComponent {
     const target = this.verificationTarget();
     if (target === null) return;
     void this.run(async () => {
-      this.observedAccounts.set(
-        await this.service.verifyAccount(target.profileId, target.revision),
-      );
+      // Dropped before the call, not after it: a refused verification that left
+      // the previous run's accounts on screen would show a refusal banner over
+      // a list of still-approvable accounts, which reads as "those are current".
+      this.observation.set(null);
+      const accounts = await this.service.verifyAccount(target.profileId, target.revision);
+      this.observation.set({ ref: target, accounts });
     });
   }
 
@@ -291,7 +336,7 @@ export class AlpacaConfigurationPageComponent {
     });
   }
 
-  private verificationTarget(): { profileId: string; revision: number } | null {
+  private verificationTarget(): RevisionRef | null {
     const open = this.openProfileContext();
     return open === null || open.latestRevision === null
       ? null

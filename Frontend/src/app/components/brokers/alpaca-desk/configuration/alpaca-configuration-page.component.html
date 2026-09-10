@@ -65,7 +65,12 @@
       />
     }
 
-    @if (slots.hasValue() && !slots.isLoading()) {
+    @if (slots.error()) {
+      <p class="configuration__error" role="alert">
+        The credential slots could not be read, so a profile cannot be created here.
+        <button type="button" (click)="reloadAll()">Retry</button>
+      </p>
+    } @else if (slots.hasValue() && !slots.isLoading()) {
       <app-configuration-profile-create
         [slots]="slots.value()"
         [busy]="busy()"
@@ -74,10 +79,15 @@
     }
   </section>
 
-  @if (detail.value(); as openProfileDetail) {
+  @if (detail.error()) {
+    <p class="configuration__error" role="alert">
+      This profile could not be read, so nothing about it is shown.
+      <button type="button" (click)="reloadAll()">Retry</button>
+    </p>
+  } @else if (detail.value(); as openProfileDetail) {
     <app-configuration-profile-detail
       [detail]="openProfileDetail"
-      [revisions]="revisions.value()"
+      [revisions]="revisions.value() ?? null"
       [slots]="slots.value()"
       [observed]="observedAccounts()"
       [nickname]="detailNickname()"

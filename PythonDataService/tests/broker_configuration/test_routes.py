@@ -262,6 +262,35 @@ async def test_a_verifier_refusal_answers_in_the_contract_shape(
     assert detail["next_step"]
 
 
+async def test_a_refusal_family_member_without_its_contract_row_is_not_answered_by_the_handler(
+    refusing_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handler must not itself raise when a subclass omits its vocabulary.
+
+    ``reason`` and ``http_status`` are ``ClassVar``s with no default, so the base
+    class is constructible without them. Reading them unguarded would make the
+    handler raise ``AttributeError`` and answer with a broken response instead
+    of the refusal it exists to give — so an incomplete member falls through to
+    the catch-all, which is a plain 500 and not a malformed 200.
+    """
+    from app.broker.alpaca.profile import BrokerProfileError
+
+    class _Incomplete(BrokerProfileError):
+        """A subclass that forgot its contract row."""
+
+    async def _refuse(_self: object, **_: object) -> tuple[ObservedAccount, ...]:
+        raise _Incomplete("no vocabulary", next_step="none")
+
+    monkeypatch.setattr(_RefusingVerifier, "observe_accounts", _refuse)
+    profile_id = await _create_paper_profile(refusing_client)
+
+    # The original exception propagates — never an ``AttributeError`` raised by
+    # the handler itself. The ASGI transport re-raises what the handlers did not
+    # answer; in the app it reaches the catch-all, which is an honest 500.
+    with pytest.raises(_Incomplete):
+        await refusing_client.post(f"{PREFIX}/profiles/{profile_id}/revisions/1/verify-account")
+
+
 async def test_account_nicknames_are_keyed_to_the_account(client: AsyncClient) -> None:
     put = await client.put(
         f"{PREFIX}/account-nicknames/PA000PAPER", json={"nickname": "Testing account"}

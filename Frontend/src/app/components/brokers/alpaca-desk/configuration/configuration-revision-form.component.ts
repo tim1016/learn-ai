@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { FormField, type FieldTree } from '@angular/forms/signals';
 
 import type { BrokerCredentialSlot } from '../../../../api/alpaca.types';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { ConfigurationEnvelopeFormComponent } from './configuration-envelope-form.component';
 import type { RevisionDraft } from './configuration-revision-draft';
 
@@ -18,7 +19,7 @@ import type { RevisionDraft } from './configuration-revision-draft';
 @Component({
   selector: 'app-configuration-revision-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ConfigurationEnvelopeFormComponent, FormField],
+  imports: [ConfigurationEnvelopeFormComponent, FormField, ReceiptLabelPipe],
   templateUrl: './configuration-revision-form.component.html',
   styleUrl: './configuration-revision-form.component.scss',
   host: { class: 'block' },
@@ -39,4 +40,14 @@ export class ConfigurationRevisionFormComponent {
 
   /** True only when the slot is known *and* has no injected pair — not while loading. */
   protected readonly slotUnavailable = computed(() => this.chosenSlot()?.available === false);
+
+  /**
+   * The draft's slot when the directory has been read and does not list it —
+   * a revision saved against a slot this deployment has since dropped. `null`
+   * while the directory is unread, because "not listed" is then unknown.
+   */
+  protected readonly unlistedSlot = computed(() => {
+    const slot = this.draftForm().credential_slot().value();
+    return this.slots().length > 0 && slot.length > 0 && this.chosenSlot() === null ? slot : null;
+  });
 }

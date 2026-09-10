@@ -170,6 +170,13 @@ async def broker_profile_exception_handler(request: Request, exc: Exception) -> 
 
     if not isinstance(exc, BrokerProfileError):  # pragma: no cover - registration is exact
         raise exc
+    # ``reason`` and ``http_status`` are ``ClassVar``s with no default, so the
+    # base class is constructible without them. A bare ``BrokerProfileError`` --
+    # or a future subclass that forgets its contract row -- would make this
+    # handler itself raise ``AttributeError`` and answer with a broken response
+    # instead of the refusal it exists to give. Let the catch-all take it.
+    if not hasattr(type(exc), "reason") or not hasattr(type(exc), "http_status"):
+        raise exc
     logger.warning(
         "Broker configuration ceremony refused",
         extra={"action": "broker_profile_refusal", "reason_code": exc.reason},

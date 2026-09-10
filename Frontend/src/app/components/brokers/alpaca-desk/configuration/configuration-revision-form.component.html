@@ -4,6 +4,12 @@
     <label class="revision-form__field">
       <span>Credential slot</span>
       <select [formField]="fields.credential_slot">
+        @if (unlistedSlot(); as unlisted) {
+          <!-- A revision can name a slot this deployment no longer lists. Without
+               an option for it the control renders blank and the operator cannot
+               see what the revision actually says. -->
+          <option [value]="unlisted" disabled>{{ unlisted | receiptLabel }} — not listed here</option>
+        }
         @for (slot of slots(); track slot.slot) {
           <option [value]="slot.slot">
             {{ slot.label }}{{ slot.available ? '' : ' — no credentials injected' }}
