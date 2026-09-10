@@ -1,7 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import type { BrokerObservedAccount, BrokerProfile } from '../../../../api/alpaca.types';
+import type {
+  BrokerInstallationSelection,
+  BrokerObservedAccount,
+  BrokerProfile,
+} from '../../../../api/alpaca.types';
 import {
   type ConfigurationRefusal,
   clientRefusal,
@@ -16,6 +20,16 @@ import {
 import { ConfigurationProfileListComponent } from './configuration-profile-list.component';
 import { ConfigurationRefusalComponent } from './configuration-refusal.component';
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
+
+/** The `(profile, revision)` pair one side of the selection names, if it names one. */
+function revisionRef(
+  selection: BrokerInstallationSelection | null,
+  side: 'staged' | 'effective',
+): { profileId: string; revision: number } | undefined {
+  const profileId = selection?.[`${side}_profile_id`] ?? null;
+  const revision = selection?.[`${side}_revision`] ?? null;
+  return profileId === null || revision === null ? undefined : { profileId, revision };
+}
 
 /**
  * The saved-configuration surface for the Alpaca broker path (ADR 0060).
@@ -84,17 +98,52 @@ export class AlpacaConfigurationPageComponent {
     loader: ({ params }) => this.service.listRevisions(params),
     defaultValue: [],
   });
+  // `GET /selection` names the staged and effective revisions but not what
+  // they *are*, and paper-versus-live is the fact an operator most needs from
+  // this page. Each is read as an exact revision: a profile's latest revision
+  // is a different one the moment an edit is saved.
+  private readonly stagedRevision = resource({
+    params: () => revisionRef(this.currentSelection(), 'staged'),
+    loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
+  });
+  private readonly effectiveRevision = resource({
+    params: () => revisionRef(this.currentSelection(), 'effective'),
+    loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
+  });
+
+  protected readonly stagedEndpointMode = computed(
+    () => this.stagedRevision.value()?.endpoint_mode ?? null,
+  );
+  protected readonly effectiveEndpointMode = computed(
+    () => this.effectiveRevision.value()?.endpoint_mode ?? null,
+  );
 
   protected readonly currentSelection = computed(() =>
     this.selection.hasValue() ? this.selection.value() : null,
   );
 
-  /** The nickname of the account the open revision is approved for, if one is set. */
-  protected readonly detailNickname = computed(() => {
-    const accountId = this.detail.value()?.latest_revision?.account_pin ?? null;
-    if (accountId === null) return null;
-    return this.nicknames.value().find((entry) => entry.account_id === accountId)?.nickname ?? null;
+  /**
+   * The profile this page has open, with its latest revision. Every write that
+   * needs one asks here, so "a profile is open and its content has loaded" is
+   * stated once rather than re-derived as a guard in each handler.
+   */
+  private readonly openProfileContext = computed(() => {
+    const profileId = this.selectedProfileId();
+    const detail = this.detail.value();
+    return profileId === null || detail === undefined
+      ? null
+      : { profileId, latestRevision: detail.latest_revision };
   });
+
+  /** The nickname of the account the open revision is approved for, if one is set. */
+  protected readonly detailNickname = computed(() =>
+    this.nicknameFor(this.openProfileContext()?.latestRevision?.account_pin ?? null),
+  );
+
+  /** The nickname of the account the worker actually bound, if one is set. */
+  protected readonly effectiveNickname = computed(() =>
+    this.nicknameFor(this.currentSelection()?.effective_account_id ?? null),
+  );
 
   protected openProfile(profileId: string): void {
     this.selectedProfileId.set(profileId === this.selectedProfileId() ? null : profileId);
@@ -113,6 +162,8 @@ export class AlpacaConfigurationPageComponent {
     this.selection.reload();
     this.detail.reload();
     this.revisions.reload();
+    this.stagedRevision.reload();
+    this.effectiveRevision.reload();
   }
 
   protected createProfile(request: { displayName: string; content: RevisionContent }): void {
@@ -174,20 +225,20 @@ export class AlpacaConfigurationPageComponent {
   }
 
   protected renameProfile(displayName: string): void {
-    const profileId = this.selectedProfileId();
-    if (profileId === null) return;
+    const open = this.openProfileContext();
+    if (open === null) return;
     void this.run(async () => {
-      await this.service.updateProfile(profileId, { displayName });
+      await this.service.updateProfile(open.profileId, { displayName });
       this.profiles.reload();
       this.detail.reload();
     });
   }
 
   protected cloneProfile(displayName: string): void {
-    const profileId = this.selectedProfileId();
-    if (profileId === null) return;
+    const open = this.openProfileContext();
+    if (open === null) return;
     void this.run(async () => {
-      const cloned = await this.service.cloneProfile(profileId, displayName);
+      const cloned = await this.service.cloneProfile(open.profileId, displayName);
       this.selectedProfileId.set(cloned.profile.profile_id);
       this.observedAccounts.set(null);
       this.profiles.reload();
@@ -195,11 +246,11 @@ export class AlpacaConfigurationPageComponent {
   }
 
   protected saveRevision(submission: RevisionSubmission): void {
-    const profileId = this.selectedProfileId();
-    if (profileId === null) return;
+    const open = this.openProfileContext();
+    if (open === null) return;
     void this.run(async () => {
       await this.service.createRevision(
-        profileId,
+        open.profileId,
         submission.expectedRevision,
         submission.content,
       );
@@ -232,7 +283,7 @@ export class AlpacaConfigurationPageComponent {
   }
 
   protected saveNickname(nickname: string): void {
-    const accountId = this.detail.value()?.latest_revision?.account_pin ?? null;
+    const accountId = this.openProfileContext()?.latestRevision?.account_pin ?? null;
     if (accountId === null) return;
     void this.run(async () => {
       await this.service.putNickname(accountId, nickname);
@@ -241,11 +292,15 @@ export class AlpacaConfigurationPageComponent {
   }
 
   private verificationTarget(): { profileId: string; revision: number } | null {
-    const profileId = this.selectedProfileId();
-    const revision = this.detail.value()?.latest_revision ?? null;
-    return profileId === null || revision === null
+    const open = this.openProfileContext();
+    return open === null || open.latestRevision === null
       ? null
-      : { profileId, revision: revision.revision };
+      : { profileId: open.profileId, revision: open.latestRevision.revision };
+  }
+
+  private nicknameFor(accountId: string | null): string | null {
+    if (accountId === null) return null;
+    return this.nicknames.value().find((entry) => entry.account_id === accountId)?.nickname ?? null;
   }
 
   /**

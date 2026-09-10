@@ -1,3 +1,5 @@
+@use './configuration-controls' as controls;
+
 .envelope {
   margin: 0;
   padding: var(--space-3);
@@ -27,18 +29,11 @@
 }
 
 .envelope__field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  @include controls.field-label;
 }
 
 .envelope__field input {
-  min-height: 2.1rem;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  @include controls.text-field;
+
   background: var(--bg-surface);
-  color: var(--text-primary);
 }

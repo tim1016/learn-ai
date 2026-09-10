@@ -5,7 +5,13 @@
     <div class="status__state">
       <h3>Effective now</h3>
       @if (effectiveLabel(); as label) {
-        <p class="status__value">{{ label }}</p>
+        <p class="status__value">
+          {{ label }}
+          <span
+            class="status__mode"
+            [class.status__mode--live]="effectiveEndpointMode() === 'live'"
+          >{{ effectiveEndpointMode() === null ? 'endpoint unread' : (effectiveEndpointMode() | receiptLabel) }}</span>
+        </p>
         @if (current.effective_account_id; as accountId) {
           <p class="status__account">
             Account <strong>{{ accountId }}</strong>
@@ -29,7 +35,13 @@
     <div class="status__state">
       <h3>Staged</h3>
       @if (stagedLabel(); as label) {
-        <p class="status__value">{{ label }}</p>
+        <p class="status__value">
+          {{ label }}
+          <span
+            class="status__mode"
+            [class.status__mode--live]="stagedEndpointMode() === 'live'"
+          >{{ stagedEndpointMode() === null ? 'endpoint unread' : (stagedEndpointMode() | receiptLabel) }}</span>
+        </p>
       } @else {
         <p class="status__value status__value--empty">Nothing is staged.</p>
       }

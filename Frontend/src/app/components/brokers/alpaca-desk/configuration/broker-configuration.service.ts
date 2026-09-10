@@ -128,6 +128,17 @@ export class BrokerConfigurationService {
     );
   }
 
+  /**
+   * One exact revision. The staged and effective revisions are read this way
+   * rather than through `readProfile`, which answers with a profile's *latest*
+   * revision — a different revision whenever an edit has been saved since.
+   */
+  readRevision(profileId: string, revision: number): Promise<BrokerProfileRevision> {
+    return firstValueFrom(
+      this.http.get<BrokerProfileRevision>(this.revisionBase(profileId, revision)),
+    );
+  }
+
   /** Read-only broker account discovery. Submits and cancels nothing. */
   verifyAccount(profileId: string, revision: number): Promise<readonly BrokerObservedAccount[]> {
     return firstValueFrom(

@@ -1,11 +1,7 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type {
-  BrokerAccountNickname,
-  BrokerInstallationSelection,
-  BrokerProfile,
-} from '../../../../api/alpaca.types';
+import type { BrokerInstallationSelection, BrokerProfile } from '../../../../api/alpaca.types';
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
 
 function profile(overrides: Partial<BrokerProfile> = {}): BrokerProfile {
@@ -43,10 +39,21 @@ function selection(
 
 async function renderPanel(
   current: BrokerInstallationSelection,
-  nicknames: readonly BrokerAccountNickname[] = [],
+  overrides: {
+    effectiveNickname?: string | null;
+    stagedEndpointMode?: 'paper' | 'live' | null;
+    effectiveEndpointMode?: 'paper' | 'live' | null;
+  } = {},
 ) {
   return render(ConfigurationStatusPanelComponent, {
-    inputs: { selection: current, profiles: [profile()], nicknames, busy: false },
+    inputs: {
+      selection: current,
+      profiles: [profile()],
+      effectiveNickname: overrides.effectiveNickname ?? null,
+      stagedEndpointMode: overrides.stagedEndpointMode ?? null,
+      effectiveEndpointMode: overrides.effectiveEndpointMode ?? null,
+      busy: false,
+    },
   });
 }
 
@@ -103,7 +110,7 @@ describe('ConfigurationStatusPanelComponent', () => {
         effective_account_id: 'PA3ZK9QWERTY',
         effective_acknowledged_at_ms: 1_757_000_000_000,
       }),
-      [{ account_id: 'PA3ZK9QWERTY', nickname: 'Testing account', updated_at_ms: 1 }],
+      { effectiveNickname: 'Testing account' },
     );
 
     expect(screen.getByText('PA3ZK9QWERTY')).toBeTruthy();
@@ -126,6 +133,31 @@ describe('ConfigurationStatusPanelComponent', () => {
         'applying profile-paper@4 would leave account PA3ZK9QWERTY with 2 open orders',
       ),
     ).toBeTruthy();
+  });
+
+  it('says which endpoint each side talks to, and marks live apart from paper', async () => {
+    const { container } = await renderPanel(
+      selection({
+        staged_profile_id: 'profile-paper',
+        staged_revision: 5,
+        effective_profile_id: 'profile-paper',
+        effective_revision: 4,
+      }),
+      { stagedEndpointMode: 'live', effectiveEndpointMode: 'paper' },
+    );
+
+    expect(screen.getByText('Live')).toBeTruthy();
+    expect(screen.getByText('Paper')).toBeTruthy();
+    expect(container.querySelectorAll('.status__mode--live')).toHaveLength(1);
+  });
+
+  it('says an endpoint is unread rather than guessing the quieter of the two', async () => {
+    await renderPanel(
+      selection({ effective_profile_id: 'profile-paper', effective_revision: 4 }),
+    );
+
+    expect(screen.getByText('endpoint unread')).toBeTruthy();
+    expect(screen.queryByText('Paper')).toBeNull();
   });
 
   it('names an unexplained profile id byte-for-byte rather than rewriting it', async () => {

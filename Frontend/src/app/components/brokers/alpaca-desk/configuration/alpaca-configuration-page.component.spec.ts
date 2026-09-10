@@ -98,6 +98,14 @@ class FakeConfigurationService {
   listRevisions = vi.fn(async () => this.revisions);
   readSelection = vi.fn(async () => this.current);
 
+  readRevision = vi.fn(async (profileId: string, rev: number) => {
+    const found = this.revisions.find(
+      (entry) => entry.profile_id === profileId && entry.revision === rev,
+    );
+    if (found === undefined) throw new Error(`no revision ${profileId}@${rev}`);
+    return found;
+  });
+
   readProfile = vi.fn(async (profileId: string): Promise<BrokerProfileDetail> => {
     const found = this.profiles.find((entry) => entry.profile_id === profileId);
     if (found === undefined) throw new Error(`no profile ${profileId}`);
@@ -254,6 +262,60 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     expect(screen.queryAllByRole('textbox', { name: /key|secret|password/i })).toHaveLength(0);
     expect(document.querySelectorAll('input[type="password"]')).toHaveLength(0);
+  });
+
+  it('reads the effective revision so the status panel can say Live, and still never arms', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(
+      revision({
+        profile_id: 'profile-1',
+        revision: 2,
+        endpoint_mode: 'live',
+        credential_slot: 'live',
+        live_envelope: {
+          loss_fraction: 0.05,
+          loss_usd: 5000,
+          shadow_sessions: 3,
+          arming_max_sessions: 20,
+          xh_entry_bps: 11,
+          xh_exit_bps: 17.5,
+        },
+      }),
+    );
+    service.current = selection({
+      effective_profile_id: 'profile-1',
+      effective_revision: 2,
+      effective_account_id: '9LIVE0001',
+      selection_generation: 4,
+    });
+    await renderPage(service);
+
+    expect(await screen.findByText('Live')).toBeTruthy();
+    expect(service.readRevision).toHaveBeenCalledWith('profile-1', 2);
+    expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
+  });
+
+  it('does not claim no profiles are saved before the list has been read', async () => {
+    const service = new FakeConfigurationService();
+    let release = (): void => {};
+    const pending = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    service.listProfiles = vi.fn(async () => {
+      await pending;
+      return service.profiles;
+    });
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    const rendered = await renderPage(service);
+
+    expect(screen.getByText('Reading saved profiles…')).toBeTruthy();
+    expect(screen.queryByText(/No configuration profiles are saved yet/)).toBeNull();
+
+    release();
+    await rendered.fixture.whenStable();
+
+    expect(await screen.findByText('Paper — strategy testing')).toBeTruthy();
   });
 
   it('has no detectable accessibility violations with a profile open and a form expanded', async () => {

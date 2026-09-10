@@ -1,0 +1,55 @@
+// The two button shapes this surface uses, in a partial rather than repeated
+// per component: emulated encapsulation keeps a parent's rule from reaching a
+// child, so the alternative is the same block copied into five stylesheets.
+
+@mixin secondary-button {
+  min-height: 2.1rem;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+
+  &:disabled {
+    color: var(--text-secondary);
+    cursor: not-allowed;
+  }
+}
+
+@mixin primary-button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+
+  &:disabled {
+    border-color: var(--border-light);
+    background: var(--bg-canvas);
+    color: var(--text-secondary);
+    cursor: not-allowed;
+  }
+}
+
+@mixin text-field {
+  min-height: 2.1rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+@mixin field-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}

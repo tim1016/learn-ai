@@ -23,7 +23,9 @@
     <app-configuration-status-panel
       [selection]="current"
       [profiles]="profiles.value()"
-      [nicknames]="nicknames.value()"
+      [effectiveNickname]="effectiveNickname()"
+      [stagedEndpointMode]="stagedEndpointMode()"
+      [effectiveEndpointMode]="effectiveEndpointMode()"
       [busy]="busy()"
       (applyRequested)="applySelection()"
     />
@@ -49,6 +51,8 @@
         The profile list could not be read.
         <button type="button" (click)="reloadAll()">Retry</button>
       </p>
+    } @else if (profiles.isLoading()) {
+      <p class="configuration__loading" role="status">Reading saved profiles…</p>
     } @else {
       <app-configuration-profile-list
         [profiles]="profiles.value()"
@@ -61,11 +65,13 @@
       />
     }
 
-    <app-configuration-profile-create
-      [slots]="slots.value()"
-      [busy]="busy()"
-      (created)="createProfile($event)"
-    />
+    @if (slots.hasValue() && !slots.isLoading()) {
+      <app-configuration-profile-create
+        [slots]="slots.value()"
+        [busy]="busy()"
+        (created)="createProfile($event)"
+      />
+    }
   </section>
 
   @if (detail.value(); as openProfileDetail) {

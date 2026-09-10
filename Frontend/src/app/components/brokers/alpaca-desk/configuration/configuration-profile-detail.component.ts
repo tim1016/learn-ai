@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
 import { FormField, form } from '@angular/forms/signals';
 
 import type {
@@ -68,7 +68,13 @@ export class ConfigurationProfileDetailComponent {
 
   protected readonly renameDraft = linkedSignal(() => this.detail().profile.display_name);
   protected readonly renameForm = form(this.renameDraft);
-  protected readonly cloneDraft = signal('');
+  // Cleared when a different profile is open — which is what a *successful*
+  // clone produces, since the page selects the new profile. A refused clone
+  // leaves the same profile open and so keeps the name that was typed.
+  protected readonly cloneDraft = linkedSignal<string, string>({
+    source: () => this.detail().profile.profile_id,
+    computation: () => '',
+  });
   protected readonly cloneForm = form(this.cloneDraft);
 
   // Seeded from the revision this editor was opened against, so the operator
@@ -114,6 +120,5 @@ export class ConfigurationProfileDetailComponent {
   protected submitClone(): void {
     if (!this.canClone()) return;
     this.cloned.emit(this.cloneDraft().trim());
-    this.cloneDraft.set('');
   }
 }

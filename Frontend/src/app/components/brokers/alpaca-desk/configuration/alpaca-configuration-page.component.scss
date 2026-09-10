@@ -1,3 +1,5 @@
+@use './configuration-controls' as controls;
+
 :host {
   display: block;
   min-height: 100%;
@@ -85,12 +87,5 @@
 }
 
 .configuration__error button {
-  min-height: 2rem;
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-canvas);
-  color: var(--text-primary);
-  font-size: var(--fs-xs);
-  cursor: pointer;
+  @include controls.secondary-button;
 }

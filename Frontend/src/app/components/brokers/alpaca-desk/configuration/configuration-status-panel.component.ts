@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import type {
-  BrokerAccountNickname,
+  BrokerEndpointMode,
   BrokerInstallationSelection,
   BrokerProfile,
 } from '../../../../api/alpaca.types';
@@ -51,7 +51,15 @@ const DRIFT_MESSAGE: Readonly<Record<SelectionDrift, string>> = {
 export class ConfigurationStatusPanelComponent {
   readonly selection = input.required<BrokerInstallationSelection>();
   readonly profiles = input.required<readonly BrokerProfile[]>();
-  readonly nicknames = input.required<readonly BrokerAccountNickname[]>();
+  /** The label for the account the worker bound, resolved by the page that owns the nicknames. */
+  readonly effectiveNickname = input<string | null>(null);
+  /**
+   * Which endpoint each side talks to. `null` means the page has not read that
+   * revision yet — rendered as unread rather than as paper, because guessing
+   * the quieter of the two is the one guess this surface must never make.
+   */
+  readonly stagedEndpointMode = input<BrokerEndpointMode | null>(null);
+  readonly effectiveEndpointMode = input<BrokerEndpointMode | null>(null);
   readonly busy = input(false);
 
   readonly applyRequested = output();
@@ -63,13 +71,6 @@ export class ConfigurationStatusPanelComponent {
   protected readonly effectiveLabel = computed(() =>
     this.describe(this.selection().effective_profile_id, this.selection().effective_revision),
   );
-
-  /** The nickname for the account the worker actually bound, when one is set. */
-  protected readonly effectiveNickname = computed(() => {
-    const accountId = this.selection().effective_account_id;
-    if (accountId === null) return null;
-    return this.nicknames().find((entry) => entry.account_id === accountId)?.nickname ?? null;
-  });
 
   protected readonly drift = computed<SelectionDrift>(() => {
     const current = this.selection();

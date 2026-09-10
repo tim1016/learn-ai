@@ -1,3 +1,5 @@
+@use './configuration-controls' as controls;
+
 .detail {
   display: flex;
   flex-direction: column;
@@ -22,21 +24,13 @@
 }
 
 .detail__inline label {
-  display: flex;
+  @include controls.field-label;
+
   flex: 1 1 12rem;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
 }
 
 .detail__inline input {
-  min-height: 2.1rem;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-canvas);
-  color: var(--text-primary);
+  @include controls.text-field;
 }
 
 .detail__heading {
@@ -92,34 +86,13 @@
 }
 
 .detail__save {
-  align-self: flex-start;
-  min-height: 2.25rem;
-  padding: 0.45rem 0.9rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--text-on-accent);
-  font-weight: var(--fw-bold);
-  cursor: pointer;
-}
+  @include controls.primary-button;
 
-.detail__save:disabled,
-.detail__inline button:disabled {
-  background: var(--bg-canvas);
-  border-color: var(--border-light);
-  color: var(--text-secondary);
-  cursor: not-allowed;
+  align-self: flex-start;
 }
 
 .detail__inline button {
-  min-height: 2.1rem;
-  padding: 0.35rem 0.8rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-canvas);
-  color: var(--text-primary);
-  font-size: var(--fs-xs);
-  cursor: pointer;
+  @include controls.secondary-button;
 }
 
 .detail__history {

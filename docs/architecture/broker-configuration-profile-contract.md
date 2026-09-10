@@ -187,6 +187,19 @@ Follow the router convention already in `brokers.py`: a **dict** `detail` with a
 }
 ```
 
+`reason` and `message` are always present. **`next_step` is optional** — the
+key is omitted, not null, when the raiser had no step to name (as
+`live_envelope_invalid` does for a domain-bound violation, whose `message`
+already says which field is wrong). A consumer must treat it as absent rather
+than assume the three-key shape.
+
+Two refusal families reach this surface, and both carry the shape above: the
+profiles database's own (`BrokerConfigurationError`) and the credential and
+verification family the account ceremonies raise (`BrokerProfileError`, package
+C's). Both are registered as exception handlers in `app/main.py`; neither may
+be left to the catch-all, which would answer a state the contract has words for
+with a generic 500.
+
 | `reason` | Status | Meaning |
 |---|---|---|
 | `profile_not_found` | 404 | |

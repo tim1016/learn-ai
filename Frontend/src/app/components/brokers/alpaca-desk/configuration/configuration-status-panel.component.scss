@@ -1,3 +1,5 @@
+@use './configuration-controls' as controls;
+
 .status {
   display: flex;
   flex-direction: column;
@@ -36,6 +38,23 @@
   font-size: var(--fs-md);
 }
 
+.status__mode {
+  display: inline-block;
+  margin-left: var(--space-1);
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  vertical-align: middle;
+}
+
+.status__mode--live {
+  border-color: var(--bear);
+  color: var(--bear);
+  font-weight: var(--fw-bold);
+}
+
 .status__value--empty {
   color: var(--text-secondary);
   font-size: var(--fs-sm);
@@ -70,22 +89,9 @@
 }
 
 .status__apply-button {
-  align-self: flex-start;
-  min-height: 2.25rem;
-  padding: 0.45rem 0.9rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--text-on-accent);
-  font-weight: var(--fw-bold);
-  cursor: pointer;
-}
+  @include controls.primary-button;
 
-.status__apply-button:disabled {
-  background: var(--bg-canvas);
-  border-color: var(--border-light);
-  color: var(--text-secondary);
-  cursor: not-allowed;
+  align-self: flex-start;
 }
 
 .status__never-arms {

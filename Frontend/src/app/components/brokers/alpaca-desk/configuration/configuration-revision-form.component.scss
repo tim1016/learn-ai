@@ -1,3 +1,5 @@
+@use './configuration-controls' as controls;
+
 .revision-form {
   display: flex;
   flex-direction: column;
@@ -11,20 +13,13 @@
 }
 
 .revision-form__field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
+  @include controls.field-label;
 }
 
 .revision-form__field select {
-  min-height: 2.1rem;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  @include controls.text-field;
+
   background: var(--bg-surface);
-  color: var(--text-primary);
 }
 
 .revision-form__notice {
