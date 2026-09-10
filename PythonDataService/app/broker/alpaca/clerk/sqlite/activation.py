@@ -108,6 +108,8 @@ class ActivationRecord:
         return record
 
     def _validate_shape(self) -> None:
+        if not isinstance(self.account_id, str):
+            raise ActivationRecordInvalid("activation account_id must be a string")
         safe_path_component(self.account_id, "account_id")
         if type(self.authority_generation) is not int or self.authority_generation < 1:
             raise ActivationRecordInvalid("activation authority_generation must be positive")
@@ -174,6 +176,10 @@ class ActivationStore:
                 )
             latest = record
         return latest
+
+    def account_ids(self) -> tuple[str, ...]:
+        """Every activated account, in first-appearance order."""
+        return tuple(dict.fromkeys(record.account_id for record in self._read_all()))
 
     def resolve(
         self,

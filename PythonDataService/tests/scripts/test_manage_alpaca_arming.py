@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import json
-import logging
+import shutil
+import sqlite3
 from collections.abc import Iterator
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_INSTANCE_UNSEALED
+from app.broker.alpaca.clerk.live_arming import (
+    LIVE_ARMING_INSTANCE_UNSEALED,
+    LIVE_ARMING_SEAL_CHANGED,
+)
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
 from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME, ActivationStore
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from scripts.manage_alpaca_arming import _SUBMISSION_ADMITTED_NOTE, _SUBMISSION_UNVERIFIED_NOTE, main
+from scripts.manage_alpaca_arming import _SUBMISSION_ADMITTED_NOTE, main
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -114,6 +120,14 @@ def _arm(roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], *, now_ms
     return _last_object(capsys)
 
 
+def _graduate_live_account(artifacts_root: Path) -> None:
+    from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
+        test_a_never_legacy_live_account_graduates_end_to_end,
+    )
+
+    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+
+
 def test_status_on_an_account_with_no_records_answers_unarmed(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -165,6 +179,285 @@ def test_status_after_arming_counts_the_instance_and_reports_the_sealed_envelope
     assert instance["state"] == "armed"
     assert instance["reason_code"] is None
     assert (instance["sessions_used"], instance["sessions_remaining"]) == (1, 19)
+
+
+def test_status_lists_an_armed_graduated_account_without_a_shadow_fence(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id=ARMING_SID,
+        sealed_account_id=LIVE_ACCT,
+    )
+    _arm(roots, capsys)
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+
+    report = _last_object(capsys)
+    assert report["live_account_id"] == LIVE_ACCT
+    assert report["armed_instance_count"] == 1
+    assert report["instances"][0]["strategy_instance_id"] == ARMING_SID
+
+
+def test_status_refuses_to_choose_between_two_directly_activated_live_accounts(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    store = ActivationStore(artifacts_root / "accounts" / "alpaca")
+    store.append(live_activation(account_id=LIVE_ACCT))
+    store.append(live_activation(account_id="9LIVE0002"))
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "more than one account" in refusal["detail"]
+
+
+def test_status_refuses_different_accounts_across_shadow_and_live_activations(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    activate_shadow_fence(artifacts_root, live_account_id=LIVE_ACCT)
+    ActivationStore(artifacts_root / "accounts" / "alpaca").append(
+        live_activation(account_id="9LIVE0002")
+    )
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert LIVE_ACCT in refusal["detail"]
+    assert "9LIVE0002" in refusal["detail"]
+
+
+def test_list_status_refuses_an_invalid_live_activation_ledger_as_one_json_object(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    ledger_path = artifacts_root / "accounts" / "alpaca" / ACTIVATION_FILENAME
+    ledger_path.parent.mkdir(parents=True)
+    ledger_path.write_text("not-json\n", encoding="utf-8")
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "Live activation ledger cannot be verified" in refusal["detail"]
+
+
+def test_list_status_refuses_a_wrong_typed_activation_account_as_one_json_object(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    payload = {**asdict(live_activation()), "account_id": None}
+    ledger_path = artifacts_root / "accounts" / "alpaca" / ACTIVATION_FILENAME
+    ledger_path.parent.mkdir(parents=True)
+    ledger_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "activation account_id must be a string" in refusal["detail"]
+
+
+def test_list_status_refuses_a_graduated_account_with_a_missing_database(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    (artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db").unlink()
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "Live activation is not verified" in refusal["detail"]
+
+
+def test_list_status_refuses_a_graduated_account_with_a_malformed_database(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    database = artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "UPDATE control_meta SET schema_version = 'not-a-version' WHERE id = 1"
+        )
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "Live activation is not verified" in refusal["detail"]
+
+
+def test_list_status_refuses_an_infinite_database_control_value(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    database = artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute("UPDATE control_meta SET control_revision = 1e999 WHERE id = 1")
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "Live activation is not verified" in refusal["detail"]
+
+
+def test_list_status_translates_an_escaped_database_symlink_to_a_typed_refusal(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    database = artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db"
+    escaped = artifacts_root.parent / "escaped.db"
+    database.replace(escaped)
+    database.symlink_to(escaped)
+
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "path escapes root" in refusal["detail"]
+
+
+def test_status_uses_the_instances_own_ledger_after_its_binding_is_lost(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id=ARMING_SID,
+        sealed_account_id=LIVE_ACCT,
+    )
+    _arm(roots, capsys)
+    shutil.rmtree(live_state_root / "live_state" / ARMING_SID)
+
+    assert (
+        main(
+            [*_flags(roots), "status", "--strategy-instance-id", ARMING_SID,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+
+    report = _last_object(capsys)
+    assert report["live_account_id"] == LIVE_ACCT
+    assert report["armed_instance_count"] == 0
+    assert report["instances"][0]["reason_code"] == LIVE_ARMING_SEAL_CHANGED
+
+
+def test_status_uses_the_instances_ledger_after_its_shadow_fence_is_lost(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, live_state_root = roots
+    arming_ready(artifacts_root, live_state_root)
+    _arm(roots, capsys)
+    ShadowActivationStore(artifacts_root).path.unlink()
+
+    assert (
+        main(
+            [*_flags(roots), "status", "--strategy-instance-id", ARMING_SID,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+
+    report = _last_object(capsys)
+    assert report["live_account_id"] == LIVE_ACCT
+    assert report["armed_instance_count"] == 1
+    assert report["instances"][0]["state"] == "armed"
+
+
+def test_recovered_seal_loss_reports_submission_closed_when_live_authority_is_damaged(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id=ARMING_SID,
+        sealed_account_id=LIVE_ACCT,
+    )
+    _arm(roots, capsys)
+    shutil.rmtree(live_state_root / "live_state" / ARMING_SID)
+    (artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db").unlink()
+
+    assert (
+        main(
+            [*_flags(roots), "status", "--strategy-instance-id", ARMING_SID,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 0
+    )
+
+    report = _last_object(capsys)
+    assert report["instances"][0]["reason_code"] == LIVE_ARMING_SEAL_CHANGED
+    assert report["submission_admitted"] is False
+    assert "Clerk database" in report["note"]
+
+
+def test_named_status_translates_an_escaped_arming_root_to_a_typed_refusal(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifacts_root, _live_state_root = roots
+    escaped = artifacts_root.parent / "escaped-arming"
+    escaped.mkdir()
+    accounts = artifacts_root / "accounts"
+    accounts.mkdir(parents=True)
+    (accounts / "arming").symlink_to(escaped, target_is_directory=True)
+
+    assert (
+        main(
+            [*_flags(roots), "status", "--strategy-instance-id", ARMING_SID,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 2
+    )
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "arming ledger cannot be discovered safely" in refusal["detail"]
+
+
+@pytest.mark.parametrize("operation", ["plan", "status"])
+def test_live_binding_with_a_missing_database_is_one_typed_refusal(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], operation: str
+) -> None:
+    artifacts_root, live_state_root = roots
+    _graduate_live_account(artifacts_root)
+    record_sealed_binding(
+        live_state_root,
+        strategy_instance_id=ARMING_SID,
+        sealed_account_id=LIVE_ACCT,
+    )
+    (artifacts_root / "accounts" / "alpaca" / LIVE_ACCT / "clerk.db").unlink()
+
+    assert (
+        main(
+            [*_flags(roots), operation, "--strategy-instance-id", ARMING_SID,
+             "--now-ms", str(ARMED_AT_MS)],
+            settings=SETTINGS,
+        )
+        == 2
+    )
+
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "not sealed to a verified Live account" in refusal["detail"]
 
 
 def test_a_quoted_token_that_is_not_the_plans_refuses_at_exit_two(
@@ -530,46 +823,35 @@ def test_a_ledger_row_that_will_not_verify_is_an_evidence_error_at_exit_one(
     assert "digest does not verify" in _last_object(capsys)["error"]
 
 
-def test_an_unverifiable_activation_ledger_reports_not_admitted_and_logs_a_warning(
-    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+def test_an_unverifiable_live_activation_refuses_even_when_shadow_evidence_exists(
+    roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A corrupt activation ledger is a note, never a traceback (Task 10 review, Finding 3).
-
-    ``ActivationStore.latest`` raises ``ActivationRecordInvalid`` on malformed
-    JSON; that must not break this module's one-JSON-object contract, worst of
-    all on ``apply`` after the arming record has already been sealed.
-    """
+    """A Shadow candidate cannot hide corrupt evidence in the Live store."""
     artifacts_root, _live_state_root = roots
     activate_shadow_fence(artifacts_root)
     ledger_path = artifacts_root / "accounts" / "alpaca" / ACTIVATION_FILENAME
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.write_text("not-json\n", encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING):
-        assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
 
-    report = _last_object(capsys)
-    assert report["submission_admitted"] is False
-    assert report["note"] == _SUBMISSION_UNVERIFIED_NOTE
-    (warning,) = [
-        record for record in caplog.records if getattr(record, "action", None) == "arming_cli_activation_record_invalid"
-    ]
-    assert warning.levelno == logging.WARNING
-    assert warning.live_account_id == LIVE_ACCT  # type: ignore[attr-defined]
+    refusal = _last_object(capsys)
+    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
+    assert "Live activation ledger cannot be verified" in refusal["detail"]
 
 
 def test_a_real_activation_record_reports_submission_admitted(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The CLI reports what it read -- a live activation record -- not a booted authority.
+    """The CLI reports a verified activation record, not a booted authority.
 
-    The record is on disk; whether the live authority actually installed is a
-    boot-time fact this read-only command cannot observe, and the note names
-    the one condition (an open control plane) that stops it (slice 7 R14).
+    Whether the live authority actually installed is a boot-time fact this
+    read-only command cannot observe, and the note names the one condition (an
+    open control plane) that stops it (slice 7 R14).
     """
     artifacts_root, _live_state_root = roots
     activate_shadow_fence(artifacts_root)
-    ActivationStore(artifacts_root / "accounts" / "alpaca").append(live_activation())
+    _graduate_live_account(artifacts_root)
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 

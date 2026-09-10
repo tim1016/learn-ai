@@ -7,11 +7,12 @@ refuses any drift, and appends the sealed arming record -- the one write on this
 path. ``disarm`` appends a revocation; it is the closed direction and takes no
 plan.
 
-The live account is never supplied on the command line: it is observed from the
-instance's sealed binding. A Shadow-bound instance must still prove its shadow
-activation fence; a Live-bound instance must prove its verified cutover
-activation. ``disarm`` alone may instead read the arming ledger that already
-names the instance.
+The live account is never supplied on the command line. ``plan`` and ``apply``
+observe it from the instance's sealed binding: a Shadow-bound instance must
+prove its shadow activation fence, while a Live-bound instance must prove its
+verified cutover activation. Read-only ``status`` may recover a graduated
+account from its activation or a previously armed instance from its unique
+ledger row. ``disarm`` may also read the ledger that already names the instance.
 
 Exit codes: ``0`` the command answered; ``1`` the command cannot be run as asked
 -- a plan file that is not one, a ledger row that will not verify, or a usage
@@ -54,13 +55,13 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     apply_arming,
     configured_envelope,
     disarm,
-    live_account_id_for,
-    live_account_id_for_instance,
+    live_account_activation_is_verified,
+    live_account_id_for_status,
     plan_arming,
 )
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
-from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.config import (
     AlpacaSettings,
@@ -85,8 +86,8 @@ _SUBMISSION_UNEVALUATED_NOTE = (
     "submission admission was not evaluated: the command was refused before its account was resolved"
 )
 _SUBMISSION_UNVERIFIED_NOTE = (
-    "the live activation record for this account does not verify; nothing submits until an operator "
-    "repairs it (ADR 0059 D1)"
+    "the live activation evidence or Clerk database for this account does not verify; nothing "
+    "submits until an operator repairs it (ADR 0059 D1)"
 )
 
 
@@ -157,14 +158,13 @@ def _submission_admitted(
     Since ADR 0059 slice 7, an armed instance's ENTER is only ever submitted
     once graduation -- the live cutover -- has installed the live authority
     for the account; arming alone never opens that path. The cutover's own
-    ``ActivationStore`` is the read of that fact. Without a resolvable
-    ``artifacts_root`` or ``live_account_id`` (a usage or pre-dispatch
-    refusal) account resolution never happened, so admission was never
-    evaluated -- that is a distinct fact from an ungraduated account and gets
-    its own note. A ledger that fails ``ActivationStore``'s own verification
-    (a symlinked or non-regular file, a non-monotonic generation, malformed
-    JSON) is reported the same way: not admitted, with a note naming the
-    unverified ledger instead of a traceback.
+    The ceremony's shared activation verifier is the read of that fact. Without
+    a resolvable ``artifacts_root`` or ``live_account_id`` (a usage or
+    pre-dispatch refusal) account resolution never happened, so admission was
+    never evaluated -- that is a distinct fact from an ungraduated account and
+    gets its own note. Activation, cutover-artifact, containment, or database
+    verification failure is reported the same way: not admitted, with a note
+    naming the unverified authority instead of a traceback.
 
     The id is a parameter, not a probe into the payload: every caller that
     has one already holds it, and a payload that came to name it differently
@@ -173,12 +173,13 @@ def _submission_admitted(
     if artifacts_root is None or live_account_id is None:
         return False, _SUBMISSION_UNEVALUATED_NOTE
     try:
-        activated = (
-            ActivationStore(artifacts_root / "accounts" / "alpaca").latest(live_account_id) is not None
+        activated = live_account_activation_is_verified(
+            live_account_id=live_account_id,
+            artifacts_root=artifacts_root,
         )
     except ActivationRecordInvalid as exc:
         logger.warning(
-            "the live activation record does not verify; submission is reported as not admitted",
+            "the live authority evidence does not verify; submission is reported as not admitted",
             extra={
                 "action": "arming_cli_activation_record_invalid",
                 "live_account_id": live_account_id,
@@ -284,14 +285,11 @@ def _status(
     args: argparse.Namespace, *, artifacts_root: Path, live_state_root: Path, settings: AlpacaSettings
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    if args.strategy_instance_id is None:
-        live_account_id = live_account_id_for(artifacts_root)
-    else:
-        live_account_id = live_account_id_for_instance(
-            strategy_instance_id=args.strategy_instance_id,
-            artifacts_root=artifacts_root,
-            live_state_root=live_state_root,
-        )
+    live_account_id = live_account_id_for_status(
+        strategy_instance_id=args.strategy_instance_id,
+        artifacts_root=artifacts_root,
+        live_state_root=live_state_root,
+    )
     arming = account_arming(
         live_account_id=live_account_id,
         artifacts_root=artifacts_root,
