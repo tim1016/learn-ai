@@ -124,3 +124,28 @@ async def catalog_schema_not_ready_exception_handler(request: Request, exc: Exce
             },
         },
     )
+
+
+async def broker_unbound_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer a worker with no broker binding in the configuration's vocabulary.
+
+    ``BrokerUnbound`` means this process resolved no effective broker profile —
+    nothing applied, an unreadable profiles database, a revision that will not
+    load, or credentials reaching an account the revision is not approved for.
+    Every one of those is a *state the contract has words for* (§6), and the
+    whole point of the refusal vocabulary is that an operator sees which one.
+
+    Without this it fell through to the catch-all 500, so precisely when the
+    Broker Desk should have said "the gate is closed, here is what to do", it
+    showed a generic fault instead — and worse than before the migration, where
+    a missing credential produced a typed contract error.
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound
+
+    if not isinstance(exc, BrokerUnbound):  # pragma: no cover - registration is exact
+        raise exc
+    logger.warning(
+        "Broker request refused: no broker binding is installed",
+        extra={"action": "broker_unbound_request", "reason_code": exc.reason},
+    )
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})

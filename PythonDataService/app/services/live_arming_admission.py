@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
 from app.broker.alpaca.clerk.active_authority import primary_custody_world
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED, LiveArmingInvalid
 from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
@@ -70,7 +70,7 @@ def live_arming_admission_fact(
             strategy_instance_ids=(binding.strategy_instance_id,),
             custody_world=world,
         )
-    except (LiveArmingInvalid, LiveEnvelopeIncomplete, ValidationError) as exc:
+    except (LiveArmingInvalid, LiveEnvelopeIncomplete, ValidationError, BrokerUnbound) as exc:
         logger.warning(
             "live arming evidence unreadable; the launch is refused",
             extra={

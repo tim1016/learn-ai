@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.active_binding import (
+    ACCOUNT_PIN_MISMATCH,
     APPLY_PREFLIGHT_REFUSED,
     BROKER_UNCONFIGURED,
     PROFILES_DATABASE_UNAVAILABLE,
@@ -30,7 +31,6 @@ from app.broker_configuration.worker_binding import (
     PriorObligations,
     UnboundWorker,
     UnprovableObligations,
-    account_pin_disagreement,
     acknowledge_worker_binding,
     resolve_worker_binding,
 )
@@ -597,49 +597,135 @@ async def test_a_live_revision_binds_its_sealed_envelope_values(
 # ---- the account pin, re-observed at startup -------------------------------
 
 
-async def test_custody_on_the_pinned_account_is_no_disagreement(
-    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+class _Reaches:
+    """A broker whose credentials reach exactly one account."""
+
+    def __init__(self, account_id: str, *, mode: str = "paper") -> None:
+        self._account_id = account_id
+        self._mode = mode
+
+    async def get_account(self):
+        from app.broker.contract.models import BrokerAccountSnapshot
+        from app.utils.timestamps import now_ms_utc
+
+        return BrokerAccountSnapshot(
+            broker="alpaca",
+            account_id=self._account_id,
+            account_mode=self._mode,
+            account_status="ACTIVE",
+            currency="USD",
+            cash=1000.0,
+            equity=1000.0,
+            buying_power=1000.0,
+            portfolio_value=1000.0,
+            long_market_value=0.0,
+            short_market_value=0.0,
+            pattern_day_trader=False,
+            trading_blocked=False,
+            account_blocked=False,
+            created_at_ms=None,
+            observed_at_ms=now_ms_utc(),
+        )
+
+
+def _reaching(account_id: str):
+    """Patch the startup re-observation to reach ``account_id``."""
+    import app.broker_configuration.worker_binding as wb
+    from app.broker.alpaca.profile import verify_account as real_verify
+
+    async def _verify(context, *, discovery=None):
+        return await real_verify(context, discovery=_Reaches(account_id))
+
+    return wb, _verify
+
+
+async def test_credentials_reaching_the_pinned_account_bind_normally(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile_id, _ = await _profile_bound_to(
         service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
     )
     _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+    wb, verify = _reaching(PAPER_ACCOUNT)
+    monkeypatch.setattr(wb, "verify_account", verify)
+
     resolved = await resolve_worker_binding(
         service_factory=_service(service), environment=environment
     )
+
     assert isinstance(resolved, BoundWorker)
+    assert resolved.context.account_pin == PAPER_ACCOUNT
 
-    assert account_pin_disagreement(resolved, account_id=PAPER_ACCOUNT) is None
 
-
-async def test_custody_on_another_account_than_the_pin_is_a_disagreement(
-    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+async def test_credentials_reaching_another_account_refuse_before_custody(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A credential slot repointed at a different Alpaca account.
 
     Everything else still looks right - the profile is applied, the mode
     agrees, the envelope is intact - so nothing else in the boot would catch
-    it, and the worker would take custody of an account nobody approved.
+    it, and the worker would take custody of an account nobody approved. The
+    check runs before the Clerk composes, so no lease is ever taken on it.
     """
     profile_id, _ = await _profile_bound_to(
         service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
     )
     _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+    wb, verify = _reaching(OTHER_ACCOUNT)
+    monkeypatch.setattr(wb, "verify_account", verify)
+
     resolved = await resolve_worker_binding(
         service_factory=_service(service), environment=environment
     )
+
+    assert isinstance(resolved, UnboundWorker)
+    assert resolved.unbound.reason == ACCOUNT_PIN_MISMATCH
+
+
+async def test_an_unreachable_broker_at_startup_is_not_a_pin_mismatch(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient blip must not unbind the worker for the whole process.
+
+    Today an unreachable broker still boots and authority selection reports
+    BROKER_ACCOUNT_UNAVAILABLE, which can recover. Treating "cannot observe" as
+    "wrong account" would be strictly worse.
+    """
+    import app.broker_configuration.worker_binding as wb
+    from app.broker.alpaca.profile import AccountVerificationFailed
+
+    profile_id, _ = await _profile_bound_to(
+        service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+
+    async def _unreachable(context, *, discovery=None):
+        raise AccountVerificationFailed(
+            "the broker could not be reached", next_step="Retry once it is reachable."
+        )
+
+    monkeypatch.setattr(wb, "verify_account", _unreachable)
+
+    resolved = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+
     assert isinstance(resolved, BoundWorker)
 
-    disagreement = account_pin_disagreement(resolved, account_id=OTHER_ACCOUNT)
 
-    assert disagreement is not None
-    assert PAPER_ACCOUNT in disagreement
-    assert OTHER_ACCOUNT in disagreement
-
-
-async def test_an_unpinned_revision_has_no_pin_to_contradict(
-    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+async def test_an_unpinned_revision_needs_no_reobservation(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import app.broker_configuration.worker_binding as wb
+
     created = service.create_profile(
         display_name="Paper - unpinned",
         credential_slot=PAPER_SLOT,
@@ -647,9 +733,118 @@ async def test_an_unpinned_revision_has_no_pin_to_contradict(
         live_envelope=None,
     )
     _make_effective(service, created.profile.profile_id, 1, PAPER_ACCOUNT)
+
+    async def _must_not_run(context, *, discovery=None):  # pragma: no cover
+        raise AssertionError("an unpinned revision has no pin to re-observe")
+
+    monkeypatch.setattr(wb, "verify_account", _must_not_run)
+
     resolved = await resolve_worker_binding(
         service_factory=_service(service), environment=environment
     )
+
     assert isinstance(resolved, BoundWorker)
 
-    assert account_pin_disagreement(resolved, account_id=OTHER_ACCOUNT) is None
+
+# ---- regressions from the independent review -------------------------------
+
+
+async def test_a_clerk_less_boot_does_not_erase_the_remembered_account(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    """The switch preflight reads effective_account_id to decide what to prove.
+
+    A boot where authority selection fails - activation missing, lease held
+    elsewhere, database refused - takes no execution lease, so it must not
+    write the effective fields at all. Writing them NULLed the remembered
+    account, which silently disarmed the preflight: the next Apply saw
+    NO_PREVIOUS_BINDING and switched away from an account holding a position
+    without ever consulting the obligations probe.
+    """
+    profile_id, _ = await _profile_bound_to(
+        service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+
+    booted = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+    assert isinstance(booted, BoundWorker)
+    acknowledge_worker_binding(
+        bound=booted, account_id=None, service_factory=_service(service)
+    )
+
+    assert service.selection().effective_account_id == PAPER_ACCOUNT
+
+
+async def test_the_preflight_still_runs_after_a_clerk_less_boot(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    """The consequence the previous test protects, driven end to end."""
+    effective_id, _ = await _profile_bound_to(
+        service, display_name="Paper - effective", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, effective_id, 1, PAPER_ACCOUNT)
+
+    clerk_less = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+    assert isinstance(clerk_less, BoundWorker)
+    acknowledge_worker_binding(
+        bound=clerk_less, account_id=None, service_factory=_service(service)
+    )
+
+    staged_id, _ = await _profile_bound_to(
+        service, display_name="Paper - staged", account_id=OTHER_ACCOUNT
+    )
+    _stage_and_apply(service, staged_id, 1)
+    switched = await resolve_worker_binding(
+        service_factory=_service(service),
+        obligations=_Encumbered(),
+        environment=environment,
+    )
+
+    assert isinstance(switched, BoundWorker)
+    assert switched.context.profile_id == effective_id
+    assert service.selection().last_apply_outcome == "refused"
+
+
+async def test_a_refused_apply_survives_an_unreadable_database_afterwards(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    """The refusal path must not carry the module's only unguarded read.
+
+    A database blip while booting the last-effective revision used to escape
+    into the lifespan and abort startup - a crash loop in exactly the state
+    this branch exists for, where an Apply was just refused because the prior
+    account still holds a position and nobody can EXIT if the worker will not
+    boot.
+    """
+    effective_id, _ = await _profile_bound_to(
+        service, display_name="Paper - effective", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, effective_id, 1, PAPER_ACCOUNT)
+    staged_id, _ = await _profile_bound_to(
+        service, display_name="Paper - staged", account_id=OTHER_ACCOUNT
+    )
+    _stage_and_apply(service, staged_id, 1)
+
+    calls: list[str] = []
+    real_selection = service.selection
+
+    def _selection_fails_after_the_refusal() -> object:
+        calls.append("selection")
+        if len(calls) > 1:
+            raise ProfilesDatabaseUnavailable("the volume went away")
+        return real_selection()
+
+    service.selection = _selection_fails_after_the_refusal  # type: ignore[method-assign]
+
+    resolved = await resolve_worker_binding(
+        service_factory=_service(service),
+        obligations=_Encumbered(),
+        environment=environment,
+    )
+
+    assert isinstance(resolved, BoundWorker)
+    assert resolved.context.profile_id == effective_id

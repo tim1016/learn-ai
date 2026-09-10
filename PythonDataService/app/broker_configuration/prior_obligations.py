@@ -345,7 +345,17 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
         ):
             continue
         binding = repository.read(child.name)
-        if binding is None or binding.broker != ALPACA_BROKER:
+        if binding is None:
+            # ``read`` does not always *raise* on a row it cannot materialise:
+            # it returns ``None`` when ``current_run.json`` is missing, or when
+            # the run record it names is gone. Those directories still pass the
+            # filter above, and their ``strategy_instance.json`` may well carry
+            # a ``sealed_account_id`` for the very account being proven clear —
+            # so treating ``None`` as "not a binding" is a fail-open, and it is
+            # the shape an ungraceful stop leaves behind, because
+            # ``record_launch`` writes ``current_run.json`` last.
+            raise _Unprovable(f"binding row {child.name!r} could not be read")
+        if binding.broker != ALPACA_BROKER:
             continue
         if binding.sealed_account_id in admissible:
             bound.append(binding)

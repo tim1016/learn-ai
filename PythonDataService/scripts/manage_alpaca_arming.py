@@ -367,10 +367,18 @@ def _envelope_change(plan: LiveArmingPlan, *, artifacts_root: Path) -> dict[str,
         }
 
     before = sealed.envelope.to_mapping()
+    # Compared by (type, value), not by ``!=``. ``5000 == 5000.0`` and
+    # ``0.0 == -0.0`` in Python, but each pair is a *different* envelope
+    # document to the sha every arming record is sealed over — so a plain
+    # inequality would print "NO CHANGE" on the operator's last look before a
+    # real-money limit changes, and then the seal would produce a
+    # LIVE_ENVELOPE_DISAGREEMENT at runtime. Reachable because a sealed record
+    # whose JSON carries ``"loss_usd": 5000`` verifies against its own sha and
+    # round-trips as an ``int``: only the two count fields are type-checked.
     changes = [
         {"field": field, "before": before[field], "after": after[field]}
         for field in _ENVELOPE_FIELD_ORDER
-        if before[field] != after[field]
+        if (type(before[field]), before[field]) != (type(after[field]), after[field])
     ]
     sealed_by = {
         "strategy_instance_id": sealed.strategy_instance_id,

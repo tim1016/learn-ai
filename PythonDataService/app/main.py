@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from app.broker.alpaca.active_binding import BrokerUnbound
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.ibkr.client import (
     BrokerError,
@@ -21,11 +22,7 @@ from app.broker.ibkr.client import (
     set_client,
 )
 from app.broker_configuration.errors import BrokerConfigurationError
-from app.broker_configuration.worker_binding import (
-    BoundWorker,
-    account_pin_disagreement,
-    resolve_worker_binding,
-)
+from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
 from app.config import settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
@@ -87,6 +84,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.utils.error_handlers import (
+    broker_unbound_exception_handler,
     catalog_schema_not_ready_exception_handler,
     clerk_sqlite_exception_handler,
     polygon_exception_handler,
@@ -169,41 +167,6 @@ async def _install_alpaca_binding() -> BoundWorker | None:
     return resolved
 
 
-def _refuse_alpaca_account_pin_mismatch(
-    *, pinned_account_id: str | None, observed_account_id: str | None
-) -> None:
-    """Close the broker gate because custody opened on an unapproved account."""
-    from app.broker.alpaca.active_binding import (
-        ACCOUNT_PIN_MISMATCH,
-        UnboundBroker,
-        refuse_active_alpaca_binding,
-    )
-
-    logger.error(
-        "Alpaca custody opened on an account this revision did not pin; "
-        "no broker binding installed.",
-        extra={
-            "action": "alpaca_binding_account_pin_mismatch",
-            "reason_code": ACCOUNT_PIN_MISMATCH,
-            "pinned_account_id": pinned_account_id,
-            "observed_account_id": observed_account_id,
-        },
-    )
-    refuse_active_alpaca_binding(
-        UnboundBroker(
-            reason=ACCOUNT_PIN_MISMATCH,
-            message=(
-                "The applied broker configuration is approved for one account but its "
-                "credentials reach another, so no broker is bound."
-            ),
-            next_step=(
-                "Restore the credential pair for the approved account, or verify and "
-                "apply a revision approved for the account they now reach."
-            ),
-        )
-    )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events.
@@ -261,7 +224,6 @@ async def lifespan(app: FastAPI):
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
-    pin_disagreement: str | None = None
     alpaca_binding = await _install_alpaca_binding()
     if alpaca_binding is not None:
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
@@ -366,30 +328,6 @@ async def lifespan(app: FastAPI):
         # else still looks right, and the worker would take custody of, and
         # trade, an account nobody approved. Refuse before the authority is
         # installed and before any background tap starts.
-        pin_disagreement = account_pin_disagreement(
-            alpaca_binding, account_id=alpaca_clerk_runtime.selected_account_id
-        )
-
-    if alpaca_binding is not None and pin_disagreement is not None:
-        # Contract §3: the pin is re-observed at startup. Custody opened on an
-        # account this revision did not pin, so the credential slot has been
-        # repointed at a different Alpaca account — everything else still looks
-        # right, and the worker would take custody of, and trade, an account
-        # nobody approved. Refused before the authority is installed and before
-        # any background tap starts.
-        _refuse_alpaca_account_pin_mismatch(
-            pinned_account_id=alpaca_binding.context.account_pin,
-            observed_account_id=(
-                alpaca_clerk_runtime.selected_account_id
-                if alpaca_clerk_runtime is not None
-                else None
-            ),
-        )
-        set_active_clerk_runtime(None)
-        alpaca_clerk_runtime = None
-        alpaca_binding = None
-
-    if alpaca_binding is not None and alpaca_clerk_runtime is not None:
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:
             logger.info(
@@ -941,6 +879,10 @@ app.add_exception_handler(
     BrokerConfigurationError,
     broker_configuration.broker_configuration_exception_handler,
 )
+# Same reasoning for a worker that resolved no broker binding: the contract
+# has a 503 vocabulary for it (broker_unconfigured, profiles_database_unavailable,
+# account_pin_mismatch), and without this it fell through to the catch-all 500.
+app.add_exception_handler(BrokerUnbound, broker_unbound_exception_handler)
 # Same reasoning: a mid-deploy catalog-schema race (#1883 Codex P2 finding)
 # is a transient deploy-ordering state, not an unexpected fault.
 app.add_exception_handler(CatalogSchemaNotReadyError, catalog_schema_not_ready_exception_handler)

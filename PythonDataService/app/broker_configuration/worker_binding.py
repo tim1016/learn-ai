@@ -43,10 +43,13 @@ from app.broker.alpaca.active_binding import (
     UnboundBroker,
 )
 from app.broker.alpaca.profile import (
+    AccountPinMismatch,
     AlpacaCredentialEnvironment,
     AlpacaRuntimeContext,
     BrokerProfileError,
     resolve_runtime_context,
+    reverify_pinned_account,
+    verify_account,
 )
 from app.broker_configuration.binding_decision import (
     BindingCandidate,
@@ -57,7 +60,7 @@ from app.broker_configuration.binding_decision import (
     switch_verdict,
 )
 from app.broker_configuration.errors import BrokerConfigurationError
-from app.broker_configuration.records import ProfileRevision
+from app.broker_configuration.records import InstallationSelection, ProfileRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.broker_configuration.service import BrokerConfigurationService
 
@@ -184,7 +187,7 @@ async def resolve_worker_binding(
         return await _bind_applied(
             chosen, service=service, probe=probe, environment=environment
         )
-    return _bind_candidate(chosen, service=service, environment=environment)
+    return await _bind_candidate(chosen, service=service, environment=environment)
 
 
 def _bind_nothing(
@@ -288,9 +291,13 @@ async def _bind_applied(
     if not isinstance(outcome, str):
         return BoundWorker(context=outcome, candidate=candidate)
 
-    _record_refusal(service, candidate=candidate, reason=outcome)
-    return _boot_last_effective_after_refusal(
-        service=service, candidate=candidate, reason=outcome, environment=environment
+    recorded = _record_refusal(service, candidate=candidate, reason=outcome)
+    return await _boot_last_effective_after_refusal(
+        service=service,
+        candidate=candidate,
+        reason=outcome,
+        recorded=recorded,
+        environment=environment,
     )
 
 
@@ -314,12 +321,18 @@ async def _attempt_apply(
         return f"the staged revision could not be read: {exc.message}"
 
     verdict = switch_verdict(candidate, candidate_account_pin=stored.account_pin)
-    previous_account_id = candidate.previous_account_id
-    # The second clause is implied by the first — a verdict can only require a
-    # clear prior account when there *is* one — and is written out rather than
-    # asserted, because an assertion is removed under ``python -O`` and this is
-    # the guard that keeps a live position from being stranded.
-    if verdict.requires_prior_account_clear() and previous_account_id is not None:
+    if verdict.requires_prior_account_clear():
+        previous_account_id = candidate.previous_account_id
+        if previous_account_id is None:
+            # A revision was effective but its account was never recorded, so
+            # there is nothing to hand the probe. Refusing is the whole point of
+            # the verdict — skipping to the resolve below would be the
+            # fail-open this branch exists to close.
+            return (
+                f"applying {candidate.profile_id}@{candidate.revision} would replace a "
+                "binding whose account was never recorded, so this start cannot prove "
+                "the previous account has no open obligations"
+            )
         prior = await probe.observe(previous_account_id)
         if not prior.is_clear:
             return (
@@ -328,12 +341,17 @@ async def _attempt_apply(
             )
 
     try:
-        return _resolve(stored, candidate, environment=environment)
+        context = _resolve(stored, candidate, environment=environment)
     except BrokerProfileError as exc:
         return f"the staged revision could not be resolved: {exc.reason}"
 
+    mismatch = await _pin_reobservation_refusal(context)
+    if mismatch is not None:
+        return f"the staged revision is not approved for the account it reaches: {mismatch}"
+    return context
 
-def _bind_candidate(
+
+async def _bind_candidate(
     candidate: BindingCandidate,
     *,
     service: BrokerConfigurationService,
@@ -358,14 +376,40 @@ def _bind_candidate(
             "loaded, so no broker is bound.",
             "Check the credential slot it names is still injected, then restart the service.",
         )
+
+    mismatch = await _pin_reobservation_refusal(context)
+    if mismatch is not None:
+        logger.error(
+            "The applied revision's credentials reach an account it is not approved for; "
+            "no broker binding installed",
+            extra={
+                "action": "worker_binding_account_pin_mismatch",
+                "profile_id": candidate.profile_id,
+                "revision": candidate.revision,
+            },
+        )
+        return UnboundWorker(
+            UnboundBroker(
+                reason=ACCOUNT_PIN_MISMATCH,
+                message=(
+                    "The applied broker configuration is approved for one account but "
+                    "its credentials reach another, so no broker is bound."
+                ),
+                next_step=(
+                    "Restore the credential pair for the approved account, or verify "
+                    "and apply a revision approved for the account they now reach."
+                ),
+            )
+        )
     return BoundWorker(context=context, candidate=candidate)
 
 
-def _boot_last_effective_after_refusal(
+async def _boot_last_effective_after_refusal(
     *,
     service: BrokerConfigurationService,
     candidate: BindingCandidate,
     reason: str,
+    recorded: InstallationSelection | None,
     environment: AlpacaCredentialEnvironment | None,
 ) -> ResolvedWorkerBinding:
     """Owner decision 4: a refused Apply still boots the last-effective revision."""
@@ -389,8 +433,18 @@ def _boot_last_effective_after_refusal(
         profile_id=candidate.previous_profile_id,
         revision=candidate.previous_revision,
         intent=BindingIntent.RECOVER,
-        # Re-read: recording the refusal advanced the generation.
-        selection_generation=service.selection().selection_generation,
+        # Recording the refusal advanced the generation, and ``record_apply_refusal``
+        # already returned the row it wrote. Re-reading it here instead would put
+        # the module's one unguarded database call on the *refusal* path: a blip
+        # there would escape into the lifespan and abort startup — a crash loop
+        # (#2014) in exactly the state this branch exists for, where an Apply was
+        # just refused because the prior account still holds a position and
+        # nobody can EXIT it if the worker cannot boot. When the refusal was not
+        # recorded, the stale generation stands and the acknowledgement fence
+        # simply refuses the write later, which is harmless.
+        selection_generation=(
+            candidate.selection_generation if recorded is None else recorded.selection_generation
+        ),
         previous_profile_id=candidate.previous_profile_id,
         previous_revision=candidate.previous_revision,
         previous_account_id=candidate.previous_account_id,
@@ -406,20 +460,21 @@ def _boot_last_effective_after_refusal(
             "reason": reason,
         },
     )
-    return _bind_candidate(fallback, service=service, environment=environment)
+    return await _bind_candidate(fallback, service=service, environment=environment)
 
 
 def _record_refusal(
     service: BrokerConfigurationService, *, candidate: BindingCandidate, reason: str
-) -> None:
+) -> InstallationSelection | None:
     """Consume the one-shot Apply so an unattended restart cannot re-arm it.
 
-    A failure to *record* the refusal must not stop the worker booting its
-    last-effective revision — the refusal already happened, and the worst case
-    is that the Apply is retried and refused again next start.
+    Returns the row it wrote, so the caller needs no second read. A failure to
+    *record* the refusal must not stop the worker booting its last-effective
+    revision — the refusal already happened, and the worst case is that the
+    Apply is retried and refused again next start.
     """
     try:
-        service.record_apply_refusal(
+        return service.record_apply_refusal(
             reason=reason, expected_selection_generation=candidate.selection_generation
         )
     except BrokerConfigurationError as exc:
@@ -427,6 +482,7 @@ def _record_refusal(
             "Could not record the Apply refusal; the worker still boots last-effective",
             extra={"action": "worker_binding_refusal_unrecorded", "reason": exc.reason},
         )
+        return None
 
 
 def _read_revision(
@@ -454,33 +510,43 @@ def _resolve(
     )
 
 
-def account_pin_disagreement(bound: BoundWorker, *, account_id: str | None) -> str | None:
-    """Why custody's account contradicts the revision's pin, or ``None``.
+async def _pin_reobservation_refusal(context: AlpacaRuntimeContext) -> str | None:
+    """Re-observe the revision's pinned account, before anything takes custody.
 
-    Contract §3: "The pin is re-observed at apply and at startup", and an
-    observation that contradicts a pin refuses. The re-observation at startup is
-    not a second broker call — the Clerk already resolved the account from the
-    revision's own credentials — so this compares what custody actually opened
-    on against what the operator explicitly approved.
+    Contract §3: "The pin is re-observed at apply and at startup." The case it
+    catches is narrow and nasty — a credential slot whose injected pair has been
+    repointed at a *different* Alpaca account. Everything else still looks right:
+    the profile is applied, the mode agrees, the envelope is intact. Nothing
+    else in the boot would notice, and the worker would take custody of, and
+    trade, an account nobody approved.
 
-    The case it catches is narrow and nasty: a credential slot whose injected
-    pair has been repointed at a *different* Alpaca account. Everything else
-    still looks right — the profile is applied, the mode agrees, the envelope is
-    intact — and the worker would take custody of, and trade, an account nobody
-    approved.
+    This runs **before** the Clerk is composed, deliberately. Checking after
+    would mean the authority had already opened and taken that account's
+    execution lease — writing to, and locking, the very account being refused,
+    which is precisely the side effect ``prior_obligations`` goes to such
+    lengths to avoid.
 
-    A revision with no pin has nothing to contradict, and neither does the
-    pre-cutover environment bootstrap, which binds no revision at all.
+    **Only a definite contradiction refuses.** A broker that cannot be reached
+    at startup is not a mismatch, and treating it as one would turn a transient
+    network blip into a worker with no broker for the life of the process —
+    strictly worse than today, where the boot proceeds and authority selection
+    reports ``BROKER_ACCOUNT_UNAVAILABLE`` and can recover. Every non-mismatch
+    failure therefore falls through to that existing path.
     """
-    context = bound.context
-    if context.account_pin is None or account_id is None:
+    if context.account_pin is None:
         return None
-    if context.account_pin == account_id:
-        return None
-    return (
-        f"this revision is pinned to account {context.account_pin} but its credentials "
-        f"opened custody on account {account_id}"
-    )
+    try:
+        verification = await verify_account(context)
+        reverify_pinned_account(verification, pinned_account_id=context.account_pin)
+    except AccountPinMismatch as exc:
+        return exc.message
+    except BrokerProfileError as exc:
+        logger.warning(
+            "Could not re-observe the pinned account at startup; authority "
+            "selection will report what it finds",
+            extra={"action": "worker_binding_pin_reobservation_unavailable", "reason": exc.reason},
+        )
+    return None
 
 
 def acknowledge_worker_binding(
@@ -502,6 +568,26 @@ def acknowledge_worker_binding(
         # The environment bootstrap binds no revision, so there is no effective
         # profile to acknowledge. Writing one would invent a binding the
         # operator never made.
+        return
+    if account_id is None:
+        # No custody opened, so this worker holds no execution lease — and the
+        # contract's rule is that the effective fields are written *only* once
+        # it does. Writing anyway is not merely a false receipt: the
+        # acknowledgement sets ``effective_account_id`` unconditionally, so a
+        # boot where authority selection failed (activation missing, lease held
+        # elsewhere, database refused — all states the lifespan handles and
+        # logs) would NULL the remembered account. The switch preflight reads
+        # exactly that field to decide whether a prior account must be proven
+        # clear, so one clerk-less boot would silently disarm it and the next
+        # Apply would strand an open position without ever consulting the probe.
+        logger.info(
+            "No Alpaca custody opened; the effective binding is left as it was",
+            extra={
+                "action": "worker_binding_acknowledgement_skipped_no_custody",
+                "profile_id": candidate.profile_id,
+                "revision": candidate.revision,
+            },
+        )
         return
     if not needs_acknowledgement(candidate, bound_account_id=account_id):
         return
@@ -532,7 +618,6 @@ __all__ = [
     "ResolvedWorkerBinding",
     "UnboundWorker",
     "UnprovableObligations",
-    "account_pin_disagreement",
     "acknowledge_worker_binding",
     "resolve_worker_binding",
 ]

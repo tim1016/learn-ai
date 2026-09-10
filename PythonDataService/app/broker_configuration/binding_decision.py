@@ -63,15 +63,30 @@ class SwitchVerdict(StrEnum):
     ACCOUNT_UNPROVABLE = "account_unprovable"
     """The candidate names no pinned account, so sameness cannot be proven."""
 
+    PREVIOUS_ACCOUNT_UNPROVABLE = "previous_account_unprovable"
+    """A revision was effective, but which account it held is not recorded."""
+
     def requires_prior_account_clear(self) -> bool:
         """Whether the previous account must be proven clear before binding.
 
-        ``ACCOUNT_UNPROVABLE`` is grouped with ``DIFFERENT_ACCOUNT`` on purpose:
-        the plan's rule is that a start which cannot *prove* the prior account
-        is clear must refuse. An unpinned candidate cannot prove it is the same
-        account, so it is treated as though it were a different one.
+        The two ``UNPROVABLE`` verdicts are grouped with ``DIFFERENT_ACCOUNT``
+        on purpose: the plan's rule is that a start which cannot *prove* the
+        prior account is clear must refuse. An unpinned candidate cannot prove
+        it is the same account; a previous binding whose account was never
+        recorded cannot prove it either. Both are treated as a switch.
+
+        The second one is deliberately fail-closed rather than convenient,
+        because the alternative reading — "no recorded account means nothing to
+        strand" — is only true when nothing was ever effective, and that case
+        already has its own verdict. Reading a *missing* account as an *absent*
+        one is how a single boot that recorded no account would silently disarm
+        this check for every switch afterwards.
         """
-        return self in (SwitchVerdict.DIFFERENT_ACCOUNT, SwitchVerdict.ACCOUNT_UNPROVABLE)
+        return self in (
+            SwitchVerdict.DIFFERENT_ACCOUNT,
+            SwitchVerdict.ACCOUNT_UNPROVABLE,
+            SwitchVerdict.PREVIOUS_ACCOUNT_UNPROVABLE,
+        )
 
 
 @dataclass(frozen=True)
@@ -161,8 +176,12 @@ def switch_verdict(
     candidate: BindingCandidate, *, candidate_account_pin: str | None
 ) -> SwitchVerdict:
     """Whether binding ``candidate`` would leave a different account behind."""
-    if candidate.previous_account_id is None:
+    if candidate.previous_profile_id is None:
         return SwitchVerdict.NO_PREVIOUS_BINDING
+    if candidate.previous_account_id is None:
+        # A revision *was* effective — the profile id says so — but which
+        # account it held is not recorded. That is not "nothing to strand".
+        return SwitchVerdict.PREVIOUS_ACCOUNT_UNPROVABLE
     if candidate_account_pin is None:
         return SwitchVerdict.ACCOUNT_UNPROVABLE
     if candidate_account_pin == candidate.previous_account_id:

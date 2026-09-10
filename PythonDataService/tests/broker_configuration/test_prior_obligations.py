@@ -527,6 +527,46 @@ async def test_observe_unreadable_binding_row_is_unreadable(
     assert not observed.readable
 
 
+async def test_observe_is_unreadable_when_a_binding_row_returns_no_record(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
+) -> None:
+    """``read`` does not always RAISE on a row it cannot materialise.
+
+    It returns ``None`` when ``current_run.json`` is missing, or when the run
+    record it names is gone. Those directories still pass the enumeration
+    filter, and their ``strategy_instance.json`` may carry a
+    ``sealed_account_id`` for the very account being proven clear — so treating
+    ``None`` as "not a binding" answers "provably clear" about an account that
+    still has a bot sealed to it. It is also the shape an ungraceful stop
+    leaves behind: ``record_launch`` writes ``current_run.json`` last.
+    """
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    instance_dir = live_state_root / "live_state" / SID
+    (instance_dir / "current_run.json").unlink()
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert not observed.readable
+    assert not observed.is_clear
+
+
+async def test_observe_is_unreadable_when_a_binding_run_record_is_gone(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
+) -> None:
+    """The other shape ``read`` answers ``None`` for."""
+    import shutil
+
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    shutil.rmtree(live_state_root / "live_state" / SID / "runs")
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert not observed.readable
+    assert not observed.is_clear
+
+
 # ── The constraint the whole probe is built around ────────────────────────────
 
 

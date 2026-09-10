@@ -145,11 +145,27 @@ def test_an_installation_with_no_profiles_at_all_is_unconfigured() -> None:
 
 def test_a_first_binding_strands_nothing() -> None:
     verdict = switch_verdict(
-        _candidate(previous_account_id=None), candidate_account_pin="PA000NEW"
+        _candidate(previous_profile_id=None, previous_revision=None, previous_account_id=None),
+        candidate_account_pin="PA000NEW",
     )
 
     assert verdict is SwitchVerdict.NO_PREVIOUS_BINDING
     assert not verdict.requires_prior_account_clear()
+
+
+def test_a_previous_binding_whose_account_was_never_recorded_must_be_proven_clear() -> None:
+    """A revision WAS effective; which account it held is simply not known.
+
+    Reading a missing account as an absent one is how a single boot that
+    recorded no account would silently disarm the preflight for every switch
+    afterwards.
+    """
+    verdict = switch_verdict(
+        _candidate(previous_account_id=None), candidate_account_pin="PA000NEW"
+    )
+
+    assert verdict is SwitchVerdict.PREVIOUS_ACCOUNT_UNPROVABLE
+    assert verdict.requires_prior_account_clear()
 
 
 def test_the_same_account_under_a_different_revision_is_not_a_switch() -> None:

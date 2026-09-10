@@ -123,9 +123,19 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
         )
         return None
     except ValidationError as exc:
+        # ``str(exc)`` would echo a plaintext credential fragment: Pydantic
+        # renders ``input_value`` for a model-level error, and for a
+        # ``BaseSettings`` that input is the raw settings-source dict — before
+        # ``SecretStr`` wrapping. ``alpaca_configuration_error_detail`` keeps
+        # only Pydantic's ``msg`` text, which never echoes the input.
+        from app.broker.alpaca.config import alpaca_configuration_error_detail
+
         logger.info(
             "Extended-hours allowances are unavailable: Alpaca settings did not load",
-            extra={"action": "extended_hours_allowances_unavailable", "error": str(exc)},
+            extra={
+                "action": "extended_hours_allowances_unavailable",
+                "detail": alpaca_configuration_error_detail(exc),
+            },
         )
         return None
     return ExtendedHoursAllowances.from_settings(settings)
