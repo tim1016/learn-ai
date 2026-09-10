@@ -53,7 +53,11 @@ _CASH_EPSILON_USD = 1e-9
 
 EnvelopeAgreement = Literal["unsealed", "agreed", "disagreed"]
 
-_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
+# (envelope field name, ``AlpacaSettings`` field name). Public because the
+# profile resolver (``app/broker/alpaca/profile/runtime_context.py``) builds
+# settings from stored envelope values through this same pairing, so the two
+# directions cannot drift into separate rename layers (contract §2.4).
+ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("loss_fraction", "live_loss_fraction"),
     ("loss_usd", "live_loss_usd"),
     ("shadow_sessions", "live_shadow_sessions"),
@@ -78,12 +82,12 @@ class LiveEnvelopeValues:
 
     @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> LiveEnvelopeValues:
-        missing = [name for _, name in _SETTINGS_FIELDS if getattr(settings, name) is None]
+        missing = [name for _, name in ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
         if missing:
             raise LiveEnvelopeIncomplete(
                 "the live envelope needs every ALPACA_LIVE_* value; missing: " + ", ".join(missing)
             )
-        return cls(**{field: getattr(settings, name) for field, name in _SETTINGS_FIELDS})
+        return cls(**{field: getattr(settings, name) for field, name in ENVELOPE_SETTINGS_FIELDS})
 
     def to_mapping(self) -> dict[str, float | int]:
         return asdict(self)
@@ -199,6 +203,7 @@ class LiveEnvelopeGate:
 
 __all__ = [
     "ENVELOPE_ADMISSION_REASON_CODES",
+    "ENVELOPE_SETTINGS_FIELDS",
     "ENVELOPE_SYNC_INTERVAL_S",
     "LIVE_ENVELOPE_CASH_EXCEEDED",
     "LIVE_ENVELOPE_DISAGREEMENT",

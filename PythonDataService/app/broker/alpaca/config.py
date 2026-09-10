@@ -14,6 +14,15 @@ spec §10):
 
 Credentials come from ``.env`` (never committed): ``ALPACA_API_KEY_ID``,
 ``ALPACA_API_SECRET_KEY``, ``ALPACA_MODE``.
+
+This class stays the shape every consumer accepts. What changes under ADR 0060
+is *where its values come from*: ``app/broker/alpaca/profile/`` builds one of
+these from a saved profile revision's validated values plus the credential pair
+an allowlisted slot resolves to, instead of from the process environment. The
+three things that remain environment reads even then are the credential pairs
+themselves (secrets), ``ALPACA_CLERK_DIR`` (deployment bootstrap — it must
+exist before a profile can be loaded), and this module's own lazy singleton,
+which Package D retires from the worker's boot path.
 """
 
 from __future__ import annotations
@@ -64,8 +73,13 @@ class AlpacaSettings(BaseSettings):
         extra="ignore",
     )
 
-    api_key_id: str = Field(min_length=1)
-    api_secret_key: str = Field(min_length=1)
+    # ``repr=False`` keeps both halves out of Pydantic's generated ``__repr__``,
+    # so no log line, traceback frame, or f-string that reaches a settings
+    # object can print a key. Their *values* still come from environment
+    # injection only — a profile names an opaque credential slot and never a
+    # value, a variable name, or a URL (ADR 0060 Decision 1).
+    api_key_id: str = Field(min_length=1, repr=False)
+    api_secret_key: str = Field(min_length=1, repr=False)
     # paper | live. ADR 0059 D1: live is admitted only on mode agreement —
     # here, that every ALPACA_LIVE_* value is present. The activation record
     # and the broker-observed mode are checked where an authority is
