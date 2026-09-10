@@ -75,8 +75,11 @@ services:
     container_name: polygon-data-service
     # Alpaca's Pydantic settings file is not mounted into /app; its values pass
     # through this env_file, so the running data plane reads ONLY
-    # PythonDataService/.env (ALPACA_MODE and every ALPACA_LIVE_* value belong
-    # there — the repo-root .env feeds compose interpolation only).
+    # PythonDataService/.env (the repo-root .env feeds compose interpolation
+    # only). Since ADR 0060 that file carries secrets and deployment bootstrap
+    # alone: the endpoint mode and the six ALPACA_LIVE_* risk values are a saved
+    # broker profile on the alpaca-clerk-data volume below. A cut-over worker
+    # refuses to bind while any of those seven is still set here.
     env_file:
       - path: ./PythonDataService/.env
         required: false

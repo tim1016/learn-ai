@@ -12,9 +12,9 @@ window (120 s default, 300 s maximum). What `apply` writes is one sha256-sealed
 `LiveArmingRecord` on an append-only, account-rooted ledger.
 
 An arming is bound to what it named. A change to the instance's sealed program,
-to any `ALPACA_LIVE_*` value, or to the account disarms it; re-arming is the
-same ceremony run again. An arming also **lapses** after
-`ALPACA_LIVE_ARMING_MAX_SESSIONS` calendar NYSE trading sessions — a deliberate
+to any envelope value in the effective profile revision, or to the account
+disarms it; re-arming is the same ceremony run again. An arming also **lapses**
+after the revision's `arming_max_sessions` calendar NYSE trading sessions — a deliberate
 "come back and look" fence, because an armed bot nobody has looked at in a
 month is the configuration accident this ADR was written to prevent.
 
@@ -67,10 +67,10 @@ sync's read).
 
 | Input | Where it comes from | Refusal if absent |
 |---|---|---|
-| Settings | `ALPACA_MODE=live` and a complete `LiveEnvelopeValues.from_settings` | `LIVE_ENVELOPE_MISSING` |
+| Settings | the effective profile revision's `endpoint_mode=live` and a complete live envelope, resolved into `AlpacaSettings` by `resolve_runtime_context` (ADR 0060) | `LIVE_ENVELOPE_MISSING` |
 | The live account id | the shadow activation fence under the artifacts root — **observed, never supplied**, so an arming cannot name an account no shadow gate was run against | `LIVE_ARMING_INSTANCE_UNSEALED` |
 | The instance's sealed binding on that account | `BotBindingRepository.list_for_broker("alpaca")`, filtered to `sealed_account_id` in `{<live_account_id>, shadow:<live_account_id>}` | `LIVE_ARMING_INSTANCE_UNSEALED` |
-| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=ALPACA_LIVE_SHADOW_SESSIONS)` | *(none — recorded when present, null otherwise; owner decision 2026-09-09)* |
+| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=<the effective revision's `shadow_sessions`>)` | *(none — recorded when present, null otherwise; owner decision 2026-09-09)* |
 
 Both custody ids are admissible for the same account because shadow custody
 seals `shadow:<live_account_id>` while the live authority seals
@@ -192,8 +192,8 @@ unreachable. Slice 6 supplies the missing half: on every 15 s tick
 instance's permission). Each transition is logged once, `live_envelope_sealed`
 or `live_envelope_unsealed`, with the resulting agreement.
 
-The effect: once any instance on the account has been armed, editing an
-`ALPACA_LIVE_*` value makes every rehearsal ENTER refuse
+The effect: once any instance on the account has been armed, applying an
+envelope change makes every rehearsal ENTER refuse
 `LIVE_ENVELOPE_DISAGREEMENT` through the existing `require_envelope_admission`,
 until a re-arm seals the new numbers. Changing a bound is a re-arm, never a
 silent drift.
@@ -275,7 +275,7 @@ values was already declared in slice 1.
   naming the instance is `LIVE_ARMING_NOT_ARMED`; two accounts having armed the
   same instance id is `LIVE_ARMING_INSTANCE_UNSEALED` naming both, because
   nothing in the tree can choose between them either.
-- **`ALPACA_LIVE_ARMING_MAX_SESSIONS` has no upper bound in code** — the owner
+- **`arming_max_sessions` has no upper bound in code** — the owner
   rejected numbers in code. The plan output shows exactly how many sessions the
   arming buys, so an implausible grant is visible at the moment it is confirmed.
 - **Resolved: `observe_arming` reads on every live-custodying facade authority

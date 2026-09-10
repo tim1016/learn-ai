@@ -323,7 +323,7 @@ which is not the RTH close and does not narrow for an RTH-only instance.
 Shutting the plane down at 16:00 ET therefore counts no session at all, and
 the day reports `sweep_not_clean` with "the sweep did not close the day clean".
 
-`--required-sessions` falls back to `ALPACA_LIVE_SHADOW_SESSIONS`; the repo's
+`--required-sessions` falls back to the effective profile revision's `shadow_sessions` (resolved through `cli_binding`, ADR 0060); the repo's
 `.env` does not set it today, so either the flag or the setting must be supplied
 or the command refuses. Both are bounded `>= 1` — a gate of zero sessions is
 satisfied by no evidence, so it is not a gate.

@@ -19,7 +19,7 @@ precedes either one. Neither rule ever runs inside a Signal Program
 2. **Daily loss hold.** `day_pnl` is account-wide: every custody subject's
    realized session P&L, plus broker-observed unrealized P&L over every open
    position, net of every journaled fee. When it breaches
-   `min(ALPACA_LIVE_LOSS_FRACTION × last_equity, ALPACA_LIVE_LOSS_USD)`, the
+   `min(loss_fraction × last_equity, loss_usd)` from the sealed envelope, the
    account enters loss hold — every ENTER refused `LIVE_ENVELOPE_LOSS_HOLD`,
    every EXIT still running so each program keeps managing its own open
    position. Only a guarded operator action releases it; it does not clear at
@@ -42,9 +42,10 @@ notional cap, no symbol allowlist, no session restriction.
 - Composition: `PythonDataService/app/broker/alpaca/clerk/active_runtime.py::compose_repository_runtime`
   takes `live_envelope: LiveEnvelopeGate | None` and
   `envelope_read: BrokerReadPort | None`, and starts/stops the sync with the
-  runtime. `PythonDataService/app/main.py` builds `LiveEnvelopeValues` from
-  the `ALPACA_LIVE_*` environment once at startup, only when the configured
-  mode is not paper, and passes them down through `select_active_clerk_runtime`.
+  runtime. `PythonDataService/app/main.py` takes `LiveEnvelopeValues` from the
+  binding the worker resolved (`alpaca_binding.context.live_envelope`, ADR
+  0060) once at startup, only when the effective revision's endpoint mode is
+  not paper, and passes them down through `select_active_clerk_runtime`.
 - Shadow rehearsal: `PythonDataService/app/broker/alpaca/clerk/shadow_authority.py::select_shadow_clerk_runtime`
   is the only consumer of a non-`None` `live_envelope_values` today — an
   activated live account composes the envelope on its live authority with
@@ -54,9 +55,10 @@ notional cap, no symbol allowlist, no session restriction.
   custody_is_simulated=True)` and passes the *live* account's own read port
   as `envelope_read=read` — not the shadow composite — so the sync observes
   the live account directly. Settings validation
-  (`AlpacaSettings._enforce_mode_agreement`) already refuses live mode
-  without every `ALPACA_LIVE_*` value, before the Clerk is composed, so that
-  boot never reaches the shadow authority. `LIVE_ENVELOPE_MISSING` remains
+  (`resolve_runtime_context`, and `AlpacaSettings._enforce_mode_agreement` on
+  the pre-cutover environment bootstrap) already refuses a live revision
+  without every envelope value, before the Clerk is composed, so that boot
+  never reaches the shadow authority. `LIVE_ENVELOPE_MISSING` remains
   the selector's refusal for a caller that composes the shadow authority
   without an envelope.
 - Sealing: `PythonDataService/app/broker/alpaca/clerk/sqlite/live_envelope_sync.py::LiveEnvelopeSync._refresh_sealed_envelope`
@@ -65,7 +67,8 @@ notional cap, no symbol allowlist, no session restriction.
   `envelope_values` (ADR 0059 slice 6). Until then `sealed` was permanently
   `None`, so `envelope_agreement` could only answer `unsealed` and
   `LIVE_ENVELOPE_DISAGREEMENT` was unreachable. It is now the live rule: an
-  `ALPACA_LIVE_*` edit after an arming refuses every ENTER until a re-arm. See
+  envelope edit that becomes effective after an arming refuses every ENTER
+  until a re-arm. See
   [alpaca-live-arming](alpaca-live-arming.md).
   Read the sealed record precisely: the runtime computes the loss limit from
   the *configured* values (`self.envelope.values`) and uses the sealed record
@@ -115,9 +118,9 @@ notional cap, no symbol allowlist, no session restriction.
 |---|---|---|
 | `LIVE_ENVELOPE_UNOBSERVED` | No observation is fresh (older than `OBSERVATION_MAX_AGE_MS = 45_000` ms — three missed 15 s sync ticks), or a market ENTER has no decision-bar price, or the sync withdrew its last observation because the reading was unjudgeable (day P&L / `last_equity`) **or breached** | ENTER refusal |
 | `LIVE_ENVELOPE_CASH_EXCEEDED` | The ENTER's notional plus reserved notional would exceed cash available | ENTER refusal |
-| `LIVE_ENVELOPE_DISAGREEMENT` | The envelope sealed by the account's newest arming record disagrees with the current `ALPACA_LIVE_*` environment values ([alpaca-live-arming](alpaca-live-arming.md)) | ENTER refusal |
+| `LIVE_ENVELOPE_DISAGREEMENT` | The envelope sealed by the account's newest arming record disagrees with the effective profile revision's envelope values ([alpaca-live-arming](alpaca-live-arming.md)) | ENTER refusal |
 | `LIVE_ENVELOPE_LOSS_HOLD` | The account-wide loss hold stands — checked earlier, by `require_admission` | ENTER refusal |
-| `LIVE_ENVELOPE_MISSING` | At least one `ALPACA_LIVE_*` value is absent for a live-mode boot | startup refusal of the shadow and live authorities — never an ENTER refusal |
+| `LIVE_ENVELOPE_MISSING` | At least one envelope value is absent for a live-mode boot | startup refusal of the shadow and live authorities — never an ENTER refusal |
 
 All four ENTER-time codes are transient at the runner: none disarms an
 instance or stops a bot, and the same decision can be re-admitted once the
@@ -183,7 +186,7 @@ carries it.
 |---|---|---|
 | `envelope_agreement` | `not_applicable` | No envelope object is installed on the active authority: a paper or synthetic account, or a live boot the composition refused `LIVE_ENVELOPE_MISSING`. |
 | | `unsealed` | An envelope is installed and this account's arming ledger holds no arming record, so nothing has sealed its values yet. |
-| | `agreed` | The sealed values and the current `ALPACA_LIVE_*` environment have the same sha. |
+| | `agreed` | The sealed values and the effective profile revision have the same sha. |
 | | `disagreed` | They differ; every ENTER is refused `LIVE_ENVELOPE_DISAGREEMENT` until the account is re-armed. |
 | `loss_hold` | `not_applicable` | The hold is not observed here: no runtime, or an authority with no envelope (paper, synthetic, unavailable). |
 | | `clear` | The hold is observed and no `LIVE_ENVELOPE_LOSS_HOLD` episode is active. |

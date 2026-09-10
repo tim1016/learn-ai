@@ -142,6 +142,45 @@ refusal, and never a process crash. `_enforce_mode_agreement`, the six live
 constraints and `base_url`/`is_paper`/`is_live` derivation all remain in
 `config.py`, unchanged.
 
+## Retired, and never retired
+
+Package F's cutover, and the distinction it is easiest to get wrong. The
+authority is
+[`alpaca-configuration-ownership-inventory.md`](../architecture/alpaca-configuration-ownership-inventory.md)
+§F; `app/broker_configuration/legacy_environment.py` encodes both lists and
+`tests/broker_configuration/test_legacy_environment.py` asserts they stay
+disjoint.
+
+**Retired — seven names, refused if present after cutover.** `ALPACA_MODE`,
+`ALPACA_LIVE_LOSS_FRACTION`, `ALPACA_LIVE_LOSS_USD`,
+`ALPACA_LIVE_SHADOW_SESSIONS`, `ALPACA_LIVE_ARMING_MAX_SESSIONS`,
+`ALPACA_LIVE_XH_ENTRY_BPS`, `ALPACA_LIVE_XH_EXIT_BPS`. Once an installation has
+a saved profile, `resolve_worker_binding` and `cli_binding.effective_broker`
+both refuse with `retired_environment_settings`, naming the variables to delete.
+The gate closes and the service still boots (#2014); it is never a crash loop.
+Detection reads them exactly as `AlpacaSettings` does — process environment and
+`.env`, case-insensitively — so a lower-case spelling that would really reach
+`AlpacaSettings` is not missed, and a value that no longer parses is still
+detected as present rather than raising on the boot path.
+
+**Never retired.** `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY` **are** the
+`default` slot: refusing a boot because they are present would break every
+deployment, and this is the single easiest mistake to make in the cutover.
+Neither are `ALPACA_CREDENTIAL_LIVE_*` (the `live` slot), `ALPACA_CLERK_DIR`
+(deployment bootstrap), the capability gates
+(`ALPACA_SQLITE_MANUAL_TRADING_ENABLED`, `ALPACA_FAULT_INJECTION_ENABLED`,
+`ALPACA_PAPER_CARRYOVER_ENABLED`), or the four qualification-container inputs.
+`ALPACA_MODE` is the one name on both sides: retired on the runtime path,
+**kept** inside `alpaca-clerk-qualification`, which asserts
+`test "$ALPACA_MODE" = "paper"` as its paper-only proof, runs
+`scripts.run_alpaca_sqlite_qualification` rather than the FastAPI app, and loads
+no profile — so the worker's refusal cannot reach it.
+
+Moving an existing deployment across is
+`python -m scripts.manage_broker_configuration plan --plan-out …` followed by
+`apply` with the printed token; the plan writes nothing, and its token is its
+own content hash, so the six numbers cannot change between review and import.
+
 ## Read-only account verification and pinning
 
 `verify_account()` observes which broker account a context's credentials and
