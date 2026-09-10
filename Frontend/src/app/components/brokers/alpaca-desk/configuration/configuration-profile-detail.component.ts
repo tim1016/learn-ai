@@ -13,6 +13,7 @@ import type { RevisionContent } from './broker-configuration.service';
 import { ConfigurationAccountEvidenceComponent } from './configuration-account-evidence.component';
 import { ConfigurationRevisionFormComponent } from './configuration-revision-form.component';
 import {
+  type RevisionDraft,
   draftFromRevision,
   draftProblems,
   emptyDraft,
@@ -66,22 +67,68 @@ export class ConfigurationProfileDetailComponent {
 
   protected readonly latest = computed(() => this.detail().latest_revision);
 
-  protected readonly renameDraft = linkedSignal(() => this.detail().profile.display_name);
+  // Every draft below is seeded from a `computed` carrying an explicit `equal`,
+  // never from a `linkedSignal` source *function*. A source function re-seeds
+  // whenever its dependencies change even if its value does not, and this
+  // component is re-fed a fresh detail object after every write — so the
+  // function form silently discards whatever the operator had typed.
+  private readonly storedName = computed(() => this.detail().profile.display_name, {
+    equal: (a, b) => a === b,
+  });
+  protected readonly renameDraft = linkedSignal<string, string>({
+    source: this.storedName,
+    computation: (name) => name,
+  });
   protected readonly renameForm = form(this.renameDraft);
+
+  private readonly openProfileId = computed(() => this.detail().profile.profile_id, {
+    equal: (a, b) => a === b,
+  });
   // Cleared when a different profile is open — which is what a *successful*
   // clone produces, since the page selects the new profile. A refused clone
   // leaves the same profile open and so keeps the name that was typed.
   protected readonly cloneDraft = linkedSignal<string, string>({
-    source: () => this.detail().profile.profile_id,
+    source: this.openProfileId,
     computation: () => '',
   });
   protected readonly cloneForm = form(this.cloneDraft);
 
-  // Seeded from the revision this editor was opened against, so the operator
-  // edits forward from the stored content rather than from a blank form.
-  protected readonly revisionDraft = linkedSignal(() => {
-    const latest = this.latest();
-    return latest === null ? emptyDraft(preferredSlot(this.slots())) : draftFromRevision(latest);
+  /**
+   * The seed for the editor, plus the identity that decides when re-seeding is
+   * warranted. `equal` compares only the identity, so a rename or an account
+   * approval — each of which reloads the detail and hands this component a
+   * fresh object for the *same* revision — does not notify.
+   *
+   * The identity has to live here rather than in `linkedSignal`'s `source`,
+   * because a `linkedSignal` computation is itself reactive: reading
+   * `this.latest()` inside it would re-run it on every new detail object no
+   * matter what the declared source said, and silently discard a half-typed
+   * live envelope.
+   */
+  private readonly editorSeed = computed(
+    () => {
+      const latest = this.latest();
+      const draft = latest === null
+        ? emptyDraft(preferredSlot(this.slots()))
+        : draftFromRevision(latest);
+      return {
+        identity: `${this.detail().profile.profile_id}#${latest?.revision ?? 0}#${draft.credential_slot}`,
+        draft,
+      };
+    },
+    { equal: (a, b) => a.identity === b.identity },
+  );
+
+  /**
+   * Seeded from the revision this editor was opened against, so the operator
+   * edits forward from the stored content rather than from a blank form. A
+   * genuinely newer revision changes the identity, and re-seeding then is
+   * correct — the draft was written against a revision that is no longer the
+   * latest, and its `expected_revision` would be refused anyway.
+   */
+  protected readonly revisionDraft = linkedSignal<{ identity: string; draft: RevisionDraft }, RevisionDraft>({
+    source: this.editorSeed,
+    computation: (seed) => seed.draft,
   });
   protected readonly revisionForm = form(this.revisionDraft);
 

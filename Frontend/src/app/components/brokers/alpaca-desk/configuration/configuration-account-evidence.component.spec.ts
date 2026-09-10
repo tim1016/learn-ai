@@ -80,6 +80,27 @@ describe('ConfigurationAccountEvidenceComponent', () => {
     expect(screen.getByText('· Testing account')).toBeTruthy();
   });
 
+  it('keeps a half-typed nickname while an unrelated part of the evidence changes', async () => {
+    const rendered = await render(ConfigurationAccountEvidenceComponent, {
+      inputs: {
+        revision: revision({ account_pin: 'PA3ZK9QWERTY' }),
+        observed: null,
+        nickname: null,
+        busy: false,
+      },
+    });
+    await userEvent.type(screen.getByLabelText('Account nickname'), 'Testing account');
+
+    rendered.fixture.componentRef.setInput('observed', [
+      { account_id: 'PA3ZK9QWERTY', account_mode: 'paper', account_status: 'ACTIVE' },
+    ]);
+    await rendered.fixture.whenStable();
+
+    expect((screen.getByLabelText('Account nickname') as HTMLInputElement).value).toBe(
+      'Testing account',
+    );
+  });
+
   it('refuses a nickname before an account is approved', async () => {
     await render(ConfigurationAccountEvidenceComponent, {
       inputs: { revision: revision(), observed: null, nickname: null, busy: false },
