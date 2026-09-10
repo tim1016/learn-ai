@@ -11,6 +11,17 @@ shape that ADR 0060 open question 2 leaves to the owner.
 The defaults refuse. An installation running only Package B can list profiles
 and stage a selection; it cannot claim a slot exists or that an account was
 observed, because in that build neither fact has a source.
+
+**This package does not validate a credential slot against the allowlist, on
+purpose.** Contract §3 says a slot outside the allowlist is refused with
+``credential_slot_unknown`` and never used to build a variable name — but the
+*shape* of that allowlist is ADR 0060 open question 2, unanswered, and package
+C's fork to make. So a slot arrives here as an opaque string and is stored as
+one; the refusal it will produce is declared in ``errors.py``
+(``CredentialSlotUnknown``, ``CredentialSlotUnavailable``) as shared vocabulary
+for C to raise, not left for C to invent. What this package guarantees is
+narrower and checkable: **it performs no environment lookup at all**, so a slot
+name it stores cannot reach one.
 """
 
 from __future__ import annotations

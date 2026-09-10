@@ -12,6 +12,14 @@ are in ``app/broker_configuration/``. A typed refusal is translated once, by
 a configuration refusal is a state of the system, not an unexpected fault, so
 it must never fall through to the catch-all 500.
 
+Every service call is dispatched via ``asyncio.to_thread``, for the reason
+``app/routers/alpaca_clerk_sqlite.py`` states at the top of its own module:
+the store is synchronous blocking I/O (SQLite with ``synchronous = FULL``, so
+an fsync per commit, plus a ``busy_timeout`` wait when another process holds
+the write lock), and calling it directly from an ``async def`` handler stalls
+the event loop for every other in-flight request. ``ProfilesStore`` is built
+for this — ``check_same_thread=False`` with its own lock.
+
 Auth is the existing control-plane posture, not a new mechanism: the
 ``X-Data-Plane-Control-Secret`` header, checked always on reads
 (``require_data_plane_control_secret_always``) and on mutations
@@ -26,6 +34,7 @@ operator performs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -36,7 +45,7 @@ from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
-from app.broker_configuration.service import BrokerConfigurationService
+from app.broker_configuration.service import MAX_EVENT_PAGE, BrokerConfigurationService
 from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
@@ -73,7 +82,6 @@ from app.security.data_plane_control import (
 logger = logging.getLogger(__name__)
 
 PREFIX = "/api/brokers/alpaca/configuration"
-MAX_EVENT_LIMIT = 200
 
 
 async def broker_configuration_exception_handler(
@@ -157,12 +165,13 @@ def _detail(record: ProfileWithRevision) -> ProfileDetailResponse:
 
 @router.get("/owner", response_model=OwnerResponse, dependencies=READ_DEPENDENCIES)
 async def read_owner(service: ServiceDep) -> OwnerResponse:
-    return OwnerResponse.from_record(service.owner())
+    return OwnerResponse.from_record(await asyncio.to_thread(service.owner))
 
 
 @router.patch("/owner", response_model=OwnerResponse, dependencies=WRITE_DEPENDENCIES)
 async def patch_owner(service: ServiceDep, body: OwnerPatchRequest) -> OwnerResponse:
-    return OwnerResponse.from_record(service.rename_owner(display_label=body.display_label))
+    owner = await asyncio.to_thread(service.rename_owner, display_label=body.display_label)
+    return OwnerResponse.from_record(owner)
 
 
 # ---- credential slots ----------------------------------------------------
@@ -175,8 +184,9 @@ async def patch_owner(service: ServiceDep, body: OwnerPatchRequest) -> OwnerResp
 )
 async def list_credential_slots(service: ServiceDep) -> CredentialSlotsResponse:
     """Slot labels and availability. Never a value, a fragment, or a var name."""
+    slots = await asyncio.to_thread(service.credential_slots)
     return CredentialSlotsResponse(
-        slots=tuple(CredentialSlotResponse.from_record(slot) for slot in service.credential_slots())
+        slots=tuple(CredentialSlotResponse.from_record(slot) for slot in slots)
     )
 
 
@@ -188,7 +198,7 @@ async def list_profiles(
     service: ServiceDep,
     include_archived: bool = Query(default=False),
 ) -> ProfileListResponse:
-    profiles = service.list_profiles(include_archived=include_archived)
+    profiles = await asyncio.to_thread(service.list_profiles, include_archived=include_archived)
     return ProfileListResponse(
         profiles=tuple(ProfileResponse.from_record(profile) for profile in profiles)
     )
@@ -201,14 +211,14 @@ async def list_profiles(
     dependencies=WRITE_DEPENDENCIES,
 )
 async def create_profile(service: ServiceDep, body: ProfileCreateRequest) -> ProfileDetailResponse:
-    return _detail(
-        service.create_profile(
-            display_name=body.display_name,
-            credential_slot=body.credential_slot,
-            endpoint_mode=body.endpoint_mode,
-            live_envelope=_envelope(body),
-        )
+    created = await asyncio.to_thread(
+        service.create_profile,
+        display_name=body.display_name,
+        credential_slot=body.credential_slot,
+        endpoint_mode=body.endpoint_mode,
+        live_envelope=_envelope(body),
     )
+    return _detail(created)
 
 
 @router.get(
@@ -217,7 +227,7 @@ async def create_profile(service: ServiceDep, body: ProfileCreateRequest) -> Pro
     dependencies=READ_DEPENDENCIES,
 )
 async def read_profile(service: ServiceDep, profile_id: ProfileId) -> ProfileDetailResponse:
-    return _detail(service.read_profile(profile_id))
+    return _detail(await asyncio.to_thread(service.read_profile, profile_id))
 
 
 @router.patch(
@@ -229,8 +239,11 @@ async def patch_profile(
     service: ServiceDep, profile_id: ProfileId, body: ProfilePatchRequest
 ) -> ProfileResponse:
     """Metadata only — ``display_name`` and ``archived``."""
-    updated = service.update_profile(
-        profile_id, display_name=body.display_name, archived=body.archived
+    updated = await asyncio.to_thread(
+        service.update_profile,
+        profile_id,
+        display_name=body.display_name,
+        archived=body.archived,
     )
     return ProfileResponse.from_record(updated)
 
@@ -245,7 +258,10 @@ async def clone_profile(
     service: ServiceDep, profile_id: ProfileId, body: ProfileCloneRequest
 ) -> ProfileDetailResponse:
     """New profile, copied content, no account pin carried over."""
-    return _detail(service.clone_profile(profile_id, display_name=body.display_name))
+    cloned = await asyncio.to_thread(
+        service.clone_profile, profile_id, display_name=body.display_name
+    )
+    return _detail(cloned)
 
 
 # ---- revisions -----------------------------------------------------------
@@ -257,7 +273,7 @@ async def clone_profile(
     dependencies=READ_DEPENDENCIES,
 )
 async def list_revisions(service: ServiceDep, profile_id: ProfileId) -> RevisionListResponse:
-    revisions = service.list_revisions(profile_id)
+    revisions = await asyncio.to_thread(service.list_revisions, profile_id)
     return RevisionListResponse(
         revisions=tuple(RevisionResponse.from_record(revision) for revision in revisions)
     )
@@ -272,7 +288,8 @@ async def list_revisions(service: ServiceDep, profile_id: ProfileId) -> Revision
 async def create_revision(
     service: ServiceDep, profile_id: ProfileId, body: RevisionCreateRequest
 ) -> RevisionResponse:
-    revision = service.create_revision(
+    revision = await asyncio.to_thread(
+        service.create_revision,
         profile_id,
         expected_revision=body.expected_revision,
         credential_slot=body.credential_slot,
@@ -290,7 +307,8 @@ async def create_revision(
 async def read_revision(
     service: ServiceDep, profile_id: ProfileId, revision: RevisionNumber
 ) -> RevisionResponse:
-    return RevisionResponse.from_record(service.read_revision(profile_id, revision))
+    stored = await asyncio.to_thread(service.read_revision, profile_id, revision)
+    return RevisionResponse.from_record(stored)
 
 
 @router.post(
@@ -333,7 +351,7 @@ async def pin_account(
     dependencies=READ_DEPENDENCIES,
 )
 async def list_nicknames(service: ServiceDep) -> NicknameListResponse:
-    nicknames = service.list_nicknames()
+    nicknames = await asyncio.to_thread(service.list_nicknames)
     return NicknameListResponse(
         nicknames=tuple(NicknameResponse.from_record(nickname) for nickname in nicknames)
     )
@@ -347,7 +365,8 @@ async def list_nicknames(service: ServiceDep) -> NicknameListResponse:
 async def put_nickname(
     service: ServiceDep, account_id: AccountId, body: NicknamePutRequest
 ) -> NicknameResponse:
-    return NicknameResponse.from_record(service.set_nickname(account_id, nickname=body.nickname))
+    record = await asyncio.to_thread(service.set_nickname, account_id, nickname=body.nickname)
+    return NicknameResponse.from_record(record)
 
 
 # ---- installation selection ---------------------------------------------
@@ -356,13 +375,14 @@ async def put_nickname(
 @router.get("/selection", response_model=SelectionResponse, dependencies=READ_DEPENDENCIES)
 async def read_selection(service: ServiceDep) -> SelectionResponse:
     """Staged and effective, always both, so neither can be rendered as the other."""
-    return SelectionResponse.from_record(service.selection())
+    return SelectionResponse.from_record(await asyncio.to_thread(service.selection))
 
 
 @router.put("/selection", response_model=SelectionResponse, dependencies=WRITE_DEPENDENCIES)
 async def put_selection(service: ServiceDep, body: SelectionPutRequest) -> SelectionResponse:
     """Stage an exact profile revision. Staging is not switching."""
-    staged = service.stage_selection(
+    staged = await asyncio.to_thread(
+        service.stage_selection,
         profile_id=body.profile_id,
         revision=body.revision,
         expected_selection_generation=body.expected_selection_generation,
@@ -378,8 +398,9 @@ async def put_selection(service: ServiceDep, body: SelectionPutRequest) -> Selec
 )
 async def apply_selection(service: ServiceDep, body: ApplyRequest) -> SelectionResponse:
     """Record the one-shot Apply. Changes no runtime; 202, never 200."""
-    requested = service.request_apply(
-        expected_selection_generation=body.expected_selection_generation
+    requested = await asyncio.to_thread(
+        service.request_apply,
+        expected_selection_generation=body.expected_selection_generation,
     )
     return SelectionResponse.from_record(requested)
 
@@ -394,10 +415,12 @@ async def apply_selection(service: ServiceDep, body: ApplyRequest) -> SelectionR
 )
 async def list_events(
     service: ServiceDep,
-    limit: int = Query(default=50, ge=1, le=MAX_EVENT_LIMIT),
+    limit: int = Query(default=50, ge=1, le=MAX_EVENT_PAGE),
     before_event_id: str | None = Query(default=None, min_length=1, max_length=120),
 ) -> ConfigurationEventListResponse:
-    events = service.events(limit=limit, before_event_id=before_event_id)
+    events = await asyncio.to_thread(
+        service.events, limit=limit, before_event_id=before_event_id
+    )
     return ConfigurationEventListResponse(
         events=tuple(ConfigurationEventResponse.from_record(event) for event in events)
     )

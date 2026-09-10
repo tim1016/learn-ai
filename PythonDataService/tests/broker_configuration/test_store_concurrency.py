@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from app.broker_configuration.errors import AccountPinMismatch
+from app.broker_configuration.errors import (
+    AccountPinMismatch,
+    RevisionConflict,
+    SelectionGenerationConflict,
+)
 from app.broker_configuration.records import EndpointMode, ObservedAccount
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
@@ -85,6 +89,96 @@ def test_write_account_pin_binds_exactly_once(clerk_dir: Path, clock: FrozenCloc
             store.close()
     finally:
         service.close()
+
+
+def test_a_stage_that_lands_mid_call_makes_this_one_conflict(
+    clerk_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interleaved case, forced — not two callers taking turns.
+
+    A sequential second caller is caught by the service's own generation check.
+    This commits a rival stage *between* this caller's read and its write, which
+    is the window contract §8's obligation is actually about.
+    """
+    service = _service(clerk_dir, clock)
+    rival = _service(clerk_dir, clock)
+    try:
+        mine = paper_profile(service, display_name="Mine")
+        theirs = paper_profile(service, display_name="Theirs")
+        original_read = service._store.read_selection
+
+        def read_then_let_the_rival_win() -> object:
+            current = original_read()
+            monkeypatch.undo()
+            rival.stage_selection(
+                profile_id=theirs.profile.profile_id,
+                revision=1,
+                expected_selection_generation=current.selection_generation,
+            )
+            return current
+
+        monkeypatch.setattr(service._store, "read_selection", read_then_let_the_rival_win)
+
+        with pytest.raises(SelectionGenerationConflict):
+            service.stage_selection(
+                profile_id=mine.profile.profile_id, revision=1, expected_selection_generation=0
+            )
+
+        assert service.selection().staged_profile_id == theirs.profile.profile_id
+        assert service.selection().selection_generation == 1
+    finally:
+        service.close()
+        rival.close()
+
+
+def test_a_revision_that_lands_mid_call_makes_this_one_conflict(
+    clerk_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window on ``create_revision``, which must not surface a 500.
+
+    The hook is on the *precondition* read, which happens before the write
+    transaction opens. Once it opens, ``BEGIN IMMEDIATE`` excludes the rival
+    outright — that exclusion is why the latest-revision lookup moved inside
+    the transaction, and this test is what proves the remaining window still
+    answers ``revision_conflict`` rather than a primary-key error.
+    """
+    service = _service(clerk_dir, clock)
+    rival = _service(clerk_dir, clock)
+    try:
+        created = paper_profile(service)
+        profile_id = created.profile.profile_id
+        original_read = service._store.read_profile
+
+        def read_then_let_the_rival_win(requested_profile_id: str) -> object:
+            profile = original_read(requested_profile_id)
+            monkeypatch.undo()
+            rival.create_revision(
+                profile_id,
+                expected_revision=1,
+                credential_slot="from-the-rival",
+                endpoint_mode="paper",
+                live_envelope=None,
+            )
+            return profile
+
+        monkeypatch.setattr(service._store, "read_profile", read_then_let_the_rival_win)
+
+        with pytest.raises(RevisionConflict):
+            service.create_revision(
+                profile_id,
+                expected_revision=1,
+                credential_slot="from-me",
+                endpoint_mode="paper",
+                live_envelope=None,
+            )
+
+        assert [r.credential_slot for r in service.list_revisions(profile_id)] == [
+            "alpaca_paper_primary",
+            "from-the-rival",
+        ]
+    finally:
+        service.close()
+        rival.close()
 
 
 async def test_a_pin_recorded_during_verification_is_not_replaced(

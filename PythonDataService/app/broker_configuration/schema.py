@@ -57,7 +57,11 @@ CREATE TABLE local_owner (
 CREATE TABLE broker_profiles (
     profile_id          TEXT PRIMARY KEY,
     owner_id            TEXT NOT NULL REFERENCES local_owner(owner_id),
-    broker              TEXT NOT NULL CHECK (broker = 'alpaca'),
+    -- No CHECK pinning 'alpaca'. Contract §2.2's whole reason for this column
+    -- is that a second broker should not need a migration, and changing a
+    -- SQLite CHECK means rebuilding the table. The closed set lives in the
+    -- request DTO's Literal, where widening it is a one-line change.
+    broker              TEXT NOT NULL CHECK (length(broker) > 0),
     display_name        TEXT NOT NULL CHECK (length(display_name) > 0),
     archived            INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
     created_at_ms       INTEGER NOT NULL,
@@ -149,7 +153,7 @@ CREATE TABLE installation_selection (
 CREATE TABLE configuration_events (
     event_id            TEXT PRIMARY KEY,
     sequence            INTEGER NOT NULL,
-    actor_owner_id      TEXT NOT NULL,
+    actor_owner_id      TEXT NOT NULL REFERENCES local_owner(owner_id),
     action              TEXT NOT NULL,
     profile_id          TEXT,
     revision            INTEGER,
@@ -160,6 +164,66 @@ CREATE TABLE configuration_events (
 );
 
 CREATE UNIQUE INDEX ux_configuration_events_sequence ON configuration_events(sequence);
+
+-- ============================================================
+-- The three invariants that were code-only until they were not
+--
+-- Contract §5 asks for these "in the schema rather than in application code".
+-- A revision is immutable, the event log is append-only, and the selection
+-- generation is monotonic; none of the three is a rule a caller may relax, so
+-- none of them is left to a caller to remember.
+-- ============================================================
+
+-- The pin is the one write a revision admits, and only from unbound. Every
+-- other column, and every delete, is refused. ``IS NOT`` rather than ``<>`` so
+-- a NULL envelope column compares correctly.
+CREATE TRIGGER trg_profile_revisions_content_immutable
+BEFORE UPDATE ON profile_revisions
+FOR EACH ROW WHEN
+    OLD.profile_id IS NOT NEW.profile_id
+    OR OLD.revision IS NOT NEW.revision
+    OR OLD.schema_version IS NOT NEW.schema_version
+    OR OLD.credential_slot IS NOT NEW.credential_slot
+    OR OLD.endpoint_mode IS NOT NEW.endpoint_mode
+    OR OLD.live_loss_fraction IS NOT NEW.live_loss_fraction
+    OR OLD.live_loss_usd IS NOT NEW.live_loss_usd
+    OR OLD.live_shadow_sessions IS NOT NEW.live_shadow_sessions
+    OR OLD.live_arming_max_sessions IS NOT NEW.live_arming_max_sessions
+    OR OLD.live_xh_entry_bps IS NOT NEW.live_xh_entry_bps
+    OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
+    OR OLD.content_sha256 IS NOT NEW.content_sha256
+    OR OLD.complete IS NOT NEW.complete
+    OR OLD.author_owner_id IS NOT NEW.author_owner_id
+    OR OLD.created_at_ms IS NOT NEW.created_at_ms
+    OR OLD.account_pin IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
+END;
+
+CREATE TRIGGER trg_profile_revisions_no_delete
+BEFORE DELETE ON profile_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'a profile revision is never deleted; archive the profile instead');
+END;
+
+CREATE TRIGGER trg_configuration_events_no_update
+BEFORE UPDATE ON configuration_events
+BEGIN
+    SELECT RAISE(ABORT, 'the configuration event log is append-only');
+END;
+
+CREATE TRIGGER trg_configuration_events_no_delete
+BEFORE DELETE ON configuration_events
+BEGIN
+    SELECT RAISE(ABORT, 'the configuration event log is append-only');
+END;
+
+CREATE TRIGGER trg_installation_selection_generation_monotonic
+BEFORE UPDATE ON installation_selection
+FOR EACH ROW WHEN NEW.selection_generation < OLD.selection_generation
+BEGIN
+    SELECT RAISE(ABORT, 'the selection generation never moves backwards');
+END;
 """
 
 # Additive-only upgrades keyed by the ``schema_version`` they start from. v1 is

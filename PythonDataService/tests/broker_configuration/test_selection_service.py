@@ -9,19 +9,80 @@ a later unattended restart.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from app.broker_configuration import selection
 from app.broker_configuration.errors import (
     ProfileArchived,
     RevisionIncomplete,
     RevisionNotFound,
     SelectionGenerationConflict,
 )
+from app.broker_configuration.records import InstallationSelection
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
 from tests.broker_configuration.conftest import OPERATOR_IDENTITY, FrozenClock, paper_profile
+
+_A_STAGED_SELECTION = InstallationSelection(
+    staged_profile_id="profile_example",
+    staged_revision=1,
+    apply_requested=True,
+    apply_requested_at_ms=1_757_000_000_000,
+    apply_requested_generation=4,
+    selection_generation=5,
+    effective_profile_id="profile_effective",
+    effective_revision=2,
+    effective_account_id="PA000PAPER",
+    effective_acknowledged_at_ms=1_756_000_000_000,
+    last_apply_outcome="applied",
+    last_apply_refusal_reason=None,
+)
+
+_TRANSITIONS = (
+    ("staged", lambda s: selection.staged(s, profile_id="p", revision=1)),
+    ("apply_requested", lambda s: selection.apply_requested(s, at_ms=1)),
+    (
+        "effective_acknowledged",
+        lambda s: selection.effective_acknowledged(
+            s, profile_id="p", revision=1, account_id=None, at_ms=1
+        ),
+    ),
+    ("apply_refused", lambda s: selection.apply_refused(s, reason="apply_preflight_refused")),
+)
+
+
+@pytest.mark.parametrize(("name", "transition"), _TRANSITIONS, ids=[n for n, _ in _TRANSITIONS])
+def test_every_selection_transition_advances_the_generation(
+    name: str, transition: Callable[[InstallationSelection], InstallationSelection]
+) -> None:
+    """The rule a missing ``+1`` on any one of four functions would break.
+
+    The generation is the installation's only fence — ADR 0060 Decision 5
+    ships no worker identity — so a transition that leaves it unchanged lets
+    whoever still holds the old value act on it.
+    """
+    del name
+
+    after = transition(_A_STAGED_SELECTION)
+
+    assert after.selection_generation == _A_STAGED_SELECTION.selection_generation + 1
+
+
+@pytest.mark.parametrize(("name", "transition"), _TRANSITIONS, ids=[n for n, _ in _TRANSITIONS])
+def test_every_transition_but_requesting_clears_a_pending_apply(
+    name: str, transition: Callable[[InstallationSelection], InstallationSelection]
+) -> None:
+    after = transition(_A_STAGED_SELECTION)
+
+    if name == "apply_requested":
+        assert after.apply_requested is True
+        return
+    assert after.apply_requested is False
+    assert after.apply_requested_at_ms is None
+    assert after.apply_requested_generation is None
 
 
 def _staged(service: BrokerConfigurationService) -> str:
@@ -35,12 +96,12 @@ def _staged(service: BrokerConfigurationService) -> str:
 def test_a_fresh_installation_has_nothing_staged_and_nothing_effective(
     service: BrokerConfigurationService,
 ) -> None:
-    selection = service.selection()
+    current = service.selection()
 
-    assert selection.staged_profile_id is None
-    assert selection.effective_profile_id is None
-    assert selection.apply_requested is False
-    assert selection.selection_generation == 0
+    assert current.staged_profile_id is None
+    assert current.effective_profile_id is None
+    assert current.apply_requested is False
+    assert current.selection_generation == 0
 
 
 def test_staging_records_the_exact_revision_and_advances_the_generation(
@@ -48,14 +109,14 @@ def test_staging_records_the_exact_revision_and_advances_the_generation(
 ) -> None:
     profile_id = _staged(service)
 
-    selection = service.selection()
+    current = service.selection()
 
-    assert selection.staged_profile_id == profile_id
-    assert selection.staged_revision == 1
-    assert selection.selection_generation == 1
+    assert current.staged_profile_id == profile_id
+    assert current.staged_revision == 1
+    assert current.selection_generation == 1
     # Staging changed no runtime and made nothing effective.
-    assert selection.effective_profile_id is None
-    assert selection.apply_requested is False
+    assert current.effective_profile_id is None
+    assert current.apply_requested is False
 
 
 def test_restaging_the_same_revision_is_a_no_op(service: BrokerConfigurationService) -> None:
@@ -80,6 +141,12 @@ def test_staging_with_a_stale_generation_conflicts(service: BrokerConfigurationS
 def test_two_tabs_cannot_silently_clobber_a_staged_selection(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
+    """The ordinary two-tab case: the second tab's read predates the first's write.
+
+    The interleaved case — a rival staging between this caller's read and its
+    write, which only the compare-and-swap catches — is
+    ``test_store_concurrency.py``.
+    """
     first_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
@@ -227,20 +294,25 @@ def test_a_refused_apply_consumes_the_request_and_keeps_the_last_effective_bindi
     service.stage_selection(
         profile_id=first.profile.profile_id, revision=1, expected_selection_generation=0
     )
-    service.request_apply(expected_selection_generation=1)
-    service.acknowledge_effective(
+    requested = service.request_apply(expected_selection_generation=1)
+    applied = service.acknowledge_effective(
         profile_id=first.profile.profile_id,
         revision=1,
         account_id="PA000PAPER",
-        expected_selection_generation=2,
+        expected_selection_generation=requested.selection_generation,
     )
-    service.stage_selection(
-        profile_id=second.profile.profile_id, revision=1, expected_selection_generation=2
+    restaged = service.stage_selection(
+        profile_id=second.profile.profile_id,
+        revision=1,
+        expected_selection_generation=applied.selection_generation,
     )
-    service.request_apply(expected_selection_generation=3)
+    pending = service.request_apply(
+        expected_selection_generation=restaged.selection_generation
+    )
 
     refused = service.record_apply_refusal(
-        reason="apply_preflight_refused", expected_selection_generation=4
+        reason="apply_preflight_refused",
+        expected_selection_generation=pending.selection_generation,
     )
 
     assert refused.apply_requested is False
@@ -249,6 +321,55 @@ def test_a_refused_apply_consumes_the_request_and_keeps_the_last_effective_bindi
     # The worker boots the last-effective revision, which is untouched.
     assert refused.effective_profile_id == first.profile.profile_id
     assert refused.staged_profile_id == second.profile.profile_id
+
+
+def test_a_refused_apply_cannot_be_re_armed_by_a_caller_holding_the_old_generation(
+    service: BrokerConfigurationService,
+) -> None:
+    """Consuming the one-shot request advances the generation (ADR 0060 D4.3).
+
+    If it did not, a client still holding the pre-refusal generation could
+    re-arm exactly the Apply that was just refused, and a later unattended
+    restart would apply it.
+    """
+    _staged(service)
+    requested = service.request_apply(expected_selection_generation=1)
+    refused = service.record_apply_refusal(
+        reason="apply_preflight_refused",
+        expected_selection_generation=requested.selection_generation,
+    )
+
+    with pytest.raises(SelectionGenerationConflict):
+        service.request_apply(
+            expected_selection_generation=requested.selection_generation
+        )
+
+    assert refused.selection_generation > requested.selection_generation
+    assert service.selection().apply_requested is False
+    assert service.selection().last_apply_outcome == "refused"
+
+
+def test_a_second_worker_holding_the_pre_acknowledge_generation_cannot_overwrite(
+    service: BrokerConfigurationService,
+) -> None:
+    profile_id = _staged(service)
+    requested = service.request_apply(expected_selection_generation=1)
+    service.acknowledge_effective(
+        profile_id=profile_id,
+        revision=1,
+        account_id="PA000PAPER",
+        expected_selection_generation=requested.selection_generation,
+    )
+
+    with pytest.raises(SelectionGenerationConflict):
+        service.acknowledge_effective(
+            profile_id=profile_id,
+            revision=1,
+            account_id="SOMETHING-ELSE",
+            expected_selection_generation=requested.selection_generation,
+        )
+
+    assert service.selection().effective_account_id == "PA000PAPER"
 
 
 def test_a_crash_with_a_staged_selection_still_reads_the_last_effective_revision(
@@ -265,15 +386,17 @@ def test_a_crash_with_a_staged_selection_still_reads_the_last_effective_revision
     before_crash.stage_selection(
         profile_id=effective.profile.profile_id, revision=1, expected_selection_generation=0
     )
-    before_crash.request_apply(expected_selection_generation=1)
-    before_crash.acknowledge_effective(
+    requested = before_crash.request_apply(expected_selection_generation=1)
+    applied = before_crash.acknowledge_effective(
         profile_id=effective.profile.profile_id,
         revision=1,
         account_id="PA000PAPER",
-        expected_selection_generation=2,
+        expected_selection_generation=requested.selection_generation,
     )
     before_crash.stage_selection(
-        profile_id=staged.profile.profile_id, revision=1, expected_selection_generation=2
+        profile_id=staged.profile.profile_id,
+        revision=1,
+        expected_selection_generation=applied.selection_generation,
     )
     before_crash.close()
 

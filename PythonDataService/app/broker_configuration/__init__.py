@@ -10,25 +10,11 @@ Deliberately *not* here: credential resolution and broker account verification
 (package C — see ``seams.py``), and startup resolution of the effective
 selection into a running worker (package D). Nothing in this package changes
 broker or worker startup behaviour.
+
+No re-exports. Import from the module that owns the name — ``.service``,
+``.store``, ``.runtime``, ``.errors``, ``.records``, ``.envelope``, ``.seams``
+— so that importing one of them does not drag the rest of the package, and the
+alpaca stack behind ``.envelope``, into an importer's graph.
 """
 
 from __future__ import annotations
-
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
-from app.broker_configuration.errors import BrokerConfigurationError, ProfilesDatabaseUnavailable
-from app.broker_configuration.runtime import (
-    build_service,
-    get_broker_configuration_service,
-    reset_broker_configuration_service_for_testing,
-)
-from app.broker_configuration.service import BrokerConfigurationService
-
-__all__ = [
-    "BrokerConfigurationError",
-    "BrokerConfigurationService",
-    "ProfilesDatabaseUnavailable",
-    "ValidatedLiveEnvelope",
-    "build_service",
-    "get_broker_configuration_service",
-    "reset_broker_configuration_service_for_testing",
-]

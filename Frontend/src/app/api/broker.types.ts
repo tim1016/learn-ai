@@ -14115,6 +14115,15 @@ export interface components {
          *     (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
          *     field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
          *     every path into storage, which is where the rule actually lives.
+         *
+         *     ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
+         *     mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
+         *     before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
+         *     by-name ``int`` check downstream would never see the boolean it exists to
+         *     refuse — a real-money session count silently minted from ``true``. Strict
+         *     ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
+         *     accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
+         *     ``float`` annotation does with ``5000``.
          */
         LiveEnvelopePayload: {
             /** Arming Max Sessions */

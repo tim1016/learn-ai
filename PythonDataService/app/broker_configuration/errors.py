@@ -81,11 +81,21 @@ class DisplayNameConflict(BrokerConfigurationError):
 
 
 class CredentialSlotUnknown(BrokerConfigurationError):
+    """Declared here, raised by the slot resolver — see ``seams.py``.
+
+    The allowlist's shape is ADR 0060 open question 2 and package C's fork, so
+    this package stores a slot as an opaque string and performs no environment
+    lookup. The refusal is shared vocabulary, not dead code: it is stated once
+    here so C raises the contract's reason rather than inventing one.
+    """
+
     reason: ClassVar[str] = "credential_slot_unknown"
     status_code: ClassVar[int] = 422
 
 
 class CredentialSlotUnavailable(BrokerConfigurationError):
+    """Also raised by the slot resolver, for the same reason as above."""
+
     reason: ClassVar[str] = "credential_slot_unavailable"
     status_code: ClassVar[int] = 409
 

@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.live_arming import LiveArmingRecord
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
@@ -25,16 +26,14 @@ from app.broker_configuration.store import ProfilesStore, profiles_database_path
 from app.schemas.broker_configuration import LiveEnvelopePayload
 from tests.broker_configuration.conftest import LIVE_ENVELOPE_PAYLOAD
 
+# Derived from the stored fixture, not restated beside it: the whole claim
+# under test is that these are the *same six numbers* reaching two different
+# constructors, and two hand-kept literals could drift apart and still pass.
 _ENVIRONMENT_SETTINGS = {
     "api_key_id": "not-a-real-key",
     "api_secret_key": "not-a-real-secret",
     "mode": "live",
-    "live_loss_fraction": 0.05,
-    "live_loss_usd": 5_000.0,
-    "live_shadow_sessions": 1,
-    "live_arming_max_sessions": 20,
-    "live_xh_entry_bps": 10.0,
-    "live_xh_exit_bps": 10.0,
+    **{f"live_{field}": value for field, value in LIVE_ENVELOPE_PAYLOAD.items()},
 }
 
 
@@ -189,6 +188,44 @@ def test_the_schema_stores_floats_as_real_and_counts_as_integer(clerk_dir: Path)
         assert columns[column] == "REAL", column
     for column in ("live_shadow_sessions", "live_arming_max_sessions"):
         assert columns[column] == "INTEGER", column
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("shadow_sessions", True),
+        ("shadow_sessions", 1.0),
+        ("shadow_sessions", "3"),
+        ("arming_max_sessions", True),
+        ("arming_max_sessions", 20.0),
+        ("loss_usd", "5000"),
+        ("loss_fraction", True),
+    ],
+)
+def test_the_request_dto_refuses_exactly_what_the_validated_type_refuses(
+    field: str, value: object
+) -> None:
+    """The DTO sits in front of ``ValidatedLiveEnvelope`` on every HTTP path.
+
+    In Pydantic's default lax mode it would normalise ``true`` to ``1`` before
+    the by-name ``int`` check downstream ever saw a boolean — so the check that
+    exists to keep a boolean out of a real-money session count would be
+    unreachable from a request. Both layers must refuse the same set.
+    """
+    payload = {**LIVE_ENVELOPE_PAYLOAD, field: value}
+
+    with pytest.raises(ValidationError):
+        LiveEnvelopePayload(**payload)
+    with pytest.raises(InvalidLiveEnvelope):
+        ValidatedLiveEnvelope.from_mapping(payload)
+
+
+def test_the_request_dto_still_widens_an_integer_to_a_float() -> None:
+    """What ``AlpacaSettings``' ``float`` annotation does with ``5000``."""
+    payload = LiveEnvelopePayload(**{**LIVE_ENVELOPE_PAYLOAD, "loss_usd": 5_000})
+
+    assert type(payload.loss_usd) is float
+    assert ValidatedLiveEnvelope.from_mapping(payload.model_dump()).sha == _settings_envelope().sha
 
 
 def test_response_dto_carries_the_same_six_values(service: BrokerConfigurationService) -> None:

@@ -18,13 +18,18 @@ from app.broker_configuration.store import ProfilesStore
 # One in-domain envelope every test that needs live values reuses, so a test
 # asserting sha parity and one asserting storage round-trip describe the same
 # six numbers.
+#
+# Every value is distinct, deliberately. The obvious fixture gives the two bps
+# fields the same number and the two counts nearby ones, and a transposition of
+# two columns between the record and the INSERT would then round-trip
+# identically through every test while changing the sha in production.
 LIVE_ENVELOPE_PAYLOAD: dict[str, float | int] = {
     "loss_fraction": 0.05,
     "loss_usd": 5_000.0,
-    "shadow_sessions": 1,
+    "shadow_sessions": 3,
     "arming_max_sessions": 20,
-    "xh_entry_bps": 10.0,
-    "xh_exit_bps": 10.0,
+    "xh_entry_bps": 11.0,
+    "xh_exit_bps": 17.5,
 }
 
 OPERATOR_IDENTITY = "test-operator"

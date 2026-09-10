@@ -172,10 +172,16 @@ def test_a_stale_edit_conflicts_instead_of_overwriting(service: BrokerConfigurat
     assert len(service.list_revisions(created.profile.profile_id)) == 2
 
 
-def test_two_concurrent_writers_on_one_database_conflict(
+def test_a_second_connection_holding_a_stale_revision_conflicts(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
-    """Two tabs, two connections, one winner — not a silent clobber."""
+    """Two tabs, two connections, one winner — not a silent clobber.
+
+    Sequential on purpose: this is the ordinary two-tab case, where the second
+    tab's read simply predates the first tab's write. The *interleaved* case —
+    a rival landing between this caller's read and its write — is
+    ``test_store_concurrency.py``.
+    """
     first_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,

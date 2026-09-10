@@ -98,6 +98,14 @@ class InstallationSelection:
     it from ``selection_generation - 1``, which is true only while nothing else
     can advance the generation.
 
+    ``selection_generation`` advances on each stage and each apply request, as
+    §2.6 says, **and** on each of the two transitions that consume the one-shot
+    request — the worker's acknowledgement and a recorded refusal. Otherwise a
+    caller still holding the pre-consumption generation could re-arm the Apply
+    that was just refused, or a second worker could overwrite the effective
+    binding; the generation is the only fence, since Decision 5 ships no worker
+    identity.
+
     The ``effective_*`` fields and ``last_apply_*`` are written **only** by the
     worker, after construction succeeds and it owns the required execution
     lease. No route writes them.

@@ -32,10 +32,16 @@ from app.broker_configuration.records import (
     LocalOwner,
     ProfileRevision,
 )
+from app.utils.timestamps import now_ms_utc
 
 DATABASE_DIRECTORY = "broker_configuration"
 DATABASE_FILENAME = "profiles.db"
 
+# ``ValidatedLiveEnvelope`` field -> its column. Order matters and is not
+# stated twice: the column list, the INSERT's placeholders and its parameter
+# tuple below are all derived from this one mapping. Two hand-kept lists would
+# let a transposition of, say, the two bps columns pass every test while
+# changing the sha in production.
 _ENVELOPE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("loss_fraction", "live_loss_fraction"),
     ("loss_usd", "live_loss_usd"),
@@ -45,12 +51,22 @@ _ENVELOPE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("xh_exit_bps", "live_xh_exit_bps"),
 )
 
-_REVISION_COLUMNS = (
-    "profile_id, revision, schema_version, credential_slot, endpoint_mode, "
-    "account_pin, account_pinned_at_ms, live_loss_fraction, live_loss_usd, "
-    "live_shadow_sessions, live_arming_max_sessions, live_xh_entry_bps, "
-    "live_xh_exit_bps, content_sha256, complete, author_owner_id, created_at_ms"
+_REVISION_COLUMN_NAMES: tuple[str, ...] = (
+    "profile_id",
+    "revision",
+    "schema_version",
+    "credential_slot",
+    "endpoint_mode",
+    "account_pin",
+    "account_pinned_at_ms",
+    *(column for _, column in _ENVELOPE_COLUMNS),
+    "content_sha256",
+    "complete",
+    "author_owner_id",
+    "created_at_ms",
 )
+_REVISION_COLUMNS = ", ".join(_REVISION_COLUMN_NAMES)
+_REVISION_PLACEHOLDERS = ", ".join("?" * len(_REVISION_COLUMN_NAMES))
 
 
 def profiles_database_path(clerk_dir: Path) -> Path:
@@ -60,6 +76,12 @@ def profiles_database_path(clerk_dir: Path) -> Path:
     records it explains survive a ``podman compose down -v`` (ADR 0060 D2).
     """
     return clerk_dir / DATABASE_DIRECTORY / DATABASE_FILENAME
+
+
+def _discard_partial_database(db_path: Path) -> None:
+    """Remove a database this process created but never finished establishing."""
+    for path in (db_path, db_path.with_name(f"{db_path.name}-wal"), db_path.with_name(f"{db_path.name}-shm")):
+        path.unlink(missing_ok=True)
 
 
 def new_identifier(prefix: str) -> str:
@@ -96,6 +118,7 @@ class ProfilesStore:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             assert_wal_filesystem_supported(db_path.parent)
             with advisory_file_lock(db_path):
+                creating = not db_path.exists()
                 conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
                 try:
@@ -103,6 +126,13 @@ class ProfilesStore:
                     cls._establish(conn)
                 except Exception:
                     conn.close()
+                    if creating:
+                        # A file with tables but no metadata row is one the next
+                        # open() refuses with "move it aside" — a manual
+                        # intervention conjured out of a transient disk error.
+                        # We know this file did not exist a moment ago, so
+                        # removing it lets the next attempt start clean.
+                        _discard_partial_database(db_path)
                     raise
         except ProfilesDatabaseUnavailable:
             raise
@@ -124,12 +154,13 @@ class ProfilesStore:
         ).fetchone()
         if row is None:
             schema.apply_schema(conn)
+            now = now_ms_utc()
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
                     "INSERT INTO configuration_meta (id, schema_version, created_at_ms, updated_at_ms) "
-                    "VALUES (1, ?, 0, 0)",
-                    (schema.SCHEMA_VERSION,),
+                    "VALUES (1, ?, ?, ?)",
+                    (schema.SCHEMA_VERSION, now, now),
                 )
                 conn.execute(
                     "INSERT INTO installation_selection "
@@ -167,6 +198,10 @@ class ProfilesStore:
                     next_step="Restore a database this build can read.",
                 )
             schema.migrate_schema(conn, from_version=stored)
+            conn.execute(
+                "UPDATE configuration_meta SET updated_at_ms = ? WHERE id = 1",
+                (now_ms_utc(),),
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -303,26 +338,27 @@ class ProfilesStore:
 
     def insert_revision(self, conn: sqlite3.Connection, revision: ProfileRevision) -> None:
         envelope = revision.live_envelope
-        envelope_values = [
-            None if envelope is None else getattr(envelope, field) for field, _ in _ENVELOPE_COLUMNS
-        ]
+        values: dict[str, Any] = {
+            "profile_id": revision.profile_id,
+            "revision": revision.revision,
+            "schema_version": revision.schema_version,
+            "credential_slot": revision.credential_slot,
+            "endpoint_mode": revision.endpoint_mode,
+            "account_pin": revision.account_pin,
+            "account_pinned_at_ms": revision.account_pinned_at_ms,
+            "content_sha256": revision.content_sha256,
+            "complete": int(revision.complete),
+            "author_owner_id": revision.author_owner_id,
+            "created_at_ms": revision.created_at_ms,
+            **{
+                column: (None if envelope is None else getattr(envelope, field))
+                for field, column in _ENVELOPE_COLUMNS
+            },
+        }
         conn.execute(
             f"INSERT INTO profile_revisions ({_REVISION_COLUMNS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                revision.profile_id,
-                revision.revision,
-                revision.schema_version,
-                revision.credential_slot,
-                revision.endpoint_mode,
-                revision.account_pin,
-                revision.account_pinned_at_ms,
-                *envelope_values,
-                revision.content_sha256,
-                int(revision.complete),
-                revision.author_owner_id,
-                revision.created_at_ms,
-            ),
+            f"VALUES ({_REVISION_PLACEHOLDERS})",
+            tuple(values[column] for column in _REVISION_COLUMN_NAMES),
         )
 
     def write_account_pin(
@@ -346,14 +382,6 @@ class ProfilesStore:
             (account_id, pinned_at_ms, profile_id, revision),
         )
         return cursor.rowcount == 1
-
-    def profile_has_revisions(self, profile_id: str) -> bool:
-        return (
-            self._query_one(
-                "SELECT 1 FROM profile_revisions WHERE profile_id = ? LIMIT 1", (profile_id,)
-            )
-            is not None
-        )
 
     # ---- nicknames ------------------------------------------------------
 

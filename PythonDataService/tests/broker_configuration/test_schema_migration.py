@@ -189,6 +189,71 @@ def test_an_unreadable_database_refuses_instead_of_crashing(clerk_dir: Path) -> 
         ProfilesStore.open(clerk_dir=clerk_dir)
 
 
+def test_a_revision_is_immutable_apart_from_binding_its_pin_once(
+    clerk_dir: Path, clock: FrozenClock
+) -> None:
+    """Contract §5 wants this in the schema, not in a caller's memory."""
+    service = _service_on(clerk_dir, clock)
+    created = paper_profile(service)
+    profile_id = created.profile.profile_id
+    service.close()
+
+    store = ProfilesStore.open(clerk_dir=clerk_dir)
+    try:
+        for column, value in (
+            ("credential_slot", "'rewritten'"),
+            ("endpoint_mode", "'live'"),
+            ("content_sha256", "'0' "),
+            ("created_at_ms", "1"),
+        ):
+            with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+                conn.execute(
+                    f"UPDATE profile_revisions SET {column} = {value} WHERE profile_id = ?",
+                    (profile_id,),
+                )
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute("DELETE FROM profile_revisions WHERE profile_id = ?", (profile_id,))
+
+        # The one write a revision does admit.
+        with store.transaction() as conn:
+            assert store.write_account_pin(
+                conn, profile_id=profile_id, revision=1, account_id="PA000PAPER", pinned_at_ms=1
+            )
+    finally:
+        store.close()
+
+
+def test_the_event_log_is_append_only_in_the_schema(
+    clerk_dir: Path, clock: FrozenClock
+) -> None:
+    service = _service_on(clerk_dir, clock)
+    paper_profile(service)
+    service.close()
+
+    store = ProfilesStore.open(clerk_dir=clerk_dir)
+    try:
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute("UPDATE configuration_events SET action = 'rewritten'")
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute("DELETE FROM configuration_events")
+    finally:
+        store.close()
+
+
+def test_the_selection_generation_cannot_move_backwards(clerk_dir: Path) -> None:
+    store = ProfilesStore.open(clerk_dir=clerk_dir)
+    try:
+        with store.transaction() as conn:
+            conn.execute("UPDATE installation_selection SET selection_generation = 5 WHERE id = 1")
+
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute("UPDATE installation_selection SET selection_generation = 4 WHERE id = 1")
+
+        assert store.read_selection().selection_generation == 5
+    finally:
+        store.close()
+
+
 def test_foreign_keys_are_enforced(clerk_dir: Path) -> None:
     store = ProfilesStore.open(clerk_dir=clerk_dir)
     try:

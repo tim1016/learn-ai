@@ -19850,7 +19850,7 @@
       },
       "LiveEnvelopePayload": {
         "additionalProperties": false,
-        "description": "The six values, named exactly as ``LiveEnvelopeValues`` names them.\n\nThe mapping to the dataclass is an identity, so no rename layer can drift\n(contract \u00a72.4). The bounds restate ``AlpacaSettings``' domain for an early,\nfield-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on\nevery path into storage, which is where the rule actually lives.",
+        "description": "The six values, named exactly as ``LiveEnvelopeValues`` names them.\n\nThe mapping to the dataclass is an identity, so no rename layer can drift\n(contract \u00a72.4). The bounds restate ``AlpacaSettings``' domain for an early,\nfield-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on\nevery path into storage, which is where the rule actually lives.\n\n``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax\nmode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises\nbefore it: ``{\"shadow_sessions\": true}`` would arrive as ``1`` and the\nby-name ``int`` check downstream would never see the boolean it exists to\nrefuse \u2014 a real-money session count silently minted from ``true``. Strict\n``int`` refuses ``True``, ``1.0`` and ``\"3\"``; strict ``float`` still\naccepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'\n``float`` annotation does with ``5000``.",
         "properties": {
           "arming_max_sessions": {
             "minimum": 1.0,

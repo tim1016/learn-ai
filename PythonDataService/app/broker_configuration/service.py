@@ -20,12 +20,14 @@ Three rules this module exists to hold, none of which a route may reinterpret:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from dataclasses import replace
 from typing import Any
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker_configuration import selection
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import (
     AccountModeDisagreement,
@@ -273,7 +275,7 @@ class BrokerConfigurationService:
             endpoint_mode=latest.endpoint_mode,
             live_envelope=latest.live_envelope,
             action="profile_cloned",
-            previous_ref=_selection_ref(source.profile_id, latest.revision),
+            previous_ref=selection.reference(source.profile_id, latest.revision),
         )
 
     # ---- revisions ------------------------------------------------------
@@ -361,9 +363,15 @@ class BrokerConfigurationService:
     # ---- verification and pinning ---------------------------------------
 
     async def verify_account(self, profile_id: str, revision: int) -> tuple[ObservedAccount, ...]:
-        """Read-only broker discovery for one revision. Never a mutation."""
-        self._require_profile(profile_id)
-        stored = self._require_revision(profile_id, revision)
+        """Read-only broker discovery for one revision. Never a mutation.
+
+        The two methods below are the module's only ``async`` entry points, and
+        the only reason is the verifier's network call. Their SQLite work goes
+        through ``asyncio.to_thread`` for the same reason the router dispatches
+        every synchronous call that way — a blocking read or an fsync must not
+        stall the event loop.
+        """
+        stored = await asyncio.to_thread(self._read_bound_revision, profile_id, revision)
         return await self._verifier.observe_accounts(
             credential_slot=stored.credential_slot,
             endpoint_mode=stored.endpoint_mode,
@@ -377,8 +385,7 @@ class BrokerConfigurationService:
         and a re-observation that contradicts an existing pin refuses without
         replacing it (contract §3).
         """
-        self._require_profile(profile_id)
-        stored = self._require_revision(profile_id, revision)
+        stored = await asyncio.to_thread(self._read_bound_revision, profile_id, revision)
         observed = await self._verifier.observe_accounts(
             credential_slot=stored.credential_slot,
             endpoint_mode=stored.endpoint_mode,
@@ -403,6 +410,11 @@ class BrokerConfigurationService:
                 )
             return stored
 
+        return await asyncio.to_thread(self._record_account_pin, profile_id, revision, account_id)
+
+    def _record_account_pin(
+        self, profile_id: str, revision: int, account_id: str
+    ) -> ProfileRevision:
         owner = self.owner()
         now = self._clock()
         with self._store.transaction() as conn:
@@ -478,24 +490,14 @@ class BrokerConfigurationService:
         if current.staged_profile_id == profile_id and current.staged_revision == revision:
             return current
 
-        # Staging a different revision retires any pending one-shot Apply: the
-        # request was made against an exact revision that is no longer staged.
-        staged = replace(
-            current,
-            staged_profile_id=profile_id,
-            staged_revision=revision,
-            apply_requested=False,
-            apply_requested_at_ms=None,
-            apply_requested_generation=None,
-            selection_generation=current.selection_generation + 1,
-        )
+        staged = selection.staged(current, profile_id=profile_id, revision=revision)
         return self._commit_selection(
             staged,
             previous_generation=current.selection_generation,
             action="selection_staged",
             profile_id=profile_id,
             revision=revision,
-            previous_ref=_selection_ref(current.staged_profile_id, current.staged_revision),
+            previous_ref=selection.reference(current.staged_profile_id, current.staged_revision),
             next_ref=f"generation:{staged.selection_generation}",
         )
 
@@ -507,10 +509,7 @@ class BrokerConfigurationService:
         no container restart from this surface.
         """
         current = self._store.read_selection()
-        if current.apply_requested and expected_selection_generation in (
-            current.selection_generation,
-            current.apply_requested_generation,
-        ):
+        if selection.is_recorded_apply(current, expected_selection_generation):
             return current
         self._require_generation(current, expected_selection_generation)
         if current.staged_profile_id is None or current.staged_revision is None:
@@ -531,13 +530,7 @@ class BrokerConfigurationService:
                 next_step="Finish the revision, then stage and apply it.",
             )
 
-        requested = replace(
-            current,
-            apply_requested=True,
-            apply_requested_at_ms=self._clock(),
-            apply_requested_generation=current.selection_generation,
-            selection_generation=current.selection_generation + 1,
-        )
+        requested = selection.apply_requested(current, at_ms=self._clock())
         self._commit_selection(
             requested,
             previous_generation=current.selection_generation,
@@ -573,17 +566,12 @@ class BrokerConfigurationService:
         current = self._store.read_selection()
         self._require_generation(current, expected_selection_generation)
         self._require_revision(profile_id, revision)
-        acknowledged = replace(
+        acknowledged = selection.effective_acknowledged(
             current,
-            apply_requested=False,
-            apply_requested_at_ms=None,
-            apply_requested_generation=None,
-            effective_profile_id=profile_id,
-            effective_revision=revision,
-            effective_account_id=account_id,
-            effective_acknowledged_at_ms=self._clock(),
-            last_apply_outcome="applied",
-            last_apply_refusal_reason=None,
+            profile_id=profile_id,
+            revision=revision,
+            account_id=account_id,
+            at_ms=self._clock(),
         )
         self._commit_selection(
             acknowledged,
@@ -591,8 +579,10 @@ class BrokerConfigurationService:
             action="effective_acknowledged",
             profile_id=profile_id,
             revision=revision,
-            previous_ref=_selection_ref(current.effective_profile_id, current.effective_revision),
-            next_ref=_selection_ref(profile_id, revision),
+            previous_ref=selection.reference(
+                current.effective_profile_id, current.effective_revision
+            ),
+            next_ref=selection.reference(profile_id, revision),
             result="applied",
         )
         logger.info(
@@ -616,14 +606,7 @@ class BrokerConfigurationService:
         """
         current = self._store.read_selection()
         self._require_generation(current, expected_selection_generation)
-        refused = replace(
-            current,
-            apply_requested=False,
-            apply_requested_at_ms=None,
-            apply_requested_generation=None,
-            last_apply_outcome="refused",
-            last_apply_refusal_reason=reason,
-        )
+        refused = selection.apply_refused(current, reason=reason)
         self._commit_selection(
             refused,
             previous_generation=current.selection_generation,
@@ -792,6 +775,11 @@ class BrokerConfigurationService:
             )
         return profile
 
+    def _read_bound_revision(self, profile_id: str, revision: int) -> ProfileRevision:
+        """One revision, refusing an unknown profile before an unknown revision."""
+        self._require_profile(profile_id)
+        return self._require_revision(profile_id, revision)
+
     def _require_revision(self, profile_id: str, revision: int) -> ProfileRevision:
         stored = self._store.read_revision(profile_id, revision)
         if stored is None:
@@ -881,12 +869,6 @@ class _DisplayNameGuard:
                 next_step="Pick a different name, or archive the profile using that one.",
             ) from exc
         return False
-
-
-def _selection_ref(profile_id: str | None, revision: int | None) -> str | None:
-    if profile_id is None or revision is None:
-        return None
-    return f"{profile_id}@{revision}"
 
 
 __all__ = [
