@@ -170,12 +170,16 @@ notional cap, no symbol allowlist, no session restriction.
   `LIVE_ENVELOPE_UNOBSERVED` whenever the seal cannot be read.
 - **The sealed floats carry the environment's domains.** `AlpacaSettings`
   refuses to boot on a `loss_fraction` outside (0, 1), a non-positive or
-  non-finite `loss_usd`, or a `*_bps` outside [0, 10000); `live_arming.py`'s
-  `_SEALED_ENVELOPE_DOMAINS` re-asserts each on the values a record *sealed*.
-  `LiveEnvelopeValues` is a plain dataclass with no field validation, and a row
-  re-sealed over a tampered value verifies both digests — so without this a
-  sealed `inf` loss limit (never breached) or a sealed 10000 bps exit anchor
-  (floors to zero, refuses the leg) would reach the money.
+  non-finite `loss_usd`, or a `*_bps` outside [0, 10000). `live_envelope.py`'s
+  `_ENVELOPE_DOMAINS` re-asserts each on the values a record *sealed*, through
+  `envelope_domain_violation()` — which `live_arming.py`'s record validator
+  asks rather than restating, so the domain lives beside the type both
+  producers build. `LiveEnvelopeValues` is a plain dataclass with no field
+  validation, and a row re-sealed over a tampered value verifies both digests —
+  so without this a sealed `inf` loss limit (never breached) or a sealed 10000
+  bps exit anchor (floors to zero, refuses the leg) would reach the money. The
+  two copies of the bounds are pinned together by
+  `tests/broker/alpaca/test_config.py::test_the_envelope_domains_agree_with_the_settings_that_declare_them`.
 
 ## Refusals
 
