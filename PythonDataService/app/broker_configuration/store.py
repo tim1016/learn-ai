@@ -85,6 +85,7 @@ class ProfilesStore:
     @classmethod
     def open(cls, *, clerk_dir: Path) -> ProfilesStore:
         """Open, creating and migrating under a cross-process advisory lock."""
+        from app.broker.alpaca.clerk.sqlite.repository import UnsupportedWalFilesystem
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
             assert_wal_filesystem_supported,
         )
@@ -105,15 +106,13 @@ class ProfilesStore:
                     raise
         except ProfilesDatabaseUnavailable:
             raise
-        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+        # Named exhaustively rather than caught broadly: an unreadable database
+        # is a state with a reason, and a bug in this module must stay a bug
+        # instead of being reported to an operator as "volume unavailable".
+        except (OSError, sqlite3.DatabaseError, UnsupportedWalFilesystem, ValueError) as exc:
             raise ProfilesDatabaseUnavailable(
                 f"The broker configuration database at {db_path} could not be opened: {exc}",
-                next_step="Check the Clerk volume is mounted and writable, then retry.",
-            ) from exc
-        except Exception as exc:  # unsupported WAL filesystem and its kin
-            raise ProfilesDatabaseUnavailable(
-                f"The broker configuration database at {db_path} is unusable: {exc}",
-                next_step="Mount the Clerk directory from a container-local named volume.",
+                next_step="Check the Clerk volume is mounted, writable and container-local, then retry.",
             ) from exc
         return cls(conn, db_path=db_path)
 
@@ -334,13 +333,19 @@ class ProfilesStore:
         revision: int,
         account_id: str,
         pinned_at_ms: int,
-    ) -> None:
-        """Bind an unbound revision to one observed account, once."""
-        conn.execute(
+    ) -> bool:
+        """Bind an unbound revision to one observed account, once.
+
+        Returns ``False`` when the revision was already bound — the ``WHERE``
+        clause, not the caller's earlier read, is what makes the pin a
+        write-once transition under a concurrent second pin.
+        """
+        cursor = conn.execute(
             "UPDATE profile_revisions SET account_pin = ?, account_pinned_at_ms = ? "
             "WHERE profile_id = ? AND revision = ? AND account_pin IS NULL",
             (account_id, pinned_at_ms, profile_id, revision),
         )
+        return cursor.rowcount == 1
 
     def profile_has_revisions(self, profile_id: str) -> bool:
         return (
@@ -389,13 +394,27 @@ class ProfilesStore:
             )
         return _selection_from_row(row)
 
-    def write_selection(self, conn: sqlite3.Connection, selection: InstallationSelection) -> None:
-        conn.execute(
+    def write_selection(
+        self,
+        conn: sqlite3.Connection,
+        selection: InstallationSelection,
+        *,
+        previous_generation: int,
+    ) -> bool:
+        """Compare-and-swap the one selection row on its generation.
+
+        Returns ``False`` when the recorded generation is no longer the one the
+        caller read. The check has to be in the ``WHERE`` clause and not only in
+        the service: two writers that both read generation N would otherwise
+        both write N+1, and the second would silently clobber the first — the
+        exact overwrite the contract's staleness rule exists to prevent.
+        """
+        cursor = conn.execute(
             "UPDATE installation_selection SET staged_profile_id = ?, staged_revision = ?, "
             "apply_requested = ?, apply_requested_at_ms = ?, apply_requested_generation = ?, "
             "selection_generation = ?, effective_profile_id = ?, effective_revision = ?, "
             "effective_account_id = ?, effective_acknowledged_at_ms = ?, last_apply_outcome = ?, "
-            "last_apply_refusal_reason = ? WHERE id = 1",
+            "last_apply_refusal_reason = ? WHERE id = 1 AND selection_generation = ?",
             (
                 selection.staged_profile_id,
                 selection.staged_revision,
@@ -409,8 +428,10 @@ class ProfilesStore:
                 selection.effective_acknowledged_at_ms,
                 selection.last_apply_outcome,
                 selection.last_apply_refusal_reason,
+                previous_generation,
             ),
         )
+        return cursor.rowcount == 1
 
     # ---- events ---------------------------------------------------------
 

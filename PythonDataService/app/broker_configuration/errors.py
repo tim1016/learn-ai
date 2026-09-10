@@ -117,7 +117,13 @@ class ProfilesDatabaseUnavailable(BrokerConfigurationError):
 
 
 class InvalidLiveEnvelope(BrokerConfigurationError):
-    """A live envelope value is outside the domain ``AlpacaSettings`` enforces."""
+    """A live envelope value is outside the domain ``AlpacaSettings`` enforces.
+
+    Not in the §6 table either. The contract states the envelope's domain in
+    §2.4 without naming the refusal a violation produces, and this path has to
+    refuse something an operator can act on rather than surface a ``TypeError``
+    from the hash.
+    """
 
     reason: ClassVar[str] = "live_envelope_invalid"
     status_code: ClassVar[int] = 422

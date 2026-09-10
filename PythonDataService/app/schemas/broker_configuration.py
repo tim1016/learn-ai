@@ -31,6 +31,10 @@ rather than assumed:
 * ``ApplyRequest.expected_selection_generation`` — §5 names the fence only on
   ``PUT /selection``; an Apply that names no generation cannot be idempotent
   or fenced, so it carries the same field.
+
+Two refusal reasons also go beyond §6's table, both documented at their
+definitions in ``app/broker_configuration/errors.py``:
+``display_name_conflict`` (409) and ``live_envelope_invalid`` (422).
 """
 
 from __future__ import annotations

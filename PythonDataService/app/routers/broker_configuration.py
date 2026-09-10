@@ -36,7 +36,7 @@ from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
-from app.broker_configuration.service import BrokerConfigurationService, live_envelope_from_request
+from app.broker_configuration.service import BrokerConfigurationService
 from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
@@ -136,8 +136,9 @@ RevisionNumber = Annotated[int, Path(ge=1)]
 
 def _envelope(content: RevisionContentRequest) -> ValidatedLiveEnvelope | None:
     """Request data becomes an envelope only through the validated type."""
-    payload = None if content.live_envelope is None else content.live_envelope.model_dump()
-    return live_envelope_from_request(payload)
+    if content.live_envelope is None:
+        return None
+    return ValidatedLiveEnvelope.from_mapping(content.live_envelope.model_dump())
 
 
 def _detail(record: ProfileWithRevision) -> ProfileDetailResponse:

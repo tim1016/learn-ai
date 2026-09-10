@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -67,6 +66,13 @@ logger = logging.getLogger(__name__)
 
 MAX_EVENT_PAGE = 200
 
+# The one place the display-name rule lives is ``ux_broker_profiles_live_name``
+# in ``schema.py``. SQLite names the *columns*, not the index, when a partial
+# unique index is violated ("UNIQUE constraint failed: broker_profiles.owner_id,
+# broker_profiles.display_name"), so the translation below matches on the
+# column. Pinned by test_two_live_profiles_cannot_share_a_display_name.
+_DISPLAY_NAME_CONSTRAINT = "broker_profiles.display_name"
+
 
 def revision_content_sha256(
     *,
@@ -95,7 +101,12 @@ def revision_content_sha256(
     return canonical_sha256(payload)
 
 
-def _is_complete(*, credential_slot: str, endpoint_mode: EndpointMode, live_envelope: object) -> bool:
+def _is_complete(
+    *,
+    credential_slot: str,
+    endpoint_mode: EndpointMode,
+    live_envelope: ValidatedLiveEnvelope | None,
+) -> bool:
     """Whether a revision may be staged or applied.
 
     Content completeness only: a slot reference, and the envelope whenever the
@@ -199,40 +210,14 @@ class BrokerConfigurationService:
         live_envelope: ValidatedLiveEnvelope | None,
     ) -> ProfileWithRevision:
         """Create a profile and its revision 1 in one transaction."""
-        owner = self.owner()
-        now = self._clock()
-        profile = BrokerProfile(
-            profile_id=new_identifier("profile"),
-            owner_id=owner.owner_id,
-            broker=ALPACA_BROKER,
+        return self._create_profile(
             display_name=display_name,
-            archived=False,
-            created_at_ms=now,
-            updated_at_ms=now,
-        )
-        revision = self._build_revision(
-            profile_id=profile.profile_id,
-            revision=1,
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
-            author_owner_id=owner.owner_id,
-            created_at_ms=now,
+            action="profile_created",
+            previous_ref=None,
         )
-        self._refuse_duplicate_display_name(display_name, excluding_profile_id=None)
-        with _DisplayNameGuard(), self._store.transaction() as conn:
-                self._store.insert_profile(conn, profile)
-                self._store.insert_revision(conn, revision)
-                self._record_event(
-                    conn,
-                    actor=owner.owner_id,
-                    action="profile_created",
-                    profile_id=profile.profile_id,
-                    revision=revision.revision,
-                    next_ref=revision.content_sha256,
-                    recorded_at_ms=now,
-                )
-        return ProfileWithRevision(profile=profile, latest_revision=revision)
 
     def update_profile(
         self,
@@ -248,28 +233,29 @@ class BrokerConfigurationService:
         next_archived = profile.archived if archived is None else archived
         if next_name == profile.display_name and next_archived == profile.archived:
             return profile
-        if next_archived and not profile.archived:
-            self._refuse_archiving_profile_in_use(profile_id)
-        if next_name != profile.display_name or (profile.archived and not next_archived):
-            self._refuse_duplicate_display_name(next_name, excluding_profile_id=profile_id)
         now = self._clock()
-        with _DisplayNameGuard(), self._store.transaction() as conn:
-                self._store.update_profile_metadata(
-                    conn,
-                    profile_id=profile_id,
-                    display_name=next_name,
-                    archived=next_archived,
-                    updated_at_ms=now,
-                )
-                self._record_event(
-                    conn,
-                    actor=owner.owner_id,
-                    action="profile_archived" if next_archived != profile.archived else "profile_renamed",
-                    profile_id=profile_id,
-                    previous_ref=profile.display_name,
-                    next_ref=next_name,
-                    recorded_at_ms=now,
-                )
+        with _DisplayNameGuard(next_name), self._store.transaction() as conn:
+            # Inside the write transaction: a selection staged between the read
+            # above and this write would otherwise let an in-use profile be
+            # archived.
+            if next_archived and not profile.archived:
+                self._refuse_archiving_profile_in_use(profile_id)
+            self._store.update_profile_metadata(
+                conn,
+                profile_id=profile_id,
+                display_name=next_name,
+                archived=next_archived,
+                updated_at_ms=now,
+            )
+            self._record_event(
+                conn,
+                actor=owner.owner_id,
+                action="profile_archived" if next_archived != profile.archived else "profile_renamed",
+                profile_id=profile_id,
+                previous_ref=profile.display_name,
+                next_ref=next_name,
+                recorded_at_ms=now,
+            )
         return replace(profile, display_name=next_name, archived=next_archived, updated_at_ms=now)
 
     def clone_profile(self, profile_id: str, *, display_name: str) -> ProfileWithRevision:
@@ -281,41 +267,14 @@ class BrokerConfigurationService:
                 "That profile has no revision to clone.",
                 next_step="Save a revision on the source profile first.",
             )
-        owner = self.owner()
-        now = self._clock()
-        clone = BrokerProfile(
-            profile_id=new_identifier("profile"),
-            owner_id=owner.owner_id,
-            broker=source.broker,
+        return self._create_profile(
             display_name=display_name,
-            archived=False,
-            created_at_ms=now,
-            updated_at_ms=now,
-        )
-        revision = self._build_revision(
-            profile_id=clone.profile_id,
-            revision=1,
             credential_slot=latest.credential_slot,
             endpoint_mode=latest.endpoint_mode,
             live_envelope=latest.live_envelope,
-            author_owner_id=owner.owner_id,
-            created_at_ms=now,
+            action="profile_cloned",
+            previous_ref=_selection_ref(source.profile_id, latest.revision),
         )
-        self._refuse_duplicate_display_name(display_name, excluding_profile_id=None)
-        with _DisplayNameGuard(), self._store.transaction() as conn:
-                self._store.insert_profile(conn, clone)
-                self._store.insert_revision(conn, revision)
-                self._record_event(
-                    conn,
-                    actor=owner.owner_id,
-                    action="profile_cloned",
-                    profile_id=clone.profile_id,
-                    revision=revision.revision,
-                    previous_ref=f"{source.profile_id}@{latest.revision}",
-                    next_ref=revision.content_sha256,
-                    recorded_at_ms=now,
-                )
-        return ProfileWithRevision(profile=clone, latest_revision=revision)
 
     # ---- revisions ------------------------------------------------------
 
@@ -342,6 +301,11 @@ class BrokerConfigurationService:
         latest returns that revision instead of minting a duplicate, whether the
         caller's ``expected_revision`` is the latest (a re-save of unchanged
         content) or the one before it (a retry whose first response was lost).
+
+        The staleness check reads ``latest`` **inside** the write transaction.
+        Read outside it, two writers could both see revision N and both insert
+        N+1 — one would win on the primary key and the loser would surface a
+        constraint error instead of the contract's ``revision_conflict``.
         """
         profile = self._require_profile(profile_id)
         if profile.archived:
@@ -349,60 +313,49 @@ class BrokerConfigurationService:
                 "That profile is archived and cannot take a new revision.",
                 next_step="Restore the profile, then save your change.",
             )
-        latest = self._store.latest_revision(profile_id)
         content_sha256 = revision_content_sha256(
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
         )
-        if latest is not None:
-            if latest.content_sha256 == content_sha256 and expected_revision in (
-                latest.revision,
-                latest.revision - 1,
-            ):
-                return latest
-            if expected_revision != latest.revision:
-                raise RevisionConflict(
-                    f"This profile changed while you were editing it: you expected revision "
-                    f"{expected_revision}, the saved revision is {latest.revision}.",
-                    next_step="Reload the profile and re-apply your change.",
-                )
-        elif expected_revision != 0:
-            raise RevisionConflict(
-                f"This profile has no revisions yet: you expected revision {expected_revision}.",
-                next_step="Reload the profile and re-apply your change.",
-            )
-
         owner = self.owner()
         now = self._clock()
-        revision = self._build_revision(
-            profile_id=profile_id,
-            revision=1 if latest is None else latest.revision + 1,
-            credential_slot=credential_slot,
-            endpoint_mode=endpoint_mode,
-            live_envelope=live_envelope,
-            author_owner_id=owner.owner_id,
-            created_at_ms=now,
-        )
-        with _DisplayNameGuard(), self._store.transaction() as conn:
-                self._store.insert_revision(conn, revision)
-                self._store.update_profile_metadata(
-                    conn,
-                    profile_id=profile_id,
-                    display_name=profile.display_name,
-                    archived=profile.archived,
-                    updated_at_ms=now,
-                )
-                self._record_event(
-                    conn,
-                    actor=owner.owner_id,
-                    action="revision_created",
-                    profile_id=profile_id,
-                    revision=revision.revision,
-                    previous_ref=None if latest is None else latest.content_sha256,
-                    next_ref=revision.content_sha256,
-                    recorded_at_ms=now,
-                )
+        with self._store.transaction() as conn:
+            latest = self._store.latest_revision(profile_id)
+            if (
+                latest is not None
+                and latest.content_sha256 == content_sha256
+                and expected_revision in (latest.revision, latest.revision - 1)
+            ):
+                return latest
+            self._require_expected_revision(expected_revision, latest)
+            revision = self._build_revision(
+                profile_id=profile_id,
+                revision=1 if latest is None else latest.revision + 1,
+                credential_slot=credential_slot,
+                endpoint_mode=endpoint_mode,
+                live_envelope=live_envelope,
+                author_owner_id=owner.owner_id,
+                created_at_ms=now,
+            )
+            self._store.insert_revision(conn, revision)
+            self._store.update_profile_metadata(
+                conn,
+                profile_id=profile_id,
+                display_name=profile.display_name,
+                archived=profile.archived,
+                updated_at_ms=now,
+            )
+            self._record_event(
+                conn,
+                actor=owner.owner_id,
+                action="revision_created",
+                profile_id=profile_id,
+                revision=revision.revision,
+                previous_ref=None if latest is None else latest.content_sha256,
+                next_ref=revision.content_sha256,
+                recorded_at_ms=now,
+            )
         return revision
 
     # ---- verification and pinning ---------------------------------------
@@ -453,13 +406,20 @@ class BrokerConfigurationService:
         owner = self.owner()
         now = self._clock()
         with self._store.transaction() as conn:
-            self._store.write_account_pin(
+            bound = self._store.write_account_pin(
                 conn,
                 profile_id=profile_id,
                 revision=revision,
                 account_id=account_id,
                 pinned_at_ms=now,
             )
+            if not bound:
+                # A concurrent pin won the write-once transition. Whatever it
+                # bound stands; this request never replaces a recorded pin.
+                raise AccountPinMismatch(
+                    "This revision was bound to an account while you were verifying.",
+                    next_step="Reload the revision to see the account it is bound to.",
+                )
             self._record_event(
                 conn,
                 actor=owner.owner_id,
@@ -531,6 +491,7 @@ class BrokerConfigurationService:
         )
         return self._commit_selection(
             staged,
+            previous_generation=current.selection_generation,
             action="selection_staged",
             profile_id=profile_id,
             revision=revision,
@@ -579,6 +540,7 @@ class BrokerConfigurationService:
         )
         self._commit_selection(
             requested,
+            previous_generation=current.selection_generation,
             action="apply_requested",
             profile_id=current.staged_profile_id,
             revision=current.staged_revision,
@@ -625,6 +587,7 @@ class BrokerConfigurationService:
         )
         self._commit_selection(
             acknowledged,
+            previous_generation=current.selection_generation,
             action="effective_acknowledged",
             profile_id=profile_id,
             revision=revision,
@@ -663,6 +626,7 @@ class BrokerConfigurationService:
         )
         self._commit_selection(
             refused,
+            previous_generation=current.selection_generation,
             action="apply_refused",
             profile_id=current.staged_profile_id,
             revision=current.staged_revision,
@@ -697,6 +661,7 @@ class BrokerConfigurationService:
         self,
         selection: InstallationSelection,
         *,
+        previous_generation: int,
         action: str,
         profile_id: str | None = None,
         revision: int | None = None,
@@ -704,10 +669,23 @@ class BrokerConfigurationService:
         next_ref: str | None = None,
         result: str = "recorded",
     ) -> InstallationSelection:
-        """Write the one selection row and its audit event in one transaction."""
+        """Write the one selection row and its audit event in one transaction.
+
+        ``previous_generation`` makes the write a compare-and-swap on the
+        generation the caller read. Its precondition checks ran against that
+        generation, so if anything advanced it in between, the write is refused
+        rather than silently applied on top of someone else's change.
+        """
         actor = self.owner().owner_id
         with self._store.transaction() as conn:
-            self._store.write_selection(conn, selection)
+            if not self._store.write_selection(
+                conn, selection, previous_generation=previous_generation
+            ):
+                raise SelectionGenerationConflict(
+                    "The installation selection changed while your change was being recorded: "
+                    f"it is no longer generation {previous_generation}.",
+                    next_step="Reload the selection and repeat your change.",
+                )
             self._record_event(
                 conn,
                 actor=actor,
@@ -720,6 +698,56 @@ class BrokerConfigurationService:
                 recorded_at_ms=self._clock(),
             )
         return selection
+
+    def _create_profile(
+        self,
+        *,
+        display_name: str,
+        credential_slot: str,
+        endpoint_mode: EndpointMode,
+        live_envelope: ValidatedLiveEnvelope | None,
+        action: str,
+        previous_ref: str | None,
+    ) -> ProfileWithRevision:
+        """One new profile and its revision 1, in one transaction.
+
+        Creating and cloning differ only in where the content came from and
+        what the audit event points back at, so they are one flow.
+        """
+        owner = self.owner()
+        now = self._clock()
+        profile = BrokerProfile(
+            profile_id=new_identifier("profile"),
+            owner_id=owner.owner_id,
+            broker=ALPACA_BROKER,
+            display_name=display_name,
+            archived=False,
+            created_at_ms=now,
+            updated_at_ms=now,
+        )
+        revision = self._build_revision(
+            profile_id=profile.profile_id,
+            revision=1,
+            credential_slot=credential_slot,
+            endpoint_mode=endpoint_mode,
+            live_envelope=live_envelope,
+            author_owner_id=owner.owner_id,
+            created_at_ms=now,
+        )
+        with _DisplayNameGuard(display_name), self._store.transaction() as conn:
+            self._store.insert_profile(conn, profile)
+            self._store.insert_revision(conn, revision)
+            self._record_event(
+                conn,
+                actor=owner.owner_id,
+                action=action,
+                profile_id=profile.profile_id,
+                revision=revision.revision,
+                previous_ref=previous_ref,
+                next_ref=revision.content_sha256,
+                recorded_at_ms=now,
+            )
+        return ProfileWithRevision(profile=profile, latest_revision=revision)
 
     def _build_revision(
         self,
@@ -781,13 +809,16 @@ class BrokerConfigurationService:
                 next_step="Reload the selection and repeat your change.",
             )
 
-    def _refuse_duplicate_display_name(self, display_name: str, *, excluding_profile_id: str | None) -> None:
-        for profile in self._store.list_profiles(include_archived=False):
-            if profile.display_name == display_name and profile.profile_id != excluding_profile_id:
-                raise DisplayNameConflict(
-                    f"Another profile is already named {display_name!r}.",
-                    next_step="Pick a different name, or archive the profile using that one.",
-                )
+    def _require_expected_revision(
+        self, expected: int, latest: ProfileRevision | None
+    ) -> None:
+        recorded = 0 if latest is None else latest.revision
+        if expected != recorded:
+            raise RevisionConflict(
+                f"This profile changed while you were editing it: you expected revision "
+                f"{expected}, the saved revision is {recorded}.",
+                next_step="Reload the profile and re-apply your change.",
+            )
 
     def _refuse_archiving_profile_in_use(self, profile_id: str) -> None:
         selection = self._store.read_selection()
@@ -827,21 +858,26 @@ class BrokerConfigurationService:
 
 
 class _DisplayNameGuard:
-    """The uniqueness rule is the schema's; this is only its translation.
+    """Translate the display-name unique index into its contract refusal.
 
-    The service pre-checks the name for a clean refusal, but two concurrent
-    creates can both pass that check and only the index stops the second. This
-    turns the index's ``IntegrityError`` into the same refusal the pre-check
-    raises, so a racing client gets a conflict rather than a 500.
+    The rule that two live profiles cannot share a name lives in exactly one
+    place — the partial unique index in ``schema.py``, as contract §5 requires
+    ("uniqueness enforced in the schema rather than in application code"). A
+    second copy of the rule in Python would be a check two concurrent creates
+    could both pass; this only gives the index's ``IntegrityError`` the words
+    the operator surface expects.
     """
+
+    def __init__(self, display_name: str) -> None:
+        self._display_name = display_name
 
     def __enter__(self) -> _DisplayNameGuard:
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, _tb: object) -> bool:
-        if isinstance(exc, sqlite3.IntegrityError) and "ux_broker_profiles_live_name" in str(exc):
+        if isinstance(exc, sqlite3.IntegrityError) and _DISPLAY_NAME_CONSTRAINT in str(exc):
             raise DisplayNameConflict(
-                "Another profile is already using that name.",
+                f"Another profile is already named {self._display_name!r}.",
                 next_step="Pick a different name, or archive the profile using that one.",
             ) from exc
         return False
@@ -853,14 +889,8 @@ def _selection_ref(profile_id: str | None, revision: int | None) -> str | None:
     return f"{profile_id}@{revision}"
 
 
-def live_envelope_from_request(mapping: Mapping[str, Any] | None) -> ValidatedLiveEnvelope | None:
-    """The only way request data becomes an envelope: through the validated type."""
-    return None if mapping is None else ValidatedLiveEnvelope.from_mapping(mapping)
-
-
 __all__ = [
     "MAX_EVENT_PAGE",
     "BrokerConfigurationService",
-    "live_envelope_from_request",
     "revision_content_sha256",
 ]
