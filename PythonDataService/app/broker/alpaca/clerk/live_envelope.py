@@ -15,8 +15,9 @@ admission seam asks the gate for one that is fresh at *its* ``now_ms``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
@@ -62,6 +63,34 @@ _SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("xh_exit_bps", "live_xh_exit_bps"),
 )
 
+# The domain of each envelope value, as one table.
+#
+# Canonical declaration: ``AlpacaSettings`` in ``app/broker/alpaca/config.py``,
+# whose pydantic ``Field`` constraints refuse to *boot* outside these. This is
+# the second copy, and it exists for a real reason: an envelope also arrives
+# from an arming record read off disk, which never passes through settings at
+# all, and those values bound real money just as hard -- a sealed ``inf`` loss
+# limit is never breached, a sealed 10 000 bps exit anchor floors to zero and
+# refuses the leg. ``LiveEnvelopeValues`` is a plain frozen dataclass, so the
+# check has to live somewhere it sees *both* producers.
+# Validated against: ``tests/broker/alpaca/test_config.py::
+# test_the_envelope_domains_agree_with_the_settings_that_declare_them`` -- the
+# parity test that fails if either copy moves.
+#
+# Predicates rather than bounds because the two ends differ per field
+# (``loss_fraction`` is exclusive at both, ``*_bps`` inclusive at zero), and
+# because a comparison against a NaN or a non-number is False or a TypeError
+# either way -- which is the answer both cases deserve.
+_ENVELOPE_DOMAINS: tuple[tuple[str, Callable[[Any], bool], str], ...] = (
+    ("loss_fraction", lambda value: 0 < value < 1, "in (0, 1)"),
+    # Excludes NaN and infinity as well as zero: ``inf > 0`` is True.
+    ("loss_usd", lambda value: 0 < value < float("inf"), "positive and finite"),
+    ("shadow_sessions", lambda value: value >= 1, "at least 1"),
+    ("arming_max_sessions", lambda value: value >= 1, "at least 1"),
+    ("xh_entry_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
+    ("xh_exit_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
+)
+
 
 class LiveEnvelopeIncomplete(ValueError):
     """A live envelope cannot be built: at least one ``ALPACA_LIVE_*`` value is absent."""
@@ -91,6 +120,19 @@ class LiveEnvelopeValues:
     @property
     def sha(self) -> str:
         return canonical_sha256(self.to_mapping())
+
+
+def envelope_domain_violation(values: LiveEnvelopeValues) -> str | None:
+    """The first value outside its domain, named with the domain it missed.
+
+    A string rather than an exception so each caller phrases its own refusal:
+    the settings path never reaches here (pydantic refuses the boot), and the
+    arming path has to say *which record* carries the bad value.
+    """
+    for name, admits, domain in _ENVELOPE_DOMAINS:
+        if not admits(getattr(values, name)):
+            return f"{name} is not {domain}"
+    return None
 
 
 def envelope_agreement(
@@ -192,6 +234,15 @@ class LiveEnvelopeGate:
         match what was armed?) and the arming snapshot's own disagreement check.
         """
         return self.values if self.sealed is None else self.sealed
+
+    @property
+    def in_force_is_sealed(self) -> bool:
+        """Whether :attr:`in_force` answered a seal rather than the environment.
+
+        The label half of the same question, so an operator surface naming
+        which envelope decided does not restate the predicate.
+        """
+        return self.sealed is not None
 
     def publish(self, observation: AccountObservation) -> None:
         self._observation = observation

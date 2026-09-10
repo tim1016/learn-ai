@@ -276,6 +276,7 @@ def test_a_resealed_envelope_integer_that_is_a_float_or_a_bool_is_refused(key: s
         # sealed infinity would be a loss limit nothing can ever breach.
         ("loss_usd", float("inf")),
         ("loss_usd", float("nan")),
+        ("shadow_sessions", 0),
         ("xh_entry_bps", -1.0),
         # 10 000 bps is 100 %: a sell anchored there floors to zero, and the
         # leg is refused EXTENDED_ANCHOR_UNPRICEABLE -- an EXIT refused
@@ -292,6 +293,10 @@ def test_a_resealed_envelope_float_outside_its_domain_is_refused(key: str, value
     ``LiveEnvelopeValues`` -- a plain dataclass with no validation of its own --
     straight off disk. A row re-sealed over the tampered value verifies both
     digests, so only this check stands between it and the money.
+
+    The domains themselves are pinned to the settings that declare them by
+    ``tests/broker/alpaca/test_config.py::
+    test_the_envelope_domains_agree_with_the_settings_that_declare_them``.
     """
     record = _armed()
     tampered_envelope = {**record.envelope_values, key: value}

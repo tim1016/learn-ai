@@ -108,8 +108,10 @@ class ArmingRefresh:
         per transition. Both inputs are read under one fault because a refresh
         holding only half of them can describe neither.
         """
+        input_read = "ledger"
         try:
             records = tuple(self._ledger.records())
+            input_read = "instance_seals"
             seals = self._read_seals()
         except LiveArmingInvalid as exc:
             if not self._ledger_invalid:
@@ -120,7 +122,12 @@ class ArmingRefresh:
                         "action": "live_arming_ledger_invalid",
                         "account_id": self._account_id,
                         "live_account_id": self._ledger.live_account_id,
-                        "path": str(self._ledger.path),
+                        # Which of the two inputs failed, and the ledger's path
+                        # only when it is the one at fault -- stamping a healthy
+                        # file beside a binding-store error sends the operator
+                        # to the wrong place.
+                        "input": input_read,
+                        "path": str(self._ledger.path) if input_read == "ledger" else None,
                         "why": str(exc),
                     },
                 )

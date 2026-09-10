@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     select_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
@@ -31,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
+    LIVE_ACCT,
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
@@ -171,6 +173,38 @@ async def test_the_clear_refuses_an_unknown_fact(
     # R5: unknown is not a number. The detail says the day cannot be judged,
     # so the figure beside it must be absent rather than plausible.
     assert refused.day_pnl_usd is None
+    assert _hold(runtime.sqlite_repository) is not None
+
+
+async def test_the_clear_names_an_unreadable_arming_ledger_rather_than_the_broker_feed(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    tmp_path: Path,
+) -> None:
+    """The fourth unjudgeable cause reaches this screen, so it must be named here.
+
+    An account whose seal cannot be read has no sealed loss limit to judge
+    against, so the clear refuses — but the standing sentence enumerated three
+    broker-side causes, and would have sent the operator to debug the feed
+    while the actual fault was a corrupt ``live_arming.jsonl``.
+    """
+    runtime, broker = shadow_runtime
+    assert runtime.envelope_sync is not None
+    _arm(tmp_path)
+    broker.unrealized = -5_000.0
+    assert await runtime.envelope_sync.tick() == "hold_raised"
+
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.path.write_text(
+        ledger.path.read_text(encoding="utf-8").replace('"kind":"armed"', '"kind":"armed ', 1),
+        encoding="utf-8",
+    )
+
+    refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
+
+    assert refused.outcome == "refused"
+    assert refused.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
+    assert "arming inputs could not be read" in refused.detail
+    assert refused.day_pnl_usd is None and refused.loss_limit_usd is None
     assert _hold(runtime.sqlite_repository) is not None
 
 

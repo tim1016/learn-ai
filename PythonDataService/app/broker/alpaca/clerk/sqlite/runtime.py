@@ -152,41 +152,6 @@ _REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSid
 logger = logging.getLogger(__name__)
 
 
-def _leg_policy_in_force(
-    policy: ProgramLegPolicy, envelope: LiveEnvelopeGate | None
-) -> ProgramLegPolicy:
-    """The policy this decision prices from: the envelope in force decides the allowance.
-
-    ADR 0059 D3 seals ``xh_entry_bps`` and ``xh_exit_bps`` at arming with every
-    other envelope value, so a staged environment edit reaches an entry or an
-    exit only at the next re-arm (owner decision 2026-09-10). ``in_force`` is
-    the one place that rule is written; this is the seam that applies it to a
-    leg. Resolved per decision, not at composition, because the arming ledger
-    is re-read on the envelope sync's cadence — which is what keeps
-    ``ProgramLegPolicy`` a plain value and ``shape_program_leg`` a pure
-    function of it.
-
-    An authority with no envelope (paper, synthetic) prices from the
-    environment exactly as before. So does a live account whose ledger holds no
-    arming record, or whose arming inputs this observation could not read:
-    ``in_force`` falls back to the configured values, and **an EXIT is never
-    refused or delayed for want of a seal**. That fallback is deliberately not
-    granted to the loss judgement, which fails closed instead
-    (``live_envelope_sync.LiveEnvelopeSync._seal_unreadable``) — an exit leaves
-    the account, so falling back can only help; admitting one on a limit
-    nothing vouches for takes new exposure.
-    """
-    if envelope is None:
-        return policy
-    values = envelope.in_force
-    return replace(
-        policy,
-        allowances=ExtendedHoursAllowances.from_bps(
-            entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
-        ),
-    )
-
-
 class _DecisionBarBoundTradePort:
     """Bind each synthetic Clerk order to one immutable retained decision bar."""
 
@@ -344,7 +309,45 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
-        return self._program_leg_policy
+        """The policy this authority prices a leg from *right now*.
+
+        The allowance is the envelope in force's (ADR 0059 D3): ``xh_entry_bps``
+        and ``xh_exit_bps`` are sealed at arming with every other envelope
+        value, so a staged environment edit reaches an entry or an exit only at
+        the next re-arm (owner decision 2026-09-10). ``in_force`` is the one
+        place that rule is written; this is the seam that applies it to a leg.
+
+        Resolved on read, not at composition, because the arming ledger is
+        re-read on the envelope sync's cadence -- which is what lets
+        ``ProgramLegPolicy`` stay a plain value and ``shape_program_leg`` a pure
+        function of it. It is resolved *here*, on the one accessor, rather than
+        at the pricing call, so admission cannot answer this policy's questions
+        off a different object than the one that prices.
+
+        An authority with no envelope (paper, synthetic) answers the composed
+        policy unchanged. So does a live account whose ledger holds no arming
+        record, or whose arming inputs the last observation could not read:
+        ``in_force`` falls back to the configured values, and **an EXIT is never
+        refused or delayed for want of a seal**. That fallback is deliberately
+        not granted to the loss judgement, which fails closed instead
+        (``live_envelope_sync.LiveEnvelopeSync._seal_unreadable``) -- an exit
+        leaves the account, so falling back can only help; admitting an entry on
+        a limit nothing vouches for takes new exposure.
+
+        Where an envelope exists it decides *both* allowances, so the
+        environment-derived pair the policy was composed with is not consulted:
+        both come from the same two ``ALPACA_LIVE_XH_*`` settings, and a live
+        envelope cannot exist without them (`AlpacaSettings` refuses the boot).
+        """
+        if self._live_envelope is None:
+            return self._program_leg_policy
+        values = self._live_envelope.in_force
+        return replace(
+            self._program_leg_policy,
+            allowances=ExtendedHoursAllowances.from_bps(
+                entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
+            ),
+        )
 
     @property
     def binds_decision_bar(self) -> bool:
@@ -803,7 +806,7 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     use_rth=use_rth,
                     decision_bar=retained_source_bar,
-                    policy=_leg_policy_in_force(self._program_leg_policy, self._live_envelope),
+                    policy=self.program_leg_policy,
                 )
             except ProgramLegRefused as exc:
                 return rejected(

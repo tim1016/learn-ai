@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_MISSING,
     LiveEnvelopeValues,
+    envelope_domain_violation,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256, verify_sealed_record
 from app.lean_sidecar.trading_calendar import trading_session_count
@@ -116,25 +117,6 @@ ArmingState = Literal["unarmed", "armed", "lapsed", "disarmed"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _LABEL = "live arming"
-
-# The domains ``AlpacaSettings`` enforces on the environment (``config.py``),
-# re-asserted on the values a record *sealed*. The two must agree because the
-# sealed envelope is what bounds real money: it is the loss limit the hold is
-# raised on and cleared against, and the allowance an extended-session leg is
-# priced from. ``LiveEnvelopeValues`` is a plain frozen dataclass with no field
-# validation of its own, so a re-sealed row could otherwise carry a `loss_usd`
-# of `inf` -- which makes every loss comparison False -- or an `xh_exit_bps`
-# past 10 000, which floors an exit's anchor to zero and refuses the leg.
-# Written as (field, admits, domain) so a new bound is a row, not a branch.
-_SEALED_ENVELOPE_DOMAINS: tuple[tuple[str, Callable[[float], bool], str], ...] = (
-    ("loss_fraction", lambda value: 0 < value < 1, "in (0, 1)"),
-    # Excludes NaN and infinity as well as zero: `inf > 0` is True.
-    ("loss_usd", lambda value: 0 < value < float("inf"), "positive and finite"),
-    ("shadow_sessions", lambda value: value >= 1, "at least 1"),
-    ("arming_max_sessions", lambda value: value >= 1, "at least 1"),
-    ("xh_entry_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
-    ("xh_exit_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
-)
 
 
 class LiveArmingInvalid(ValueError):
@@ -366,9 +348,14 @@ def _validate_armed(record: LiveArmingRecord) -> None:
     # for the record's own four integers.
     if not _is_int(sealed.shadow_sessions) or not _is_int(sealed.arming_max_sessions):
         raise LiveArmingInvalid("live arming record's sealed envelope has invalid integer facts")
-    for name, admits, domain in _SEALED_ENVELOPE_DOMAINS:
-        if not admits(getattr(sealed, name)):
-            raise LiveArmingInvalid(f"live arming record's sealed {name} is not {domain}")
+    # The sealed values bound real money -- the loss limit the hold is raised on
+    # and cleared against, the allowance an extended leg is priced from -- and
+    # they arrive off disk without ever passing through ``AlpacaSettings``. The
+    # domain is the envelope's own (``live_envelope._ENVELOPE_DOMAINS``), asked
+    # for here rather than restated.
+    violation = envelope_domain_violation(sealed)
+    if violation is not None:
+        raise LiveArmingInvalid(f"live arming record's sealed {violation}")
     if sealed.sha != record.envelope_sha256:
         raise LiveArmingInvalid("live arming record's envelope sha does not match its sealed values")
     # The lapse count is the sealed envelope's, not a second number beside it.

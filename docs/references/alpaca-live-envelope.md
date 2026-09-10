@@ -76,33 +76,18 @@ notional cap, no symbol allowlist, no session restriction.
   - the loss limit the sync raises the hold on, and the one the guarded clear
     refuses against — `LiveEnvelopeSync.observe`;
   - the extended-hours allowance a program leg is priced from, entry and exit
-    alike — `sqlite/runtime.py::_leg_policy_in_force`, which resolves the
-    authority's `ProgramLegPolicy` per decision. The policy itself stays a
-    plain value and `shape_program_leg` a pure function of it; the authority,
-    which holds the envelope, is what applies the rule.
+    alike — `sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy`,
+    the one accessor that resolves the authority's `ProgramLegPolicy` against
+    the envelope. The policy itself stays a plain value and
+    `shape_program_leg` a pure function of it; the authority, which holds the
+    envelope, is what applies the rule. Resolved on the accessor rather than
+    at the pricing call so Start/Resume admission (`extended_hours_admission_fact`)
+    cannot answer off a different policy than the one that prices.
 
   The configured `values` stay the input to the two questions that are *about*
   the environment — `agreement`, and the arming snapshot's own disagreement
   check — and they are the fallback for an account no ceremony has ever armed,
   which has nothing sealed to prefer.
-- **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
-  to `None` when the arming inputs cannot be read (a corrupt ledger row, a
-  binding store that will not open), and *there* the fallback would be a
-  relaxation: loosen `ALPACA_LIVE_LOSS_USD`, corrupt the ledger, and the
-  account would be judged by the looser number. So
-  `LiveEnvelopeSync._seal_unreadable` makes such a tick unjudgeable — the
-  observation is withdrawn and every ENTER refuses `LIVE_ENVELOPE_UNOBSERVED`,
-  exactly as an unknown day P&L does. Extended-hours pricing takes the opposite
-  branch deliberately (see the allowances bullet below): an exit leaves the
-  account, so falling back can only help.
-- **Both arming inputs are read under one fault.** `ArmingRefresh` reads the
-  ledger *and* the runner's sealed bindings inside one `try`
-  (`sqlite/arming_refresh.py::_read_seals`), because a refresh holding only
-  half of them can describe neither. The bindings callable reaches disk, so an
-  `OSError` there is this module's own `LiveArmingInvalid` rather than an
-  escaping error — the guarded clear re-observes through this path, and an
-  unhandled error would answer HTTP 500 where the contract is "refused, the
-  hold stands".
 
   This used to be the other way around: the loss limit was computed from the
   configured values and the seal was only an equality gate. That was argued to
@@ -144,6 +129,28 @@ notional cap, no symbol allowlist, no session restriction.
   `DayPnl.known` is `False` — never zero — whenever an external order was
   observed on the account today, because its realized P&L was never
   journaled.
+- **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
+  to `None` when the arming inputs cannot be read (a corrupt ledger row, a
+  binding store that will not open), and *there* the fallback would be a
+  relaxation: loosen `ALPACA_LIVE_LOSS_USD`, corrupt the ledger, and the
+  account would be judged by the looser number. So
+  `LiveEnvelopeSync._seal_unreadable` makes such a tick unjudgeable — the
+  observation is withdrawn and every ENTER refuses `LIVE_ENVELOPE_UNOBSERVED`,
+  exactly as an unknown day P&L does. Extended-hours pricing takes the opposite
+  branch deliberately (see the allowances bullet below): an exit leaves the
+  account, so falling back can only help.
+- **Both arming inputs are read under one fault.** `ArmingRefresh` reads the
+  ledger *and* the runner's sealed bindings inside one `try`
+  (`sqlite/arming_refresh.py::_read_seals`), because a refresh holding only
+  half of them can describe neither. The bindings callable reaches disk, so an
+  `OSError` there is this module's own `LiveArmingInvalid` rather than an
+  escaping error — the guarded clear re-observes through this path, and an
+  unhandled error would answer HTTP 500 where the contract is "refused, the
+  hold stands". Note the cost: the clear endpoint now does the same
+  synchronous ledger + binding-store read the 15 s tap does, on the request. It
+  is a handful of small files today; if the fleet grows enough for that to
+  matter, the read moves off the request path, not the freshness rule.
+
 - **`last_equity`.** The loss limit is `min(loss_fraction × last_equity,
   loss_usd)`, both factors read off `LiveEnvelopeGate.in_force` — the sealed
   envelope where one exists. A broker snapshot with no `last_equity` leaves

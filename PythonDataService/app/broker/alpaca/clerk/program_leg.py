@@ -9,8 +9,8 @@ turns into a rejected receipt; a program leg is never guessed.
 
 Which allowance the policy carries is decided by the authority, not here: on
 the live world it is the one sealed at arming
-(``sqlite/runtime.py::_leg_policy_in_force``, ADR 0059 D3). This module is a
-pure function of the policy it is handed.
+(``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``, ADR 0059
+D3). This module is a pure function of the policy it is handed.
 """
 
 from __future__ import annotations
@@ -34,8 +34,9 @@ class ProgramLegPolicy:
     ``allowances`` is the pair this policy prices from — a plain value, so
     shaping a leg stays a pure function of its arguments. On the live world the
     authority re-resolves it against the sealed envelope per decision
-    (``sqlite/runtime.py::_leg_policy_in_force``); the pair built here from the
-    environment is what a paper or never-armed authority prices from.
+    (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
+    pair built here from the environment is what a paper or never-armed
+    authority prices from.
     """
 
     window: ExtendedHoursWindow | None

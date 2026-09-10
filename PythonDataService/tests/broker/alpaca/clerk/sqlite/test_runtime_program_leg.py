@@ -122,6 +122,7 @@ async def _enter(
     policy: ProgramLegPolicy,
     retained_source_bar: RetainedSourceBar | None,
     stream_health: StreamHealthGate | None = None,
+    live_envelope: LiveEnvelopeGate | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt."""
     repo = ClerkSqliteRepository.initialize(
@@ -137,6 +138,7 @@ async def _enter(
         account_mode="paper",
         program_leg_policy=policy,
         stream_health=stream_health,
+        live_envelope=live_envelope,
     )
     binding = _binding(use_rth=use_rth)
     await facade.register_strategy_run(binding)
@@ -221,6 +223,44 @@ async def test_an_extended_exit_decision_submits_a_marketable_day_limit_at_the_e
         True,
         "sell",
     )
+
+
+def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sides(
+    tmp_path: Path,
+) -> None:
+    """Entries are sealed like exits, and admission reads the policy that prices.
+
+    The owner's decision names entries *and* exits. The entry price cannot be
+    driven end-to-end the way the exit is — a live ENTER whose environment
+    differs from its seal is refused ``LIVE_ENVELOPE_DISAGREEMENT`` before it
+    is priced, and one with no fresh observation is refused
+    ``LIVE_ENVELOPE_UNOBSERVED`` — so what is pinned here is the accessor both
+    sides share. Start and Resume admission read it through
+    ``active_program_leg_policy``; ``_execute_effect`` prices from it (which
+    the extended-exit tests above prove end-to-end). One accessor is what stops
+    admission answering this policy's questions off a different object.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    armed = replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),
+        trade=_FakeTradePort(),
+        account_mode="paper",
+        # The composed policy's 10 / 20 bps is the pre-envelope answer, and the
+        # one a wrong wiring would give.
+        program_leg_policy=_EXTENDED_POLICY,
+        live_envelope=LiveEnvelopeGate(values=armed, sealed=armed, custody_is_simulated=False),
+    )
+    try:
+        policy = facade.program_leg_policy
+    finally:
+        repo.close()
+
+    assert policy.allowances == ExtendedHoursAllowances(
+        entry_bps=Decimal("30"), exit_bps=Decimal("40")
+    )
+    assert policy.window == _EXTENDED_POLICY.window
 
 
 async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged_edit(

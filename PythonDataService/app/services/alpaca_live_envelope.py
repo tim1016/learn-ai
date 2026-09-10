@@ -62,6 +62,27 @@ def _unobserved(
     )
 
 
+def _unjudgeable_detail(reading: EnvelopeReading) -> str:
+    """Why the account cannot be judged, in the operator's own sentence.
+
+    One predicate, two sentences, so the prose cannot drift from the diagnosis
+    the sync logs beside it (``_unknown_detail``'s
+    ``sealed_envelope_readable``). An operator sent to debug the broker feed
+    over a corrupt ``live_arming.jsonl`` loses the incident.
+    """
+    if not reading.seal_readable:
+        return (
+            "This account's arming inputs could not be read, so there is no sealed "
+            "loss limit to judge against. Repair the arming ledger, then clear again. "
+            "The hold stands."
+        )
+    return (
+        "Day P&L is unknown (an external order was seen today, or the broker "
+        "reported no previous-close equity, or a risk figure the broker "
+        "reported was not a finite number). The hold stands."
+    )
+
+
 def _from_reading(
     reading: EnvelopeReading,
     *,
@@ -123,13 +144,9 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reading,
             outcome="refused",
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
-            detail=(
-                "Day P&L is unknown (an external order was seen today, or the broker "
-                "reported no previous-close equity, or a risk figure the broker "
-                "reported was not a finite number). The hold stands."
-            ),
+            detail=_unjudgeable_detail(reading),
         )
-    limit_source = _SEALED_LIMIT if sync.envelope.sealed is not None else _CONFIGURED_LIMIT
+    limit_source = _SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT
     if reading.breached:
         return _from_reading(
             reading,

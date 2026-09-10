@@ -96,6 +96,11 @@ class EnvelopeReading:
     observation: AccountObservation
     day_pnl: DayPnl | None
     loss_limit_usd: float | None
+    # Whether this observation could read the account's arming inputs. Carried
+    # on the reading, not asked of the sync afterwards, because it is one of
+    # the four reasons the two figures above can be absent -- and the operator
+    # surface that reports "unknown" has to name the right one.
+    seal_readable: bool = True
 
     @property
     def breached(self) -> bool | None:
@@ -146,11 +151,11 @@ def _non_finite_risk_fields(
     )
 
 
-def _unknown_detail(reading: EnvelopeReading, *, seal_readable: bool) -> dict[str, Any]:
+def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     """Which fact left the account unjudgeable — the operator's whole diagnosis."""
     day_pnl = reading.day_pnl
     return {
-        "sealed_envelope_readable": seal_readable,
+        "sealed_envelope_readable": reading.seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
         "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
         "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
@@ -278,6 +283,7 @@ class LiveEnvelopeSync:
         # ``_noted_non_finite`` is evaluated first and unconditionally: it
         # deduplicates its own log against the previous observation, and
         # short-circuiting it would make that log depend on the seal.
+        seal_readable = not self._seal_unreadable()
         unjudgeable = (
             self._noted_non_finite(
                 _non_finite_risk_fields(
@@ -286,10 +292,11 @@ class LiveEnvelopeSync:
                     unrealized_pl=unrealized_pl_usd,
                 )
             )
-            or self._seal_unreadable()
+            or not seal_readable
         )
         reading = EnvelopeReading(
             observation=observation,
+            seal_readable=seal_readable,
             day_pnl=(
                 None
                 if unjudgeable
@@ -328,8 +335,8 @@ class LiveEnvelopeSync:
         ``LIVE_ENVELOPE_UNOBSERVED`` until the inputs read again.
 
         Pricing an extended-hours leg is the deliberate opposite
-        (``sqlite/runtime.py::_leg_policy_in_force``): it falls back and never
-        refuses, because an EXIT leaves the account.
+        (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``): it
+        falls back and never refuses, because an EXIT leaves the account.
         """
         return self._arming is not None and self._arming.inputs_unreadable
 
@@ -407,15 +414,10 @@ class LiveEnvelopeSync:
                 "hold_stands",
                 {}
                 if reading.breached is not None
-                else {
-                    "why": "the account is also unjudgeable",
-                    **_unknown_detail(reading, seal_readable=not self._seal_unreadable()),
-                },
+                else {"why": "the account is also unjudgeable", **_unknown_detail(reading)},
             )
         if reading.breached is None:
-            return self._acted(
-                "unknown", _unknown_detail(reading, seal_readable=not self._seal_unreadable())
-            )
+            return self._acted("unknown", _unknown_detail(reading))
         cause = _breach_cause(reading)
         if cause is None:
             return self._acted("observed", _observed_detail(reading))
