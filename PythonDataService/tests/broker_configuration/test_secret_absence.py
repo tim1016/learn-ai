@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.broker_configuration.records import CredentialSlotStatus, ObservedAccount
+from app.broker_configuration.records import ObservedAccount
 from app.broker_configuration.runtime import reset_broker_configuration_service_for_testing
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore, profiles_database_path
@@ -29,8 +29,8 @@ from tests.broker_configuration.conftest import (
     LIVE_ENVELOPE_PAYLOAD,
     OPERATOR_IDENTITY,
     FakeAccountVerifier,
-    FakeSlotDirectory,
     FrozenClock,
+    slot_directory_for_tests,
 )
 
 # Distinctive enough that a substring search cannot match by accident, and
@@ -52,9 +52,7 @@ async def client(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
         clock=clock,
-        credential_slots=FakeSlotDirectory(
-            CredentialSlotStatus(slot="alpaca_live_primary", label="Live — primary", available=True)
-        ),
+        credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(
             ObservedAccount(account_id="9LIVE0001", account_mode="live", account_status="ACTIVE")
         ),

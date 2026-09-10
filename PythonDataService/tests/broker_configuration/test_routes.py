@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.broker_configuration.records import CredentialSlotStatus, ObservedAccount
+from app.broker_configuration.records import ObservedAccount
 from app.broker_configuration.runtime import reset_broker_configuration_service_for_testing
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
@@ -27,9 +27,10 @@ from app.routers.broker_configuration import (
 from tests.broker_configuration.conftest import (
     LIVE_ENVELOPE_PAYLOAD,
     OPERATOR_IDENTITY,
+    TEST_CREDENTIAL_SLOTS,
     FakeAccountVerifier,
-    FakeSlotDirectory,
     FrozenClock,
+    slot_directory_for_tests,
 )
 
 PAPER_BODY = {"credential_slot": "alpaca_paper_primary", "endpoint_mode": "paper"}
@@ -43,9 +44,7 @@ async def client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[AsyncClie
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
         clock=clock,
-        credential_slots=FakeSlotDirectory(
-            CredentialSlotStatus(slot="alpaca_paper_primary", label="Paper — primary", available=True)
-        ),
+        credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(
             ObservedAccount(account_id="PA000PAPER", account_mode="paper", account_status="ACTIVE")
         ),
@@ -83,12 +82,13 @@ async def test_credential_slots_report_labels_and_availability_only(client: Asyn
     assert response.status_code == 200
     assert response.json()["slots"] == [
         {
-            "slot": "alpaca_paper_primary",
-            "label": "Paper — primary",
-            "available": True,
+            "slot": slot.slot,
+            "label": slot.label,
+            "available": slot.available,
             "verified_account_id": None,
             "verified_at_ms": None,
         }
+        for slot in TEST_CREDENTIAL_SLOTS
     ]
 
 
@@ -147,12 +147,12 @@ async def test_a_stale_revision_edit_returns_a_conflict_with_its_reason(
     profile_id = await _create_paper_profile(client)
     await client.post(
         f"{PREFIX}/profiles/{profile_id}/revisions",
-        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "second"},
+        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "alpaca_paper_secondary"},
     )
 
     stale = await client.post(
         f"{PREFIX}/profiles/{profile_id}/revisions",
-        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "third"},
+        json={"expected_revision": 1, **PAPER_BODY, "credential_slot": "alpaca_paper_tertiary"},
     )
 
     assert stale.status_code == 409

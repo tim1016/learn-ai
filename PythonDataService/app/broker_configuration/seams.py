@@ -22,10 +22,22 @@ one; the refusal it will produce is declared in ``errors.py``
 for C to raise, not left for C to invent. What this package guarantees is
 narrower and checkable: **it performs no environment lookup at all**, so a slot
 name it stores cannot reach one.
+
+``observe_accounts`` also carries the revision's ``live_envelope``. That was
+added by package D, the first package to *implement* the protocol, and the
+reason is a hard constraint rather than a convenience: an Alpaca runtime
+binding for a ``live`` endpoint mode cannot be constructed without all six
+envelope values — ``AlpacaSettings._enforce_mode_agreement`` refuses it — so a
+verifier handed only a slot and a mode could never observe the account of a
+live revision at all. The alternative was fabricating placeholder envelope
+values to get past the validator, which would put a number nobody chose on the
+live path (ADR 0059). The three parameters are now exactly the inputs a
+resolvable binding needs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from app.broker_configuration.errors import AccountVerificationFailed
@@ -44,10 +56,19 @@ class AccountVerifier(Protocol):
     """Read-only broker account discovery under one revision's mode.
 
     No submit, no cancel, no mutation of any kind (contract §3).
+
+    ``live_envelope`` carries the revision's six values under
+    ``LiveEnvelopeValues``' own field names, or ``None`` on a revision that
+    declares none. A ``live`` mode needs it to build a binding at all; a
+    ``paper`` mode ignores it.
     """
 
     async def observe_accounts(
-        self, *, credential_slot: str, endpoint_mode: EndpointMode
+        self,
+        *,
+        credential_slot: str,
+        endpoint_mode: EndpointMode,
+        live_envelope: Mapping[str, object] | None = None,
     ) -> tuple[ObservedAccount, ...]: ...
 
 
@@ -62,7 +83,11 @@ class UnconfiguredAccountVerifier:
     """No broker verifier is installed, so no account can be observed."""
 
     async def observe_accounts(
-        self, *, credential_slot: str, endpoint_mode: EndpointMode
+        self,
+        *,
+        credential_slot: str,
+        endpoint_mode: EndpointMode,
+        live_envelope: Mapping[str, object] | None = None,
     ) -> tuple[ObservedAccount, ...]:
         raise AccountVerificationFailed(
             "This build cannot verify a broker account: no account verifier is installed.",

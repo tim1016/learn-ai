@@ -44,11 +44,26 @@ def resolve_clerk_dir() -> Path:
 
 
 def build_service(*, clerk_dir: Path | None = None) -> BrokerConfigurationService:
-    """Open the profiles database and wrap it in the configuration service."""
+    """Open the profiles database and wrap it in the configuration service.
+
+    The two seams ``seams.py`` declares are filled here with their real
+    Alpaca-backed implementations (package D). The import is function-local
+    deliberately: it reaches ``app.broker.alpaca.profile`` and through it the
+    broker, and doing that at module scope would put the whole vendor stack
+    behind every import of this package — including the configuration router's,
+    which needs nothing from it to list profiles.
+    """
+    from app.broker_configuration.alpaca_seams import (
+        AlpacaAccountVerifier,
+        AlpacaCredentialSlotDirectory,
+    )
+
     root = resolve_clerk_dir() if clerk_dir is None else clerk_dir
     return BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=root),
         operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+        credential_slots=AlpacaCredentialSlotDirectory(),
+        account_verifier=AlpacaAccountVerifier(),
     )
 
 

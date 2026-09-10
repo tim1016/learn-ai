@@ -8,6 +8,7 @@ overwrite the first — the outcome contract §5 exists to prevent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -199,9 +200,13 @@ async def test_a_pin_recorded_during_verification_is_not_replaced(
         """A second writer binds the revision while verification is in flight."""
 
         async def observe_accounts(
-            self, *, credential_slot: str, endpoint_mode: EndpointMode
+            self,
+            *,
+            credential_slot: str,
+            endpoint_mode: EndpointMode,
+            live_envelope: Mapping[str, object] | None = None,
         ) -> tuple[ObservedAccount, ...]:
-            del credential_slot, endpoint_mode
+            del credential_slot, endpoint_mode, live_envelope
             with rival.transaction() as conn:
                 rival.write_account_pin(
                     conn,

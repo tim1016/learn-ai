@@ -32,6 +32,7 @@ from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import (
     AccountModeDisagreement,
     AccountPinMismatch,
+    CredentialSlotUnknown,
     DisplayNameConflict,
     ProfileArchived,
     ProfileInUse,
@@ -119,6 +120,18 @@ def _is_complete(
     if not credential_slot:
         return False
     return endpoint_mode != "live" or live_envelope is not None
+
+
+def _envelope_mapping(revision: ProfileRevision) -> dict[str, float | int] | None:
+    """One revision's envelope as the verifier's keyword argument.
+
+    ``None`` stays ``None``: a paper revision declaring no envelope must hand
+    the verifier nothing rather than an empty mapping, which the resolver would
+    read as "six values, all missing".
+    """
+    if revision.live_envelope is None:
+        return None
+    return revision.live_envelope.to_mapping()
 
 
 class BrokerConfigurationService:
@@ -212,6 +225,7 @@ class BrokerConfigurationService:
         live_envelope: ValidatedLiveEnvelope | None,
     ) -> ProfileWithRevision:
         """Create a profile and its revision 1 in one transaction."""
+        self._require_known_credential_slot(credential_slot)
         return self._create_profile(
             display_name=display_name,
             credential_slot=credential_slot,
@@ -309,6 +323,7 @@ class BrokerConfigurationService:
         N+1 — one would win on the primary key and the loser would surface a
         constraint error instead of the contract's ``revision_conflict``.
         """
+        self._require_known_credential_slot(credential_slot)
         profile = self._require_profile(profile_id)
         if profile.archived:
             raise ProfileArchived(
@@ -375,6 +390,7 @@ class BrokerConfigurationService:
         return await self._verifier.observe_accounts(
             credential_slot=stored.credential_slot,
             endpoint_mode=stored.endpoint_mode,
+            live_envelope=_envelope_mapping(stored),
         )
 
     async def pin_account(self, profile_id: str, revision: int, *, account_id: str) -> ProfileRevision:
@@ -389,6 +405,7 @@ class BrokerConfigurationService:
         observed = await self._verifier.observe_accounts(
             credential_slot=stored.credential_slot,
             endpoint_mode=stored.endpoint_mode,
+            live_envelope=_envelope_mapping(stored),
         )
         match = next((account for account in observed if account.account_id == account_id), None)
         if match is None:
@@ -764,6 +781,38 @@ class BrokerConfigurationService:
             ),
             author_owner_id=author_owner_id,
             created_at_ms=created_at_ms,
+        )
+
+    def _require_known_credential_slot(self, credential_slot: str) -> None:
+        """Refuse a slot the installed directory does not list (contract §6).
+
+        Package B stored an opaque string because the allowlist's shape was not
+        yet decided; package C decided it, and package D wires the directory in,
+        so a saved revision can now be refused at the moment it names a slot
+        that does not exist instead of at the moment a worker tries to bind it.
+
+        **The installed directory is the allowlist.** When no directory is
+        installed — ``UnconfiguredCredentialSlotDirectory``, the build package B
+        ships on its own — there is nothing to check a name against, and the
+        slot stays opaque exactly as it did before. That is not a hole: the
+        property contract §8 actually requires is that a slot off the allowlist
+        never reaches an environment lookup, and that is enforced
+        unconditionally by ``require_known_credential_slot`` inside package C,
+        which every binding passes through. This check buys an honest 422 at
+        save time rather than a refusal three steps later.
+        """
+        known = self._slots.list_slots()
+        if not known:
+            return
+        if any(status.slot == credential_slot for status in known):
+            return
+        raise CredentialSlotUnknown(
+            f"There is no credential slot named {credential_slot!r}.",
+            next_step=(
+                "Choose one of the available credential slots: "
+                + ", ".join(sorted(status.slot for status in known))
+                + "."
+            ),
         )
 
     def _require_profile(self, profile_id: str) -> BrokerProfile:

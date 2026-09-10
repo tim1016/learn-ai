@@ -6,7 +6,7 @@ a running container, a real Clerk volume, or a credential.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -56,17 +56,44 @@ class FakeSlotDirectory:
         return self._slots
 
 
+# Every slot name the tests in this package save a revision against. Package D
+# made the installed directory the allowlist a saved slot is checked against
+# (``service._require_known_credential_slot``), so a slot missing from here is
+# refused at save time — which is the point, but it means the fixtures must
+# name the slots they use in one place rather than per file.
+TEST_CREDENTIAL_SLOTS: tuple[CredentialSlotStatus, ...] = (
+    CredentialSlotStatus(slot="alpaca_paper_primary", label="Paper — primary", available=True),
+    CredentialSlotStatus(slot="alpaca_paper_secondary", label="Paper — secondary", available=True),
+    CredentialSlotStatus(slot="alpaca_paper_tertiary", label="Paper — tertiary", available=True),
+    CredentialSlotStatus(slot="alpaca_live_primary", label="Live — primary", available=True),
+)
+
+
+def slot_directory_for_tests() -> FakeSlotDirectory:
+    """A directory listing every slot this package's tests use."""
+    return FakeSlotDirectory(*TEST_CREDENTIAL_SLOTS)
+
+
 class FakeAccountVerifier:
     """Records what it was asked and answers with pre-set observations."""
 
     def __init__(self, *accounts: ObservedAccount) -> None:
         self.accounts = list(accounts)
         self.calls: list[tuple[str, str]] = []
+        # What the last call carried as the revision's envelope, so a test can
+        # assert a live revision's six values actually reach the verifier —
+        # without them, a live binding cannot be constructed at all.
+        self.envelopes: list[Mapping[str, object] | None] = []
 
     async def observe_accounts(
-        self, *, credential_slot: str, endpoint_mode: EndpointMode
+        self,
+        *,
+        credential_slot: str,
+        endpoint_mode: EndpointMode,
+        live_envelope: Mapping[str, object] | None = None,
     ) -> tuple[ObservedAccount, ...]:
         self.calls.append((credential_slot, endpoint_mode))
+        self.envelopes.append(live_envelope)
         return tuple(self.accounts)
 
 
@@ -98,9 +125,7 @@ def service(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
         clock=clock,
-        credential_slots=FakeSlotDirectory(
-            CredentialSlotStatus(slot="alpaca_paper_primary", label="Paper — primary", available=True)
-        ),
+        credential_slots=slot_directory_for_tests(),
         account_verifier=verifier,
     )
     yield built
