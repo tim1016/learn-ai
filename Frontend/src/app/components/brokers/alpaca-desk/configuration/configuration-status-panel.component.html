@@ -10,7 +10,7 @@
           <span
             class="status__mode"
             [class.status__mode--live]="effectiveEndpointMode() === 'live'"
-          >{{ effectiveEndpointMode() === null ? 'endpoint unread' : (effectiveEndpointMode() | receiptLabel) }}</span>
+          >{{ effectiveModeLabel() }}</span>
         </p>
         @if (current.effective_account_id; as accountId) {
           <p class="status__account">
@@ -40,7 +40,7 @@
           <span
             class="status__mode"
             [class.status__mode--live]="stagedEndpointMode() === 'live'"
-          >{{ stagedEndpointMode() === null ? 'endpoint unread' : (stagedEndpointMode() | receiptLabel) }}</span>
+          >{{ stagedModeLabel() }}</span>
         </p>
       } @else {
         <p class="status__value status__value--empty">Nothing is staged.</p>

@@ -5,7 +5,7 @@ import type {
   BrokerInstallationSelection,
   BrokerProfile,
 } from '../../../../api/alpaca.types';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { ReceiptLabelPipe, formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 
 /** How far apart staged and effective are, and therefore what is owed next. */
@@ -26,6 +26,15 @@ const DRIFT_MESSAGE: Readonly<Record<SelectionDrift, string>> = {
     + 'restart is what makes it effective.',
   'in-step': 'The staged revision is the one already effective.',
 };
+
+/**
+ * What one side's endpoint reads as. A mode the page has not read yet says so
+ * rather than falling back to `paper`: on this surface, guessing the quieter of
+ * the two is the one guess that could mislead an operator about real money.
+ */
+function modeLabel(mode: BrokerEndpointMode | null): string {
+  return mode === null ? 'endpoint unread' : formatReceiptLabel(mode);
+}
 
 /**
  * Staged and effective, side by side, and the Apply button between them.
@@ -83,6 +92,9 @@ export class ConfigurationStatusPanelComponent {
       && current.staged_revision === current.effective_revision;
     return sameAsEffective ? 'in-step' : 'staged-not-applied';
   });
+
+  protected readonly effectiveModeLabel = computed(() => modeLabel(this.effectiveEndpointMode()));
+  protected readonly stagedModeLabel = computed(() => modeLabel(this.stagedEndpointMode()));
 
   protected readonly driftMessage = computed(() => DRIFT_MESSAGE[this.drift()]);
 
