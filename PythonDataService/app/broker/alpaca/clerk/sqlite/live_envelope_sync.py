@@ -10,7 +10,8 @@ observe the account, publish or withdraw the observation, raise the loss
 hold — is this module's. The arming half (slice 7: read the ledger once,
 seal the envelope from it, refresh the per-instance gate) belongs to
 ``ArmingRefresh`` in ``sqlite/arming_refresh.py``; the sync holds one
-reference to it, calls it once per tick, and assigns ``envelope.sealed``
+reference to it, calls it once per observation -- ahead of the broker read,
+so the loss limit judged is the sealed one -- and assigns ``envelope.sealed``
 from what it returns.
 
 The sync raises the loss hold and never releases it: only the guarded
@@ -219,7 +220,15 @@ class LiveEnvelopeSync:
         self._observed_account_id: str | None = None
 
     async def observe(self) -> EnvelopeReading:
-        """One broker read → the day-P&L reading, and the gate's observation.
+        """One ledger read and one broker read → the day-P&L reading, and the gate's observation.
+
+        The ledger read comes first and is what seals the envelope, so the loss
+        limit below is the newest arming record's rather than whatever the
+        process booted with (ADR 0059 D3). It is inside ``observe`` and not only
+        in :meth:`tick` because the guarded operator clear re-observes through
+        this same method: judging a standing hold against a limit an operator
+        raised in the environment and never re-armed is exactly the drift the
+        seal exists to prevent.
 
         The observation is published only when the reading can be *judged*
         AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3),
@@ -237,6 +246,7 @@ class LiveEnvelopeSync:
         Raises ``BrokerError``: a failed read is not a verdict at all, so it
         never touches the gate and the last observation ages out on its own.
         """
+        self._refresh_arming()
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
@@ -281,7 +291,11 @@ class LiveEnvelopeSync:
             loss_limit_usd=(
                 None
                 if unjudgeable or account.last_equity is None
-                else loss_limit_usd(self.envelope.values, last_equity_usd=account.last_equity)
+                # The sealed envelope's limit, falling back to the configured
+                # one only where nothing has ever been armed: raising the hold
+                # and clearing it are the same judgement and must read the same
+                # number, and neither may follow an unarmed environment edit.
+                else loss_limit_usd(self.envelope.in_force, last_equity_usd=account.last_equity)
             ),
         )
         if reading.breached is False:
@@ -291,7 +305,12 @@ class LiveEnvelopeSync:
         return reading
 
     def _refresh_arming(self) -> None:
-        """Run the arming half of this tick, and seal the envelope from what it read."""
+        """Run the arming half of this observation, and seal the envelope from what it read.
+
+        Called from :meth:`observe`, ahead of the broker read, so every caller
+        of that method -- the cadence and the guarded operator clear alike --
+        judges against the seal the ledger holds right now.
+        """
         if self._arming is None:
             return
         self._assign_sealed(self._arming.refresh(self._repo.clock(), self.envelope.values))
@@ -329,7 +348,6 @@ class LiveEnvelopeSync:
         it with a later tick's numbers would churn the control revision and
         overwrite the evidence the operator is reading.
         """
-        self._refresh_arming()
         try:
             reading = await self.observe()
         except BrokerAccountModeDisagreement as exc:
@@ -337,9 +355,9 @@ class LiveEnvelopeSync:
             # authority was composed for. Withdraw the observation (no ENTER
             # bounds against it) and hold the gate under the disagreement's
             # own code. The hold is the gate's own sticky fault, so the
-            # refresh above may publish freely and the recovery below is not
-            # one tick late: this tick's read is what raises it and this
-            # tick's read is what releases it.
+            # arming refresh ``observe`` ran before the read may publish
+            # freely and the recovery below is not one tick late: this tick's
+            # read is what raises it and this tick's read is what releases it.
             self.envelope.withdraw()
             if self._arming_gate is not None:
                 self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))

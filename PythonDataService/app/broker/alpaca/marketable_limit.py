@@ -90,12 +90,23 @@ class ExtendedHoursAllowances:
     exit_bps: Decimal
 
     @classmethod
+    def from_bps(cls, *, entry_bps: float, exit_bps: float) -> ExtendedHoursAllowances:
+        """The pair as exact decimals, from whichever record holds the two numbers.
+
+        ``Decimal(str(x))``, never ``Decimal(x)``: the anchor must round the
+        allowance the operator wrote, not the binary float nearest to it.
+        Stated once here because the same two numbers reach this class from the
+        environment and from an arming record's sealed envelope.
+        """
+        return cls(entry_bps=Decimal(str(entry_bps)), exit_bps=Decimal(str(exit_bps)))
+
+    @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> ExtendedHoursAllowances | None:
         if settings.live_xh_entry_bps is None or settings.live_xh_exit_bps is None:
             return None
-        return cls(
-            entry_bps=Decimal(str(settings.live_xh_entry_bps)),
-            exit_bps=Decimal(str(settings.live_xh_exit_bps)),
+        return cls.from_bps(
+            entry_bps=settings.live_xh_entry_bps,
+            exit_bps=settings.live_xh_exit_bps,
         )
 
     @classmethod

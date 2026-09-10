@@ -174,6 +174,9 @@ async def test_the_composed_shadow_runtime_carries_a_simulated_custody_envelope_
     # envelope subtracts what this Clerk's own fills would have spent.
     assert runtime.envelope_sync.envelope.custody_is_simulated is True
     assert runtime.envelope_sync.envelope.values == TEST_ENVELOPE_VALUES
+    # And the same object the leg policy prices extended-session allowances
+    # from, so a re-arm moves the limit and the anchor together (ADR 0059 D3).
+    assert runtime.clerk.program_leg_policy.envelope is runtime.envelope_sync.envelope
 
 
 async def test_an_unobserved_envelope_refuses_the_enter_as_a_rejected_receipt_not_an_exception(

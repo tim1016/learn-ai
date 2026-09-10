@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 import pytest
 
@@ -249,6 +250,50 @@ async def test_a_mid_session_mode_disagreement_invalidates_the_gate_until_a_read
     await sync.tick()
     assert gate.invalid_reason_code is None
     assert gate.fresh_snapshot(T0) is not None
+
+
+async def test_the_hold_is_raised_against_the_sealed_limit_not_a_loosened_configured_one(
+    envelope_repo: ClerkSqliteRepository, tmp_path
+) -> None:
+    """Raising the hold and clearing it are one judgement, so both read the seal.
+
+    ADR 0059 D3: an operator who loosens ``ALPACA_LIVE_LOSS_*`` without
+    re-arming has not widened anything. The account is judged by the armed
+    envelope until the next ceremony -- which is also what makes the guarded
+    clear safe, since it re-observes through this same reading.
+    """
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    # limit = min(0.05 × 100,000, 5,000) = 5,000, and the day is -5,000: a
+    # breach of the sealed limit and not of the loosened 9,000 below.
+    broker = _LiveBroker(now_ms=T0, unrealized=-5_000.0)
+    sync = _sync(envelope_repo, ledger, ArmingGate(), {SID: SEAL}, broker=broker)
+    sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
+
+    assert await sync.tick() == "hold_raised"
+
+    assert sync.envelope.in_force == TEST_ENVELOPE_VALUES
+    assert sync.envelope.agreement == "disagreed"
+
+
+async def test_an_account_no_ceremony_has_armed_is_judged_by_the_configured_limit(
+    envelope_repo: ClerkSqliteRepository, tmp_path
+) -> None:
+    """The fallback, stated: an empty ledger seals nothing, so nothing overrides."""
+    broker = _LiveBroker(now_ms=T0, unrealized=-5_000.0)
+    sync = _sync(
+        envelope_repo,
+        LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT),
+        ArmingGate(),
+        {},
+        broker=broker,
+    )
+    sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
+
+    assert await sync.tick() == "observed"
+
+    assert sync.envelope.sealed is None
+    assert sync.envelope.in_force == sync.envelope.values
 
 
 async def test_without_a_gate_the_sync_only_seals_as_in_slice_6(

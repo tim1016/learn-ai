@@ -3,14 +3,18 @@
 Inside the regular session a program leg is a market DAY order, exactly as
 before this slice. Outside it — in the broker's declared PRE or POST window —
 the leg is a marketable DAY limit flagged for extended hours, anchored to the
-decision bar's close. Anything else (closed, no anchor, no window, no
-allowance) is a typed refusal the Clerk turns into a rejected receipt; a
-program leg is never guessed.
+decision bar's close and widened by the allowance in force — the sealed
+envelope's where an arming record exists, the configured one otherwise
+(``ProgramLegPolicy.allowances_in_force``). Anything else (closed, no anchor,
+no window, no allowance) is a typed refusal the Clerk turns into a rejected
+receipt; a program leg is never guessed.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
@@ -21,20 +25,39 @@ from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
 
+if TYPE_CHECKING:
+    # Type-only: ``clerk.live_envelope`` pulls in the SQLite package, whose
+    # repository imports ``EnvelopeReservation`` straight back out of it. This
+    # module is imported first by the composition root, so a runtime import
+    # here would close that cycle.
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class ProgramLegPolicy:
-    """What the active authority knows about shaping extended-session legs."""
+    """What the active authority knows about shaping extended-session legs.
+
+    ``envelope`` is the live world's risk envelope, or ``None`` where the
+    authority has none (paper, synthetic). It is held rather than copied from
+    because the arming ledger is re-read on the envelope sync's cadence: the
+    allowances a leg is priced from must be the ones sealed *now*, not the ones
+    that happened to be sealed when this authority was composed.
+    """
 
     window: ExtendedHoursWindow | None
     allowances: ExtendedHoursAllowances | None
+    envelope: LiveEnvelopeGate | None = None
 
     @classmethod
     def regular_only(cls) -> ProgramLegPolicy:
         return cls(window=None, allowances=None)
 
     @classmethod
-    def from_read_port(cls, read: BrokerReadPort) -> ProgramLegPolicy:
+    def from_read_port(
+        cls, read: BrokerReadPort, *, envelope: LiveEnvelopeGate | None = None
+    ) -> ProgramLegPolicy:
         """The policy an activated authority's own capability read implies.
 
         Both activation paths — the real paper Clerk and the ``sim:`` synthetic
@@ -44,6 +67,35 @@ class ProgramLegPolicy:
         return cls(
             window=read.capabilities().extended_hours_window,
             allowances=ExtendedHoursAllowances.from_environment(),
+            envelope=envelope,
+        )
+
+    def allowances_in_force(self) -> ExtendedHoursAllowances | None:
+        """The allowances a leg is priced from: the sealed envelope's, else configured.
+
+        ADR 0059 D3 seals ``xh_entry_bps`` and ``xh_exit_bps`` at arming with
+        every other envelope value, so a staged environment edit reaches an
+        entry or an exit only at the next re-arm (owner decision 2026-09-10).
+
+        Falling back is never a refusal. An EXIT must leave whatever the
+        environment says about seals — an account nobody has armed yet, a
+        ledger this tick could not verify — so an unsealed envelope prices from
+        the configured allowances and says so, rather than stranding a position
+        the operator is trying to close.
+        """
+        envelope = self.envelope
+        if envelope is None:
+            return self.allowances
+        sealed = envelope.sealed
+        if sealed is None:
+            logger.info(
+                "extended-hours allowances fall back to the configured values; "
+                "no arming record seals this account",
+                extra={"action": "extended_hours_allowances_unsealed"},
+            )
+            return self.allowances
+        return ExtendedHoursAllowances.from_bps(
+            entry_bps=sealed.xh_entry_bps, exit_bps=sealed.xh_exit_bps
         )
 
 
@@ -192,9 +244,10 @@ def shape_program_leg(
         return regular_session_shape(side)
     if phase not in TRADEABLE_EXTENDED_PHASES:
         raise ProgramLegRefused(session_closed_at_decision(phase))
-    if policy.allowances is None:
+    allowances = policy.allowances_in_force()
+    if allowances is None:
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
-    allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
+    allowance = allowances.entry_bps if purpose is EffectPurpose.ENTER else allowances.exit_bps
     try:
         price = marketable_limit_price(side=side, close=decision_bar.close, allowance_bps=allowance)
     except ValueError as exc:

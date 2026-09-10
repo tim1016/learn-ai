@@ -340,7 +340,9 @@ def extended_hours_admission_fact(
         state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"] = "NOT_REQUESTED"
     elif policy.window is None:
         state = "UNSUPPORTED"
-    elif policy.allowances is None:
+    elif policy.allowances_in_force() is None:
+        # The same question ``shape_program_leg`` asks per decision, so Start
+        # cannot admit a run whose first extended leg would be refused.
         state = "ALLOWANCE_UNSET"
     else:
         state = "READY"

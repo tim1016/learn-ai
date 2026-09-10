@@ -168,6 +168,25 @@ class LiveEnvelopeGate:
     def agreement(self) -> EnvelopeAgreement:
         return envelope_agreement(self.values, self.sealed)
 
+    @property
+    def in_force(self) -> LiveEnvelopeValues:
+        """The values every judgement is made against: the sealed ones, else configured.
+
+        ADR 0059 D3 seals every value at arming, so an edit to the environment
+        is a re-arm and never a silent drift. The loss limit a hold is raised on
+        and cleared against, and the allowance an extended-session leg is priced
+        from, are therefore the newest arming record's -- not whatever the
+        process happened to boot with. ``values`` is the fallback for an account
+        no ceremony has ever armed, which has nothing sealed to prefer; it is
+        never a *relaxation* of a seal, because a sealed envelope always wins
+        here.
+
+        ``values`` remains the right input for the two questions that are
+        *about* the configured half: ``agreement`` (does the environment still
+        match what was armed?) and the arming snapshot's own disagreement check.
+        """
+        return self.values if self.sealed is None else self.sealed
+
     def publish(self, observation: AccountObservation) -> None:
         self._observation = observation
 

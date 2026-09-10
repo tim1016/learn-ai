@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import (
     ProgramLegPolicy,
@@ -20,12 +23,18 @@ from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import to_ms_utc
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 
 _ET = ZoneInfo("America/New_York")
 _DAY = date(2026, 9, 2)
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20"))
 _POLICY = ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES)
+# Three distinguishable allowances, so a leg's price names which one priced it:
+# the sealed envelope's (30 / 40 bps), the environment's staged edit (500 bps),
+# and the policy's own configured pair (10 / 20 bps).
+_SEALED = replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0)
+_STAGED = replace(TEST_ENVELOPE_VALUES, xh_entry_bps=500.0, xh_exit_bps=500.0)
 
 
 def _bar(hour: int, minute: int, *, close: str = "100.00") -> RetainedSourceBar:
@@ -158,6 +167,71 @@ def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() 
         )
         == regular_session_shape(OrderSide.BUY)
     )
+
+
+@pytest.mark.parametrize(
+    ("side", "purpose", "expected_limit"),
+    [
+        (OrderSide.BUY, EffectPurpose.ENTER, 100.30),  # sealed entry allowance, 30 bps up
+        (OrderSide.SELL, EffectPurpose.EXIT, 99.60),  # sealed exit allowance, 40 bps down
+    ],
+)
+def test_an_extended_leg_is_priced_from_the_sealed_allowance_not_a_staged_edit(
+    side: OrderSide, purpose: EffectPurpose, expected_limit: float
+) -> None:
+    """ADR 0059 D3: an edited allowance reaches an entry or an exit at the re-arm.
+
+    The environment here carries a staged 500 bps that nobody armed. Pricing
+    from it would let an operator move a real-money limit by editing a file,
+    which is exactly the drift the seal exists to prevent -- and the policy's
+    own configured pair (10 / 20 bps) would be the pre-envelope answer, so a
+    wrong wiring cannot hide behind a plausible-looking price.
+    """
+    policy = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=_ALLOWANCES,
+        envelope=LiveEnvelopeGate(
+            values=_STAGED, sealed=_SEALED, custody_is_simulated=False
+        ),
+    )
+
+    shape = shape_program_leg(
+        side=side,
+        purpose=purpose,
+        use_rth=False,
+        decision_bar=_bar(18, 30),
+        policy=policy,
+    )
+
+    assert shape.limit_price == expected_limit
+
+
+def test_an_unsealed_envelope_prices_an_exit_from_the_configured_allowance_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An EXIT is never refused for want of a seal: it falls back and is logged.
+
+    A position an operator is trying to close must not be stranded because no
+    ceremony has armed this account yet, or because this tick could not verify
+    the ledger. The fallback is loud, not silent.
+    """
+    policy = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=_ALLOWANCES,
+        envelope=LiveEnvelopeGate(values=_STAGED, custody_is_simulated=False),
+    )
+
+    with caplog.at_level(logging.INFO):
+        shape = shape_program_leg(
+            side=OrderSide.SELL,
+            purpose=EffectPurpose.EXIT,
+            use_rth=False,
+            decision_bar=_bar(18, 30),
+            policy=policy,
+        )
+
+    assert shape.limit_price == 99.80  # the configured 20 bps, not the staged 500
+    assert [r for r in caplog.records if getattr(r, "action", None) == "extended_hours_allowances_unsealed"]
 
 
 def test_apply_uses_the_side_the_shape_was_priced_for() -> None:

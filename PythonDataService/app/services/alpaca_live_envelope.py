@@ -4,6 +4,13 @@
 hold was raised on and refuses while the breach still stands. The hold
 never clears on a timer or at session rollover; this is the only release.
 
+The limit it re-reads against is the envelope **sealed at arming** wherever
+an arming record exists (ADR 0059 D3): ``sync.observe()`` re-reads the
+arming ledger before it re-reads the account, so raising
+``ALPACA_LIVE_LOSS_USD`` in the environment and restarting cannot release a
+standing hold. Only a re-arm moves that number. An account no ceremony has
+ever armed has nothing sealed, and falls back to the configured values.
+
 Re-reading is not free of side effects: ``sync.observe()`` is the same call
 the background tap makes, so after ruling R-A′ it re-publishes the gate's
 observation only when the reading is judgeable AND not breached, and
@@ -24,6 +31,11 @@ from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 
 LIVE_ENVELOPE_LOSS_HOLD_STANDS = "LIVE_ENVELOPE_LOSS_HOLD_STANDS"
 LIVE_ENVELOPE_LOSS_HOLD_CLEARED = "LIVE_ENVELOPE_LOSS_HOLD_CLEARED"
+# Which envelope decided, said in the operator's own sentence. An operator who
+# has just raised a limit in the environment and is watching the hold refuse
+# anyway needs to read that the number is the armed one, not the edited one.
+_SEALED_LIMIT = "sealed at arming"
+_CONFIGURED_LIMIT = "configured in the environment"
 
 _ClearOutcome = Literal["cleared", "no_hold", "refused"]
 
@@ -117,6 +129,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
                 "reported was not a finite number). The hold stands."
             ),
         )
+    limit_source = _SEALED_LIMIT if sync.envelope.sealed is not None else _CONFIGURED_LIMIT
     if reading.breached:
         return _from_reading(
             reading,
@@ -124,7 +137,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_LOSS_HOLD_STANDS,
             detail=(
                 f"Day P&L {day_pnl.total_usd:.2f} USD is still at or below the "
-                f"{loss_limit_usd:.2f} USD loss limit. The hold stands."
+                f"{loss_limit_usd:.2f} USD loss limit {limit_source}. The hold stands."
             ),
         )
     released = resolve_account_hold(
@@ -145,7 +158,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
         reason_code=None,
         detail=(
             f"Loss hold cleared: day P&L {day_pnl.total_usd:.2f} USD is above the "
-            f"{loss_limit_usd:.2f} USD loss limit. New entries are admitted again."
+            f"{loss_limit_usd:.2f} USD loss limit {limit_source}. New entries are "
+            "admitted again."
         ),
     )
 
