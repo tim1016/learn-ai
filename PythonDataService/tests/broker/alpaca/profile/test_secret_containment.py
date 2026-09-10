@@ -15,6 +15,7 @@ import pytest
 
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.profile.credentials import (
+    CREDENTIAL_SLOTS,
     describe_credential_slots,
     resolve_credentials,
 )
@@ -40,7 +41,7 @@ from tests.broker.alpaca.profile.conftest import (
 )
 
 _EVERY_ERROR: tuple[BrokerProfileError, ...] = (
-    CredentialSlotUnknown(known_slots=("default", "live")),
+    CredentialSlotUnknown(known_slots=CREDENTIAL_SLOTS),
     CredentialSlotUnavailable("live"),
     RevisionIncomplete("its loss_usd is not stored as a number"),
     AccountVerificationFailed.from_broker_error(
@@ -48,8 +49,14 @@ _EVERY_ERROR: tuple[BrokerProfileError, ...] = (
     ),
     AccountVerificationFailed.not_observed(selected_account_id="PA3TESTACCOUNT"),
     AccountVerificationFailed.stale(age_ms=600_000, max_age_ms=300_000),
+    AccountVerificationFailed.dated_after_the_clock(),
     AccountModeDisagreement(endpoint_mode="live", credential_slot="live"),
-    AccountPinMismatch(pinned_account_id="PA3TESTACCOUNT", observed_account_id="PA9OTHER"),
+    AccountPinMismatch.on_reobservation(
+        pinned_account_id="PA3TESTACCOUNT", observed_account_ids=("PA9OTHER",)
+    ),
+    AccountPinMismatch.on_selection(
+        pinned_account_id="PA3TESTACCOUNT", selected_account_id="PA9OTHER"
+    ),
 )
 
 
@@ -65,8 +72,11 @@ def _assert_no_secret_in(text: str) -> None:
     """
     for secret in EVERY_FIXTURE_SECRET:
         assert secret not in text
-        # A leading fragment is as disqualifying as the whole value.
-        assert secret[: len(secret) // 2] not in text
+        # Eight characters, not half the value: Pydantic truncates an echoed
+        # ``input_value`` to a short prefix, and a check tuned to long
+        # fragments would pass straight over that leak. Each fixture opens
+        # with its own distinctive token so this cannot false-positive.
+        assert secret[:8] not in text
 
 
 def test_resolved_credentials_mask_themselves_in_repr_and_str() -> None:

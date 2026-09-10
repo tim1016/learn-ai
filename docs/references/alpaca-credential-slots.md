@@ -43,21 +43,46 @@ would be a fact about the injected secrets that the contract does not admit, so
 a half-injected slot (or one whose value is blank or whitespace) reports
 `available: false` and refuses resolution rather than half-resolving.
 
-Secret hygiene is asserted, not assumed (contract §8):
+Secret hygiene is asserted, not assumed (contract §8). Two pre-existing leaks
+were found by the independent security review of this package and closed here:
 
-- `ResolvedCredentials` holds both halves as `SecretStr`, so the dataclass
-  `repr` — and anything that reaches one — shows a mask. `key_id()` and
-  `secret_key()` are the two deliberate unwrap sites, called only when handing
-  the value to the SDK.
-- `AlpacaSettings.api_key_id` / `.api_secret_key` gained `Field(repr=False)`.
-  **This closed a real pre-existing leak**: Pydantic's generated `__repr__` and
-  `__str__` printed both values, so any log line or f-string that reached a
-  settings object printed the live API key.
+- **`AlpacaSettings` printed and serialised both credential values.** Pydantic's
+  generated `__repr__`/`__str__` printed them, and `model_dump()`,
+  `model_dump_json()` and `dict()` returned them in the clear — so any log line,
+  f-string, or payload that reached a settings object carried the live API key.
+  Both fields are now `SecretStr` with `Field(repr=False)`: `repr`/`str` omit
+  them and every serialisation renders `**********`. `.get_secret_value()` is
+  the single greppable unwrap idiom, called at exactly four places — the SDK
+  client, the two websocket auth frames, and the HITL capture script. `repr=False`
+  alone would have closed only one of those five surfaces.
+- **A refused revision leaked a credential fragment into the traceback.**
+  Pydantic captures the *raw input* in a failed validation's `input_value`, and
+  for a model-level validator that input is the whole kwargs dict with
+  `loc == ()` — so a per-field filter could not see it, and the fragment reached
+  `__cause__`, `traceback.format_exception`, and any `logger.exception`. Two
+  changes close it: the resolver hands `AlpacaSettings` the `SecretStr` objects
+  still wrapped, so the worst case renders `SecretStr('**********')`, and the
+  exception chain is severed outright (`raise … from None`).
+  `alpaca_configuration_error_detail` keeps only Pydantic's `msg` text, which
+  never echoes the input, so nothing diagnostic is lost.
+
+The rest:
+
+- `ResolvedCredentials` holds both halves as `SecretStr`; they go into
+  `AlpacaSettings` still wrapped and are never unwrapped in this package.
 - `AlpacaRuntimeContext` defines its own `__repr__` naming only profile id,
   revision, mode, slot label and account pin.
 - Every error's prose, `next_step`, and `as_detail()` payload is authored from
   constants, allowlisted slot labels, endpoint modes and broker account IDs.
-  A rejected slot name is deliberately **not** echoed back.
+  The **echo policy** is stated once in `profile/errors.py`: request-supplied
+  text (a rejected slot name) is never reflected into rendered prose; field
+  names read out of the profiles database are, because naming them is the only
+  way an operator can tell which stored row needs repairing. Neither echoes a
+  value.
+- "Never a length" holds structurally rather than by substring search: the
+  availability payload's fields are exactly `{slot, available}` and an error's
+  detail is exactly `{reason, message, next_step}`, and both shapes are pinned
+  by tests. There is nowhere for a length to be reported.
 
 ## The resolved runtime context
 
@@ -90,7 +115,17 @@ violates contract §2.4. The resolver asks each stored value for its Python type
 by name first — the same `type(value) is int` test `clerk/live_arming.py`
 applies to a sealed record — and refuses anything else as `revision_incomplete`.
 An `int` supplied for a `float` field is accepted and normalised to `float`,
-which is exactly the "convert explicitly on load" the contract asks for.
+which is exactly the "convert explicitly on load" the contract asks for. Which
+fields are the integer ones is **derived** from `LiveEnvelopeValues`' own
+annotations, not hand-listed: a hand-listed split would drift silently the next
+time a field is added or retyped, and drift there changes the `sha` every
+historical arming record is sealed over.
+
+A `live` revision with no envelope at all is refused **in profile vocabulary**,
+before settings are constructed. Letting `_enforce_mode_agreement` refuse it
+downstream would have rendered *its* message to the operator — a message naming
+six environment variables and ending "Refusing to start", which is precisely the
+ADR 0059 environment-source rule ADR 0060 supersedes, on a request-time 422.
 
 Every live field is passed to `AlpacaSettings` explicitly, `None` included, so a
 stale `ALPACA_LIVE_*` left in the environment cannot contribute a value to a
@@ -111,10 +146,16 @@ constraints and `base_url`/`is_paper`/`is_live` derivation all remain in
 
 `verify_account()` observes which broker account a context's credentials and
 mode actually reach. It talks to `AccountDiscoveryPort`, a `Protocol` declaring
-exactly one method, `get_account`. **A port that cannot name `submit` or
-`cancel` cannot call them**, which makes "verification performs no mutation" a
-structural fact rather than a review finding; a test pins the protocol's method
-set and a recording double asserts nothing else was reached for.
+exactly one method, `get_account`.
+
+The claim "verification performs no mutation" is structural, not a convention —
+but only because the **default** port is narrowed too. `AlpacaBroker` implements
+the trade port, so handing one straight to a read-only ceremony would have made
+this a claim about discipline enforced by an annotation that nothing type-checks
+(this repo runs no mypy). `_BrokerAccountDiscovery` wraps it down to the single
+read, so the object verification actually holds exposes no `submit` and no
+`cancel`. Tests assert that of the default port, and a recording double asserts
+nothing but `get_account` was reached for on the injected path.
 
 Alpaca issues one account per credential pair, so a successful discovery yields
 exactly one candidate. The result is still a tuple, because the contract's
@@ -143,16 +184,35 @@ is still the one they are looking at. It bounds a UI ceremony, not risk — no
 envelope value derives from it, so ADR 0059's no-defaults-in-code rule for
 risk-envelope values does not reach it.
 
+**Both** pin functions enforce it. The independent security review caught the
+stronger guard sitting on the weaker gate: `reverify_pinned_account` is what
+authorises binding a real account at apply and at startup, and without a
+freshness bound a caller replaying a cached verification would have satisfied
+the contract's "re-observed at apply and at startup" with a fact of any age. An
+observation dated *after* the reading clock is its own refusal, separate from
+"too old", because it is a different operator problem: nothing is stale, the
+clocks disagree.
+
+`AccountPin.pinned_at_ms` is when the pin was recorded, not when the account was
+seen — contract §2.3's field is `account_pinned_at_ms`, and two pins minted from
+one observation are two events.
+
 ## The interface Package D calls
 
 ```python
 from app.broker.alpaca.profile import (
-    describe_credential_slots,      # () -> tuple[CredentialSlotAvailability, ...]
-    resolve_credentials,            # (slot) -> ResolvedCredentials
-    resolve_runtime_context,        # (endpoint_mode, credential_slot, live_envelope=None, ...) -> AlpacaRuntimeContext
-    verify_account,                 # async (context, discovery=None) -> AccountVerification
-    pin_observed_account,           # (verification, selected_account_id, existing_pin=None) -> AccountPin
-    reverify_pinned_account,        # (verification, pinned_account_id) -> ObservedAccount
+    is_known_credential_slot,       # (slot) -> bool                     — no raise, no env read
+    require_known_credential_slot,  # (slot) -> str                      — raises CredentialSlotUnknown
+    credential_slot_available,      # (slot, *, environment=None) -> bool
+    describe_credential_slots,      # (*, environment=None) -> tuple[CredentialSlotAvailability, ...]
+    resolve_credentials,            # (slot, *, environment=None) -> ResolvedCredentials
+    resolve_runtime_context,        # (*, endpoint_mode, credential_slot, live_envelope=None,
+                                    #    account_pin=None, profile_id=None, revision=None,
+                                    #    environment=None) -> AlpacaRuntimeContext
+    verify_account,                 # async (context, *, discovery=None) -> AccountVerification
+    pin_observed_account,           # (verification, *, selected_account_id, existing_pin=None,
+                                    #    now_ms=None) -> AccountPin
+    reverify_pinned_account,        # (verification, *, pinned_account_id, now_ms=None) -> ObservedAccount
 )
 ```
 
@@ -178,6 +238,20 @@ capability descriptor and for the account mode it hands the adapter, while
 context would still have read another configuration's mode. The lazy fallback is
 unchanged, so the port is still registered at startup on a credential-free
 service.
+
+A broker and its client are **one** binding: passing both a client and settings
+that disagree is refused at construction, because the port would otherwise stamp
+its own mode on a snapshot the client fetched from the other mode's endpoint.
+`AlpacaTradingClient.bound_settings` exposes what a client is bound to so that
+check can be made without reaching into a private attribute.
+
+**Not changed, deliberately:** verification's default path reaches the shared
+capture journal, so verifying an unbound draft deposits an account capture
+alongside the effective binding's. The capture hook records only method, URL and
+body and never auth headers, so this is a provenance question rather than a leak;
+journaling every broker response verbatim is the repo's existing audit posture,
+and scoping a separate journal for ceremonies is a change Package D or E should
+make deliberately if the smear matters.
 
 `live_envelope._SETTINGS_FIELDS` became `ENVELOPE_SETTINGS_FIELDS`. The resolver
 builds settings from stored envelope values through the same pairing

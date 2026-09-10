@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, get_type_hints
 
 from pydantic import ValidationError
 
@@ -63,14 +63,15 @@ LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = tuple(
     field for field, _ in ENVELOPE_SETTINGS_FIELDS
 )
 
-# The two counts that must round-trip as exactly ``int``; the rest are floats.
+# The counts that must round-trip as exactly ``int``; every other field is a
+# float. Derived from the dataclass's own annotations rather than hand-listed:
+# a hand-listed split would drift silently if a field's type changed or a
+# seventh were added, and drift here changes the ``sha`` — which every arming
+# record already in an operator's ledger is sealed over (contract §2.4).
 _INTEGER_ENVELOPE_FIELDS: Final[frozenset[str]] = frozenset(
-    {"shadow_sessions", "arming_max_sessions"}
-)
-
-# The ``AlpacaSettings`` fields that hold secret material.
-_CREDENTIAL_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
-    {"api_key_id", "api_secret_key"}
+    name
+    for name, hint in get_type_hints(LiveEnvelopeValues).items()
+    if hint is int
 )
 
 # What a revision with no live envelope hands ``AlpacaSettings``: every live
@@ -208,6 +209,16 @@ def resolve_runtime_context(
     """
     if endpoint_mode not in ("paper", "live"):
         raise RevisionIncomplete("its endpoint mode is neither 'paper' nor 'live'")
+    if endpoint_mode == "live" and live_envelope is None:
+        # Refused here, in profile vocabulary, rather than by letting
+        # ``_enforce_mode_agreement`` refuse downstream: that validator's
+        # message names six environment variables and says "Refusing to start",
+        # which is ADR 0059's environment-source rule — exactly the rule
+        # ADR 0060 supersedes — and contract §6 renders ``message`` verbatim.
+        raise RevisionIncomplete(
+            "a live revision carries all six live envelope values and this one "
+            "carries none"
+        )
 
     credentials = resolve_credentials(credential_slot, environment=environment)
     envelope_settings = (
@@ -218,24 +229,23 @@ def resolve_runtime_context(
 
     try:
         settings = AlpacaSettings(
-            api_key_id=credentials.key_id(),
-            api_secret_key=credentials.secret_key(),
+            # The ``SecretStr`` objects go in unwrapped-never. Pydantic captures
+            # the *raw input* in a failed validation's ``input_value``, and for
+            # a model-level validator that input is the whole kwargs dict with
+            # ``loc == ()`` — so no per-field inspection could have filtered it.
+            # Handing it ``SecretStr`` means the worst case renders
+            # ``SecretStr('**********')``.
+            api_key_id=credentials.api_key_id,
+            api_secret_key=credentials.api_secret_key,
             mode=endpoint_mode,
             **envelope_settings,
         )
     except ValidationError as exc:
-        detail = alpaca_configuration_error_detail(exc)
-        credential_touched = any(
-            _CREDENTIAL_SETTINGS_FIELDS.intersection(error.get("loc", ()))
-            for error in exc.errors()
-        )
-        # ``str(ValidationError)`` echoes ``input_value``, so a failure naming a
-        # credential field must not survive in the traceback chain. It is
-        # unreachable today — both halves are non-empty by construction above
-        # and ``min_length=1`` is their only bound — and severed rather than
-        # argued about. ``alpaca_configuration_error_detail`` keeps only the
-        # ``msg`` text, which never carries the input.
-        raise RevisionIncomplete(detail) from (None if credential_touched else exc)
+        # ...and the chain is severed regardless, so no traceback frame can
+        # carry the input at all. ``alpaca_configuration_error_detail`` keeps
+        # only Pydantic's ``msg`` text, which never echoes the input, so the
+        # detail below is the whole diagnostic a caller needs.
+        raise RevisionIncomplete(alpaca_configuration_error_detail(exc)) from None
 
     return AlpacaRuntimeContext(
         settings=settings,

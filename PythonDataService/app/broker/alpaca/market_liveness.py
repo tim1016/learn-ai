@@ -353,8 +353,8 @@ async def alpaca_market_status_frames(settings: AlpacaSettings) -> AsyncIterator
             json.dumps(
                 {
                     "action": "auth",
-                    "key": settings.api_key_id,
-                    "secret": settings.api_secret_key,
+                    "key": settings.api_key_id.get_secret_value(),
+                    "secret": settings.api_secret_key.get_secret_value(),
                 }
             )
         )

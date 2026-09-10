@@ -41,7 +41,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeGuard
+from typing import Final, TypeGuard
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -53,8 +53,6 @@ from app.broker.alpaca.profile.errors import (
 
 CREDENTIAL_SLOT_DEFAULT: Final = "default"
 CREDENTIAL_SLOT_LIVE: Final = "live"
-
-CredentialSlot = Literal["default", "live"]
 
 # slot → the two ``AlpacaCredentialEnvironment`` field names holding its pair.
 # Field names, not environment-variable names: the settings class owns the
@@ -98,22 +96,15 @@ class ResolvedCredentials:
     """One slot's injected pair, resolved for exactly one runtime binding.
 
     Held as ``SecretStr`` so the dataclass ``repr`` — and therefore any log
-    line, traceback frame, or f-string that reaches one — shows a mask.
-    :meth:`key_id` / :meth:`secret_key` are the two deliberate call sites that
-    unwrap the value, at the point of handing it to the SDK.
+    line, traceback frame, or f-string that reaches one — shows a mask. These
+    go into ``AlpacaSettings`` still wrapped; ``.get_secret_value()`` is the
+    single greppable unwrap idiom, and it is called only where the vendor SDK
+    or a websocket auth frame needs the plaintext.
     """
 
     slot: str
     api_key_id: SecretStr
     api_secret_key: SecretStr
-
-    def key_id(self) -> str:
-        """The plain key id, for handing to the vendor SDK. Never log this."""
-        return self.api_key_id.get_secret_value()
-
-    def secret_key(self) -> str:
-        """The plain secret key, for handing to the vendor SDK. Never log this."""
-        return self.api_secret_key.get_secret_value()
 
 
 @dataclass(frozen=True)
@@ -242,7 +233,6 @@ __all__ = [
     "CREDENTIAL_SLOT_DEFAULT",
     "CREDENTIAL_SLOT_LIVE",
     "AlpacaCredentialEnvironment",
-    "CredentialSlot",
     "CredentialSlotAvailability",
     "ResolvedCredentials",
     "credential_slot_available",

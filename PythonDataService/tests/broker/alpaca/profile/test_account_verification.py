@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import pytest
 
+from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.profile.account_verification import (
     ACCOUNT_VERIFICATION_MAX_AGE_MS,
-    AccountDiscoveryPort,
     AccountPin,
     AccountVerification,
     ObservedAccount,
+    _BrokerAccountDiscovery,
     pin_observed_account,
     reverify_pinned_account,
     verify_account,
@@ -129,12 +130,39 @@ def _verification(
 # ── Discovery is read-only ──────────────────────────────────────────────────
 
 
-def test_the_discovery_port_can_express_nothing_but_a_read() -> None:
-    methods = {
-        name for name in AccountDiscoveryPort.__protocol_attrs__ if not name.startswith("_")
-    }
+class _ReadOnlyDouble:
+    """Exposes one read method and nothing else — no submit, no cancel."""
 
-    assert methods == {"get_account"}
+    def __init__(self, snapshot: BrokerAccountSnapshot) -> None:
+        self._snapshot = snapshot
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return self._snapshot
+
+
+async def test_verification_needs_nothing_but_a_read_method() -> None:
+    double = _ReadOnlyDouble(_snapshot())
+
+    assert not hasattr(double, "submit")
+    assert not hasattr(double, "cancel")
+
+    verification = await verify_account(_paper_context(), discovery=double)
+
+    assert verification.candidates[0].account_id == _PAPER_ACCOUNT_ID
+
+
+def test_the_default_discovery_port_exposes_no_mutating_method() -> None:
+    """The default is a narrowing adapter, not the full trade port.
+
+    ``AlpacaBroker`` implements ``submit`` and ``cancel``; handing one straight
+    to a read-only ceremony would make "verification performs no mutation" a
+    claim about discipline. The adapter makes it a claim about the object.
+    """
+    port = _BrokerAccountDiscovery(AlpacaBroker())
+
+    assert not hasattr(port, "submit")
+    assert not hasattr(port, "cancel")
+    assert callable(port.get_account)
 
 
 async def test_verify_account_observes_one_candidate_and_calls_nothing_else() -> None:
@@ -206,7 +234,7 @@ async def test_a_live_revision_verifies_against_its_own_slot_credentials() -> No
 
     assert verification.credential_slot == "live"
     assert verification.endpoint_mode == "live"
-    assert context.settings.api_key_id == LIVE_SLOT_KEY
+    assert context.settings.api_key_id.get_secret_value() == LIVE_SLOT_KEY
 
 
 # ── Pinning ─────────────────────────────────────────────────────────────────
@@ -222,7 +250,8 @@ def test_pinning_an_observed_account_records_it_against_the_observed_mode() -> N
     assert pin == AccountPin(
         account_id=_PAPER_ACCOUNT_ID,
         endpoint_mode="paper",
-        pinned_at_ms=_OBSERVED_AT_MS,
+        # When the pin was recorded, not when the account was seen.
+        pinned_at_ms=_OBSERVED_AT_MS + 1_000,
     )
 
 
@@ -250,7 +279,7 @@ def test_selecting_a_different_account_than_the_pin_refuses_and_keeps_the_pin() 
         )
 
     assert info.value.pinned_account_id == _PAPER_ACCOUNT_ID
-    assert info.value.observed_account_id == _OTHER_PAPER_ACCOUNT_ID
+    assert info.value.contradicting_account_ids == (_OTHER_PAPER_ACCOUNT_ID,)
     assert "unchanged" in info.value.message
 
 
@@ -286,7 +315,9 @@ def test_a_stale_verification_cannot_justify_a_pin(now_ms: int) -> None:
 
 
 def test_reverification_confirms_a_pin_and_returns_only_an_observation() -> None:
-    observed = reverify_pinned_account(_verification(), pinned_account_id=_PAPER_ACCOUNT_ID)
+    observed = reverify_pinned_account(
+        _verification(), pinned_account_id=_PAPER_ACCOUNT_ID, now_ms=_OBSERVED_AT_MS + 1_000
+    )
 
     assert isinstance(observed, ObservedAccount)
     assert not isinstance(observed, AccountPin)
@@ -309,7 +340,9 @@ async def test_rotating_a_secret_for_the_same_account_leaves_the_pin_alone() -> 
     )
 
     verification = await verify_account(rotated, discovery=discovery)
-    observed = reverify_pinned_account(verification, pinned_account_id="123456789")
+    observed = reverify_pinned_account(
+        verification, pinned_account_id="123456789", now_ms=_OBSERVED_AT_MS + 1_000
+    )
 
     assert rotated.account_pin == "123456789"
     assert observed.account_id == rotated.account_pin
@@ -319,8 +352,29 @@ def test_reverification_against_a_different_account_refuses_without_replacing_th
     verification = _verification(account_id=_OTHER_PAPER_ACCOUNT_ID)
 
     with pytest.raises(AccountPinMismatch) as info:
-        reverify_pinned_account(verification, pinned_account_id=_PAPER_ACCOUNT_ID)
+        reverify_pinned_account(
+            verification, pinned_account_id=_PAPER_ACCOUNT_ID, now_ms=_OBSERVED_AT_MS + 1_000
+        )
 
     assert info.value.reason == "account_pin_mismatch"
     assert info.value.pinned_account_id == _PAPER_ACCOUNT_ID
+    assert info.value.contradicting_account_ids == (_OTHER_PAPER_ACCOUNT_ID,)
     assert "new revision" in info.value.next_step
+
+
+@pytest.mark.parametrize(
+    "now_ms",
+    [
+        _OBSERVED_AT_MS + ACCOUNT_VERIFICATION_MAX_AGE_MS + 1,
+        _OBSERVED_AT_MS - 1,
+    ],
+    ids=["too-old", "dated-after-the-clock"],
+)
+def test_reverification_refuses_a_stale_observation(now_ms: int) -> None:
+    # This is the gate that authorises binding a real account at apply and at
+    # startup, so replaying a cached verification must not satisfy it. It holds
+    # the same bound the pinning ceremony does.
+    with pytest.raises(AccountVerificationFailed):
+        reverify_pinned_account(
+            _verification(), pinned_account_id=_PAPER_ACCOUNT_ID, now_ms=now_ms
+        )

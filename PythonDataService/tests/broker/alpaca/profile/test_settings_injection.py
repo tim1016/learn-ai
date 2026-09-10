@@ -145,4 +145,25 @@ def test_a_broker_hands_its_injected_settings_to_the_client_it_builds() -> None:
     client = AlpacaBroker(settings=context.settings)._client
 
     assert isinstance(client, AlpacaTradingClient)
-    assert client._settings is context.settings
+    assert client.bound_settings is context.settings
+
+
+def test_a_broker_refuses_settings_that_disagree_with_its_client() -> None:
+    # A broker and its client are one binding. Accepting two would let the port
+    # stamp one mode on a snapshot the client fetched from the other mode's
+    # endpoint — the cross-contamination injected settings exist to prevent.
+    paper = _context("paper")
+    live = _context("live")
+
+    with pytest.raises(ValueError, match="one binding"):
+        AlpacaBroker(AlpacaTradingClient(settings=paper.settings), settings=live.settings)
+
+
+def test_a_broker_accepts_a_client_bound_to_the_same_settings() -> None:
+    context = _context("live")
+
+    broker = AlpacaBroker(
+        AlpacaTradingClient(settings=context.settings), settings=context.settings
+    )
+
+    assert broker.capabilities() is ALPACA_LIVE_CAPABILITIES

@@ -58,8 +58,8 @@ def test_resolve_credentials_default_slot_returns_the_legacy_pair(
     resolved = resolve_credentials("default", environment=both_slots_injected)
 
     assert resolved.slot == "default"
-    assert resolved.key_id() == DEFAULT_SLOT_KEY
-    assert resolved.secret_key() == DEFAULT_SLOT_SECRET
+    assert resolved.api_key_id.get_secret_value() == DEFAULT_SLOT_KEY
+    assert resolved.api_secret_key.get_secret_value() == DEFAULT_SLOT_SECRET
 
 
 def test_resolve_credentials_live_slot_returns_the_dedicated_pair(
@@ -68,8 +68,8 @@ def test_resolve_credentials_live_slot_returns_the_dedicated_pair(
     resolved = resolve_credentials("live", environment=both_slots_injected)
 
     assert resolved.slot == "live"
-    assert resolved.key_id() == LIVE_SLOT_KEY
-    assert resolved.secret_key() == LIVE_SLOT_SECRET
+    assert resolved.api_key_id.get_secret_value() == LIVE_SLOT_KEY
+    assert resolved.api_secret_key.get_secret_value() == LIVE_SLOT_SECRET
 
 
 def test_two_slots_resolve_distinct_pairs_without_cross_contamination(
@@ -78,9 +78,9 @@ def test_two_slots_resolve_distinct_pairs_without_cross_contamination(
     default = resolve_credentials("default", environment=both_slots_injected)
     live = resolve_credentials("live", environment=both_slots_injected)
 
-    assert {default.key_id(), live.key_id()} == {DEFAULT_SLOT_KEY, LIVE_SLOT_KEY}
-    assert default.key_id() != live.key_id()
-    assert default.secret_key() != live.secret_key()
+    assert {default.api_key_id.get_secret_value(), live.api_key_id.get_secret_value()} == {DEFAULT_SLOT_KEY, LIVE_SLOT_KEY}
+    assert default.api_key_id.get_secret_value() != live.api_key_id.get_secret_value()
+    assert default.api_secret_key.get_secret_value() != live.api_secret_key.get_secret_value()
 
 
 def test_resolve_credentials_reads_the_slot_pair_from_the_environment(
@@ -94,8 +94,8 @@ def test_resolve_credentials_reads_the_slot_pair_from_the_environment(
         "live", environment=AlpacaCredentialEnvironment(_env_file=None)
     )
 
-    assert resolved.key_id() == LIVE_SLOT_KEY
-    assert resolved.secret_key() == LIVE_SLOT_SECRET
+    assert resolved.api_key_id.get_secret_value() == LIVE_SLOT_KEY
+    assert resolved.api_secret_key.get_secret_value() == LIVE_SLOT_SECRET
 
 
 @pytest.mark.parametrize(

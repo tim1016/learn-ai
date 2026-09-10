@@ -11,9 +11,17 @@ Frontend renders through the shared ``receiptLabel`` pipe; ``message`` and
 carries a credential value, a fragment, a length, or an environment-variable
 name. The only identifiers that appear are slot labels (allowlisted constants),
 endpoint modes, and broker account IDs — all non-secret audit facts the
-contract already preserves verbatim in evidence. A rejected *slot name* is
-deliberately not echoed: it is caller-supplied text, the caller already knows
-what it sent, and reflecting it buys nothing.
+contract already preserves verbatim in evidence.
+
+**Echo policy**, stated once so the two cases do not read as inconsistent. Text
+that arrived on the *request* is never reflected into prose the UI renders: a
+rejected ``credential_slot`` is refused without naming what was sent, since the
+caller already knows and reflecting untrusted text into rendered copy buys
+nothing. Field names read out of the *profiles database* — an envelope key that
+is not an envelope field — are named, because they were written by the
+authenticated owner through Package B's validated write path and naming them is
+the only way an operator can tell which stored row needs repairing. Neither case
+ever echoes a *value*.
 """
 
 from __future__ import annotations
@@ -99,11 +107,15 @@ class RevisionIncomplete(BrokerProfileError):
     http_status: ClassVar[int] = 422
 
     def __init__(self, detail: str) -> None:
+        # Pydantic prefixes a ``model_validator``'s message with "Value error, "
+        # and its own messages end without a stop; normalise both so the prose
+        # a surface renders is one sentence rather than a stitched fragment.
+        normalised = detail.removeprefix("Value error, ").strip().rstrip(".")
         super().__init__(
-            f"This configuration revision cannot be applied yet: {detail}.",
+            f"This configuration revision cannot be applied yet: {normalised}.",
             next_step="Complete the revision's values and save it again.",
         )
-        self.detail = detail
+        self.detail = normalised
 
 
 class AccountVerificationFailed(BrokerProfileError):
@@ -145,11 +157,26 @@ class AccountVerificationFailed(BrokerProfileError):
 
     @classmethod
     def stale(cls, *, age_ms: int, max_age_ms: int) -> AccountVerificationFailed:
-        """The observation is too old to justify a pin."""
+        """The observation is too old to act on."""
         return cls(
-            f"This account observation is {age_ms // 1000}s old; a pin is recorded "
-            f"only against one no older than {max_age_ms // 1000}s.",
+            f"This account observation is {age_ms // 1000}s old; it is acted on "
+            f"only while it is no older than {max_age_ms // 1000}s.",
             next_step="Verify the account again, then pin the account you selected.",
+        )
+
+    @classmethod
+    def dated_after_the_clock(cls) -> AccountVerificationFailed:
+        """The observation is stamped later than the clock reading it.
+
+        A separate refusal from :meth:`stale` because it is a separate operator
+        problem: nothing is old, the clocks disagree.
+        """
+        return cls(
+            "This account observation is stamped later than the clock reading it.",
+            next_step=(
+                "Check the service clock, then verify the account again before "
+                "pinning."
+            ),
         )
 
 
@@ -179,23 +206,64 @@ class AccountModeDisagreement(BrokerProfileError):
 
 
 class AccountPinMismatch(BrokerProfileError):
-    """Re-observation contradicts the pin. The previous pin is not replaced."""
+    """The pin is contradicted. The previous pin is never replaced.
+
+    Two situations reach this, and each authors its own prose: a re-observation
+    that found a different account, and an operator selecting an account other
+    than the one already pinned. Both leave the caller's pin as it was —
+    neither constructor produces a pin value.
+    """
 
     reason: ClassVar[str] = "account_pin_mismatch"
     http_status: ClassVar[int] = 409
 
-    def __init__(self, *, pinned_account_id: str, observed_account_id: str) -> None:
-        super().__init__(
-            f"This configuration is pinned to account {pinned_account_id}, but the "
-            f"account observed now is {observed_account_id}. The pin is unchanged.",
-            next_step=(
-                "Rotating a secret for the same account is a reconnection and needs no "
-                "new pin. Pointing a configuration at a different account needs a new "
-                "revision and fresh account approval."
-            ),
-        )
+    _NEXT_STEP: ClassVar[str] = (
+        "Rotating a secret for the same account is a reconnection and needs no new "
+        "pin. Pointing a configuration at a different account needs a new revision "
+        "and fresh account approval."
+    )
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pinned_account_id: str,
+        contradicting_account_ids: tuple[str, ...],
+    ) -> None:
+        super().__init__(message, next_step=self._NEXT_STEP)
         self.pinned_account_id = pinned_account_id
-        self.observed_account_id = observed_account_id
+        self.contradicting_account_ids = contradicting_account_ids
+
+    @classmethod
+    def on_reobservation(
+        cls, *, pinned_account_id: str, observed_account_ids: tuple[str, ...]
+    ) -> AccountPinMismatch:
+        """Re-verification observed accounts, none of them the pinned one.
+
+        Every observed ID is named, not just the first: contract §2.5 keeps
+        exact account IDs in audit evidence, and reporting one of several
+        arbitrarily would make that evidence depend on iteration order.
+        """
+        return cls(
+            f"This configuration is pinned to account {pinned_account_id}, but the "
+            f"account now observed is {', '.join(observed_account_ids)}. The pin is "
+            "unchanged.",
+            pinned_account_id=pinned_account_id,
+            contradicting_account_ids=observed_account_ids,
+        )
+
+    @classmethod
+    def on_selection(
+        cls, *, pinned_account_id: str, selected_account_id: str
+    ) -> AccountPinMismatch:
+        """The operator selected an account other than the one already pinned."""
+        return cls(
+            f"This configuration is pinned to account {pinned_account_id}; "
+            f"{selected_account_id} cannot replace it on this revision. The pin is "
+            "unchanged.",
+            pinned_account_id=pinned_account_id,
+            contradicting_account_ids=(selected_account_id,),
+        )
 
 
 __all__ = [

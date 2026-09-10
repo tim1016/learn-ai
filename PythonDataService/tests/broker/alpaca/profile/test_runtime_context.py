@@ -8,7 +8,6 @@ operator's ledger is sealed over that exact encoding.
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -22,6 +21,7 @@ from app.broker.alpaca.profile.errors import (
     RevisionIncomplete,
 )
 from app.broker.alpaca.profile.runtime_context import (
+    _INTEGER_ENVELOPE_FIELDS,
     LIVE_ENVELOPE_FIELDS,
     is_exactly_int,
     resolve_runtime_context,
@@ -60,8 +60,8 @@ def test_a_paper_revision_resolves_without_an_envelope(
     assert context.settings.base_url == "https://paper-api.alpaca.markets"
     assert context.live_envelope is None
     assert context.credential_slot == "default"
-    assert context.settings.api_key_id == DEFAULT_SLOT_KEY
-    assert context.settings.api_secret_key == DEFAULT_SLOT_SECRET
+    assert context.settings.api_key_id.get_secret_value() == DEFAULT_SLOT_KEY
+    assert context.settings.api_secret_key.get_secret_value() == DEFAULT_SLOT_SECRET
 
 
 def test_a_live_revision_resolves_its_envelope_and_live_endpoint(
@@ -98,7 +98,13 @@ def test_a_live_revision_without_an_envelope_is_incomplete_not_a_crash(
 
     assert info.value.reason == "revision_incomplete"
     assert info.value.http_status == 422
-    assert "ALPACA_MODE=live requires" in info.value.detail
+    # Profile vocabulary, not the settings validator's. That message names six
+    # environment variables and says "Refusing to start" — the ADR 0059
+    # environment-source rule ADR 0060 supersedes — and contract §6 renders
+    # ``message`` to the operator verbatim.
+    assert "live envelope" in info.value.detail
+    for banned in ("ALPACA_", "environment file", "Refusing to start"):
+        assert banned not in info.value.message
 
 
 def test_stored_values_and_environment_values_seal_to_the_same_sha(
@@ -218,6 +224,10 @@ def test_an_out_of_domain_envelope_value_is_refused_without_echoing_input(
 
     assert "less than 1" in info.value.detail
     assert DEFAULT_SLOT_SECRET not in str(info.value)
+    # Pydantic captures the *raw input*, and for a model-level validator that
+    # is the whole kwargs dict with ``loc == ()`` — no per-field filter could
+    # have caught it. The chain is severed rather than inspected.
+    assert info.value.__cause__ is None
 
 
 def test_the_envelope_field_names_are_the_dataclass_field_names() -> None:
@@ -260,8 +270,8 @@ def test_two_revisions_bind_distinct_credentials_without_cross_contamination(
         profile_id="live-profile",
     )
 
-    assert paper.settings.api_key_id == DEFAULT_SLOT_KEY
-    assert live.settings.api_key_id == LIVE_SLOT_KEY
+    assert paper.settings.api_key_id.get_secret_value() == DEFAULT_SLOT_KEY
+    assert live.settings.api_key_id.get_secret_value() == LIVE_SLOT_KEY
     assert paper.settings.api_secret_key != live.settings.api_secret_key
     assert paper.settings.base_url != live.settings.base_url
     assert paper.live_envelope is None
@@ -304,20 +314,30 @@ def test_the_clerk_directory_stays_a_deployment_bootstrap_environment_read(
     assert context.settings.clerk_dir == tmp_path / "clerk"
 
 
-def test_a_revision_cannot_supply_an_endpoint_url_or_a_clerk_directory() -> None:
-    parameters = set(inspect.signature(resolve_runtime_context).parameters)
+@pytest.mark.parametrize("forbidden", ["base_url", "clerk_dir"])
+def test_a_revision_cannot_supply_an_endpoint_url_or_a_clerk_directory(
+    forbidden: str,
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    # The endpoint is derived from the mode and the Clerk directory is
+    # deployment bootstrap; neither is a thing a profile gets to say.
+    with pytest.raises(TypeError):
+        resolve_runtime_context(
+            endpoint_mode="paper",
+            credential_slot="default",
+            environment=only_default_slot_injected,
+            **{forbidden: "anything"},
+        )
 
-    assert "base_url" not in parameters
-    assert "clerk_dir" not in parameters
-    assert parameters == {
-        "endpoint_mode",
-        "credential_slot",
-        "live_envelope",
-        "account_pin",
-        "profile_id",
-        "revision",
-        "environment",
-    }
+
+def test_the_integer_envelope_fields_are_derived_from_the_dataclass() -> None:
+    # A hand-listed int/float split would drift silently the next time a field
+    # is added or retyped, and drift here changes the sha every historical
+    # arming record is sealed over.
+    assert frozenset(
+        {"shadow_sessions", "arming_max_sessions"}
+    ) == _INTEGER_ENVELOPE_FIELDS
+    assert set(LIVE_ENVELOPE_FIELDS) >= _INTEGER_ENVELOPE_FIELDS
 
 
 def test_an_endpoint_mode_that_is_neither_paper_nor_live_is_refused(

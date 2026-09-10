@@ -52,12 +52,31 @@ ACCOUNT_VERIFICATION_MAX_AGE_MS: Final[int] = 5 * 60 * 1000
 class AccountDiscoveryPort(Protocol):
     """The whole broker surface verification is allowed to reach.
 
-    One read method. A port that cannot name ``submit`` or ``cancel`` cannot
-    call them, which is what makes "verification performs no mutation" a
-    structural fact rather than a review finding.
+    One read method. Every object this module talks to is one of these,
+    including the default — :class:`_BrokerAccountDiscovery` below narrows
+    ``AlpacaBroker`` down to it rather than handing the full trade port to a
+    read-only ceremony. There is no reference to a mutating method anywhere in
+    this module for a future edit to reach for by accident.
     """
 
     async def get_account(self) -> BrokerAccountSnapshot: ...
+
+
+class _BrokerAccountDiscovery:
+    """Narrows a full ``AlpacaBroker`` to the one read verification may make.
+
+    ``AlpacaBroker`` implements the trade port too. Binding the default through
+    this adapter means the object verification holds genuinely exposes nothing
+    but ``get_account``, instead of relying on an annotation the repo has no
+    type checker to enforce. The wrapped broker is private so the adapter does
+    not hand back the surface it exists to withhold.
+    """
+
+    def __init__(self, broker: AlpacaBroker) -> None:
+        self._broker = broker
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return await self._broker.get_account()
 
 
 @dataclass(frozen=True)
@@ -130,7 +149,11 @@ async def verify_account(
     ADR 0059 D1 refusal, re-stated in profile vocabulary — and
     :class:`AccountVerificationFailed` (409) for any other broker failure.
     """
-    port = discovery if discovery is not None else AlpacaBroker(settings=context.settings)
+    port: AccountDiscoveryPort = (
+        discovery
+        if discovery is not None
+        else _BrokerAccountDiscovery(AlpacaBroker(settings=context.settings))
+    )
     try:
         snapshot = await port.get_account()
     except BrokerAccountModeDisagreement as exc:
@@ -151,16 +174,20 @@ async def verify_account(
 
 
 def _require_fresh(verification: AccountVerification, *, now_ms: int) -> None:
-    """Refuse an observation dated too long ago — or after the pinning clock.
+    """Refuse an observation dated too long ago — or after the reading clock.
 
     A backward clock step would otherwise make a negative age look fresh
     indefinitely, the same reason ``LiveEnvelopeGate.fresh_observation`` bounds
-    its age below as well as above.
+    its age below as well as above. The two are separate refusals because they
+    are separate operator problems: one is a stale ceremony, the other is a
+    disagreeing clock.
     """
     age_ms = now_ms - verification.verified_at_ms
-    if not (0 <= age_ms <= ACCOUNT_VERIFICATION_MAX_AGE_MS):
+    if age_ms < 0:
+        raise AccountVerificationFailed.dated_after_the_clock()
+    if age_ms > ACCOUNT_VERIFICATION_MAX_AGE_MS:
         raise AccountVerificationFailed.stale(
-            age_ms=abs(age_ms), max_age_ms=ACCOUNT_VERIFICATION_MAX_AGE_MS
+            age_ms=age_ms, max_age_ms=ACCOUNT_VERIFICATION_MAX_AGE_MS
         )
 
 
@@ -182,41 +209,57 @@ def pin_observed_account(
     Refuses a stale verification: a pin is recorded against an observation the
     operator is actually looking at, not one from an hour ago.
     """
-    _require_fresh(verification, now_ms=now_ms if now_ms is not None else now_ms_utc())
+    pinned_at_ms = now_ms if now_ms is not None else now_ms_utc()
+    _require_fresh(verification, now_ms=pinned_at_ms)
 
     observed_ids = {candidate.account_id for candidate in verification.candidates}
     if selected_account_id not in observed_ids:
         raise AccountVerificationFailed.not_observed(selected_account_id=selected_account_id)
 
     if existing_pin is not None and existing_pin != selected_account_id:
-        raise AccountPinMismatch(
+        raise AccountPinMismatch.on_selection(
             pinned_account_id=existing_pin,
-            observed_account_id=selected_account_id,
+            selected_account_id=selected_account_id,
         )
 
     return AccountPin(
         account_id=selected_account_id,
         endpoint_mode=verification.endpoint_mode,
-        pinned_at_ms=verification.verified_at_ms,
+        # When the pin was recorded, not when the account was seen. Two pins
+        # minted from one observation are two events (contract §2.3's
+        # ``account_pinned_at_ms``).
+        pinned_at_ms=pinned_at_ms,
     )
 
 
 def reverify_pinned_account(
-    verification: AccountVerification, *, pinned_account_id: str
+    verification: AccountVerification,
+    *,
+    pinned_account_id: str,
+    now_ms: int | None = None,
 ) -> ObservedAccount:
     """Confirm a pin against a fresh observation, at apply and at startup.
+
+    Freshness is required here too, and for a stronger reason than at pinning
+    time: the contract says the pin is *re-observed* at apply and at startup,
+    and a caller replaying a cached verification would otherwise satisfy that
+    with a fact of any age. This is the gate that authorises binding a real
+    account, so it holds the same bound the ceremony does.
 
     Returns the observation that matched, and can return nothing else — there
     is no path through this function that produces a pin, so a re-verification
     can never silently move one. A contradiction raises
     :class:`AccountPinMismatch` and leaves the caller's pin untouched.
     """
+    _require_fresh(verification, now_ms=now_ms if now_ms is not None else now_ms_utc())
     for candidate in verification.candidates:
         if candidate.account_id == pinned_account_id:
             return candidate
-    raise AccountPinMismatch(
+    raise AccountPinMismatch.on_reobservation(
         pinned_account_id=pinned_account_id,
-        observed_account_id=verification.candidates[0].account_id,
+        observed_account_ids=tuple(
+            candidate.account_id for candidate in verification.candidates
+        ),
     )
 
 

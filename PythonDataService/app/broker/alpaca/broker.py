@@ -89,8 +89,19 @@ class AlpacaBroker:
         *,
         settings: AlpacaSettings | None = None,
     ) -> None:
-        self._settings = settings
         self._client = client or AlpacaTradingClient(settings=settings)
+        bound = getattr(self._client, "bound_settings", None)
+        if settings is not None and isinstance(bound, AlpacaSettings) and bound is not settings:
+            # One binding, described twice, disagreeing. The port would stamp
+            # this mode on a snapshot the client fetched from the other mode's
+            # endpoint — exactly the cross-contamination injected settings
+            # exist to prevent. (A test double reports no settings and is
+            # unaffected.)
+            raise ValueError(
+                "AlpacaBroker was given settings that disagree with its client's; "
+                "a broker and its client are one binding."
+            )
+        self._settings = settings
 
     def _resolved_settings(self) -> AlpacaSettings:
         """The injected settings, else the process-wide ones read on first use.
