@@ -111,7 +111,7 @@ A nickname is a label. It never substitutes for the account ID in audit evidence
 
 ## 3. Credential slots
 
-A profile references an **opaque slot name**, and a fixed provider-specific convention maps that slot to exactly **two** environment variable names. **The template below is provisional pending ADR 0060 open question 2**, which is where the allowlist shape and the v1 slot count get decided; the *properties* under it are not provisional and hold whatever template the owner picks.
+A profile references an **opaque slot name**, and a fixed provider-specific convention maps that slot to exactly **two** environment variable names. **ADR 0060 open question 2 is resolved** (owner, 2026-09-10): the allowlist is a fixed, **code-owned closed set**, and v1 ships **two** slots — `default` (the compatibility slot, mapping to the unrenamed `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY`) and `live` (`ALPACA_CREDENTIAL_LIVE_KEY_ID` / `ALPACA_CREDENTIAL_LIVE_SECRET_KEY`, on the template below). The template is therefore no longer provisional.
 
 ```
 <slot>  ->  ALPACA_CREDENTIAL_<SLOT_UPPER>_KEY_ID
@@ -127,7 +127,7 @@ Rules:
 - Two profiles pointing at different real accounts require two injected pairs. A nickname manufactures no access.
 - Resolution happens only inside the backend, at context construction — never per tick, never in a router.
 
-**Open** (ADR 0060 open question 2): whether the allowlist is a code-owned closed set or a deployment-declared list, and whether v1 ships the compatibility slot alone or that plus a named live slot. Package C must not decide this unilaterally.
+**Resolved** (ADR 0060 open question 2, owner 2026-09-10 — see above). Built as Package C: [`docs/references/alpaca-credential-slots.md`](../references/alpaca-credential-slots.md).
 
 **Verification** is read-only broker account discovery under the revision's mode and resolved credentials: no submit, no cancel, no mutation of any kind. The operator selects from the observed accounts; nobody types an account ID. The pin is re-observed at apply and at startup. A missing credential, a mode mismatch, or a wrong account **refuses without replacing the previous pin**. Credential rotation against the same account is controlled reconnection plus re-verification; changing accounts requires a new revision and account approval.
 

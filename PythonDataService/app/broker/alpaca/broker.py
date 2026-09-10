@@ -7,13 +7,19 @@ only ever see contract models.
 
 The port is cheap to construct (the underlying client builds credentials and
 network lazily), so it can be registered at startup without keys.
+
+Settings are injectable. Pass a resolved ``AlpacaSettings`` — the one a profile
+revision produced (``app/broker/alpaca/profile/``) — and this port and the
+client it builds are bound to that revision's mode and credentials, so two
+configurations cannot cross-contaminate. Omit it and the port reads the
+process-wide settings lazily on first use, exactly as it always has.
 """
 
 from __future__ import annotations
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
-from app.broker.alpaca.config import BROKER_ID, get_alpaca_settings
+from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -77,13 +83,41 @@ class AlpacaBroker:
 
     broker_id = BROKER_ID
 
-    def __init__(self, client: AlpacaTradingClient | None = None) -> None:
-        self._client = client or AlpacaTradingClient()
+    def __init__(
+        self,
+        client: AlpacaTradingClient | None = None,
+        *,
+        settings: AlpacaSettings | None = None,
+    ) -> None:
+        self._client = client or AlpacaTradingClient(settings=settings)
+        bound = getattr(self._client, "bound_settings", None)
+        if settings is not None and isinstance(bound, AlpacaSettings) and bound is not settings:
+            # One binding, described twice, disagreeing. The port would stamp
+            # this mode on a snapshot the client fetched from the other mode's
+            # endpoint — exactly the cross-contamination injected settings
+            # exist to prevent. (A test double reports no settings and is
+            # unaffected.)
+            raise ValueError(
+                "AlpacaBroker was given settings that disagree with its client's; "
+                "a broker and its client are one binding."
+            )
+        self._settings = settings
+
+    def _resolved_settings(self) -> AlpacaSettings:
+        """The injected settings, else the process-wide ones read on first use.
+
+        Deferred exactly like the client's own ``self._settings or
+        get_alpaca_settings()``: the port is registered at startup without
+        credentials, and reading them eagerly would refuse to boot a
+        credential-free service. An injected object is the whole binding — a
+        broker built from one profile's context never consults another's.
+        """
+        return self._settings or get_alpaca_settings()
 
     def capabilities(self) -> BrokerCapabilities:
         return (
             ALPACA_LIVE_CAPABILITIES
-            if get_alpaca_settings().is_live
+            if self._resolved_settings().is_live
             else ALPACA_PAPER_CAPABILITIES
         )
 
@@ -91,7 +125,7 @@ class AlpacaBroker:
         payload = await self._client.get_account()
         # The mode that selected the endpoint is the only source of the
         # account's mode (ADR 0059 D1); the adapter refuses a disagreeing shape.
-        return adapter.from_alpaca_account(payload, account_mode=get_alpaca_settings().mode)
+        return adapter.from_alpaca_account(payload, account_mode=self._resolved_settings().mode)
 
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()

@@ -889,8 +889,8 @@ async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes 
                 {
                     "action": "authenticate",
                     "data": {
-                        "key_id": settings.api_key_id,
-                        "secret_key": settings.api_secret_key,
+                        "key_id": settings.api_key_id.get_secret_value(),
+                        "secret_key": settings.api_secret_key.get_secret_value(),
                     },
                 }
             )

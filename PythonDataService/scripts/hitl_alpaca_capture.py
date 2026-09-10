@@ -359,9 +359,9 @@ def _check_credentials() -> None:
     settings = get_alpaca_settings()
     if not settings.is_paper:
         raise RuntimeError("ALPACA_MODE must be 'paper'")
-    if not settings.api_key_id:
+    if not settings.api_key_id.get_secret_value():
         raise RuntimeError("ALPACA_API_KEY_ID missing")
-    if not settings.api_secret_key:
+    if not settings.api_secret_key.get_secret_value():
         raise RuntimeError("ALPACA_API_SECRET_KEY missing")
     # H1 requirement: market-data endpoint must NOT be wired into the phase-1
     # trading client. The client uses TradingClient (paper base URL only).
@@ -489,8 +489,8 @@ async def _run_order_gate(client: AlpacaTradingClient) -> tuple[dict[str, Any], 
                     {
                         "action": "authenticate",
                         "data": {
-                            "key_id": settings.api_key_id,
-                            "secret_key": settings.api_secret_key,
+                            "key_id": settings.api_key_id.get_secret_value(),
+                            "secret_key": settings.api_secret_key.get_secret_value(),
                         },
                     }
                 )
