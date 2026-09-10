@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.config import get_alpaca_settings
+from app.broker_configuration.runtime import resolve_clerk_dir
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
 from app.utils.timestamps import now_ms_utc
 
@@ -222,7 +222,9 @@ _AUDIT_LOCK = threading.Lock()
 
 
 def _audit_log_path(account_id: str) -> Path:
-    root = get_alpaca_settings().clerk_dir
+    # Deployment bootstrap, read credential-free: appending an audit entry
+    # must not depend on a credential pair being present (ADR 0060 D7).
+    root = resolve_clerk_dir()
     safe_account = "".join(c for c in account_id if c.isalnum() or c in "-_.")
     return root / "accounts" / safe_account / "evidence_audit.jsonl"
 

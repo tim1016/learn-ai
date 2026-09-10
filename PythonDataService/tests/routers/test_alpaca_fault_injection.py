@@ -40,7 +40,7 @@ def _reset() -> None:
 @pytest.fixture
 def permit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
-    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
+    monkeypatch.setattr(fi, "resolved_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
 
 
 async def test_arm_is_refused_when_not_permitted(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -18,8 +18,9 @@ process-wide settings lazily on first use, exactly as it always has.
 from __future__ import annotations
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
-from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -104,15 +105,24 @@ class AlpacaBroker:
         self._settings = settings
 
     def _resolved_settings(self) -> AlpacaSettings:
-        """The injected settings, else the process-wide ones read on first use.
+        """The injected settings, else the binding this worker resolved.
 
-        Deferred exactly like the client's own ``self._settings or
-        get_alpaca_settings()``: the port is registered at startup without
-        credentials, and reading them eagerly would refuse to boot a
+        Deferred, not eager: the port is registered at startup before a binding
+        exists, and reading settings eagerly would refuse to boot a
         credential-free service. An injected object is the whole binding — a
         broker built from one profile's context never consults another's.
+
+        The uninjected fallback is now the *resolved binding* rather than the
+        environment singleton (ADR 0060). That matters for the registry's
+        broker, which is constructed settings-free at startup and serves every
+        ``/api/brokers/alpaca/...`` read route: before this it answered from
+        whatever the process environment said, which after a profile switch is
+        a different configuration than the one the worker actually bound.
+        ``resolved_alpaca_settings`` reads the environment only when nothing has
+        attempted a binding at all, and raises rather than falling back when a
+        binding was attempted and refused.
         """
-        return self._settings or get_alpaca_settings()
+        return self._settings or resolved_alpaca_settings()
 
     def capabilities(self) -> BrokerCapabilities:
         return (

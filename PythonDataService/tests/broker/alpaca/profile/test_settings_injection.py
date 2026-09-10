@@ -81,7 +81,7 @@ def _client_returning(payload: dict[str, Any]) -> Any:
 def test_an_injected_context_selects_the_capability_descriptor(
     monkeypatch: pytest.MonkeyPatch, mode: str, expected: Any
 ) -> None:
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", _refuse_singleton)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", _refuse_singleton)
 
     broker = AlpacaBroker(MagicMock(), settings=_context(mode).settings)
 
@@ -91,7 +91,7 @@ def test_an_injected_context_selects_the_capability_descriptor(
 async def test_an_injected_context_supplies_the_account_mode(
     monkeypatch: pytest.MonkeyPatch, load_alpaca_fixture: Any
 ) -> None:
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", _refuse_singleton)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", _refuse_singleton)
     broker = AlpacaBroker(
         _client_returning(load_alpaca_fixture("account", "account.json")),
         settings=_context("paper").settings,
@@ -108,7 +108,7 @@ async def test_an_injected_live_context_still_refuses_a_paper_shaped_account(
     # The ADR 0059 D1 refusal must survive the move to injected settings: the
     # mode that selected the endpoint is configuration truth, and the account
     # number's shape is a refusal input.
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", _refuse_singleton)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", _refuse_singleton)
     broker = AlpacaBroker(
         _client_returning(load_alpaca_fixture("account", "account.json")),
         settings=_context("live").settings,
@@ -124,7 +124,7 @@ def test_a_broker_without_injected_settings_still_defers_to_the_singleton(
     settings = AlpacaSettings(
         api_key_id=DEFAULT_SLOT_KEY, api_secret_key=DEFAULT_SLOT_SECRET, mode="paper"
     )
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", lambda: settings)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", lambda: settings)
 
     assert AlpacaBroker(MagicMock()).capabilities() is ALPACA_PAPER_CAPABILITIES
 
@@ -134,7 +134,7 @@ def test_constructing_a_broker_never_reads_settings(
 ) -> None:
     # Registration happens at startup on a credential-free service; reading
     # settings eagerly would refuse to boot it.
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", _refuse_singleton)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", _refuse_singleton)
 
     assert AlpacaBroker().broker_id == "alpaca"
 

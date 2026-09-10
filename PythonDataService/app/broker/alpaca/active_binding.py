@@ -40,10 +40,17 @@ never a crash loop.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
+
+if TYPE_CHECKING:
+    # Type-only: importing the profile package at runtime would close a cycle,
+    # because its account verification imports ``AlpacaBroker`` and the broker
+    # imports this module for its settings. Nothing here needs the class at
+    # runtime — every use is an annotation, and this module declares
+    # ``from __future__ import annotations``.
+    from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
 
 # Contract §6 refusal codes. Code-like and stable: the Frontend renders them
 # through the shared ``receiptLabel`` pipe, and the prose beside them is

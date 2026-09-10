@@ -112,26 +112,54 @@ def _validate_data_root_identity() -> None:
     resolve_root_context(expected_root_id)
 
 
-def _alpaca_clerk_configuration_is_valid() -> bool:
-    """Clear stale runtime state, validate settings, and log only safe detail."""
-    from pydantic import ValidationError
+async def _install_alpaca_binding() -> BoundWorker | None:
+    """Resolve the effective broker profile and install it for this process.
 
-    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
-    from app.broker.alpaca.config import (
-        alpaca_configuration_error_detail,
-        get_alpaca_settings,
+    Replaces the old "are the environment settings valid?" probe (ADR 0060).
+    What a worker runs on is now the installation's *effective* profile
+    revision — the staged one only when an Apply is recorded against it — and
+    resolving it is where the switch preflight, the refusal-boots-last-effective
+    rule and the generation fence live (``broker_configuration.worker_binding``).
+
+    Returns the binding, or ``None`` when none could be installed. ``None``
+    closes the broker gate with a surfaced reason and installs no clerk,
+    exactly as invalid settings did before: the service still boots (#2014),
+    it simply has no broker. The caller keeps the returned binding so it can
+    acknowledge it once the Clerk holds the account's execution lease.
+    """
+    from app.broker.alpaca.active_binding import (
+        refuse_active_alpaca_binding,
+        set_active_alpaca_binding,
     )
+    from app.broker_configuration.worker_binding import BoundWorker
+    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+    from app.broker_configuration.worker_binding import resolve_worker_binding
 
     set_active_clerk_runtime(None)
-    try:
-        get_alpaca_settings()
-    except ValidationError as exc:
+    resolved = await resolve_worker_binding()
+    if not isinstance(resolved, BoundWorker):
+        refuse_active_alpaca_binding(resolved.unbound)
         logger.warning(
-            "Alpaca settings invalid; order-submission clerk not installed.",
-            extra={"detail": alpaca_configuration_error_detail(exc)},
+            "No Alpaca broker binding installed; order-submission clerk not installed.",
+            extra={
+                "action": "alpaca_binding_refused",
+                "reason_code": resolved.unbound.reason,
+            },
         )
-        return False
-    return True
+        return None
+
+    set_active_alpaca_binding(resolved.context)
+    logger.info(
+        "Alpaca broker binding installed.",
+        extra={
+            "action": "alpaca_binding_installed",
+            "profile_id": resolved.context.profile_id,
+            "revision": resolved.context.revision,
+            "mode": resolved.context.settings.mode,
+            "credential_slot": resolved.context.credential_slot,
+        },
+    )
+    return resolved
 
 
 @asynccontextmanager
@@ -187,15 +215,21 @@ async def lifespan(app: FastAPI):
         select_active_clerk_runtime,
         set_active_clerk_runtime,
     )
-    from app.broker.alpaca.config import get_alpaca_settings
+
+    from app.broker_configuration.worker_binding import acknowledge_worker_binding
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
-    if _alpaca_clerk_configuration_is_valid():
+    alpaca_binding = await _install_alpaca_binding()
+    if alpaca_binding is not None:
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
-        alpaca_broker = AlpacaBroker()
-        alpaca_settings = get_alpaca_settings()
+        # One context, passed to every consumer. The broker, the client it
+        # builds, the two websockets and the Clerk are all bound to this exact
+        # revision's mode and credential pair, so none of them can answer for a
+        # configuration this worker did not bind (ADR 0060; plan §5.5).
+        alpaca_settings = alpaca_binding.context.settings
+        alpaca_broker = AlpacaBroker(settings=alpaca_settings)
         alpaca_clerk_root = alpaca_settings.clerk_dir
         # #1671: scheduled session structure remains calendar-owned; this
         # source provides the separate real-time clock + per-symbol
@@ -207,6 +241,7 @@ async def lifespan(app: FastAPI):
 
         alpaca_market_liveness = AlpacaMarketLivenessConsumer.for_alpaca(
             read=alpaca_broker,
+            settings=alpaca_settings,
         )
         alpaca_market_liveness.start()
         set_market_liveness_consumer(alpaca_market_liveness)
@@ -262,16 +297,12 @@ async def lifespan(app: FastAPI):
                 ).items()
             }
 
-        # ADR 0059 D4: the live world's risk envelope, read once from the
-        # environment. Settings validation (`_enforce_mode_agreement`) already
-        # refuses live mode without every ALPACA_LIVE_* value, so this cannot
-        # raise here; the selector's LIVE_ENVELOPE_MISSING refusal remains the
-        # defence for a caller that composes the shadow authority without it.
-        from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
-
-        live_envelope_values = (
-            None if alpaca_settings.is_paper else LiveEnvelopeValues.from_settings(alpaca_settings)
-        )
+        # ADR 0059 D4 / ADR 0060: the live world's risk envelope, taken from
+        # the revision this worker bound rather than from the environment. The
+        # resolved context already carries it — a live revision cannot resolve
+        # without all six values — so this is a read, not a second construction
+        # that could disagree with the one the binding sealed.
+        live_envelope_values = alpaca_binding.context.live_envelope
 
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
@@ -303,6 +334,7 @@ async def lifespan(app: FastAPI):
             alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
                 evidence_sink=alpaca_clerk_runtime.evidence_sink,
                 read=alpaca_broker,
+                settings=alpaca_settings,
             )
             alpaca_trade_updates.start()
             set_trade_updates_consumer(alpaca_trade_updates)
@@ -321,6 +353,25 @@ async def lifespan(app: FastAPI):
                     "account_id": alpaca_clerk_runtime.startup_failure.account_id,
                 },
             )
+
+        # The effective binding is published only here: construction has
+        # succeeded and, because a Clerk authority opened, this worker holds
+        # that account's execution lease (the lease is a row in the account's
+        # own SQLite, taken when the repository opens). A start that failed
+        # before this point never publishes itself as the effective runtime,
+        # and the generation fence inside ``acknowledge_worker_binding``
+        # refuses the write outright if the selection moved while we were
+        # building. When no Clerk opened, the account is ``None`` — the
+        # binding resolved but nothing took custody of an account, and
+        # recording an account we do not hold would be a false receipt.
+        acknowledge_worker_binding(
+            bound=alpaca_binding,
+            account_id=(
+                alpaca_clerk_runtime.selected_account_id
+                if alpaca_clerk_runtime.clerk is not None
+                else None
+            ),
+        )
 
         from app.services.sovereign_equity_snapshots import (
             DailySovereignEquitySnapshotScheduler,

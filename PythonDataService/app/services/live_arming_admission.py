@@ -19,7 +19,8 @@ from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE
 from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.run_admission import ARMING_NEXT_STEP, ArmingAdmissionFact
@@ -56,7 +57,10 @@ def live_arming_admission_fact(
     ):
         return None
     try:
-        resolved = get_alpaca_settings() if settings is None else settings
+        # The envelope an arming is judged against is the effective
+        # revision's (ADR 0060), so a staged-but-unapplied risk change
+        # cannot make a sealed arming look stale.
+        resolved = resolved_alpaca_settings() if settings is None else settings
         arming = account_arming(
             live_account_id=custody.account_id,
             artifacts_root=resolved.clerk_dir if artifacts_root is None else artifacts_root,
