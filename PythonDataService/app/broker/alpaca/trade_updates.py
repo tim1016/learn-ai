@@ -65,11 +65,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.clerk.stream_health import ExecutionEvidenceHealth
 from app.broker.alpaca.clerk.trade_evidence import (
     TradeUpdateEvidenceSink,
 )
-from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.alpaca.fault_injection import (
     FrameFaultKind,

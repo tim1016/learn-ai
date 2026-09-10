@@ -15,7 +15,14 @@ from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
 from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
 from app.broker.alpaca.clerk.sqlite.dev_reset import DeveloperCleanSlateResetRefused
-from app.broker.alpaca.config import AlpacaSettings
+from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_testing
+from app.broker_configuration import runtime as broker_configuration_runtime
+from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.runtime import (
+    build_service,
+    reset_broker_configuration_service_for_testing,
+)
+from app.broker_configuration.service import BrokerConfigurationService
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_catalog_quarantine_plan,
     _read_cutover_evidence,
@@ -24,6 +31,7 @@ from scripts.manage_alpaca_sqlite_clerk import (
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
 from tests.broker.alpaca.clerk.live_arming_fixtures import live_settings
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     PLAN_MS,
     write_stopped_runner_bot,
@@ -238,10 +246,16 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
 
 
-def test_read_cutover_evidence_refuses_live_evidence_under_non_live_alpaca_mode(
+def test_read_cutover_evidence_refuses_live_evidence_under_non_live_effective_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The paper-only proof, now judged against the effective profile revision.
+
+    What it proves is unchanged (ADR 0059 D1): live broker evidence is refused
+    unless this installation *is* live. Only the source of the mode moved, from
+    ``ALPACA_MODE`` to the effective revision (ADR 0060).
+    """
     payload = {
         "account_id": ACCOUNT_ID,
         "account_mode": "live",
@@ -255,17 +269,107 @@ def test_read_cutover_evidence_refuses_live_evidence_under_non_live_alpaca_mode(
 
     monkeypatch.setattr(
         recovery_cli_module,
-        "get_alpaca_settings",
+        "effective_alpaca_settings",
         lambda: AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
     )
-    with pytest.raises(ValueError, match="ALPACA_MODE"):
+    with pytest.raises(ValueError, match="not live") as refused:
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+    assert "effective broker configuration" in str(refused.value)
 
-    monkeypatch.setattr(recovery_cli_module, "get_alpaca_settings", live_settings)
+    monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", live_settings)
 
     evidence = _read_cutover_evidence(evidence_path, ACCOUNT_ID)
 
     assert evidence.account_mode == "live"
+
+
+def test_read_cutover_evidence_reads_the_real_effective_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same proof once, end to end, against a real profiles database.
+
+    The test above patches the resolver by name, which pins the wiring but not
+    what the name resolves *to*. This one applies a paper revision and then a
+    live one for real, so the paper-only gate is demonstrated against the
+    installation's actual effective selection rather than a double of it.
+    """
+    payload = {
+        "account_id": ACCOUNT_ID,
+        "account_mode": "live",
+        "observed_at_ms": PLAN_MS,
+        "proof_reference": "fake-cli-proof",
+        "positions": {},
+        "open_order_ids": [],
+    }
+    evidence_path = tmp_path / "live-broker-evidence.json"
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+    clerk_dir = tmp_path / "clerk"
+    clerk_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+    for name, value in (
+        ("ALPACA_API_KEY_ID", "paper-key"),
+        ("ALPACA_API_SECRET_KEY", "paper-secret"),
+        ("ALPACA_CREDENTIAL_LIVE_KEY_ID", "live-key"),
+        ("ALPACA_CREDENTIAL_LIVE_SECRET_KEY", "live-secret"),
+        ("ALPACA_CLERK_DIR", str(clerk_dir)),
+    ):
+        monkeypatch.setenv(name, value)
+    # ``tests/conftest.py`` pins the profiles database inside tmp_path by
+    # patching this resolver; a test that needs its own location patches it
+    # again, later patch winning.
+    monkeypatch.setattr(broker_configuration_runtime, "resolve_clerk_dir", lambda: clerk_dir)
+    reset_alpaca_settings_for_testing()
+    reset_broker_configuration_service_for_testing()
+    service = build_service(clerk_dir=clerk_dir)
+    try:
+        _apply_revision(service, _paper_profile(service))
+
+        with pytest.raises(ValueError, match="not live"):
+            _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+        _apply_revision(service, _live_profile(service))
+
+        assert _read_cutover_evidence(evidence_path, ACCOUNT_ID).account_mode == "live"
+    finally:
+        service.close()
+        reset_broker_configuration_service_for_testing()
+        reset_alpaca_settings_for_testing()
+
+
+def _paper_profile(service: BrokerConfigurationService) -> str:
+    created = service.create_profile(
+        display_name="Paper — qualification",
+        credential_slot="default",
+        endpoint_mode="paper",
+        live_envelope=None,
+    )
+    return created.profile.profile_id
+
+
+def _live_profile(service: BrokerConfigurationService) -> str:
+    created = service.create_profile(
+        display_name="Live — primary",
+        credential_slot="live",
+        endpoint_mode="live",
+        live_envelope=ValidatedLiveEnvelope.from_mapping(TEST_ENVELOPE_VALUES.to_mapping()),
+    )
+    return created.profile.profile_id
+
+
+def _apply_revision(service: BrokerConfigurationService, profile_id: str) -> None:
+    """Stage and acknowledge revision 1, the way a worker's start does."""
+    service.stage_selection(
+        profile_id=profile_id,
+        revision=1,
+        expected_selection_generation=service.selection().selection_generation,
+    )
+    service.acknowledge_effective(
+        profile_id=profile_id,
+        revision=1,
+        account_id=ACCOUNT_ID,
+        expected_selection_generation=service.selection().selection_generation,
+    )
 
 
 def test_read_cutover_evidence_never_reads_settings_for_paper_evidence(
@@ -283,9 +387,9 @@ def test_read_cutover_evidence_never_reads_settings_for_paper_evidence(
     evidence_path.write_text(json.dumps(payload), encoding="utf-8")
 
     def _explode() -> AlpacaSettings:
-        raise AssertionError("paper evidence must not read Alpaca settings")
+        raise AssertionError("paper evidence must not resolve the effective broker binding")
 
-    monkeypatch.setattr(recovery_cli_module, "get_alpaca_settings", _explode)
+    monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", _explode)
     assert _read_cutover_evidence(evidence_path, ACCOUNT_ID).account_mode == "paper"
 
 
@@ -341,7 +445,7 @@ def test_dev_reset_cli_refuses_unactivated_legacy_authority(
     journal.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(
         recovery_cli_module,
-        "get_alpaca_settings",
+        "effective_alpaca_settings",
         lambda: SimpleNamespace(mode="paper"),
     )
 
@@ -382,7 +486,7 @@ def test_dev_reset_cli_refuses_live_mode_without_moving_authority(
     runner_bytes = runner_registry.read_bytes()
     monkeypatch.setattr(
         recovery_cli_module,
-        "get_alpaca_settings",
+        "effective_alpaca_settings",
         lambda: SimpleNamespace(mode="live"),
     )
 

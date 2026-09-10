@@ -14,12 +14,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.clerk.active_authority import primary_custody_world
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED, LiveArmingInvalid
 from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
