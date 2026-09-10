@@ -58,6 +58,9 @@ if TYPE_CHECKING:
 BROKER_UNCONFIGURED: Final = "broker_unconfigured"
 PROFILES_DATABASE_UNAVAILABLE: Final = "profiles_database_unavailable"
 APPLY_PREFLIGHT_REFUSED: Final = "apply_preflight_refused"
+# Custody opened on an account the revision did not pin (contract §6). A 409
+# there, but here it is a boot-time refusal: the gate closes and stays closed.
+ACCOUNT_PIN_MISMATCH: Final = "account_pin_mismatch"
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,7 @@ def reset_active_alpaca_binding_for_testing() -> None:
 
 
 __all__ = [
+    "ACCOUNT_PIN_MISMATCH",
     "APPLY_PREFLIGHT_REFUSED",
     "BROKER_UNCONFIGURED",
     "PROFILES_DATABASE_UNAVAILABLE",

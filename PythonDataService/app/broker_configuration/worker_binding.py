@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from app.broker.alpaca.active_binding import (
+    ACCOUNT_PIN_MISMATCH,
     APPLY_PREFLIGHT_REFUSED,
     BROKER_UNCONFIGURED,
     PROFILES_DATABASE_UNAVAILABLE,
@@ -453,6 +454,35 @@ def _resolve(
     )
 
 
+def account_pin_disagreement(bound: BoundWorker, *, account_id: str | None) -> str | None:
+    """Why custody's account contradicts the revision's pin, or ``None``.
+
+    Contract §3: "The pin is re-observed at apply and at startup", and an
+    observation that contradicts a pin refuses. The re-observation at startup is
+    not a second broker call — the Clerk already resolved the account from the
+    revision's own credentials — so this compares what custody actually opened
+    on against what the operator explicitly approved.
+
+    The case it catches is narrow and nasty: a credential slot whose injected
+    pair has been repointed at a *different* Alpaca account. Everything else
+    still looks right — the profile is applied, the mode agrees, the envelope is
+    intact — and the worker would take custody of, and trade, an account nobody
+    approved.
+
+    A revision with no pin has nothing to contradict, and neither does the
+    pre-cutover environment bootstrap, which binds no revision at all.
+    """
+    context = bound.context
+    if context.account_pin is None or account_id is None:
+        return None
+    if context.account_pin == account_id:
+        return None
+    return (
+        f"this revision is pinned to account {context.account_pin} but its credentials "
+        f"opened custody on account {account_id}"
+    )
+
+
 def acknowledge_worker_binding(
     *,
     bound: BoundWorker,
@@ -495,12 +525,14 @@ def acknowledge_worker_binding(
 
 
 __all__ = [
+    "ACCOUNT_PIN_MISMATCH",
     "BoundWorker",
     "PriorAccountObligations",
     "PriorObligations",
     "ResolvedWorkerBinding",
     "UnboundWorker",
     "UnprovableObligations",
+    "account_pin_disagreement",
     "acknowledge_worker_binding",
     "resolve_worker_binding",
 ]

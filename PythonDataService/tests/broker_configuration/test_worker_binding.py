@@ -30,6 +30,7 @@ from app.broker_configuration.worker_binding import (
     PriorObligations,
     UnboundWorker,
     UnprovableObligations,
+    account_pin_disagreement,
     acknowledge_worker_binding,
     resolve_worker_binding,
 )
@@ -591,3 +592,64 @@ async def test_a_live_revision_binds_its_sealed_envelope_values(
     assert envelope.loss_fraction == LIVE_ENVELOPE_PAYLOAD["loss_fraction"]
     assert type(envelope.shadow_sessions) is int
     assert type(envelope.xh_exit_bps) is float
+
+
+# ---- the account pin, re-observed at startup -------------------------------
+
+
+async def test_custody_on_the_pinned_account_is_no_disagreement(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    profile_id, _ = await _profile_bound_to(
+        service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+    resolved = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+    assert isinstance(resolved, BoundWorker)
+
+    assert account_pin_disagreement(resolved, account_id=PAPER_ACCOUNT) is None
+
+
+async def test_custody_on_another_account_than_the_pin_is_a_disagreement(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    """A credential slot repointed at a different Alpaca account.
+
+    Everything else still looks right - the profile is applied, the mode
+    agrees, the envelope is intact - so nothing else in the boot would catch
+    it, and the worker would take custody of an account nobody approved.
+    """
+    profile_id, _ = await _profile_bound_to(
+        service, display_name="Paper - testing", account_id=PAPER_ACCOUNT
+    )
+    _make_effective(service, profile_id, 1, PAPER_ACCOUNT)
+    resolved = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+    assert isinstance(resolved, BoundWorker)
+
+    disagreement = account_pin_disagreement(resolved, account_id=OTHER_ACCOUNT)
+
+    assert disagreement is not None
+    assert PAPER_ACCOUNT in disagreement
+    assert OTHER_ACCOUNT in disagreement
+
+
+async def test_an_unpinned_revision_has_no_pin_to_contradict(
+    service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
+) -> None:
+    created = service.create_profile(
+        display_name="Paper - unpinned",
+        credential_slot=PAPER_SLOT,
+        endpoint_mode="paper",
+        live_envelope=None,
+    )
+    _make_effective(service, created.profile.profile_id, 1, PAPER_ACCOUNT)
+    resolved = await resolve_worker_binding(
+        service_factory=_service(service), environment=environment
+    )
+    assert isinstance(resolved, BoundWorker)
+
+    assert account_pin_disagreement(resolved, account_id=OTHER_ACCOUNT) is None
