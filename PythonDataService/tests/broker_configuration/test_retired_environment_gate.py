@@ -80,16 +80,6 @@ def service(
     built.close()
 
 
-@pytest.fixture
-def reads_the_real_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Undo the autouse isolation, for the tests that are *about* the detector.
-
-    ``tests/conftest.py`` pins every test's view of the retired settings to
-    "absent" so a developer's real ``.env`` cannot decide an unrelated binding
-    test. These tests need the real reader back; a later patch wins.
-    """
-
-
 async def _effective_paper_profile(service: BrokerConfigurationService) -> None:
     """One saved, pinned, effective revision — an installation that has cut over."""
     created = service.create_profile(
@@ -113,14 +103,21 @@ async def _effective_paper_profile(service: BrokerConfigurationService) -> None:
     )
 
 
-def _pending_apply_on_a_second_profile(service: BrokerConfigurationService) -> str:
-    """A staged revision with Apply pressed against it — a deliberate change."""
+async def _pending_apply_on_a_second_profile(service: BrokerConfigurationService) -> str:
+    """A staged revision with Apply pressed against it — a deliberate change.
+
+    Pinned to the same account as the effective revision, the way an operator
+    reaches Apply in practice: the configuration page verifies and approves the
+    account first. Without the pin the Apply would be refused by the *switch*
+    preflight instead, which is a different test's subject.
+    """
     created = service.create_profile(
         display_name="A change the operator applied",
         credential_slot=PAPER_SLOT,
         endpoint_mode="paper",
         live_envelope=None,
     )
+    await service.pin_account(created.profile.profile_id, 1, account_id=PAPER_ACCOUNT)
     service.stage_selection(
         profile_id=created.profile.profile_id,
         revision=1,
@@ -137,7 +134,6 @@ def _logged_actions(caplog: pytest.LogCaptureFixture, action: str) -> list[loggi
     return [record for record in caplog.records if getattr(record, "action", None) == action]
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
 async def test_a_plain_restart_binds_and_complains_while_a_retired_variable_is_set(
     service: BrokerConfigurationService,
     environment: AlpacaCredentialEnvironment,
@@ -185,7 +181,6 @@ async def test_a_plain_restart_binds_and_complains_while_a_retired_variable_is_s
     assert _logged_actions(caplog, "worker_binding_retired_environment") == []
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
 async def test_a_pending_apply_still_refuses_while_a_retired_variable_is_set(
     service: BrokerConfigurationService,
     environment: AlpacaCredentialEnvironment,
@@ -204,7 +199,7 @@ async def test_a_pending_apply_still_refuses_while_a_retired_variable_is_set(
     assertion here is enough to say the two are wired together.
     """
     await _effective_paper_profile(service)
-    _pending_apply_on_a_second_profile(service)
+    await _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_MODE", "live")
     monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
 
@@ -224,7 +219,6 @@ async def test_a_pending_apply_still_refuses_while_a_retired_variable_is_set(
     assert _logged_actions(caplog, "worker_binding_retired_environment_recovery_warning") == []
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
 async def test_the_refusal_is_a_closed_gate_not_a_crash(
     service: BrokerConfigurationService,
     environment: AlpacaCredentialEnvironment,
@@ -239,7 +233,7 @@ async def test_the_refusal_is_a_closed_gate_not_a_crash(
     for what the same environment does without one.
     """
     await _effective_paper_profile(service)
-    _pending_apply_on_a_second_profile(service)
+    await _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_MODE", "paper")
 
     resolved = await resolve_worker_binding(
@@ -249,7 +243,6 @@ async def test_the_refusal_is_a_closed_gate_not_a_crash(
     assert isinstance(resolved, UnboundWorker)
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
 async def test_the_credential_pair_does_not_trip_the_gate(
     service: BrokerConfigurationService,
     environment: AlpacaCredentialEnvironment,
@@ -260,8 +253,15 @@ async def test_the_credential_pair_does_not_trip_the_gate(
     ``ALPACA_API_KEY_ID`` / ``ALPACA_API_SECRET_KEY`` *are* the ``default``
     credential slot. They stay in the environment forever, and a cut-over worker
     binds normally with them present.
+
+    Deliberately an **Apply** boot. A recovery binds through a retired variable
+    now, so running this as a restart would assert nothing: it would pass just as
+    happily if someone wrongly added the credential pair to ``RETIRED_SETTINGS``.
+    Apply is the boot shape where a wrongly-retired name still refuses, so it is
+    the only one where this test has teeth.
     """
     await _effective_paper_profile(service)
+    staged_profile_id = await _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_API_KEY_ID", DEFAULT_SLOT_KEY)
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", DEFAULT_SLOT_SECRET)
     monkeypatch.setenv("ALPACA_CLERK_DIR", "/app/artifacts/alpaca_clerk")
@@ -271,10 +271,10 @@ async def test_the_credential_pair_does_not_trip_the_gate(
     )
 
     assert isinstance(resolved, BoundWorker)
-    assert resolved.from_profile
+    assert resolved.candidate is not None
+    assert resolved.candidate.profile_id == staged_profile_id
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
 async def test_a_pre_cutover_installation_still_boots_from_the_environment(
     clerk_dir: Path,
     clock: FrozenClock,
@@ -320,7 +320,7 @@ async def test_a_refused_apply_is_consumed_so_a_later_tidy_up_cannot_re_arm_it(
     The change has to be re-authorised after the environment is fixed.
     """
     await _effective_paper_profile(service)
-    staged_profile_id = _pending_apply_on_a_second_profile(service)
+    staged_profile_id = await _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
 
     resolved = await resolve_worker_binding(

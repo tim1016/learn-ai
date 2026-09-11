@@ -92,10 +92,10 @@ def service(
 def rehearsal_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """An ADR 0059 live deployment: seven retired lines plus a credential pair.
 
-    The autouse isolation in ``tests/conftest.py`` is undone here — this test is
-    *about* the detector, so it needs the real reader, pinned to the process
-    environment (``_env_file=None``) rather than to whatever ``.env`` happens to
-    sit beside the test run.
+    Set on the *process* environment, which is the half of the reader the autouse
+    isolation in ``tests/conftest.py`` leaves alone — it drops only the ``.env``
+    half, so this test sees exactly what it sets and never whatever ``.env``
+    happens to sit beside the test run.
     """
     for name, value in LEGACY_LIVE_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
@@ -208,7 +208,19 @@ async def test_the_whole_cutover_and_its_rollback(
     #    (ADR 0060 D4.3). The lines are reported, loudly, and ignored. A real
     #    rollback reverts the code too, and the profile records are deliberately
     #    kept so it can.
-    for name, value in LEGACY_LIVE_ENVIRONMENT.items():
+    #
+    #    The restored values are deliberately *drifted* from the profile's. This
+    #    is the assertion that proves the recovery ignores them: restoring the
+    #    identical numbers would satisfy the `sha` check whether the envelope came
+    #    from the profile or from the environment, so it would prove nothing. On a
+    #    **live** revision these six are the real risk limits, and a leak here
+    #    would raise a loss cap on real money.
+    drifted = {
+        **LEGACY_LIVE_ENVIRONMENT,
+        "ALPACA_LIVE_LOSS_USD": "999999",
+        "ALPACA_LIVE_ARMING_MAX_SESSIONS": "9999",
+    }
+    for name, value in drifted.items():
         monkeypatch.setenv(name, value)
     with caplog.at_level(logging.ERROR, logger="app.broker_configuration.worker_binding"):
         rolled_back = await resolve_worker_binding(
@@ -217,6 +229,12 @@ async def test_the_whole_cutover_and_its_rollback(
     assert isinstance(rolled_back, BoundWorker)
     assert rolled_back.context.live_envelope is not None
     assert rolled_back.context.live_envelope.sha == legacy_sha
+    assert rolled_back.context.settings.live_loss_usd == float(
+        LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_LOSS_USD"]
+    )
+    assert rolled_back.context.settings.live_arming_max_sessions == int(
+        LEGACY_LIVE_ENVIRONMENT["ALPACA_LIVE_ARMING_MAX_SESSIONS"]
+    )
     complained = [
         record
         for record in caplog.records

@@ -63,9 +63,11 @@ APPLY_PREFLIGHT_REFUSED: Final = "apply_preflight_refused"
 ACCOUNT_PIN_MISMATCH: Final = "account_pin_mismatch"
 # A variable the profiles database replaced is still set on an installation that
 # has cut over (ADR 0060 open question 1, resolved by the owner 2026-09-10:
-# refuse, do not ignore quietly). Not in contract §6's table, which was written
-# before that answer existed; the shape is the same and package F's
-# ``legacy_environment`` module is the only raiser.
+# refuse, do not ignore quietly — narrowed the same day to *deliberate* boots
+# only, so an ordinary restart logs these names and binds rather than raising
+# this). Not in contract §6's table, which was written before that answer
+# existed; the shape is the same and package F's ``legacy_environment`` module is
+# the only raiser.
 RETIRED_ENVIRONMENT_SETTINGS: Final = "retired_environment_settings"
 
 

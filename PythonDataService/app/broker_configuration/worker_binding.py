@@ -51,6 +51,7 @@ from app.broker.alpaca.profile import (
     reverify_pinned_account,
     verify_account,
 )
+from app.broker_configuration import legacy_environment
 from app.broker_configuration.binding_decision import (
     BindingCandidate,
     BindingIntent,
@@ -61,7 +62,6 @@ from app.broker_configuration.binding_decision import (
 )
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.legacy_environment import (
-    current_retired_settings,
     retired_environment_refusal,
     stale_retired_settings,
 )
@@ -227,7 +227,14 @@ async def resolve_worker_binding(
     # One read, off the loop thread. ``LegacyEnvironmentPresence()`` parses
     # ``.env`` from disk; reading it twice — once for the refusal, once for the
     # log line — would both block here and let the two disagree.
-    presence = await asyncio.to_thread(current_retired_settings)
+    #
+    # Reached through the module rather than imported by name, deliberately.
+    # ``tests/conftest.py``'s autouse fixture drops the ``.env`` half of this
+    # reader so no test inherits a developer's real file; a ``from ... import``
+    # binds the function object here at import time and that patch would never
+    # reach this call — which is exactly how these tests came to pass in a fresh
+    # worktree and fail in the main checkout.
+    presence = await asyncio.to_thread(legacy_environment.current_retired_settings)
     stale_refusal = retired_environment_refusal(presence)
 
     if chosen.intent is BindingIntent.APPLY:
@@ -260,9 +267,14 @@ async def resolve_worker_binding(
         # repeats every boot until the line is deleted — but the ``action``
         # differs so a log search or an alert rule can tell "refused to bind"
         # from "bound anyway, please tidy up".
+        #
+        # The wording claims only what is certain at this point. The bind below
+        # can still be refused for an unrelated reason — an unresolvable
+        # revision, an account-pin mismatch — and a line asserting "bound
+        # anyway" would be the one an operator read on exactly that boot.
         logger.error(
-            "Retired broker settings are still present; this recovery binds the "
-            "effective revision anyway and does not read them",
+            "Retired broker settings are still present; this recovery does not read "
+            "them and is not refused for them",
             extra={
                 "action": "worker_binding_retired_environment_recovery_warning",
                 "reason_code": stale_refusal.reason,
