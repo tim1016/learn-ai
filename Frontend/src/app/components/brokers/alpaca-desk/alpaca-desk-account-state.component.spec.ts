@@ -23,6 +23,7 @@ function choice(
     is_effective: true,
     action_kind: 'review_configuration',
     action_label: 'Review Alpaca Paper',
+    action_consequence: 'Review this saved revision without changing the running worker.',
     ...overrides,
   };
 }

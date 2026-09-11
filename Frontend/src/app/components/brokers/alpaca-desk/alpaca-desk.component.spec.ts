@@ -63,6 +63,7 @@ const accountActivation: AlpacaDeskState = {
     is_effective: false,
     action_kind: 'review_configuration',
     action_label: 'Select Paper account',
+    action_consequence: 'Review this saved revision without changing the running worker.',
   }],
   profiles_requiring_setup: 0,
   setup_required_message: null,

@@ -65,7 +65,7 @@
     </fieldset>
 
     <footer class="activation__footer">
-      <p id="alpaca-activation-consequence">{{ current.consequence }}</p>
+      <p id="alpaca-activation-consequence">{{ actionConsequence() }}</p>
       <button
         type="submit"
         [disabled]="!canRequestAction()"

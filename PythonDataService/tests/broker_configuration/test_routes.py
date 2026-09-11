@@ -171,12 +171,42 @@ async def test_desk_state_returns_verified_choices_without_configuration_secrets
             "description": "Alpaca-Paper uses the verified paper account.",
             "action_kind": "review_configuration",
             "action_label": "Review Alpaca-Paper",
+            "action_consequence": (
+                "Reviewing this saved revision does not stage or apply it, restart a worker, "
+                "or arm live trading."
+            ),
             "is_staged": False,
             "is_effective": False,
         }
     ]
     assert "credential_slot" not in response.text
     assert "api_secret" not in response.text.lower()
+
+
+async def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
+    client: AsyncClient,
+) -> None:
+    profile_id = await _create_paper_profile(client)
+    archived = await client.patch(
+        f"{PREFIX}/profiles/{profile_id}",
+        json={"archived": True},
+    )
+    assert archived.status_code == 200, archived.text
+
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["choices"] == []
+    assert response.json()["empty_choices_message"] == (
+        "All saved account configurations are archived. Restore one on the Configuration "
+        "page, or set up a new account."
+    )
+    assert response.json()["action"] == {
+        "kind": "review_configuration",
+        "label": "Review account configurations",
+        "enabled": True,
+    }
+    assert "No account configurations are saved yet" not in response.text
 
 
 async def test_profile_lifecycle_over_http(client: AsyncClient) -> None:

@@ -291,6 +291,7 @@ export class AlpacaConfigurationPageComponent {
       this.createForm()?.reset();
       this.selectedProfileId.set(created.profile.profile_id);
       this.profiles.reload();
+      this.deskState.reload();
     });
   }
 
@@ -350,6 +351,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.updateProfile(request.profileId, { archived: request.archived });
       this.profiles.reload();
       this.detail.reload();
+      this.deskState.reload();
     });
   }
 
@@ -360,6 +362,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.updateProfile(open.profileId, { displayName });
       this.profiles.reload();
       this.detail.reload();
+      this.deskState.reload();
     });
   }
 
@@ -370,6 +373,7 @@ export class AlpacaConfigurationPageComponent {
       const cloned = await this.service.cloneProfile(open.profileId, displayName);
       this.selectedProfileId.set(cloned.profile.profile_id);
       this.profiles.reload();
+      this.deskState.reload();
     });
   }
 
@@ -407,6 +411,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.pinAccount(target.profileId, target.revision, accountId);
       this.detail.reload();
       this.revisions.reload();
+      this.deskState.reload();
     });
   }
 
@@ -416,6 +421,7 @@ export class AlpacaConfigurationPageComponent {
     void this.run(async () => {
       await this.service.putNickname(accountId, nickname);
       this.nicknames.reload();
+      this.deskState.reload();
     });
   }
 

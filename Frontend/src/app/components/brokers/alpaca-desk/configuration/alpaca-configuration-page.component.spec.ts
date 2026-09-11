@@ -93,6 +93,7 @@ function deskChoice(
     description: 'Paper — strategy testing uses the verified paper account.',
     action_kind: 'review_configuration',
     action_label: 'Review Paper — strategy testing',
+    action_consequence: 'Review this saved revision without changing the running worker.',
     is_staged: false,
     is_effective: false,
     ...overrides,
@@ -523,18 +524,58 @@ describe('AlpacaConfigurationPageComponent', () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile({ profile_id: 'profile-1' }));
     service.revisions.push(revision({ profile_id: 'profile-1' }));
-    await renderPage(service);
+    service.current = selection({
+      staged_profile_id: 'profile-1',
+      staged_revision: 1,
+      selection_generation: 4,
+    });
+    service.desk = deskState({
+      activation_state: 'staged_not_applied',
+      detail: 'Paper — strategy testing is staged. Review it before recording Apply.',
+      consequence: 'Apply records the change for the next controlled worker restart.',
+      action: {
+        kind: 'review_staged_configuration',
+        label: 'Review & apply Paper — strategy testing',
+        enabled: true,
+      },
+      selection_generation: 4,
+      staged_choice: deskChoice({
+        profile_id: 'profile-1',
+        selection_id: 'profile-1@1',
+        is_staged: true,
+        action_kind: 'review_staged_configuration',
+        action_label: 'Review & apply Paper — strategy testing',
+        action_consequence: 'Apply records the change for the next controlled worker restart.',
+      }),
+    });
+    await renderPage(service, { profileId: 'profile-1', revision: '1' });
 
-    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    expect(await screen.findByText(/Paper — strategy testing is staged/)).toBeTruthy();
     const nameField = await screen.findByLabelText('Profile name');
     await userEvent.clear(nameField);
     await userEvent.type(nameField, 'Paper — overnight');
+    service.desk = deskState({
+      ...service.desk,
+      detail: 'Paper — overnight is staged. Review it before recording Apply.',
+      staged_choice: deskChoice({
+        profile_id: 'profile-1',
+        selection_id: 'profile-1@1',
+        profile_label: 'Paper — overnight',
+        account_label: 'Paper — overnight',
+        is_staged: true,
+        action_kind: 'review_staged_configuration',
+        action_label: 'Review & apply Paper — overnight',
+        action_consequence: 'Apply records the change for the next controlled worker restart.',
+      }),
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
 
     expect(service.updateProfile).toHaveBeenCalledWith('profile-1', {
       displayName: 'Paper — overnight',
     });
     expect(service.profiles[0].display_name).toBe('Paper — overnight');
+    expect(await screen.findByText(/Paper — overnight is staged/)).toBeTruthy();
+    expect(service.readDeskState).toHaveBeenCalledTimes(2);
   });
 
   it('says what an unavailable credential slot means and who can fix it', async () => {

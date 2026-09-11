@@ -98,6 +98,10 @@ async def test_desk_state_offers_only_complete_explicitly_pinned_revisions(
     assert choice.badge_label == "Paper account"
     assert choice.action_kind == "review_configuration"
     assert choice.action_label == "Review Alpaca-Paper"
+    assert choice.action_consequence == (
+        "Reviewing this saved revision does not stage or apply it, restart a worker, or arm "
+        "live trading."
+    )
     assert choice.is_staged is False
     assert choice.is_effective is False
     assert state.empty_choices_message is None
@@ -146,6 +150,7 @@ async def test_projector_authors_the_live_choice_safety_copy(
         staged_revision=None,
         effective_revision=None,
         nicknames=service.list_nicknames(),
+        has_archived_profiles=False,
     )
 
     assert state.choices[0].description == (
@@ -158,6 +163,10 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     service: BrokerConfigurationService,
 ) -> None:
     profile_id = await _pinned_paper_profile(service)
+    alternate_profile_id = await _pinned_paper_profile(
+        service,
+        display_name="Paper alternate",
+    )
 
     staged = service.stage_selection(
         profile_id=profile_id,
@@ -174,6 +183,7 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert staged_state.action.kind == "review_staged_configuration"
     assert staged_state.action.label == "Review & apply Alpaca-Paper"
     assert staged_state.choices[0].action_kind == "review_staged_configuration"
+    assert staged_state.choices[0].action_consequence == staged_state.consequence
 
     requested = service.request_apply(
         expected_selection_generation=staged.selection_generation,
@@ -185,6 +195,15 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert restart_state.action.kind == "view_restart_steps"
     assert restart_state.choices[0].action_kind == "view_restart_steps"
     assert restart_state.choices[0].action_label == "View restart steps"
+    assert restart_state.choices[0].action_consequence == restart_state.consequence
+    alternate_choice = next(
+        choice for choice in restart_state.choices if choice.profile_id == alternate_profile_id
+    )
+    assert alternate_choice.action_kind == "review_configuration"
+    assert alternate_choice.action_consequence == (
+        "Reviewing this saved revision does not stage or apply it, restart a worker, or arm "
+        "live trading."
+    )
     assert "controlled restart" in restart_state.detail
     assert "does not arm live trading" in restart_state.consequence
 
@@ -215,6 +234,24 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert repeat_restart_state.choices[0].is_effective is True
     assert repeat_restart_state.choices[0].action_kind == "view_restart_steps"
     assert repeat_restart_state.choices[0].action_label == "View restart steps"
+
+
+def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
+    service: BrokerConfigurationService,
+) -> None:
+    created = paper_profile(service, display_name="Archived paper")
+    service.update_profile(created.profile.profile_id, archived=True)
+
+    state = service.desk_state()
+
+    assert state.choices == ()
+    assert state.profiles_requiring_setup == 0
+    assert state.empty_choices_message == (
+        "All saved account configurations are archived. Restore one on the Configuration "
+        "page, or set up a new account."
+    )
+    assert state.action.kind == "review_configuration"
+    assert state.action.label == "Review account configurations"
 
 
 async def test_desk_state_keeps_effective_and_staged_drift_visibly_separate(

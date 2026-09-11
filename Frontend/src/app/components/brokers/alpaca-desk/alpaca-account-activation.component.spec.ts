@@ -56,6 +56,7 @@ const deskState: AlpacaDeskState = {
       is_effective: false,
       action_kind: 'review_configuration',
       action_label: 'Select Paper account',
+      action_consequence: 'Review Paper without changing the running worker.',
     },
     {
       selection_id: 'live-profile:2',
@@ -72,6 +73,7 @@ const deskState: AlpacaDeskState = {
       is_effective: false,
       action_kind: 'review_configuration',
       action_label: 'Select Live account',
+      action_consequence: 'Review Live without changing the running worker.',
     },
   ],
   profiles_requiring_setup: 0,
@@ -209,6 +211,7 @@ describe('AlpacaAccountActivationComponent', () => {
       ...deskState.choices[0],
       action_kind: 'view_restart_steps' as const,
       action_label: 'View restart steps',
+      action_consequence: 'Restarting applies this exact Paper revision.',
       is_staged: true,
     };
     const restartState: AlpacaDeskState = {
@@ -226,5 +229,32 @@ describe('AlpacaAccountActivationComponent', () => {
     );
     expect(screen.getAllByText('View restart steps')).toHaveLength(2);
     expect(screen.queryByText('Review & apply Alpaca Paper')).toBeNull();
+  });
+
+  it('switches the described consequence when another revision is selected after Apply', async () => {
+    const staged = {
+      ...deskState.choices[0],
+      action_kind: 'view_restart_steps' as const,
+      action_label: 'View restart steps',
+      action_consequence: 'Restarting applies this exact Paper revision.',
+      is_staged: true,
+    };
+    const restartState: AlpacaDeskState = {
+      ...deskState,
+      activation_state: 'apply_requested_restart_required',
+      consequence: staged.action_consequence,
+      staged_choice: staged,
+      choices: [staged, deskState.choices[1]],
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    };
+    await render(AlpacaAccountActivationComponent, { inputs: { view: restartState } });
+
+    await userEvent.click(screen.getByRole('radio', { name: /LIVE-456/ }));
+
+    expect(screen.getByText('Review Live without changing the running worker.')).toBeTruthy();
+    expect(screen.queryByText(staged.action_consequence)).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Select Live account' }).getAttribute('aria-describedby'),
+    ).toBe('alpaca-activation-consequence');
   });
 });

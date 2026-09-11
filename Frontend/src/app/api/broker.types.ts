@@ -10402,6 +10402,8 @@ export interface components {
             account_id: string;
             /** Account Label */
             account_label: string;
+            /** Action Consequence */
+            action_consequence: string;
             /**
              * Action Kind
              * @enum {string}

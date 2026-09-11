@@ -220,6 +220,7 @@ class DeskAccountChoiceResponse(DeskSelectionSummaryResponse):
         "view_restart_steps",
     ]
     action_label: str
+    action_consequence: str
     is_staged: bool
     is_effective: bool
 
@@ -238,6 +239,7 @@ class DeskAccountChoiceResponse(DeskSelectionSummaryResponse):
             description=choice.description,
             action_kind=choice.action_kind,
             action_label=choice.action_label,
+            action_consequence=choice.action_consequence,
             is_staged=choice.is_staged,
             is_effective=choice.is_effective,
         )

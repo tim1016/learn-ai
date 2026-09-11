@@ -12024,6 +12024,10 @@
             "title": "Account Label",
             "type": "string"
           },
+          "action_consequence": {
+            "title": "Action Consequence",
+            "type": "string"
+          },
           "action_kind": {
             "enum": [
               "review_configuration",
@@ -12103,6 +12107,7 @@
           "description",
           "action_kind",
           "action_label",
+          "action_consequence",
           "is_staged",
           "is_effective"
         ],

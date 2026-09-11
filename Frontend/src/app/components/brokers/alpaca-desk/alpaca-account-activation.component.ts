@@ -42,6 +42,9 @@ export class AlpacaAccountActivationComponent {
   protected readonly actionLabel = computed(
     () => this.selectedChoice()?.action_label ?? this.view().action.label,
   );
+  protected readonly actionConsequence = computed(
+    () => this.selectedChoice()?.action_consequence ?? this.view().consequence,
+  );
   protected readonly canRequestAction = computed(() => {
     const action = this.view().action;
     return !this.busy()

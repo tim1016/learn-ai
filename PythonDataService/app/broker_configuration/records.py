@@ -212,6 +212,7 @@ class DeskAccountChoice(DeskSelectionSummary):
 
     action_kind: DeskActionKind
     action_label: str
+    action_consequence: str
     is_staged: bool
     is_effective: bool
 

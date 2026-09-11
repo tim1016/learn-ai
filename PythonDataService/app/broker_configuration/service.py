@@ -558,7 +558,8 @@ class BrokerConfigurationService:
         """
         with self._store.read_snapshot():
             current = self._store.read_selection()
-            profiles = self._store.list_profiles(include_archived=False)
+            all_profiles = self._store.list_profiles(include_archived=True)
+            profiles = [profile for profile in all_profiles if not profile.archived]
             revisions_by_profile = {
                 profile.profile_id: self._store.list_revisions(profile.profile_id)
                 for profile in profiles
@@ -581,6 +582,7 @@ class BrokerConfigurationService:
             staged_revision=staged_revision,
             effective_revision=effective_revision,
             nicknames=nicknames,
+            has_archived_profiles=len(all_profiles) > len(profiles),
         )
 
     def stage_selection(

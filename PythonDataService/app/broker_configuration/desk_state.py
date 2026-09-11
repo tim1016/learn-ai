@@ -29,6 +29,19 @@ from app.broker_configuration.records import (
     ProfileRevision,
 )
 
+_REVIEW_CHOICE_CONSEQUENCE = (
+    "Reviewing this saved revision does not stage or apply it, restart a worker, or arm "
+    "live trading."
+)
+_APPLY_CONSEQUENCE = (
+    "Apply records the change for the next controlled worker restart. It does not switch "
+    "a running worker or arm live trading."
+)
+_RESTART_CONSEQUENCE = (
+    "Restarting applies this exact profile revision. It does not arm live trading or "
+    "retarget any existing strategy."
+)
+
 
 def _same_selection(
     left_profile_id: str,
@@ -82,12 +95,15 @@ def _choice(
     if is_staged and apply_requested:
         action_kind = "view_restart_steps"
         action_label = "View restart steps"
+        action_consequence = _RESTART_CONSEQUENCE
     elif is_staged and not is_effective:
         action_kind = "review_staged_configuration"
         action_label = f"Review & apply {summary.profile_label}"
+        action_consequence = _APPLY_CONSEQUENCE
     else:
         action_kind = "review_configuration"
         action_label = f"Review {summary.profile_label}"
+        action_consequence = _REVIEW_CHOICE_CONSEQUENCE
     return DeskAccountChoice(
         selection_id=summary.selection_id,
         profile_id=summary.profile_id,
@@ -101,6 +117,7 @@ def _choice(
         description=summary.description,
         action_kind=action_kind,
         action_label=action_label,
+        action_consequence=action_consequence,
         is_staged=is_staged,
         is_effective=is_effective,
     )
@@ -196,6 +213,7 @@ def project_desk_state(
     staged_revision: ProfileRevision | None,
     effective_revision: ProfileRevision | None,
     nicknames: Sequence[AccountNickname],
+    has_archived_profiles: bool,
 ) -> AlpacaDeskState:
     """Build the desk read model without probing credentials or Alpaca."""
     profile_by_id = {profile.profile_id: profile for profile in profiles}
@@ -261,7 +279,15 @@ def project_desk_state(
         )
         action = DeskAction(
             kind="review_configuration",
-            label="Choose an account" if choices else "Set up an account",
+            label=(
+                "Choose an account"
+                if choices
+                else (
+                    "Review account configurations"
+                    if has_archived_profiles and not profiles
+                    else "Set up an account"
+                )
+            ),
             enabled=True,
         )
     elif activation_state == "staged_not_applied":
@@ -279,10 +305,7 @@ def project_desk_state(
             else f"{staged.profile_label} is staged. Review it before recording Apply."
         )
         selection_label = f"Selected: {staged.account_label}"
-        consequence = (
-            "Apply records the change for the next controlled worker restart. It does not "
-            "switch a running worker or arm live trading."
-        )
+        consequence = _APPLY_CONSEQUENCE
         action = DeskAction(
             kind="review_staged_configuration",
             label=f"Review & apply {staged.profile_label}",
@@ -297,10 +320,7 @@ def project_desk_state(
             "selected configuration becomes effective."
         )
         selection_label = f"Apply recorded: {staged.account_label}"
-        consequence = (
-            "Restarting applies this exact profile revision. It does not arm live trading or "
-            "retarget any existing strategy."
-        )
+        consequence = _RESTART_CONSEQUENCE
         action = DeskAction(
             kind="view_restart_steps",
             label="View restart steps",
@@ -341,7 +361,12 @@ def project_desk_state(
                 "No verified accounts are ready to choose. Finish account verification on "
                 "the Configuration page."
                 if profiles_requiring_setup
-                else "No account configurations are saved yet. Set one up to continue."
+                else (
+                    "All saved account configurations are archived. Restore one on the "
+                    "Configuration page, or set up a new account."
+                    if has_archived_profiles
+                    else "No account configurations are saved yet. Set one up to continue."
+                )
             )
         ),
         profiles_requiring_setup=profiles_requiring_setup,
