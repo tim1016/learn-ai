@@ -219,15 +219,21 @@ class SymbolValidityProbe:
 def _store_root() -> Path:
     """The one production store root (the clerk artifacts dir).
 
-    Kept as a seam on purpose: ``get_alpaca_settings`` validates credentials
-    on first use, and tests must never depend on them — the autouse
-    ``_isolate_symbol_validity_store`` fixture in ``tests/conftest.py``
-    repoints this at an empty per-test location (the #1739 lesson: a
-    gitignored artifacts file must not make local pytest diverge from CI).
-    """
-    from app.broker.alpaca.config import get_alpaca_settings
+    Kept as a seam on purpose: tests must never depend on a developer's real
+    artifacts directory — the autouse ``_isolate_symbol_validity_store``
+    fixture in ``tests/conftest.py`` repoints this at an empty per-test
+    location (the #1739 lesson: a gitignored artifacts file must not make
+    local pytest diverge from CI).
 
-    return get_alpaca_settings().clerk_dir
+    The Clerk directory is *deployment bootstrap*, not user-owned
+    configuration (ADR 0060 Decision 1), so it is read through the
+    credential-free resolver. Reading it through ``AlpacaSettings`` used to
+    make locating a store depend on a credential pair being present, which is
+    the coupling Decision 7 exists to remove.
+    """
+    from app.broker_configuration.runtime import resolve_clerk_dir
+
+    return resolve_clerk_dir()
 
 
 def symbol_marked_unresolvable(symbol: str) -> bool:

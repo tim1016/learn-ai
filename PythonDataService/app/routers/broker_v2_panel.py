@@ -785,6 +785,7 @@ async def _read_evidence(
     # (audit log write failure, which is logged-and-swallowed inside) and does
     # not raise PanelDataError, so wrapping it here would mask real I/O errors.
     return read_evidence_page(
+        broker=broker,
         account_id=account_id,
         sid=sid,
         transaction_ref=transaction_ref,

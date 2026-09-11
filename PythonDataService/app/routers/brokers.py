@@ -19,6 +19,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
+from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -41,7 +42,6 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.config import get_alpaca_settings
 from app.broker.contract.errors import (
     BrokerAccountModeDisagreement,
     BrokerError,
@@ -735,9 +735,11 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
             detail={"reason": "live_verdict_unsupported_broker", "message": f"No live verdict for broker '{broker}'."},
         )
     try:
-        alpaca_settings = get_alpaca_settings()
-    except ValidationError:
-        # Invalid settings are a verdict input ("unconfigured"), not a 500.
+        alpaca_settings = resolved_alpaca_settings()
+    except (ValidationError, BrokerUnbound):
+        # Neither invalid settings nor a refused binding is a 500: both are
+        # verdict inputs ("unconfigured"). ``BrokerUnbound`` is what a worker
+        # that could not bind a profile revision raises (ADR 0060).
         alpaca_settings = None
     runtime = get_active_clerk_runtime()
     # One instant for the whole verdict: the lapse count and the stamp the

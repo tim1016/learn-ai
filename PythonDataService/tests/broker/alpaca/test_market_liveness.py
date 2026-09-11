@@ -125,6 +125,9 @@ def test_bad_status_frame_does_not_clear_prior_symbol_evidence(tmp_path: Path) -
     '[{"T":"subscription","statuses":[]}]',
     '[{"T":"subscription","statuses":"*"}]',
     '[{"T":"s","S":"SPY","sc":"T"}]',
+    '[{"T":"s","S":"SPY","t":"2023-11-14T22:13:20Z"}]',
+    '[{"T":"s","S":"SPY","sc":"?","t":"2023-11-14T22:13:20Z"}]',
+    '[{"T":"s","S":"SPY","sc":"T","t":"2099-01-01T00:00:00Z"}]',
 ])
 def test_unsubscribed_frames_never_prove_market_liveness(tmp_path: Path, frame: str) -> None:
     """A rejected handshake must never briefly admit a Paper or Shadow run."""
@@ -143,7 +146,9 @@ def test_unsubscribed_frames_never_prove_market_liveness(tmp_path: Path, frame: 
 
     consumer.handle_frame(frame)
 
-    fact = store.fact("SPY", now_ms=_NOW)
+    # A malformed SPY event may be retained as negative evidence for SPY, but
+    # it must not prove the stream usable for a quiet symbol.
+    fact = store.fact("QQQ", now_ms=_NOW)
     assert fact.state == "UNKNOWN"
     assert fact.reason_code == "STATUS_STREAM_DISCONNECTED"
 
@@ -169,7 +174,7 @@ async def test_paper_worker_shares_statuses_without_opening_another_vendor_socke
     async def snapshot_source() -> MarketStatusSnapshot:
         return source.status_snapshot(now_ms=_NOW)
 
-    async def forbidden_vendor_socket():
+    async def forbidden_vendor_socket() -> AsyncIterator[bytes | str]:
         raise AssertionError("A Paper follower must not open another stock-data connection")
         yield  # pragma: no cover
 
@@ -305,7 +310,12 @@ async def test_production_factory_selects_the_configured_paper_status_source(
     source.mark_stream_connected(observed_at_ms=now_ms_utc())
     calls = []
 
-    async def read_snapshot(actual_url: str, *, control_secret: str, journal: CaptureJournal):
+    async def read_snapshot(
+        actual_url: str,
+        *,
+        control_secret: str,
+        journal: CaptureJournal,
+    ) -> MarketStatusSnapshot:
         calls.append((actual_url, control_secret))
         return source.status_snapshot(now_ms=now_ms_utc())
 

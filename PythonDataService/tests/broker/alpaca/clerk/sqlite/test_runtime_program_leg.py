@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.broker.alpaca.clerk.active_authority import (
     active_program_leg_policy,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -28,6 +30,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import Clock, now_ms_utc, to_ms_utc
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
@@ -119,6 +122,7 @@ async def _enter(
     policy: ProgramLegPolicy,
     retained_source_bar: RetainedSourceBar | None,
     stream_health: StreamHealthGate | None = None,
+    live_envelope: LiveEnvelopeGate | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one ENTER through the facade and report the port and the receipt."""
     repo = ClerkSqliteRepository.initialize(
@@ -134,6 +138,7 @@ async def _enter(
         account_mode="paper",
         program_leg_policy=policy,
         stream_health=stream_health,
+        live_envelope=live_envelope,
     )
     binding = _binding(use_rth=use_rth)
     await facade.register_strategy_run(binding)
@@ -159,6 +164,7 @@ async def _exit(
     use_rth: bool,
     policy: ProgramLegPolicy,
     retained_source_bar: RetainedSourceBar | None,
+    live_envelope: LiveEnvelopeGate | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt."""
     repo = ClerkSqliteRepository.initialize(
@@ -173,6 +179,7 @@ async def _exit(
         trade=trade,
         account_mode="paper",
         program_leg_policy=policy,
+        live_envelope=live_envelope,
     )
     binding = _binding(use_rth=use_rth)
     await facade.register_strategy_run(binding)
@@ -216,6 +223,107 @@ async def test_an_extended_exit_decision_submits_a_marketable_day_limit_at_the_e
         True,
         "sell",
     )
+
+
+def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sides(
+    tmp_path: Path,
+) -> None:
+    """Entries are sealed like exits, and admission reads the policy that prices.
+
+    The owner's decision names entries *and* exits. The entry price cannot be
+    driven end-to-end the way the exit is — a live ENTER whose environment
+    differs from its seal is refused ``LIVE_ENVELOPE_DISAGREEMENT`` before it
+    is priced, and one with no fresh observation is refused
+    ``LIVE_ENVELOPE_UNOBSERVED`` — so what is pinned here is the accessor both
+    sides share. Start and Resume admission read it through
+    ``active_program_leg_policy``; ``_execute_effect`` prices from it (which
+    the extended-exit tests above prove end-to-end). One accessor is what stops
+    admission answering this policy's questions off a different object.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    armed = replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),
+        trade=_FakeTradePort(),
+        account_mode="paper",
+        # The composed policy's 10 / 20 bps is the pre-envelope answer, and the
+        # one a wrong wiring would give.
+        program_leg_policy=_EXTENDED_POLICY,
+        live_envelope=LiveEnvelopeGate(values=armed, sealed=armed, custody_is_simulated=False),
+    )
+    try:
+        policy = facade.program_leg_policy
+    finally:
+        repo.close()
+
+    assert policy.allowances == ExtendedHoursAllowances(
+        entry_bps=Decimal("30"), exit_bps=Decimal("40")
+    )
+    assert policy.window == _EXTENDED_POLICY.window
+
+
+async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged_edit(
+    tmp_path: Path,
+) -> None:
+    """ADR 0059 D3: an edited allowance reaches an exit at the re-arm, never before.
+
+    The environment here carries a staged 500 bps that nobody armed, and the
+    ledger seals 40. Pricing from the environment would let an operator move a
+    real-money anchor by editing a file — and an exit is never envelope-gated,
+    so nothing else would catch it. The policy's own configured 20 bps is the
+    pre-envelope answer, so a wrong wiring cannot hide behind a plausible price.
+    """
+    envelope = LiveEnvelopeGate(
+        values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=500.0, xh_exit_bps=500.0),
+        sealed=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0),
+        custody_is_simulated=False,
+    )
+
+    trade, state, _explanation = await _exit(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+        live_envelope=envelope,
+    )
+
+    assert state is not EffectOperationState.REJECTED
+    (leg,) = trade.submitted_legs
+    assert leg.limit_price == pytest.approx(99.60)  # 100.00 − the sealed 40 bps
+
+
+async def test_an_extended_exit_still_prices_when_no_arming_record_seals_the_account(
+    tmp_path: Path,
+) -> None:
+    """An EXIT is never refused or delayed for want of a seal.
+
+    A position the operator is closing must not be stranded because no ceremony
+    has armed this account yet, or because this observation could not read the
+    ledger. Both leave ``sealed`` at ``None``, and the exit prices from the
+    configured values exactly as it did before the envelope existed. (The loss
+    judgement deliberately does *not* take this fallback — see
+    ``LiveEnvelopeSync._seal_unreadable``.)
+    """
+    envelope = LiveEnvelopeGate(
+        # As in production, the environment feeds both the configured envelope
+        # and the policy's allowances, so the two agree at 20 bps on the exit.
+        values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=10.0, xh_exit_bps=20.0),
+        custody_is_simulated=False,
+    )
+    assert envelope.sealed is None
+
+    trade, state, explanation = await _exit(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+        live_envelope=envelope,
+    )
+
+    assert state is not EffectOperationState.REJECTED, explanation
+    (leg,) = trade.submitted_legs
+    assert leg.limit_price == pytest.approx(99.80)  # 100.00 − the configured 20 bps
 
 
 async def test_an_exit_decision_at_session_close_is_rejected_before_broker_contact(

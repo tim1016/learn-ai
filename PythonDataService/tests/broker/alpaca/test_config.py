@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
+from app.broker.alpaca.active_binding import reset_active_alpaca_binding_for_testing
 from app.broker.alpaca.clerk import (
     get_alpaca_clerk,
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.live_envelope import (
+    LiveEnvelopeValues,
+    envelope_domain_violation,
+)
 from app.broker.alpaca.config import (
     AlpacaSettings,
     reset_alpaca_settings_for_testing,
 )
-from app.main import _alpaca_clerk_configuration_is_valid
 
 _LIVE_REQUIRED = {
     "live_loss_fraction": 0.02,
@@ -27,26 +32,46 @@ _LIVE_REQUIRED = {
     "live_xh_entry_bps": 10.0,
     "live_xh_exit_bps": 10.0,
 }
+# The same six values as an envelope, so a domain row can be tampered with one
+# field at a time on both sides of the parity test below.
+_IN_DOMAIN_ENVELOPE = LiveEnvelopeValues(
+    **{name.removeprefix("live_"): value for name, value in _LIVE_REQUIRED.items()}
+)
 
 
 @pytest.fixture(autouse=True)
 def _isolate_alpaca_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configuration tests must never inherit the developer's trading account."""
     monkeypatch.setitem(AlpacaSettings.model_config, "env_file", None)
-    for name in os.environ:
+    for name in tuple(os.environ):
         if name.startswith("ALPACA_"):
             monkeypatch.delenv(name)
 
 
 def test_shared_status_source_is_explicit_and_paper_only() -> None:
     url = "http://shadow-service:8000/api/brokers/alpaca/market-status-snapshot"
-    paper = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper", market_status_upstream_url=url)
+    paper = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        mode="paper",
+        market_status_upstream_url=url,
+    )
     assert str(paper.market_status_upstream_url) == url
     assert paper.base_url == "https://paper-api.alpaca.markets"
     with pytest.raises(ValidationError, match="only for Paper"):
-        AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", market_status_upstream_url=url, **_LIVE_REQUIRED)
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            mode="live",
+            market_status_upstream_url=url,
+            **_LIVE_REQUIRED,
+        )
     with pytest.raises(ValidationError, match="must not contain credentials"):
-        AlpacaSettings(api_key_id="k", api_secret_key="s", market_status_upstream_url="http://user:secret@shadow-service:8000/")
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            market_status_upstream_url="http://user:secret@shadow-service:8000/",
+        )
 
 
 def test_paper_mode_derives_paper_base_url() -> None:
@@ -124,10 +149,21 @@ def test_missing_credentials_raise(monkeypatch: pytest.MonkeyPatch) -> None:
         AlpacaSettings(_env_file=None)
 
 
-def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
+async def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A half-edited ``.env`` on an installation with no profiles.
+
+    Under ADR 0060 the startup probe resolves a *binding* rather than reading
+    the environment, but this deployment shape — no profiles saved yet — still
+    bootstraps from the environment, so the diagnostic that names the missing
+    ``ALPACA_LIVE_*`` variables is still the true one and must survive. It
+    belongs in the log, never in the operator-facing refusal, and the
+    credential must not appear in either.
+    """
+    from app.main import _install_alpaca_binding
+
     secret = "must-not-appear-in-logs"
     set_alpaca_clerk(MagicMock())
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
@@ -137,7 +173,7 @@ def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
 
     try:
         with caplog.at_level("WARNING"):
-            assert _alpaca_clerk_configuration_is_valid() is False
+            assert await _install_alpaca_binding() is None
 
         assert get_alpaca_clerk() is None
         rendered = " ".join(
@@ -147,6 +183,7 @@ def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
         assert "ALPACA_MODE=live requires" in rendered
         assert secret not in rendered
     finally:
+        reset_active_alpaca_binding_for_testing()
         reset_alpaca_clerk_for_testing()
         reset_alpaca_settings_for_testing()
 
@@ -163,3 +200,52 @@ def test_live_values_must_be_finite(field: str, bad: float) -> None:
 
     with pytest.raises(ValidationError):
         AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **values)
+
+
+# One row per envelope value, holding a value just outside the domain this
+# file's settings declare. ``live_envelope._ENVELOPE_DOMAINS`` is a second copy
+# of those bounds -- necessary, because an envelope also arrives from an arming
+# record read off disk and never passes through settings -- and the parity test
+# below is what stops the two from drifting (CLAUDE.md guiding philosophy #5).
+_JUST_OUTSIDE: tuple[tuple[str, float], ...] = (
+    ("loss_fraction", 0.0),
+    ("loss_fraction", 1.0),
+    ("loss_usd", 0.0),
+    ("loss_usd", float("inf")),
+    ("loss_usd", float("nan")),
+    ("shadow_sessions", 0),
+    ("arming_max_sessions", 0),
+    ("xh_entry_bps", -1.0),
+    ("xh_entry_bps", 10_000.0),
+    ("xh_exit_bps", -1.0),
+    ("xh_exit_bps", 10_000.0),
+)
+
+
+@pytest.mark.parametrize(("field", "value"), _JUST_OUTSIDE)
+def test_the_envelope_domains_agree_with_the_settings_that_declare_them(
+    field: str, value: float
+) -> None:
+    """Both copies of one domain, pinned together.
+
+    ``AlpacaSettings`` refuses to *boot* outside these bounds;
+    ``envelope_domain_violation`` refuses an arming record *sealed* outside
+    them. Move a bound in either place without the other and this fails.
+    """
+    settings_values = {**_LIVE_REQUIRED, f"live_{field}": value}
+
+    with pytest.raises(ValidationError):
+        AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **settings_values)
+
+    violation = envelope_domain_violation(replace(_IN_DOMAIN_ENVELOPE, **{field: value}))
+    assert violation is not None, (
+        f"{field}={value} is refused by AlpacaSettings but admitted by the envelope domains"
+    )
+    assert violation.startswith(field)
+
+
+def test_the_envelope_domains_admit_every_value_the_settings_load() -> None:
+    """The other direction: what the environment accepts must also seal."""
+    settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
+
+    assert envelope_domain_violation(LiveEnvelopeValues.from_settings(settings)) is None

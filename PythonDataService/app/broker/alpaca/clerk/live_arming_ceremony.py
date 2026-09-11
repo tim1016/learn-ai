@@ -792,6 +792,9 @@ def account_arming(
     a caller that knows it reads the ``real_live`` world counts only
     live-sealed instances.
     """
+    from app.broker_configuration.arming_policy import configuration_arming_invalidations
+
+    invalidated = configuration_arming_invalidations(artifacts_root, live_account_id)
     records = LiveArmingLedger(artifacts_root, live_account_id=live_account_id).records()
     known = instance_ids(records)
     wanted = known if strategy_instance_ids is None else tuple(strategy_instance_ids)
@@ -814,6 +817,7 @@ def account_arming(
             seal_hash=None if seal is None else seal.seal_hash,
             configured_envelope=configured_envelope,
             now_ms=now_ms,
+            invalidated_record_shas=invalidated,
         )
     return AccountArming(statuses=statuses, sealed=latest_arming(records))
 

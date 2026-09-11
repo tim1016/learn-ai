@@ -1,0 +1,89 @@
+@use './configuration-controls' as controls;
+
+.profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.profiles__empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.profile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.profile--open {
+  border-color: var(--accent);
+}
+
+.profile__open {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile__name {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.profile__stamp {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.profile__badges {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.badge {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.badge--effective {
+  border-color: var(--bull);
+  color: var(--bull);
+}
+
+.badge--staged {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.profile__actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.profile__actions button {
+  @include controls.secondary-button;
+}

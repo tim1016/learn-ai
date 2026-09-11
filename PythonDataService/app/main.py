@@ -13,13 +13,21 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from app.broker.alpaca.active_binding import (
+    BrokerUnbound,
+    UnboundBroker,
+    active_alpaca_binding_refusal,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
+from app.broker.alpaca.profile import BrokerProfileError
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
     IbkrClient,
     set_client,
 )
+from app.broker_configuration.errors import BrokerConfigurationError
+from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
 from app.config import settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
@@ -33,6 +41,7 @@ from app.routers import (
     broker,
     broker_bots,
     broker_capability,
+    broker_configuration,
     broker_v2_gallery,
     broker_v2_panel,
     brokers,
@@ -80,6 +89,8 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.utils.error_handlers import (
+    broker_profile_exception_handler,
+    broker_unbound_exception_handler,
     catalog_schema_not_ready_exception_handler,
     clerk_sqlite_exception_handler,
     polygon_exception_handler,
@@ -110,30 +121,87 @@ def _validate_data_root_identity() -> None:
     resolve_root_context(expected_root_id)
 
 
-def _alpaca_clerk_configuration_is_valid() -> bool:
-    """Clear stale runtime state, validate settings, and log only safe detail."""
-    from pydantic import ValidationError
+async def _install_alpaca_binding(
+    *, refusal: UnboundBroker | None = None
+) -> BoundWorker | None:
+    """Resolve the effective broker profile and install it for this process.
 
-    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
-    from app.broker.alpaca.config import (
-        alpaca_configuration_error_detail,
-        get_alpaca_settings,
+    Replaces the old "are the environment settings valid?" probe (ADR 0060).
+    What a worker runs on is now the installation's *effective* profile
+    revision — the staged one only when an Apply is recorded against it — and
+    resolving it is where the switch preflight, the refusal-boots-last-effective
+    rule and the generation fence live (``broker_configuration.worker_binding``).
+
+    Returns the binding, or ``None`` when none could be installed. ``None``
+    closes the broker gate with a surfaced reason and installs no clerk,
+    exactly as invalid settings did before: the service still boots (#2014),
+    it simply has no broker. The caller keeps the returned binding so it can
+    acknowledge it once the Clerk holds the account's execution lease.
+    """
+    from app.broker.alpaca.active_binding import (
+        refuse_active_alpaca_binding,
+        set_active_alpaca_binding,
     )
+    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+    from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
 
     set_active_clerk_runtime(None)
-    try:
-        get_alpaca_settings()
-    except ValidationError as exc:
+    if refusal is not None:
+        refuse_active_alpaca_binding(refusal)
+        return None
+    # The switch preflight's evidence. Without it the fail-closed default
+    # refuses every account switch, which is safe but would quietly make
+    # switching impossible — so the real probe is wired here, not defaulted.
+    resolved = await resolve_worker_binding(obligations=ClerkPriorAccountObligations())
+    if not isinstance(resolved, BoundWorker):
+        refuse_active_alpaca_binding(resolved.unbound)
         logger.warning(
-            "Alpaca settings invalid; order-submission clerk not installed.",
-            extra={"detail": alpaca_configuration_error_detail(exc)},
+            "No Alpaca broker binding installed; order-submission clerk not installed.",
+            extra={
+                "action": "alpaca_binding_refused",
+                "reason_code": resolved.unbound.reason,
+            },
         )
-        return False
-    return True
+        return None
+
+    set_active_alpaca_binding(resolved.context)
+    logger.info(
+        "Alpaca broker binding installed.",
+        extra={
+            "action": "alpaca_binding_installed",
+            "profile_id": resolved.context.profile_id,
+            "revision": resolved.context.revision,
+            "mode": resolved.context.settings.mode,
+            "credential_slot": resolved.context.credential_slot,
+        },
+    )
+    return resolved
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Retain the installation writer lock until every custody handle closes."""
+    from app.broker_configuration.worker_lifecycle import installation_worker
+
+    with installation_worker() as refusal:
+        started = False
+        try:
+            async with _service_lifespan(app, worker_refusal=refusal):
+                started = True
+                yield
+        except BaseException:
+            # The inner shutdown block starts after startup finishes. If an
+            # earlier subsystem fails, release custody before the installation
+            # lock so another process cannot inherit a still-running writer.
+            if not started:
+                from app.broker_configuration.worker_lifecycle import close_failed_startup
+
+                await close_failed_startup()
+            raise
+
+
+@asynccontextmanager
+async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | None = None):
     """Startup and shutdown events.
 
     The IBKR client is connected best-effort: a failure here logs and
@@ -185,158 +253,180 @@ async def lifespan(app: FastAPI):
         select_active_clerk_runtime,
         set_active_clerk_runtime,
     )
-    from app.broker.alpaca.config import get_alpaca_settings
+    from app.broker_configuration.worker_lifecycle import (
+        acknowledge_runtime_binding,
+        selection_handover,
+    )
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
-    if _alpaca_clerk_configuration_is_valid():
-        from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
-
-        alpaca_broker = AlpacaBroker()
-        alpaca_settings = get_alpaca_settings()
-        alpaca_clerk_root = alpaca_settings.clerk_dir
-        # #1671: scheduled session structure remains calendar-owned; this
-        # source provides the separate real-time clock + per-symbol
-        # halt/resume evidence used to fail new exposure closed.
-        from app.broker.alpaca.market_liveness import (
-            AlpacaMarketLivenessConsumer,
-            set_market_liveness_consumer,
+    # The selection cannot move between preflight, lease acquisition and the
+    # effective acknowledgement, including writes by another process.
+    handover = (
+        contextlib.nullcontext(None) if worker_refusal is not None else selection_handover()
+    )
+    with handover as handover_refusal:
+        alpaca_binding = await _install_alpaca_binding(
+            refusal=worker_refusal or handover_refusal
         )
+        if alpaca_binding is not None:
+            from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
-        alpaca_market_liveness = AlpacaMarketLivenessConsumer.for_alpaca(
-            read=alpaca_broker,
-        )
-        alpaca_market_liveness.start()
-        set_market_liveness_consumer(alpaca_market_liveness)
-        logger.info("Alpaca market-liveness source started.")
-        # S4 (#1262): the dual-health submission gate — market-data feed AND
-        # trade_updates execution channel must both be healthy. Shared by
-        # both authorities so the cutover never silently drops this
-        # fail-closed check.
-        alpaca_stream_health_gate = build_default_stream_health_gate()
-
-        # Resolve the broker account before constructing the sole writer. The
-        # append-only activation fence must select SQLite; a missing or invalid
-        # activation installs no broker-mutation capability.
-        # Symbols provider for the sweep's post-pass validity probe (#1795):
-        # a fresh one-shot binding read per call, so a bot deployed after boot
-        # is probed without a restart. Injected as a callable so the clerk
-        # layer stays free of bot-registration imports.
-        #
-        # Dry Run bindings are excluded: they are sealed to a synthetic sim
-        # account and never contact the Alpaca broker, so Alpaca's asset
-        # universe is not their admission invariant and asking about their
-        # symbols spends broker calls on a fact no consumer may act on
-        # (`symbol_unresolvable_for_mode` refuses the mode anyway).
-        from app.broker.ibkr.config import live_artifacts_root
-        from app.services.bot_binding_repository import live_state_binding_repository
-
-        def _alpaca_roster_symbols() -> list[str]:
-            bindings = live_state_binding_repository(live_artifacts_root()).list_for_broker(
-                "alpaca"
-            )
-            return sorted(
-                {binding.symbol for binding in bindings if binding.mode != "dry_run"}
+            # One context, passed to every consumer. The broker, the client it
+            # builds, the two websockets and the Clerk are all bound to this exact
+            # revision's mode and credential pair, so none of them can answer for a
+            # configuration this worker did not bind (ADR 0060; plan §5.5).
+            alpaca_settings = alpaca_binding.context.settings
+            alpaca_broker = AlpacaBroker(settings=alpaca_settings)
+            alpaca_clerk_root = alpaca_settings.clerk_dir
+            # #1671: scheduled session structure remains calendar-owned; this
+            # source provides the separate real-time clock + per-symbol
+            # halt/resume evidence used to fail new exposure closed.
+            from app.broker.alpaca.market_liveness import (
+                AlpacaMarketLivenessConsumer,
+                set_market_liveness_consumer,
             )
 
-        # ADR 0059 slice 7: the live authority's arming gate reads the runner's
-        # sealed bindings beside the ledger every tick. Built here, the same
-        # `roster_symbols` pattern and for the same reason -- the ceremony
-        # imports the runner's binding repository, and the clerk layer must
-        # never learn the runner's root. Resolved per call, so a bot deployed
-        # after boot is seen without a restart.
-        from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
-
-        def _alpaca_instance_seals(live_account_id: str) -> dict[str, str]:
-            return {
-                sid: seal.seal_hash
-                for sid, seal in instance_seal_hashes(
-                    live_account_id=live_account_id,
-                    live_state_root=live_artifacts_root(),
-                    # This authority custodies the live id itself, so the
-                    # rehearsal's `shadow:`-sealed bindings are foreign to it
-                    # (design R15) and seal nothing the gate may admit.
-                    custody_world="real_live",
-                ).items()
-            }
-
-        # ADR 0059 D4: the live world's risk envelope, read once from the
-        # environment. Settings validation (`_enforce_mode_agreement`) already
-        # refuses live mode without every ALPACA_LIVE_* value, so this cannot
-        # raise here; the selector's LIVE_ENVELOPE_MISSING refusal remains the
-        # defence for a caller that composes the shadow authority without it.
-        from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
-
-        live_envelope_values = (
-            None if alpaca_settings.is_paper else LiveEnvelopeValues.from_settings(alpaca_settings)
-        )
-
-        alpaca_clerk_runtime = await select_active_clerk_runtime(
-            read=alpaca_broker,
-            trade=alpaca_broker,
-            artifacts_root=alpaca_clerk_root,
-            stream_health_gate=alpaca_stream_health_gate,
-            roster_symbols=_alpaca_roster_symbols,
-            live_envelope_values=live_envelope_values,
-            # ADR 0059 slice 7: the live authority reads sealed bindings beside
-            # the arming ledger every tick, and refuses to install behind an
-            # open control plane (R14).
-            instance_seals=_alpaca_instance_seals,
-            control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-        )
-        set_active_clerk_runtime(alpaca_clerk_runtime)
-        if alpaca_clerk_runtime.clerk is not None:
-            logger.info(
-                "Alpaca Clerk ready (authority=%s).",
-                alpaca_clerk_runtime.authority_kind,
-            )
-
-            # Capture/parsing stays shared, but durable lifecycle evidence is
-            # folded only into the SQLite authority.
-            from app.broker.alpaca.trade_updates import (
-                TradeUpdatesConsumer,
-                set_trade_updates_consumer,
-            )
-
-            alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
-                evidence_sink=alpaca_clerk_runtime.evidence_sink,
+            alpaca_market_liveness = AlpacaMarketLivenessConsumer.for_alpaca(
                 read=alpaca_broker,
+                settings=alpaca_settings,
             )
-            alpaca_trade_updates.start()
-            set_trade_updates_consumer(alpaca_trade_updates)
-            logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
-            # Only now does the stream-health sync have both providers to
-            # sample; starting it earlier reads the not-yet-registered
-            # consumer as an outage (#1777 WP4). The envelope sync could have
-            # started sooner but rides the same seam, so this is the one place
-            # to ask whether the account's background taps are running.
-            alpaca_clerk_runtime.start_background_taps()
-        elif alpaca_clerk_runtime.startup_failure is not None:
-            logger.warning(
-                "Alpaca Clerk unavailable after authority selection.",
-                extra={
-                    "reason_code": alpaca_clerk_runtime.startup_failure.reason_code,
-                    "account_id": alpaca_clerk_runtime.startup_failure.account_id,
-                },
-            )
+            # S4 (#1262): the dual-health submission gate — market-data feed AND
+            # trade_updates execution channel must both be healthy. Shared by
+            # both authorities so the cutover never silently drops this
+            # fail-closed check.
+            alpaca_stream_health_gate = build_default_stream_health_gate()
 
-        from app.services.sovereign_equity_snapshots import (
-            DailySovereignEquitySnapshotScheduler,
-            DailySovereignEquitySnapshotStore,
-            DailySovereignEquitySnapshotWriter,
-            sovereign_equity_snapshot_database_path,
-        )
+            # Resolve the broker account before constructing the sole writer. The
+            # append-only activation fence must select SQLite; a missing or invalid
+            # activation installs no broker-mutation capability.
+            # Symbols provider for the sweep's post-pass validity probe (#1795):
+            # a fresh one-shot binding read per call, so a bot deployed after boot
+            # is probed without a restart. Injected as a callable so the clerk
+            # layer stays free of bot-registration imports.
+            #
+            # Dry Run bindings are excluded: they are sealed to a synthetic sim
+            # account and never contact the Alpaca broker, so Alpaca's asset
+            # universe is not their admission invariant and asking about their
+            # symbols spends broker calls on a fact no consumer may act on
+            # (`symbol_unresolvable_for_mode` refuses the mode anyway).
+            from app.broker.ibkr.config import live_artifacts_root
+            from app.services.bot_binding_repository import live_state_binding_repository
 
-        sovereign_equity_snapshot_scheduler = DailySovereignEquitySnapshotScheduler(
-            writer=DailySovereignEquitySnapshotWriter(
-                store=DailySovereignEquitySnapshotStore(
-                    sovereign_equity_snapshot_database_path(alpaca_clerk_root)
-                ),
-                account_snapshot_provider=alpaca_broker.get_account,
+            def _alpaca_roster_symbols() -> list[str]:
+                bindings = live_state_binding_repository(live_artifacts_root()).list_for_broker(
+                    "alpaca"
+                )
+                return sorted(
+                    {binding.symbol for binding in bindings if binding.mode != "dry_run"}
+                )
+
+            # ADR 0059 slice 7: the live authority's arming gate reads the runner's
+            # sealed bindings beside the ledger every tick. Built here, the same
+            # `roster_symbols` pattern and for the same reason -- the ceremony
+            # imports the runner's binding repository, and the clerk layer must
+            # never learn the runner's root. Resolved per call, so a bot deployed
+            # after boot is seen without a restart.
+            from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+
+            def _alpaca_instance_seals(live_account_id: str) -> dict[str, str]:
+                return {
+                    sid: seal.seal_hash
+                    for sid, seal in instance_seal_hashes(
+                        live_account_id=live_account_id,
+                        live_state_root=live_artifacts_root(),
+                        # This authority custodies the live id itself, so the
+                        # rehearsal's `shadow:`-sealed bindings are foreign to it
+                        # (design R15) and seal nothing the gate may admit.
+                        custody_world="real_live",
+                    ).items()
+                }
+
+            # ADR 0059 D4 / ADR 0060: the live world's risk envelope, taken from
+            # the revision this worker bound rather than from the environment. The
+            # resolved context already carries it — a live revision cannot resolve
+            # without all six values — so this is a read, not a second construction
+            # that could disagree with the one the binding sealed.
+            live_envelope_values = alpaca_binding.context.live_envelope
+
+            alpaca_clerk_runtime = await select_active_clerk_runtime(
+                read=alpaca_broker,
+                trade=alpaca_broker,
+                artifacts_root=alpaca_clerk_root,
+                stream_health_gate=alpaca_stream_health_gate,
+                roster_symbols=_alpaca_roster_symbols,
+                live_envelope_values=live_envelope_values,
+                # ADR 0059 slice 7: the live authority reads sealed bindings beside
+                # the arming ledger every tick, and refuses to install behind an
+                # open control plane (R14).
+                instance_seals=_alpaca_instance_seals,
+                control_unauthenticated=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                expected_account_id=alpaca_binding.context.account_pin,
             )
-        )
-        sovereign_equity_snapshot_scheduler.start()
-        logger.info("Daily sovereign Alpaca equity snapshot scheduler started.")
+            # Do not publish a writer or start any stream until its exact binding
+            # is durably acknowledged. A refused receipt closes all custody handles.
+            alpaca_clerk_runtime = await acknowledge_runtime_binding(
+                bound=alpaca_binding, runtime=alpaca_clerk_runtime,
+            )
+            if active_alpaca_binding_refusal() is None:
+                alpaca_market_liveness.start()
+                set_market_liveness_consumer(alpaca_market_liveness)
+                logger.info("Alpaca market-liveness source started.")
+            set_active_clerk_runtime(alpaca_clerk_runtime)
+            if alpaca_clerk_runtime.clerk is not None:
+                logger.info(
+                    "Alpaca Clerk ready (authority=%s).",
+                    alpaca_clerk_runtime.authority_kind,
+                )
+
+                # Capture/parsing stays shared, but durable lifecycle evidence is
+                # folded only into the SQLite authority.
+                from app.broker.alpaca.trade_updates import (
+                    TradeUpdatesConsumer,
+                    set_trade_updates_consumer,
+                )
+
+                alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
+                    evidence_sink=alpaca_clerk_runtime.evidence_sink,
+                    read=alpaca_broker,
+                    settings=alpaca_settings,
+                )
+                alpaca_trade_updates.start()
+                set_trade_updates_consumer(alpaca_trade_updates)
+                logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
+                # Only now does the stream-health sync have both providers to
+                # sample; starting it earlier reads the not-yet-registered
+                # consumer as an outage (#1777 WP4). The envelope sync could have
+                # started sooner but rides the same seam, so this is the one place
+                # to ask whether the account's background taps are running.
+                alpaca_clerk_runtime.start_background_taps()
+            elif alpaca_clerk_runtime.startup_failure is not None:
+                logger.warning(
+                    "Alpaca Clerk unavailable after authority selection.",
+                    extra={
+                        "reason_code": alpaca_clerk_runtime.startup_failure.reason_code,
+                        "account_id": alpaca_clerk_runtime.startup_failure.account_id,
+                    },
+                )
+
+            if active_alpaca_binding_refusal() is None:
+                from app.services.sovereign_equity_snapshots import (
+                    DailySovereignEquitySnapshotScheduler,
+                    DailySovereignEquitySnapshotStore,
+                    DailySovereignEquitySnapshotWriter,
+                    sovereign_equity_snapshot_database_path,
+                )
+
+                sovereign_equity_snapshot_scheduler = DailySovereignEquitySnapshotScheduler(
+                    writer=DailySovereignEquitySnapshotWriter(
+                        store=DailySovereignEquitySnapshotStore(
+                            sovereign_equity_snapshot_database_path(alpaca_clerk_root)
+                        ),
+                        account_snapshot_provider=alpaca_broker.get_account,
+                    )
+                )
+                sovereign_equity_snapshot_scheduler.start()
+                logger.info("Daily sovereign Alpaca equity snapshot scheduler started.")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -700,6 +790,14 @@ app.include_router(
     brokers.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
+# User-owned broker configuration profiles (ADR 0060). Storage and API only:
+# the router carries its own literal /api/brokers/alpaca/configuration prefix
+# and its own per-route auth dependencies (always-on secret on reads, the
+# mutating-control secret plus the server-resolved-field refusal on writes), so
+# it is registered without additional dependencies here. Registering it does
+# not change broker or worker startup — resolving an effective selection into a
+# running worker is a separate change.
+app.include_router(broker_configuration.router)
 # Broker-parameterized bot runner (Alpaca Bot Control v2, S2 — #1260).
 # Deploy/stop/list for in-container log-only bots; broker-tagged bindings.
 # Control actions on live broker state — always-on data-plane secret.
@@ -800,6 +898,22 @@ app.add_exception_handler(
 # Ordered before the catch-all: an unusable Clerk authority is a state, not a
 # fault, and must not be reported as an internal error.
 app.add_exception_handler(ClerkSqliteError, clerk_sqlite_exception_handler)
+# Same reasoning for the profiles database: a stale edit, an archived profile or
+# an unreadable configuration database is a state the contract has words for,
+# not an internal fault.
+app.add_exception_handler(
+    BrokerConfigurationError,
+    broker_configuration.broker_configuration_exception_handler,
+)
+# The configuration surface has a second refusal family: the account ceremonies
+# raise ``BrokerProfileError``, which carries the same contract vocabulary but
+# is not a ``BrokerConfigurationError``. Untranslated, "which credential is
+# missing" answered with a generic 500.
+app.add_exception_handler(BrokerProfileError, broker_profile_exception_handler)
+# Same reasoning for a worker that resolved no broker binding: the contract
+# has a 503 vocabulary for it (broker_unconfigured, profiles_database_unavailable,
+# account_pin_mismatch), and without this it fell through to the catch-all 500.
+app.add_exception_handler(BrokerUnbound, broker_unbound_exception_handler)
 # Same reasoning: a mid-deploy catalog-schema race (#1883 Codex P2 finding)
 # is a transient deploy-ordering state, not an unexpected fault.
 app.add_exception_handler(CatalogSchemaNotReadyError, catalog_schema_not_ready_exception_handler)

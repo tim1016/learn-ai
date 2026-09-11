@@ -18,6 +18,14 @@ value in it is ``int64 ms UTC``. (``--help`` is argparse's own usage text on
 stdout and exits ``0``; it runs no command.) A usage refusal is therefore a
 readable ``error`` key at exit ``1`` rather than argparse's bare exit ``2``,
 which used to collide with "the gate is not satisfied".
+
+The two values this CLI does not take on the command line -- the Clerk root and
+the required session count -- come from the installation's **effective** profile
+revision (ADR 0060), through the one resolver the three ``manage_alpaca_*`` CLIs
+share (``manage_alpaca_arming.effective_alpaca_settings``). Both reads stay
+conditional: an invocation that names ``--artifacts-root`` and
+``--required-sessions`` opens no profiles database at all, exactly as it read no
+environment before.
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.active_binding import BrokerUnbound
 from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -49,8 +58,9 @@ from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
 from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
-from app.broker.alpaca.config import get_alpaca_settings
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.ibkr.config import live_artifacts_root
+from app.broker_configuration.cli_binding import effective_alpaca_settings
 from app.services.alpaca_shadow_reconciliation import (
     EconomicFillSource,
     ShadowGateEvaluation,
@@ -160,13 +170,34 @@ def _default_evaluate(
         )
 
 
-def _required_sessions(explicit: int | None) -> int:
+def _resolved_settings(supplied: AlpacaSettings | None) -> AlpacaSettings:
+    """The effective revision's settings, or this CLI's own refusal.
+
+    Called only from the two places that actually need a value nobody stated on
+    the command line, so an invocation naming both flags never opens the
+    profiles database. A binding that will not resolve -- nothing applied, an
+    unreadable database, an unresolvable revision -- is "this command cannot be
+    run as asked", which is exactly ``ShadowOperatorRefusal`` at exit ``1``;
+    there is no fall back to stale environment settings (ADR 0060 Decision 7).
+    """
+    if supplied is not None:
+        return supplied
+    try:
+        return effective_alpaca_settings()
+    except BrokerUnbound as exc:
+        raise ShadowOperatorRefusal(
+            f"{exc.reason}: {exc.unbound.message} {exc.unbound.next_step}"
+        ) from exc
+
+
+def _required_sessions(explicit: int | None, *, settings: AlpacaSettings | None) -> int:
     if explicit is not None:
         return explicit
-    configured = get_alpaca_settings().live_shadow_sessions
+    configured = _resolved_settings(settings).live_shadow_sessions
     if configured is None:
         raise ShadowOperatorRefusal(
-            "--required-sessions is required unless ALPACA_LIVE_SHADOW_SESSIONS is configured"
+            "--required-sessions is required unless the effective broker configuration "
+            "sets a shadow session count"
         )
     return configured
 
@@ -274,8 +305,9 @@ def _judge(
     live_account_id: str,
     artifacts_root: Path,
     evaluate: ShadowGateEvaluator,
+    settings: AlpacaSettings | None,
 ) -> int:
-    required_sessions = _required_sessions(args.required_sessions)
+    required_sessions = _required_sessions(args.required_sessions, settings=settings)
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
     shadow_bindings = live_state_binding_repository(args.live_state_root or live_artifacts_root())
     twin_bindings = live_state_binding_repository(
@@ -313,14 +345,19 @@ def _judge(
     return 0 if evaluation.satisfied or args.operation == "sessions" else 2
 
 
-def main(argv: list[str] | None = None, *, evaluate: ShadowGateEvaluator = _default_evaluate) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    evaluate: ShadowGateEvaluator = _default_evaluate,
+    settings: AlpacaSettings | None = None,
+) -> int:
     try:
         args = _parse_args(argv)
         # Before anything reaches the shadow world: a reserved ``shadow:`` or
         # ``sim:`` id is not a live account, and must never become the subject
         # of an activation or a receipt.
         live_account_id = require_real_account_id(args.live_account_id)
-        artifacts_root = args.artifacts_root or get_alpaca_settings().clerk_dir
+        artifacts_root = args.artifacts_root or _resolved_settings(settings).clerk_dir
         if args.operation == "activate":
             return _activate(live_account_id=live_account_id, artifacts_root=artifacts_root)
         return _judge(
@@ -328,6 +365,7 @@ def main(argv: list[str] | None = None, *, evaluate: ShadowGateEvaluator = _defa
             live_account_id=live_account_id,
             artifacts_root=artifacts_root,
             evaluate=evaluate,
+            settings=settings,
         )
     except ShadowTwinMismatch as exc:
         _write({"error": exc.reason_code, "detail": str(exc)})

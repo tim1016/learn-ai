@@ -31,8 +31,8 @@ class MarketClockLivenessEvidence(BaseModel):
 
     state: MarketClockState
     source: str
-    observed_at_ms: int = Field(ge=0)
-    vendor_timestamp_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    vendor_timestamp_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     reason: str | None = None
 
 
@@ -50,8 +50,8 @@ class SymbolTradingStatusEvidence(BaseModel):
     symbol: str
     state: SymbolTradingState
     source: str
-    observed_at_ms: int = Field(ge=0)
-    source_timestamp_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    source_timestamp_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     reason_code: str | None = None
     reason: str | None = None
 
@@ -63,7 +63,7 @@ class MarketLivenessFact(BaseModel):
 
     symbol: str
     state: MarketLivenessState
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     market_clock: MarketClockLivenessEvidence
     symbol_status: SymbolTradingStatusEvidence | None
     reason_code: str

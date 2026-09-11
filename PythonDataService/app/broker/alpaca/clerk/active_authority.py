@@ -115,6 +115,7 @@ async def select_active_clerk_runtime(
     live_envelope_values: LiveEnvelopeValues | None = None,
     instance_seals: InstanceSealsForAccount | None = None,
     control_unauthenticated: bool = False,
+    expected_account_id: str | None = None,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority.
 
@@ -156,6 +157,18 @@ async def select_active_clerk_runtime(
             "BROKER_ACCOUNT_UNAVAILABLE",
             account_id=None,
             recovery=f"Restore the Alpaca account identity probe: {exc}",
+        )
+    # This read is the identity used to open custody. A separate verification
+    # may have been unavailable, or observed different upstream state, so its
+    # result cannot stand in for checking the revision's pin here.
+    if expected_account_id is not None and account.account_id != expected_account_id:
+        return unavailable_runtime(
+            "ACCOUNT_PIN_MISMATCH",
+            account_id=account.account_id,
+            recovery=(
+                "The broker account does not match the applied configuration's approved "
+                "account. Restore its credentials or verify and apply a new revision."
+            ),
         )
     store = activation_store or ActivationStore(artifacts_root / "accounts" / "alpaca")
     if account.account_mode == "live":

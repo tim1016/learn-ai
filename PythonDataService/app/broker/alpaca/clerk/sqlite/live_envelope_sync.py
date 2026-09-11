@@ -10,19 +10,22 @@ observe the account, publish or withdraw the observation, raise the loss
 hold — is this module's. The arming half (slice 7: read the ledger once,
 seal the envelope from it, refresh the per-instance gate) belongs to
 ``ArmingRefresh`` in ``sqlite/arming_refresh.py``; the sync holds one
-reference to it, calls it once per tick, and assigns ``envelope.sealed``
+reference to it, calls it once per observation -- ahead of the broker read,
+so the loss limit judged is the sealed one -- and assigns ``envelope.sealed``
 from what it returns.
 
 The sync raises the loss hold and never releases it: only the guarded
 operator action does (plan R6, R12).
 
-Three facts leave the account *unjudgeable* rather than merely unlucky: a
+Four facts leave the account *unjudgeable* rather than merely unlucky: a
 broker snapshot with no ``last_equity`` has no loss limit to judge against
 (plan R3), an external order observed today makes the day's P&L unknowable
-(plan R5), and a non-finite cash, equity or unrealized figure makes every
-loss comparison meaningless. None may be read as "nothing breached", so an
-unjudgeable tick withdraws the gate's observation and every ENTER refuses
-``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one arrives.
+(plan R5), a non-finite cash, equity or unrealized figure makes every
+loss comparison meaningless, and arming inputs this observation could not
+read leave no sealed envelope to judge against at all. None may be read as
+"nothing breached", so an unjudgeable tick withdraws the gate's observation
+and every ENTER refuses ``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one
+arrives.
 """
 
 from __future__ import annotations
@@ -93,6 +96,11 @@ class EnvelopeReading:
     observation: AccountObservation
     day_pnl: DayPnl | None
     loss_limit_usd: float | None
+    # Whether this observation could read the account's arming inputs. Carried
+    # on the reading, not asked of the sync afterwards, because it is one of
+    # the four reasons the two figures above can be absent -- and the operator
+    # surface that reports "unknown" has to name the right one.
+    seal_readable: bool = True
 
     @property
     def breached(self) -> bool | None:
@@ -147,6 +155,7 @@ def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     """Which fact left the account unjudgeable — the operator's whole diagnosis."""
     day_pnl = reading.day_pnl
     return {
+        "sealed_envelope_readable": reading.seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
         "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
         "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
@@ -219,7 +228,15 @@ class LiveEnvelopeSync:
         self._observed_account_id: str | None = None
 
     async def observe(self) -> EnvelopeReading:
-        """One broker read → the day-P&L reading, and the gate's observation.
+        """One ledger read and one broker read → the day-P&L reading, and the gate's observation.
+
+        The ledger read comes first and is what seals the envelope, so the loss
+        limit below is the newest arming record's rather than whatever the
+        process booted with (ADR 0059 D3). It is inside ``observe`` and not only
+        in :meth:`tick` because the guarded operator clear re-observes through
+        this same method: judging a standing hold against a limit an operator
+        raised in the environment and never re-armed is exactly the drift the
+        seal exists to prevent.
 
         The observation is published only when the reading can be *judged*
         AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3),
@@ -237,6 +254,7 @@ class LiveEnvelopeSync:
         Raises ``BrokerError``: a failed read is not a verdict at all, so it
         never touches the gate and the last observation ages out on its own.
         """
+        self._refresh_arming()
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
@@ -262,15 +280,23 @@ class LiveEnvelopeSync:
         # Withholding both loss inputs is the whole treatment: ``breached`` is
         # then None, the tick withdraws on the existing path, and no new
         # refusal code has to exist for a broker that reported a NaN.
-        unjudgeable = self._noted_non_finite(
-            _non_finite_risk_fields(
-                cash=account.cash,
-                last_equity=account.last_equity,
-                unrealized_pl=unrealized_pl_usd,
+        # ``_noted_non_finite`` is evaluated first and unconditionally: it
+        # deduplicates its own log against the previous observation, and
+        # short-circuiting it would make that log depend on the seal.
+        seal_readable = not self._seal_unreadable()
+        unjudgeable = (
+            self._noted_non_finite(
+                _non_finite_risk_fields(
+                    cash=account.cash,
+                    last_equity=account.last_equity,
+                    unrealized_pl=unrealized_pl_usd,
+                )
             )
+            or not seal_readable
         )
         reading = EnvelopeReading(
             observation=observation,
+            seal_readable=seal_readable,
             day_pnl=(
                 None
                 if unjudgeable
@@ -281,7 +307,14 @@ class LiveEnvelopeSync:
             loss_limit_usd=(
                 None
                 if unjudgeable or account.last_equity is None
-                else loss_limit_usd(self.envelope.values, last_equity_usd=account.last_equity)
+                # The sealed envelope's limit, falling back to the configured
+                # one only where nothing has ever been armed: raising the hold
+                # and clearing it are the same judgement and must read the same
+                # number, and neither may follow an unarmed environment edit.
+                # An account whose seal could not be *read* never reaches here
+                # -- it is unjudgeable above, because that fallback would be a
+                # relaxation.
+                else loss_limit_usd(self.envelope.in_force, last_equity_usd=account.last_equity)
             ),
         )
         if reading.breached is False:
@@ -290,8 +323,30 @@ class LiveEnvelopeSync:
             self.envelope.withdraw()
         return reading
 
+    def _seal_unreadable(self) -> bool:
+        """Whether this observation could not read the account's arming inputs.
+
+        Such an account cannot be judged. ``LiveEnvelopeGate.in_force`` would
+        fall back to the configured values, and here that fallback is a
+        *relaxation*: an operator could loosen ``ALPACA_LIVE_LOSS_*``, corrupt
+        or delete the arming ledger, and clear a standing hold against the
+        looser limit -- the very drift this seal exists to stop. So it rides the
+        same withdrawal an unknown day P&L does, and every ENTER refuses
+        ``LIVE_ENVELOPE_UNOBSERVED`` until the inputs read again.
+
+        Pricing an extended-hours leg is the deliberate opposite
+        (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``): it
+        falls back and never refuses, because an EXIT leaves the account.
+        """
+        return self._arming is not None and self._arming.inputs_unreadable
+
     def _refresh_arming(self) -> None:
-        """Run the arming half of this tick, and seal the envelope from what it read."""
+        """Run the arming half of this observation, and seal the envelope from what it read.
+
+        Called from :meth:`observe`, ahead of the broker read, so every caller
+        of that method -- the cadence and the guarded operator clear alike --
+        judges against the seal the ledger holds right now.
+        """
         if self._arming is None:
             return
         self._assign_sealed(self._arming.refresh(self._repo.clock(), self.envelope.values))
@@ -329,7 +384,6 @@ class LiveEnvelopeSync:
         it with a later tick's numbers would churn the control revision and
         overwrite the evidence the operator is reading.
         """
-        self._refresh_arming()
         try:
             reading = await self.observe()
         except BrokerAccountModeDisagreement as exc:
@@ -337,9 +391,9 @@ class LiveEnvelopeSync:
             # authority was composed for. Withdraw the observation (no ENTER
             # bounds against it) and hold the gate under the disagreement's
             # own code. The hold is the gate's own sticky fault, so the
-            # refresh above may publish freely and the recovery below is not
-            # one tick late: this tick's read is what raises it and this
-            # tick's read is what releases it.
+            # arming refresh ``observe`` ran before the read may publish
+            # freely and the recovery below is not one tick late: this tick's
+            # read is what raises it and this tick's read is what releases it.
             self.envelope.withdraw()
             if self._arming_gate is not None:
                 self._arming_gate.hold(LIVE_MODE_DISAGREEMENT, exc.detail or str(exc))

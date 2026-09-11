@@ -756,13 +756,14 @@ async def _revive_lease_or_raise(
 
     A synthetic authority is not "inherited" here in any sense -- it never
     reaches this function's ``sweep.revive_now()`` call at all.
-    ``active_reconciliation_sweep`` gates on ``authority_kind == "sqlite"``
-    exactly like ``active_sqlite_facade`` does, so a synthetic authority's
+    ``active_reconciliation_sweep`` and ``active_sqlite_facade`` share the
+    same primary-authority selector, so a synthetic authority's
     ``facade`` lookup below already returns ``None`` and this raises
     ``REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE`` before any sweep is consulted.
     """
     facade = active_sqlite_facade(broker)
-    if facade is None or facade.account_id != account_id:
+    custody_account_id = custody_account_id_for_route(broker, account_id)
+    if facade is None or facade.account_id != custody_account_id:
         # The active SQLite authority for this account is gone -- a restart
         # or reset raced this request, or it was never SQLite to begin with
         # (a synthetic authority's facade lookup also returns None here) --

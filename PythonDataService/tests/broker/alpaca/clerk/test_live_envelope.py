@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    _SETTINGS_FIELDS,
     ENVELOPE_ADMISSION_REASON_CODES,
+    ENVELOPE_SETTINGS_FIELDS,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
     EnvelopeReservation,
@@ -131,4 +131,4 @@ def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
 
 def test_the_envelope_reads_exactly_the_settings_live_mode_requires() -> None:
     """A value added to one list only would turn a valid live boot into a service that fails to start."""
-    assert tuple(name for _, name in _SETTINGS_FIELDS) == tuple(_LIVE_REQUIRED_FIELDS)
+    assert tuple(name for _, name in ENVELOPE_SETTINGS_FIELDS) == tuple(_LIVE_REQUIRED_FIELDS)

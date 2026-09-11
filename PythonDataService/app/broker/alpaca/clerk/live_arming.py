@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_MISSING,
     LiveEnvelopeValues,
+    envelope_domain_violation,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256, verify_sealed_record
 from app.lean_sidecar.trading_calendar import trading_session_count
@@ -347,6 +348,14 @@ def _validate_armed(record: LiveArmingRecord) -> None:
     # for the record's own four integers.
     if not _is_int(sealed.shadow_sessions) or not _is_int(sealed.arming_max_sessions):
         raise LiveArmingInvalid("live arming record's sealed envelope has invalid integer facts")
+    # The sealed values bound real money -- the loss limit the hold is raised on
+    # and cleared against, the allowance an extended leg is priced from -- and
+    # they arrive off disk without ever passing through ``AlpacaSettings``. The
+    # domain is the envelope's own (``live_envelope._ENVELOPE_DOMAINS``), asked
+    # for here rather than restated.
+    violation = envelope_domain_violation(sealed)
+    if violation is not None:
+        raise LiveArmingInvalid(f"live arming record's sealed {violation}")
     if sealed.sha != record.envelope_sha256:
         raise LiveArmingInvalid("live arming record's envelope sha does not match its sealed values")
     # The lapse count is the sealed envelope's, not a second number beside it.
@@ -443,11 +452,12 @@ def _live_state(
     configured_envelope: LiveEnvelopeValues,
     future_dated: bool,
     used: int,
+    invalidated: bool,
 ) -> tuple[ArmingState, str | None]:
     """The ordered rule R5 states, as five lines; ``arming_status`` says why."""
     if seal_hash is None or seal_hash != latest.seal_hash:
         return "disarmed", LIVE_ARMING_SEAL_CHANGED
-    if latest.envelope_sha256 != configured_envelope.sha:
+    if invalidated or latest.envelope_sha256 != configured_envelope.sha:
         return "disarmed", LIVE_ENVELOPE_DISAGREEMENT
     if future_dated:
         return "disarmed", LIVE_ARMING_FUTURE_DATED
@@ -464,6 +474,7 @@ def arming_status(
     seal_hash: str | None,
     configured_envelope: LiveEnvelopeValues,
     now_ms: int,
+    invalidated_record_shas: frozenset[str] = frozenset(),
 ) -> ArmingStatus:
     """This instance's arming state, decided by its latest record alone (R5).
 
@@ -507,6 +518,7 @@ def arming_status(
         configured_envelope=configured_envelope,
         future_dated=future_dated,
         used=used,
+        invalidated=latest.record_sha256 in invalidated_record_shas,
     )
     return ArmingStatus(
         state=state,

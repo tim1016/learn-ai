@@ -23,10 +23,12 @@ from typing import Any
 import httpx
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
 from app.broker.contract.ports import BrokerReadPort
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
+from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -255,25 +257,20 @@ class AlpacaMarketLivenessConsumer:
                     self._store.mark_stream_connected(observed_at_ms=self._clock())
                 else:
                     self._store.mark_stream_disconnected(observed_at_ms=self._clock())
-            elif (
-                message.get("T") == "s"
-                and isinstance(message.get("S"), str)
-                and message["S"].strip()
-                and _message_timestamp_ms(message) is not None
-            ):
+            elif self._handle_status_message(message):
                 self._store.mark_stream_connected(observed_at_ms=self._clock())
-            self._handle_status_message(message)
 
-    def _handle_status_message(self, message: dict[str, Any]) -> None:
+    def _handle_status_message(self, message: dict[str, Any]) -> bool:
+        """Apply one status transition and report whether it proves the stream usable."""
         if message.get("T") != "s":
-            return
+            return False
         symbol = str(message.get("S") or "").strip().upper()
         if not symbol:
             logger.warning(
                 "alpaca market-status message omitted its symbol",
                 extra={"action": "market_liveness_status_symbol_missing"},
             )
-            return
+            return False
         source_timestamp_ms = _message_timestamp_ms(message)
         if source_timestamp_ms is None:
             # A missing or unparsable source time is unverifiable external
@@ -285,7 +282,7 @@ class AlpacaMarketLivenessConsumer:
                 "alpaca market-status message has no verifiable source time; the transition was not applied",
                 extra={"action": "market_liveness_status_timestamp_missing", "symbol": symbol},
             )
-            return
+            return False
         status_code = str(message.get("sc") or "").upper()
         if status_code in _HALT_CODES:
             state = "HALTED"
@@ -299,6 +296,7 @@ class AlpacaMarketLivenessConsumer:
             state = "UNKNOWN"
             reason_code = "ALPACA_STATUS_UNKNOWN"
             reason = f"Alpaca reported unrecognized trading status {status_code or 'missing'} for {symbol}."
+        proves_connection = state != "UNKNOWN"
 
         receipt_ms = self._clock()
         if source_timestamp_ms > receipt_ms + _MAX_FUTURE_SKEW_MS:
@@ -319,7 +317,7 @@ class AlpacaMarketLivenessConsumer:
                         "receipt_ms": receipt_ms,
                     },
                 )
-                return
+                return False
             # A future-dated HALT/unrecognized-status event is still
             # safety-relevant negative evidence — dropping it, unlike a
             # dropped resume, would leave the symbol exposed to whatever it
@@ -339,6 +337,7 @@ class AlpacaMarketLivenessConsumer:
                 },
             )
             source_timestamp_ms = receipt_ms
+            proves_connection = False
 
         self._store.observe_symbol_status(
             SymbolTradingStatusEvidence(
@@ -351,6 +350,7 @@ class AlpacaMarketLivenessConsumer:
                 reason=reason,
             )
         )
+        return proves_connection
 
     @classmethod
     def for_alpaca(
@@ -361,8 +361,14 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
     ) -> AlpacaMarketLivenessConsumer:
-        """Use the vendor socket, or an explicitly configured Paper status source."""
-        resolved = settings or get_alpaca_settings()
+        """Build the consumer with the vendor socket or a shared Paper source.
+
+        ``resolved`` is captured once and closed over by every reconnect, so
+        the source keeps using the binding it was started for. A consumer that
+        re-read configuration on reconnect could silently switch accounts or
+        status topology without a controlled restart.
+        """
+        resolved = settings or resolved_alpaca_settings()
 
         def frame_source() -> AsyncIterator[bytes | str]:
             return alpaca_market_status_frames(resolved)
@@ -395,7 +401,7 @@ async def read_shared_market_status(
 ) -> MarketStatusSnapshot:
     """Read protected status evidence without forwarding trading credentials."""
     async with httpx.AsyncClient(timeout=3.0, follow_redirects=False, trust_env=False) as client:
-        response = await client.get(url, headers={"X-Data-Plane-Control-Secret": control_secret})
+        response = await client.get(url, headers={CONTROL_SECRET_HEADER: control_secret})
     captured = journal.record(
         broker="alpaca",
         endpoint=CaptureEndpoint.STREAM,
@@ -429,8 +435,8 @@ async def alpaca_market_status_frames(settings: AlpacaSettings) -> AsyncIterator
             json.dumps(
                 {
                     "action": "auth",
-                    "key": settings.api_key_id,
-                    "secret": settings.api_secret_key,
+                    "key": settings.api_key_id.get_secret_value(),
+                    "secret": settings.api_secret_key.get_secret_value(),
                 }
             )
         )

@@ -1,0 +1,94 @@
+@use './configuration-controls' as controls;
+
+.evidence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
+}
+
+.evidence h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.evidence__account {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.evidence__nickname {
+  color: var(--text-secondary);
+}
+
+.evidence__stamp {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.evidence__verify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.evidence__observed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+}
+
+.evidence__observed li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.evidence__mode {
+  color: var(--text-secondary);
+}
+
+.evidence__mode--disagrees {
+  color: var(--bear);
+  font-weight: var(--fw-bold);
+}
+
+.evidence__nickname-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.evidence__nickname-form label {
+  @include controls.field-label;
+}
+
+.evidence__nickname-form input {
+  @include controls.text-field;
+
+  background: var(--bg-surface);
+}
+
+.evidence button {
+  @include controls.secondary-button;
+
+  background: var(--bg-surface);
+}

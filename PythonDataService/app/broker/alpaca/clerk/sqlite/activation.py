@@ -13,7 +13,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.broker.alpaca.paths import (
     fsync_directory,
@@ -233,16 +233,51 @@ class ActivationStore:
             label="legacy quarantine manifest",
         )
         for label, payload in (("broker proof", broker_proof), ("quarantine", quarantine)):
-            if payload.get("account_id") != record.account_id:
-                raise ActivationRecordInvalid(f"{label} account does not match activation")
-            if payload.get("authority_generation") != record.authority_generation:
-                raise ActivationRecordInvalid(
-                    f"{label} authority generation does not match activation"
-                )
-            if payload.get("db_identity_token") != record.db_identity_token:
-                raise ActivationRecordInvalid(
-                    f"{label} database identity does not match activation"
-                )
+            _validate_artifact_identity(record, payload, label=label)
+
+    @staticmethod
+    def account_mode(
+        record: ActivationRecord, *, artifacts_root: Path,
+    ) -> Literal["paper", "live"]:
+        """Read cutover mode through verified, strictly older reset ancestry.
+
+        Ordinary resets seal ``prior_generation`` instead of repeating mode.
+        Only that recognized proof can inherit its exact predecessor's mode;
+        missing or conflicting history never falls back to current settings.
+        """
+        history = [
+            ancestor
+            for ancestor in ActivationStore(artifacts_root / "accounts" / "alpaca")._read_all()
+            if ancestor.account_id == record.account_id
+        ]
+        by_generation = {ancestor.authority_generation: ancestor for ancestor in history}
+        if len(by_generation) != len(history) or by_generation.get(record.authority_generation) != record:
+            raise ActivationRecordInvalid("activation ancestry is missing or ambiguous")
+        while True:
+            proof = _verified_referenced_json(
+                artifacts_root, record.broker_proof_reference, record.broker_proof_sha256,
+                label="broker proof",
+            )
+            _validate_artifact_identity(record, proof, label="broker proof")
+            if "broker_evidence" in proof:
+                evidence = proof["broker_evidence"]
+                if not isinstance(evidence, dict) or evidence.get("account_id") != record.account_id:
+                    raise ActivationRecordInvalid("broker evidence account does not match activation")
+                mode = evidence.get("account_mode")
+                if mode not in ("paper", "live"):
+                    raise ActivationRecordInvalid("broker evidence has no verified account mode")
+                return mode
+            prior_generation = proof.get("prior_generation")
+            if (
+                proof.get("operation") != "RESET_AUTHORITY"
+                or type(prior_generation) is not int
+                or not 0 < prior_generation < record.authority_generation
+            ):
+                raise ActivationRecordInvalid("broker proof has no verified mode or valid reset ancestry")
+            predecessor = by_generation.get(prior_generation)
+            if predecessor is None:
+                raise ActivationRecordInvalid("reset activation predecessor is missing")
+            record = predecessor
 
     def append(self, record: ActivationRecord) -> None:
         """Append one new generation and fsync it before returning."""
@@ -290,6 +325,17 @@ class ActivationStore:
 
 def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _validate_artifact_identity(
+    record: ActivationRecord, payload: dict[str, Any], *, label: str,
+) -> None:
+    if payload.get("account_id") != record.account_id:
+        raise ActivationRecordInvalid(f"{label} account does not match activation")
+    if payload.get("authority_generation") != record.authority_generation:
+        raise ActivationRecordInvalid(f"{label} authority generation does not match activation")
+    if payload.get("db_identity_token") != record.db_identity_token:
+        raise ActivationRecordInvalid(f"{label} database identity does not match activation")
 
 
 def _verified_referenced_json(

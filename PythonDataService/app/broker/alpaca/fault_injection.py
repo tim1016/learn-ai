@@ -39,7 +39,8 @@ from typing import Any
 
 from alpaca.common.exceptions import APIError
 
-from app.broker.alpaca.config import BROKER_ID, get_alpaca_settings
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.config import BROKER_ID
 from app.broker.alpaca.errors import map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.config import settings
@@ -84,7 +85,7 @@ def injection_permitted() -> bool:
     if not settings.ALPACA_FAULT_INJECTION_ENABLED:
         return False
     try:
-        return get_alpaca_settings().is_paper
+        return resolved_alpaca_settings().is_paper
     except Exception:
         # An unresolvable posture is not a paper posture — refuse.
         return False

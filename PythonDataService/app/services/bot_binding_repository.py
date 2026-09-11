@@ -13,6 +13,7 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -48,6 +49,17 @@ RUN_BUILD_EVIDENCE_DIRECTORY = "program_build_evidence"
 SEALED_PROGRAM_FILENAME = "sealed_program_v2.json"
 LEGACY_MIGRATION_LINEAGE_FILENAME = "legacy_migration_lineage.json"
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+def _regular_evidence_file_exists(path: Path) -> bool:
+    """Distinguish absent evidence from unsafe evidence without following links."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not S_ISREG(metadata.st_mode):
+        raise ValueError(f"binding evidence {path} must be a regular non-symbolic-link file")
+    return True
 
 
 class StrategyInstanceConfigurationConflictError(ValueError):
@@ -341,20 +353,49 @@ class BotBindingRepository:
                 return normalized
         return self._read_legacy_binding(instance_dir)
 
-    def list_for_broker(self, broker: str) -> list[BrokerBotBinding]:
-        """Return all valid bindings for a broker without hiding corrupt rows."""
+    def list_for_broker(self, broker: str, *, strict: bool = False) -> list[BrokerBotBinding]:
+        """List displayable bindings, or require complete evidence for a ceremony.
+
+        Strict callers cannot skip corrupt rows or use a legacy fallback when
+        a newer normalized record is incomplete. Reset and switching must know
+        which account owns every candidate before removing or leaving it.
+        """
+        if strict:
+            # A missing catalog is empty; a broken link to its volume is not.
+            for entry in reversed((self._live_state_root, *self._live_state_root.parents)):
+                try:
+                    entry.lstat()
+                except FileNotFoundError:
+                    return []
+                if entry.is_symlink():
+                    entry.stat()
+            if self._live_state_root.is_symlink() or not self._live_state_root.is_dir():
+                raise ValueError("the bot catalog must be a regular directory")
         if not self._live_state_root.is_dir():
             return []
 
         bindings: list[BrokerBotBinding] = []
         for child in sorted(self._live_state_root.iterdir()):
-            if not child.is_dir() or not (
-                (child / STRATEGY_INSTANCE_FILENAME).is_file() or (child / BINDING_FILENAME).is_file()
-            ):
+            if strict and child.is_symlink():
+                raise ValueError(f"binding directory {child.name!r} must not be a symbolic link")
+            if not child.is_dir():
+                continue
+            file_exists = _regular_evidence_file_exists if strict else Path.is_file
+            normalized = file_exists(child / STRATEGY_INSTANCE_FILENAME)
+            legacy = file_exists(child / BINDING_FILENAME)
+            if not normalized and not legacy:
                 continue
             try:
-                binding = self.read(child.name)
+                binding = (
+                    self._read_normalized(child, strict=True)
+                    if strict and normalized
+                    else self.read(child.name)
+                )
+                if strict and (binding is None or binding.strategy_instance_id != child.name):
+                    raise ValueError(f"binding row {child.name!r} is incomplete or has a different identity")
             except (OSError, ValidationError, ValueError) as exc:
+                if strict:
+                    raise
                 logger.warning(
                     "Skipping corrupt broker binding",
                     extra={
@@ -735,20 +776,24 @@ class BotBindingRepository:
         )
 
     @staticmethod
-    def _read_normalized(instance_dir: Path) -> BrokerBotBinding | None:
+    def _read_normalized(instance_dir: Path, *, strict: bool = False) -> BrokerBotBinding | None:
+        file_exists = _regular_evidence_file_exists if strict else Path.exists
         instance = StrategyInstanceRecord.model_validate_json(
             (instance_dir / STRATEGY_INSTANCE_FILENAME).read_text(encoding="utf-8")
         )
         current_path = instance_dir / CURRENT_RUN_FILENAME
-        if not current_path.exists():
+        if not file_exists(current_path):
             return None
         current = CurrentRunBinding.model_validate_json(
             current_path.read_text(encoding="utf-8")
         )
         if current.strategy_instance_id != instance.strategy_instance_id:
             raise ValueError("current run pointer belongs to another strategy instance")
-        run_path = instance_dir / RUNS_DIRECTORY / f"{current.run_id}.json"
-        if not run_path.exists():
+        runs_dir = instance_dir / RUNS_DIRECTORY
+        if strict and runs_dir.is_symlink():
+            raise ValueError("binding run directory must not be a symbolic link")
+        run_path = runs_dir / f"{current.run_id}.json"
+        if not file_exists(run_path):
             return None
         run = BotRunRecord.model_validate_json(
             run_path.read_text(encoding="utf-8")
@@ -759,9 +804,10 @@ class BotBindingRepository:
         ):
             raise ValueError("current run evidence does not match its strategy instance")
         seal_path = instance_dir / SEALED_PROGRAM_FILENAME
+        seal_exists = _regular_evidence_file_exists(seal_path) if strict else seal_path.is_file()
         sealed_program = (
             SealedBotProgram.model_validate_json(seal_path.read_text(encoding="utf-8"))
-            if seal_path.is_file()
+            if seal_exists
             else None
         )
         if sealed_program is not None and sealed_program.strategy_instance_id != instance.strategy_instance_id:

@@ -173,14 +173,37 @@ real-money submission open` or `… — real-money authority installed, no
 instance armed`; `clerk_authority` stays `sqlite` (`configured_mode` names the
 world).
 
-## Operator environment
+## Operator configuration
 
-The data plane reads **only** `PythonDataService/.env` (compose `env_file`);
-the repo-root `.env` feeds compose interpolation only. One `ALPACA_MODE` line
-and six `ALPACA_LIVE_*` lines, all in `PythonDataService/.env`;
-`DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=false` and
-`ALPACA_FAULT_INJECTION_ENABLED=false` on a live boot (the first refuses to
-install the authority; the second is already refused by `injection_permitted`).
+**The endpoint mode and the six risk-envelope values are a saved broker profile,
+not environment settings** (ADR 0060, superseding ADR 0059's environment-source
+rule). They are edited under `/api/brokers/alpaca/configuration`, staged, and
+made effective by pressing Apply and performing a controlled restart. There is
+no `ACTIVE_PROFILE` variable and no `ALPACA_MODE` on the runtime path.
+
+Once an installation has a saved profile, leaving any of the seven retired
+variables in place — `ALPACA_MODE`, `ALPACA_LIVE_LOSS_FRACTION`,
+`ALPACA_LIVE_LOSS_USD`, `ALPACA_LIVE_SHADOW_SESSIONS`,
+`ALPACA_LIVE_ARMING_MAX_SESSIONS`, `ALPACA_LIVE_XH_ENTRY_BPS`,
+`ALPACA_LIVE_XH_EXIT_BPS` — is answered by naming the ones to delete
+(`retired_environment_settings`). **A deliberate change refuses; an ordinary
+restart does not.** The worker binding a staged revision an Apply named refuses
+and the gate closes (the service still boots), as does any operator CLI. A
+restart of an already-effective configuration **binds and logs an error naming
+the variables on every boot** instead, because a worker left with no broker
+cannot place an EXIT (ADR 0060 D4.3) and the stale values are not read by
+anything it binds. `scripts/manage_broker_configuration.py` moves an existing
+deployment across; the per-boot table is in
+[`alpaca-credential-slots.md`](alpaca-credential-slots.md#retired-and-never-retired).
+
+What **remains** environment-injected, and always will: the credential pairs
+(`ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` are the `default` slot;
+`ALPACA_CREDENTIAL_LIVE_*` are the `live` slot), `ALPACA_CLERK_DIR`, and the
+capability gates. The data plane reads **only** `PythonDataService/.env` (compose
+`env_file`); the repo-root `.env` feeds compose interpolation only. On a live
+boot, `DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=false` and
+`ALPACA_FAULT_INJECTION_ENABLED=false` (the first refuses to install the
+authority; the second is already refused by `injection_permitted`).
 
 ## Residuals
 

@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -41,6 +42,7 @@ from app.config import settings
 from app.routers.broker_v2_panel import router as panel_router
 from app.routers.brokers import router as brokers_router
 from app.schemas.broker_bots import BotProcessFact
+from app.schemas.broker_v2_panel import PanelActionRequest
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_lifecycle_projection import (
@@ -51,6 +53,10 @@ from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
+)
+from app.services.broker_v2_panel import evidence_service, panel_data_source
+from app.services.broker_v2_panel.action_execution_service import (
+    ExecutionAuthorityRevivedError,
 )
 from app.services.broker_v2_panel.panel_data_source import _panel_authority_for_binding
 from app.services.broker_v2_panel.panel_projection_service import build_panel
@@ -322,6 +328,77 @@ async def test_shadow_authority_facts_preserve_public_route_account_scope(
         assert response.json()["process"]["state"] == "UNKNOWN"
     else:
         assert response.status_code == 404, response.text
+
+
+async def test_shadow_evidence_route_reads_the_custody_namespace(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    shadow_registry: BotTaskRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public live-account route reads Shadow's SQLite timeline."""
+    app, _runtime = shadow_app
+    await shadow_registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=SID,
+        symbol="SPY",
+        mode="trade",
+    )
+    monkeypatch.setattr(evidence_service, "resolve_clerk_dir", lambda: tmp_path)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/evidence"
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["account_id"] == LIVE_ACCT
+    assert "STRATEGY_INSTANCE_REGISTERED" in {
+        entry["kind"] for entry in body["entries"]
+    }
+
+
+async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A public Shadow route revives the active Shadow authority's lease."""
+    _app, _runtime = shadow_app
+    calls: list[str] = []
+
+    class _Sweep:
+        async def revive_now(self) -> bool:
+            calls.append("revived")
+            return True
+
+    monkeypatch.setattr(
+        panel_data_source,
+        "active_reconciliation_sweep",
+        lambda _broker: _Sweep(),
+    )
+    request = PanelActionRequest(
+        action_id="reconcile_now",
+        revision=0,
+        concurrency_token="shadow-lease",
+        idempotency_key="shadow-lease",
+    )
+
+    with pytest.raises(ExecutionAuthorityRevivedError):
+        await panel_data_source._revive_lease_or_raise(
+            "alpaca",
+            LIVE_ACCT,
+            SID,
+            request,
+            error=ExecutionLeaseLost(
+                "Shadow execution lease expired",
+                account_id=SHADOW_ACCT,
+            ),
+        )
+
+    assert calls == ["revived"]
 
 
 async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(

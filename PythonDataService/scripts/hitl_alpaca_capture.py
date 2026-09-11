@@ -1,9 +1,14 @@
 """HITL #1178 + #1198 — live Alpaca paper-account capture and validation.
 
-Run from PythonDataService/ with paper credentials in .env:
+Run from PythonDataService/:
 
     cd PythonDataService
     python scripts/hitl_alpaca_capture.py
+
+It resolves the **effective** broker configuration for itself, the way the three
+``manage_alpaca_*`` CLIs do (ADR 0060): a saved profile revision once the
+installation has cut over, and the ``.env`` credentials before that. Either way
+the capture is paper-only and refuses a live endpoint mode.
 
 Gates closed by this script
 ---------------------------
@@ -53,12 +58,16 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 # ── application imports (after path setup) ────────────────────────────────────
+from pydantic import ValidationError  # noqa: E402
+
+from app.broker.alpaca.active_binding import BrokerUnbound  # noqa: E402
 from app.broker.alpaca.client import AlpacaTradingClient  # noqa: E402
 from app.broker.alpaca.config import (  # noqa: E402
-    get_alpaca_settings,
-    reset_alpaca_settings_for_testing,
+    AlpacaSettings,
+    alpaca_configuration_error_detail,
 )
 from app.broker.capture.journal import CaptureSettings, reset_capture_journal_for_testing  # noqa: E402
+from app.broker_configuration.cli_binding import effective_alpaca_settings  # noqa: E402
 from app.engine.live.order_identity import (  # noqa: E402
     DEFAULT_ORDER_REF_MAX_LENGTH,
     build_manual_order_namespace,
@@ -353,16 +362,44 @@ gate #1178 / #1198. Adapter + schema-drift tests run against this payload.
 # ── H1: credentials check ─────────────────────────────────────────────────────
 
 
-def _check_credentials() -> None:
+def _resolved_settings() -> AlpacaSettings:
+    """The effective revision's settings, resolved once for this process.
+
+    This capture runs in its own process, where ``app/main.py``'s lifespan has
+    installed no binding, so it resolves one itself exactly as the three
+    ``manage_alpaca_*`` CLIs do. Reading ``get_alpaca_settings()`` directly --
+    which this script did before ADR 0060 -- would answer from ``.env`` on an
+    installation whose worker binds a saved profile, i.e. potentially a
+    different account than the one under capture.
+
+    Two exception types, for the two states ``cli_binding`` leaves open: a
+    ``ValidationError`` escapes the pre-cutover environment bootstrap, and
+    ``BrokerUnbound`` comes from a configured installation that will not resolve.
+    """
+    try:
+        return effective_alpaca_settings()
+    except ValidationError as exc:
+        raise RuntimeError(
+            f"Alpaca configuration is unusable: {alpaca_configuration_error_detail(exc)}"
+        ) from exc
+    except BrokerUnbound as exc:
+        raise RuntimeError(
+            f"{exc.reason}: {exc.unbound.message} {exc.unbound.next_step}"
+        ) from exc
+
+
+def _check_credentials(settings: AlpacaSettings) -> None:
     logger.info("[H1] Checking credentials")
-    reset_alpaca_settings_for_testing()
-    settings = get_alpaca_settings()
     if not settings.is_paper:
-        raise RuntimeError("ALPACA_MODE must be 'paper'")
-    if not settings.api_key_id:
-        raise RuntimeError("ALPACA_API_KEY_ID missing")
-    if not settings.api_secret_key:
-        raise RuntimeError("ALPACA_API_SECRET_KEY missing")
+        raise RuntimeError(
+            "this capture is paper-only, but the effective broker configuration's "
+            f"endpoint mode is {settings.mode!r}. Before cutover that is ALPACA_MODE; "
+            "afterwards it is the effective profile revision's endpoint mode."
+        )
+    if not settings.api_key_id.get_secret_value():
+        raise RuntimeError("the resolved credential slot has no key id")
+    if not settings.api_secret_key.get_secret_value():
+        raise RuntimeError("the resolved credential slot has no secret key")
     # H1 requirement: market-data endpoint must NOT be wired into the phase-1
     # trading client. The client uses TradingClient (paper base URL only).
     logger.info("paper credentials verified; credential values are not logged")
@@ -442,7 +479,9 @@ def _replace_fixtures_from_reads(journal_entries: dict[str, dict[str, Any]]) -> 
 # ── S7: order submission + websocket lifecycle ─────────────────────────────────
 
 
-async def _run_order_gate(client: AlpacaTradingClient) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+async def _run_order_gate(
+    client: AlpacaTradingClient, settings: AlpacaSettings
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Submit one SPY market order and observe the full lifecycle."""
     logger.info("[S7] Order submission gate")
 
@@ -466,8 +505,6 @@ async def _run_order_gate(client: AlpacaTradingClient) -> tuple[dict[str, Any], 
         "client_order_id": order_ref,
     }
 
-    settings = get_alpaca_settings()
-
     # Open the websocket BEFORE submitting the order so we don't miss the
     # initial "new" event.
     logger.info("opening paper trade_updates websocket")
@@ -489,8 +526,8 @@ async def _run_order_gate(client: AlpacaTradingClient) -> tuple[dict[str, Any], 
                     {
                         "action": "authenticate",
                         "data": {
-                            "key_id": settings.api_key_id,
-                            "secret_key": settings.api_secret_key,
+                            "key_id": settings.api_key_id.get_secret_value(),
+                            "secret_key": settings.api_secret_key.get_secret_value(),
                         },
                     }
                 )
@@ -714,15 +751,18 @@ async def _main() -> None:
     logger.info("UTC capture date", extra={"date": _TODAY_UTC})
     logger.info("=" * 60)
 
-    # H1: credential check.
-    _check_credentials()
+    # H1: credential check. Resolved once and threaded from here, so the
+    # websocket auth frame and the trading client cannot end up describing a
+    # different configuration than the one this gate checked.
+    settings = _resolved_settings()
+    _check_credentials(settings)
 
     # Use a fresh in-memory journal that also writes to disk (so entries are
     # available for extraction). The default journal goes to var/broker_captures/
     # which is git-ignored.
     reset_capture_journal_for_testing()
 
-    client = AlpacaTradingClient()
+    client = AlpacaTradingClient(settings=settings)
 
     # H2: establish the read-capture path before placing the documented order.
     await _capture_reads(client)
@@ -731,7 +771,7 @@ async def _main() -> None:
     logger.info("[S7] Running order submission gate")
     captured_at_ms = int(datetime.now(UTC).timestamp() * 1000)
     try:
-        submit_result, ws_frames = await _run_order_gate(client)
+        submit_result, ws_frames = await _run_order_gate(client, settings)
     except Exception:
         logger.exception("order gate failed; no fixtures were replaced")
         raise

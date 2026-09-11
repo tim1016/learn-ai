@@ -350,6 +350,18 @@ blank; there is no checked-in development credential.
 rotates the retired `local-dev-control-secret` value during an upgrade without
 overwriting an operator-provided secret.
 
+**Broker configuration is not an environment setting.** Alpaca API credentials
+stay in `PythonDataService/.env` — they are the credential *slots* a profile
+refers to by name — but the endpoint mode (paper/live) and the six real-money
+risk-envelope values are a **saved broker profile** on the Clerk volume, created
+and edited in the browser and made effective by pressing Apply and restarting
+(ADR 0060). An installation upgrading from the environment-configured layout
+imports its existing values once with
+`python -m scripts.manage_broker_configuration plan --plan-out …`, then deletes
+the retired `ALPACA_MODE` / `ALPACA_LIVE_*` lines; the worker refuses to bind
+while any of them is still set, and names the ones to remove. See
+[`docs/references/alpaca-credential-slots.md`](docs/references/alpaca-credential-slots.md).
+
 ### 2. Start the backend services
 
 ```bash
