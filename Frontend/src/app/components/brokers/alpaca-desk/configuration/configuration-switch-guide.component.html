@@ -1,0 +1,57 @@
+<section class="switch-guide" aria-labelledby="switch-guide-title">
+  <header>
+    <p class="switch-guide__eyebrow">Every account switch</p>
+    <h2 id="switch-guide-title">Switch between Paper and Live</h2>
+    <p>Keep one saved profile for each account. Then use the same four steps in either direction.</p>
+  </header>
+
+  <ol class="switch-guide__steps">
+    <li>
+      <span class="switch-guide__number" aria-hidden="true">1</span>
+      <div>
+        <strong>Stage the destination profile</strong>
+        <p>Under Profiles, choose <b>Stage</b> beside Paper or Live.</p>
+      </div>
+    </li>
+    <li>
+      <span class="switch-guide__number" aria-hidden="true">2</span>
+      <div>
+        <strong>Record Apply</strong>
+        <p>Confirm the Staged card is correct, then choose <b>Apply staged revision</b>.</p>
+      </div>
+    </li>
+    <li>
+      <span class="switch-guide__number" aria-hidden="true">3</span>
+      <div>
+        <strong>Restart the worker</strong>
+        <p>Refreshing or reopening the browser does not apply the change.</p>
+        <div class="switch-guide__command">
+          <code>{{ restartCommand }}</code>
+          <app-copy-button
+            variant="button"
+            [text]="restartCommand"
+            label="Copy command"
+            copiedLabel="Command copied"
+            ariaLabel="Copy worker restart command" />
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="switch-guide__number" aria-hidden="true">4</span>
+      <div>
+        <strong>Verify before deploying</strong>
+        <p>Check Effective now and the top ALPACA banner for the intended mode and account.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="switch-guide__directions">
+    <p><strong>Live → Paper:</strong> use the four steps above; no clean-slate script is needed.</p>
+    <p><strong>Paper → Live:</strong> first clear Paper exposure, then use the guarded handoff script below.</p>
+  </div>
+
+  <p class="switch-guide__safety" role="note">
+    A profile switch never retargets, arms, or launches an existing bot. Deploy bots only after the
+    intended account is visibly effective.
+  </p>
+</section>
