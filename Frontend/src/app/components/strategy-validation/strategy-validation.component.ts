@@ -20,6 +20,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { LeanTwinSourceComponent } from './lean-twin-source/lean-twin-source.component';
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
 import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strategy-proof-pipeline.component';
+import { GoldenValidationWorkbenchComponent } from '../golden-validation-workbench/golden-validation-workbench.component';
 
 @Component({
   selector: 'app-strategy-validation',
@@ -29,6 +30,7 @@ import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strate
     LeanTwinSourceComponent,
     QuantConnectReferenceCodeComponent,
     StrategyProofPipelineComponent,
+    GoldenValidationWorkbenchComponent,
   ],
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',

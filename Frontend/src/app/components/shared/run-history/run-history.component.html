@@ -24,7 +24,7 @@
             <span class="badge" [attr.data-source]="row.source">{{ badge(row.source) }}</span>
           </td>
           <td>{{ strategyLabel(row) }}</td>
-          <td>{{ row.symbol ?? '—' }}</td>
+          <td>@if (row.symbol) { <app-asset-identity [symbol]="row.symbol" size="xs" /> } @else { — }</td>
           <td>{{ row.startDate | timestampDisplay: 'date-et' }} – {{ row.endDate | timestampDisplay: 'date-et' }}</td>
           <td class="bars-cell">{{ barsSummary(row.dataPolicy) }}</td>
           <td>{{ row.executedAt | timestampDisplay: 'local' : 'datetime' }}</td>
@@ -37,6 +37,23 @@
               <span class="badge badge--warning">Open at end</span>
             } @else {
               <span class="badge badge--neutral">Complete</span>
+            }
+            @if (row.goldenValidationState; as goldenState) {
+              <button
+                type="button"
+                class="badge badge--golden golden-action"
+                (click)="requestGolden(row, $event)"
+                [attr.aria-label]="'Review Validation Golden Run for run ' + row.id">
+                Golden · {{ goldenState | receiptLabel }}
+              </button>
+            } @else if (row.source === 'engine') {
+              <button
+                type="button"
+                class="golden-action"
+                (click)="requestGolden(row, $event)"
+                [attr.aria-label]="'Designate run ' + row.id + ' as a Validation Golden Run'">
+                Mark golden
+              </button>
             }
           </td>
           <td class="notes-cell" (click)="$event.stopPropagation()">

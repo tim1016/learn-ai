@@ -2027,13 +2027,51 @@ class TestTemplateSelection:
         with pytest.raises(ValidationError):
             TrustedRunRequestModel.model_validate(payload)
 
+    async def test_signal_template_accepts_all_resolved_strategy_parameters(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_signal"
+        payload["strategy_parameters"] = {
+            "gap": 0.35,
+            "gap_bps": 2.5,
+            "rsi_min": 42,
+            "rsi_max": 68,
+        }
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None
+        assert model.strategy_parameters.model_dump() == payload["strategy_parameters"]
+
+    @pytest.mark.parametrize(
+        ("strategy_parameters", "expected_rsi_min"),
+        [({}, 50.0), ({"rsi_min": 45}, 45.0)],
+    )
+    async def test_signal_template_partial_parameters_use_signal_defaults(
+        self,
+        strategy_parameters: dict[str, float],
+        expected_rsi_min: float,
+    ) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_signal"
+        payload["strategy_parameters"] = strategy_parameters
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None
+        assert model.strategy_parameters.gap_bps == 0.0
+        assert model.strategy_parameters.rsi_min == expected_rsi_min
+
     async def test_non_parameterized_template_rejects_strategy_parameters(self) -> None:
         from pydantic import ValidationError
 
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
-        payload["template"] = "ema_crossover_signal"
+        payload["template"] = "rsi_mean_reversion"
         payload["strategy_parameters"] = {
             "gap_bps": 2,
             "rsi_min": 50,

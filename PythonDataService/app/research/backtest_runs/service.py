@@ -52,6 +52,7 @@ def persist_engine_response_sync(
     compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,
+    execution_config: Mapping[str, Any] | None = None,
 ) -> int | None:
     """Shape a completed engine response into its row and write it; ``None`` when persistence failed.
 
@@ -73,6 +74,7 @@ def persist_engine_response_sync(
                 compatibility_profile=compatibility_profile,
                 requested_engine=requested_engine,
                 parity_group_id=parity_group_id,
+                execution_config=execution_config,
             )
         ),
         source="engine",

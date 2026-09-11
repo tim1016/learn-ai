@@ -57,6 +57,7 @@ REASON_EXECUTION_PROFILE = "execution_profile_unsupported"
 REASON_RESOLUTION = "resolution_unsupported"
 REASON_WINDOW = "window_unsupported"
 REASON_PARAMETERS_UNREPRESENTABLE = "parameters_unrepresentable_by_twin"
+REASON_WARMUP_UNSUPPORTED = "warmup_unsupported_by_twin"
 
 
 def new_parity_group_id() -> str:
@@ -84,6 +85,8 @@ def companion_ineligibility_reason(
         return REASON_RESOLUTION
     if not request.from_date or not request.to_date:
         return REASON_WINDOW
+    if request.warmup_from_date is not None:
+        return REASON_WARMUP_UNSUPPORTED
     if _has_parameters_the_twin_cannot_see(registration, request):
         return REASON_PARAMETERS_UNREPRESENTABLE
     return None

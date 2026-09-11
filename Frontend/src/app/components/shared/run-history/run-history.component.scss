@@ -89,6 +89,26 @@
   border-color: var(--badge-neutral-border);
 }
 
+.badge--golden {
+  margin-left: var(--space-1);
+  background: color-mix(in srgb, var(--warn-soft) 70%, var(--bg-elevated));
+  border-color: var(--badge-warn-border);
+  color: var(--badge-warn-text);
+}
+
+.golden-action {
+  margin-left: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--badge-warn-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--badge-warn-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  font-weight: var(--fw-medium);
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

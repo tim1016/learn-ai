@@ -1795,6 +1795,16 @@ def _persist_and_dispatch_companion(
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
+        execution_config={
+            "compatibility_profile": request.compatibility_profile,
+            "warmup_from_date": request.warmup_from_date,
+            "slippage_per_share": request.slippage_per_share,
+            "session_entry_cutoff": (
+                request.session_entry_cutoff.isoformat() if request.session_entry_cutoff is not None else None
+            ),
+            "force_flat_at": request.force_flat_at.isoformat() if request.force_flat_at is not None else None,
+            "limit_penetration": request.limit_penetration,
+        },
     )
 
     on_log(f"Saved study {response.study_id}")

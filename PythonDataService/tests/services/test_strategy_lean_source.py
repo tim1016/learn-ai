@@ -4,6 +4,7 @@ import hashlib
 
 import pytest
 
+from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover_signal import EMA_CROSSOVER_SIGNAL_SOURCE
 from app.lean_sidecar.trusted_samples.rsi_mean_reversion import RSI_MEAN_REVERSION_SOURCE
 from app.services.strategy_lean_source_service import (
@@ -19,6 +20,7 @@ def test_resolve_strategy_lean_source_returns_registered_qc_algorithm() -> None:
     assert result.source == EMA_CROSSOVER_SIGNAL_SOURCE
     assert "class MyAlgorithm(QCAlgorithm)" in result.source
     assert result.source_sha256 == hashlib.sha256(result.source.encode("utf-8")).hexdigest()
+    assert result.source_sha256 == hashlib.sha256(EMA_CROSSOVER_SOURCE.encode("utf-8")).hexdigest()
 
 
 def test_resolve_strategy_lean_source_rejects_strategy_without_lean_twin() -> None:

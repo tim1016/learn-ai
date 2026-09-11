@@ -82,6 +82,7 @@ def build_engine_run_payload(
     compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,
+    execution_config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Shape a completed engine response into the canonical persist payload.
 
@@ -124,12 +125,18 @@ def build_engine_run_payload(
     except (KeyError, TypeError, ValueError) as exc:
         raise RunPayloadError(f"engine run report preparation failed: {exc}") from exc
 
+    # Resolve this at run-persistence time, not later at Golden designation:
+    # a future registry edit must not rewrite which Signal Program ran.
+    from app.engine.strategy.registry import strategy_program_version
+
     return {
         "source": "engine",
         "lean_run_id": None,
         "requested_engine": requested_engine,
         "parity_group_id": parity_group_id,
         "strategy_name": response.strategy_name,
+        "program_version": strategy_program_version(response.strategy_name),
+        "execution_config_json": None if execution_config is None else json.dumps(execution_config, sort_keys=True),
         "symbol": symbol,
         "parameters": dict(parameters),
         "start_date": start_date,

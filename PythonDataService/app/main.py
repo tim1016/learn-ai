@@ -52,6 +52,7 @@ from app.routers import (
     edge,
     engine,
     golden_fixtures,
+    golden_validation,
     grid_search,
     indicator_reliability,
     indicators,
@@ -700,6 +701,11 @@ app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spe
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
 app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+app.include_router(
+    golden_validation.router,
+    prefix="/api/research/golden-validations",
+    tags=["research-golden-validation"],
+)
 # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
 app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
 app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])

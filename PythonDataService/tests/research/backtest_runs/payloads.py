@@ -73,6 +73,16 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
         "requested_engine": "python",
         "parity_group_id": None,
         "strategy_name": "ema_crossover_signal",
+        "execution_config_json": json.dumps(
+            {
+                "compatibility_profile": "us-equity-raw-ibkr-v1",
+                "warmup_from_date": None,
+                "slippage_per_share": 0.0,
+                "session_entry_cutoff": None,
+                "force_flat_at": None,
+                "limit_penetration": 0.0,
+            }
+        ),
         "symbol": symbol,
         "parameters": {"symbol": symbol, "gap_bps": 0.0},
         "start_date": "2025-01-06",
@@ -141,6 +151,17 @@ def lean_payload(lean_run_id: str, symbol: str = "SPY", **overrides: Any) -> dic
         "requested_engine": "lean",
         "fill_mode": "lean-sidecar",
         "strategy_name": "ema_crossover",
+        "program_version": "ema-crossover-signal/v1",
+        "execution_config_json": json.dumps(
+            {
+                "compatibility_profile": "us-equity-raw-ibkr-v1",
+                "warmup_from_date": None,
+                "slippage_per_share": 0.0,
+                "session_entry_cutoff": None,
+                "force_flat_at": None,
+                "limit_penetration": 0.0,
+            }
+        ),
         "symbol": symbol,
         "parameters": {"symbol": symbol},
         "starting_cash": 100_000.0,

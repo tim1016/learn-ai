@@ -70,6 +70,8 @@ class BacktestRunRecord:
     # rather than being compared against a real Python run (#1977).
     parity_failure_detail: str | None
     strategy_name: str
+    program_version: str | None
+    execution_config_json: str | None
     symbol: str
     parameters: dict[str, Any]
     start_ms: int  # ET midnight of the first trading date, int64 ms UTC
@@ -146,6 +148,8 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         parity_group_id=payload.get("parity_group_id") or None,
         parity_failure_detail=_parity_failure_detail(payload, source=source),
         strategy_name=str(payload.get("strategy_name") or ""),
+        program_version=str(payload["program_version"]) if payload.get("program_version") else None,
+        execution_config_json=_json_text(payload.get("execution_config_json")),
         symbol=symbol,
         parameters=parameters,
         start_ms=et_midnight_ms(start_date),

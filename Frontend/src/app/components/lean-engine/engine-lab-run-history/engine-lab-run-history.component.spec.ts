@@ -1,18 +1,22 @@
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Router } from "@angular/router";
-import { of } from "rxjs";
+import { of, type Observable } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history.component";
 import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
 import type { BacktestRunSummary } from "../../../services/backtest-runs.types";
 import { JobsService, JobState } from "../../../services/jobs.service";
+import { GoldenValidationService } from "../../../services/golden-validation.service";
 
 /** Writable signal the auto-refresh tests use to drive JobsService state.
  *  Reset in the outer `beforeEach` so cross-test pollution doesn't trip
  *  the seen-ids dedupe set. */
 const fakeJobsSignal = signal<JobState[]>([]);
 const jobsServiceMock = { jobs: () => fakeJobsSignal() };
+const goldenValidationMock = {
+  list: vi.fn<() => Observable<{ source_run_id: number; state: string }[]>>(() => of([])),
+};
 
 function installLocalStorage(): void {
   const store = new Map<string, string>();
@@ -35,6 +39,8 @@ function installLocalStorage(): void {
 
 beforeEach(() => {
   installLocalStorage();
+  goldenValidationMock.list.mockClear();
+  goldenValidationMock.list.mockReturnValue(of([]));
 });
 
 function makeJob(over: Partial<JobState>): JobState {
@@ -120,6 +126,7 @@ async function setup(
       { provide: BacktestRunsService, useValue: runsService },
       { provide: Router, useValue: { navigate: navigateSpy } },
       { provide: JobsService, useValue: jobsServiceMock },
+      { provide: GoldenValidationService, useValue: goldenValidationMock },
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(EngineLabRunHistoryComponent);
@@ -172,6 +179,20 @@ describe("EngineLabRunHistoryComponent", () => {
     const fixture = await setup();
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(html).toContain("Open at end");
+  });
+
+  it("badges a designated run and opens its Golden Validation workflow", async () => {
+    goldenValidationMock.list.mockReturnValue(of([{ source_run_id: 30, state: "candidate" }]));
+    const fixture = await setup();
+    const requested = vi.fn();
+    fixture.componentInstance.goldenRunRequested.subscribe(requested);
+    fixture.detectChanges();
+
+    const button = Array.from(fixture.nativeElement.querySelectorAll("button"))
+      .find((entry) => (entry as HTMLButtonElement).textContent?.includes("Golden · Candidate")) as HTMLButtonElement;
+    button.click();
+
+    expect(requested).toHaveBeenCalledWith(30);
   });
 
   it("renders the empty state when no rows are returned", async () => {

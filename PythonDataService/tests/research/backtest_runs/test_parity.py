@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -79,6 +80,17 @@ def _run(run_id: int, source: str, **overrides) -> RunDetail:
         source=source,
         requested_engine="both",
         strategy_name="ema_crossover",
+        program_version="ema-crossover-v1",
+        execution_config_json=json.dumps(
+            {
+                "compatibility_profile": "us-equity-raw-ibkr-v1",
+                "warmup_from_date": None,
+                "slippage_per_share": 0.0,
+                "session_entry_cutoff": None,
+                "force_flat_at": None,
+                "limit_penetration": 0.0,
+            }
+        ),
         symbol="SPY",
         lean_run_id=f"companion-{run_id}" if source == "lean-sidecar" else None,
         parameters_json='{"symbol": "SPY"}',
@@ -134,6 +146,7 @@ def test_no_divergences_agree_with_every_receipt_matching() -> None:
     status, verdict = _verdict()
 
     assert status == "agree" and verdict["status"] == "agree" and verdict["reason"] is None
+    assert verdict["schema_version"] == 3
     assert verdict["native_metric_parity"]["status"] == "match"
     assert verdict["readiness_parity"] == {
         "status": "match",
@@ -144,6 +157,18 @@ def test_no_divergences_agree_with_every_receipt_matching() -> None:
     assert (
         verdict["input_parity"]["status"] == "match" and verdict["input_parity"]["fixture_id"] == "bar-store-v1-exact"
     )
+    assert verdict["parameter_parity"] == {
+        "status": "match",
+        "reason": None,
+        "compared_field_count": 1,
+        "mismatched_fields": [],
+    }
+    assert verdict["program_version_parity"] == {
+        "status": "match",
+        "reason": None,
+        "left_program_version": "ema-crossover-v1",
+        "right_program_version": "ema-crossover-v1",
+    }
     assert verdict["left_execution_id"] == 1 and verdict["right_execution_id"] == 2
     assert verdict["engines"] == {"left": "python", "right": "lean"} and verdict["tolerances"] == {
         "fill_price_atol": "0.01"
@@ -159,6 +184,57 @@ def test_a_trade_divergence_freezes_diverged_with_category_counts() -> None:
     assert (
         verdict["divergences"][0]["category"] == "FILL_PRICE_DRIFT" and verdict["divergences"][0]["trade_number"] == 1
     )
+
+
+def test_shifted_trade_timestamp_is_a_decision_mismatch() -> None:
+    shifted = replace(_trade_row(), entry_ms=1_736_173_800_001)
+
+    status, verdict = _verdict(trades=(shifted,))
+
+    assert status == "diverged"
+    assert verdict["counts_by_category"] == {"DECISION_MISMATCH": 1}
+
+
+def test_changed_resolved_parameter_is_not_a_comparable_pair() -> None:
+    status, verdict = _verdict(parameters_json='{"symbol": "SPY", "gap": 0.25}')
+
+    assert status == "unavailable"
+    assert verdict["reason"] == "strategy_parameter_mismatch"
+    assert verdict["parameter_parity"]["mismatched_fields"] == ["gap"]
+
+
+def test_changed_program_version_is_not_a_comparable_pair() -> None:
+    status, verdict = _verdict(program_version="ema-crossover-v2")
+
+    assert status == "unavailable"
+    assert verdict["reason"] == "program_version_mismatch"
+    assert verdict["program_version_parity"]["status"] == "mismatch"
+
+
+def test_changed_execution_configuration_is_not_a_comparable_pair() -> None:
+    changed = json.loads(_run(2, "lean-sidecar").execution_config_json or "{}")
+    changed["slippage_per_share"] = 0.01
+
+    status, verdict = _verdict(execution_config_json=json.dumps(changed))
+
+    assert status == "unavailable"
+    assert verdict["reason"] == "compatibility_input_mismatch"
+    assert verdict["input_parity"]["mismatched_fields"] == ["execution_configuration"]
+
+
+def test_missing_fixture_identity_is_unavailable() -> None:
+    status, verdict = _verdict(data_policy_json=json.dumps(data_policy("SPY")))
+
+    assert status == "unavailable"
+    assert verdict["reason"] == "compatibility_input_parity_unavailable"
+    assert verdict["input_parity"] == {
+        "status": "unavailable",
+        "reason": "fixture_identity_missing",
+        "compared_field_count": 0,
+        "fixture_id": None,
+        "fixture_sha256": None,
+        "mismatched_fields": [],
+    }
 
 
 def test_a_readiness_mismatch_names_the_signature_in_the_receipt() -> None:
@@ -210,6 +286,7 @@ def test_legacy_verdicts_without_a_signature_compare_field_by_field() -> None:
 def test_a_native_metric_mismatch_freezes_diverged() -> None:
     native = json.loads(json.dumps(MATCHING_NATIVE_STATISTICS))
     native["namespaces"]["status"] = "mismatch"
+    native["namespaces"]["divergences"] = [{"metric": "sharpe", "absolute_delta": 0.1}]
 
     status, verdict = _verdict(lean_statistics_json=json.dumps(native))
 
@@ -223,6 +300,30 @@ def test_a_missing_metric_receipt_is_unavailable_instead_of_a_false_agreement() 
     assert verdict["native_metric_parity"]["reason"] == "lean_native_metric_receipt_missing"
 
 
+def test_a_nominal_native_match_without_receipts_is_unavailable() -> None:
+    status, verdict = _verdict(lean_statistics_json='{"namespaces":{"status":"match"}}')
+
+    assert status == "unavailable"
+    assert verdict["native_metric_parity"]["reason"] == "lean_native_metric_receipt_incomplete"
+
+
+def test_one_sided_readiness_signature_is_unavailable() -> None:
+    status, verdict = _verdict(run_verdict_json="{}")
+
+    assert status == "unavailable"
+    assert verdict["readiness_parity"]["reason"] == "readiness_signature_missing"
+
+
+def test_empty_readiness_documents_are_unavailable() -> None:
+    left = _run(1, "engine", run_verdict_json="{}")
+    right = _run(2, "lean-sidecar", run_verdict_json="{}")
+
+    verdict = json.loads(compute_parity_verdict(parity_group_id="pg-test", left=left, right=right).verdict_json)
+
+    assert verdict["status"] == "unavailable"
+    assert verdict["readiness_parity"]["reason"] == "readiness_fields_missing"
+
+
 def test_missing_and_unreadable_native_statistics_are_named() -> None:
     assert _verdict(lean_statistics_json=None)[1]["native_metric_parity"]["reason"] == "lean_statistics_missing"
     assert (
@@ -230,10 +331,10 @@ def test_missing_and_unreadable_native_statistics_are_named() -> None:
     )
 
 
-def test_a_shared_fixture_mismatch_freezes_diverged_and_names_the_fixture() -> None:
+def test_a_shared_fixture_mismatch_is_not_a_comparable_pair_and_names_the_fixture() -> None:
     status, verdict = _verdict(data_policy_json=json.dumps(data_policy("SPY", fixture_id="bar-store-v1-changed")))
 
-    assert status == "diverged" and verdict["reason"] == "compatibility_input_mismatch"
+    assert status == "unavailable" and verdict["reason"] == "compatibility_input_mismatch"
     assert verdict["input_parity"]["mismatched_fields"] == ["fixture_id"]
     assert verdict["input_parity"]["fixture_id"] == "bar-store-v1-changed"
 
@@ -241,9 +342,9 @@ def test_a_shared_fixture_mismatch_freezes_diverged_and_names_the_fixture() -> N
 def test_cash_window_and_fill_mode_are_compared_as_inputs() -> None:
     status, verdict = _verdict(initial_cash=50_000.0, end_ms=et_midnight_ms(date(2026, 1, 7)), fill_mode="lean-sidecar")
 
-    assert status == "diverged"
+    assert status == "unavailable"
     assert verdict["input_parity"]["mismatched_fields"] == ["initial_cash", "end_date", "fill_mode"]
-    assert verdict["input_parity"]["compared_field_count"] == 15
+    assert verdict["input_parity"]["compared_field_count"] == 16
 
 
 def test_a_missing_data_policy_is_unavailable() -> None:

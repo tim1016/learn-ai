@@ -23,6 +23,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     4: "af50760fa9b256df",
     5: "5bafa2856e347d82",
     6: "ff9c91a7adf7ac30",
+    7: "69a0fae284dcaa08",
 }
 
 
@@ -82,6 +83,37 @@ async def test_version_6_cascades_a_parity_verdict_with_its_lean_side(scratch_db
     )
 
     assert delete_rule == b"c"  # CASCADE (asyncpg returns the "char" column as bytes); version 5 had SET NULL
+
+
+async def test_version_7_declares_append_only_golden_validation_ledgers(scratch_db: asyncpg.Connection) -> None:
+    await ensure_schema(scratch_db)
+
+    tables = await scratch_db.fetch(
+        """
+        SELECT tablename FROM pg_tables
+         WHERE tablename IN ('research_validation_golden_runs', 'research_golden_validation_reviews')
+         ORDER BY tablename
+        """
+    )
+    triggers = await scratch_db.fetch(
+        """
+        SELECT tgname FROM pg_trigger
+         WHERE tgname IN (
+            'research_validation_golden_runs_no_update_or_delete',
+            'research_golden_validation_reviews_no_update_or_delete'
+         )
+         ORDER BY tgname
+        """
+    )
+
+    assert [row["tablename"] for row in tables] == [
+        "research_golden_validation_reviews",
+        "research_validation_golden_runs",
+    ]
+    assert [row["tgname"] for row in triggers] == [
+        "research_golden_validation_reviews_no_update_or_delete",
+        "research_validation_golden_runs_no_update_or_delete",
+    ]
 
 
 async def test_version_5_nulls_every_recency_study_reference(scratch_db: asyncpg.Connection) -> None:

@@ -201,6 +201,45 @@ def _compare_trade_pair(
     left_qty = _to_decimal(left["quantity"])
     right_qty = _to_decimal(right["quantity"])
 
+    # A sequence match is not a decision match when either fill moved.  These
+    # are int64-ms UTC values at the run boundary, so even one millisecond is a
+    # different observed decision/fill rather than a quantity or price drift.
+    right_entry_ms = int(right["entry_ms_utc"])
+    if entry_ms != right_entry_ms:
+        out.append(
+            DivergenceDto(
+                category=DivergenceCategory.DECISION_MISMATCH.name,
+                trade_number=trade_number,
+                ms_utc=min(entry_ms, right_entry_ms),
+                message=(f"trade #{trade_number} entry timestamp: left={entry_ms} right={right_entry_ms}"),
+            )
+        )
+
+    exit_ms = int(left["exit_ms_utc"])
+    right_exit_ms = int(right["exit_ms_utc"])
+    if exit_ms != right_exit_ms:
+        out.append(
+            DivergenceDto(
+                category=DivergenceCategory.DECISION_MISMATCH.name,
+                trade_number=trade_number,
+                ms_utc=min(exit_ms, right_exit_ms),
+                message=(f"trade #{trade_number} exit timestamp: left={exit_ms} right={right_exit_ms}"),
+            )
+        )
+
+    if left.get("is_synthetic_exit") != right.get("is_synthetic_exit"):
+        out.append(
+            DivergenceDto(
+                category=DivergenceCategory.DECISION_MISMATCH.name,
+                trade_number=trade_number,
+                ms_utc=exit_ms,
+                message=(
+                    f"trade #{trade_number} synthetic exit: "
+                    f"left={left.get('is_synthetic_exit')!r} right={right.get('is_synthetic_exit')!r}"
+                ),
+            )
+        )
+
     left_sign = math.copysign(1, float(left_qty))
     right_sign = math.copysign(1, float(right_qty))
     if left_sign != right_sign and left_qty != _ZERO and right_qty != _ZERO:
@@ -245,7 +284,6 @@ def _compare_trade_pair(
         )
 
     # Exit fill price drift
-    exit_ms = int(left["exit_ms_utc"])
     left_exit = _to_decimal(left["exit_price"])
     right_exit = _to_decimal(right["exit_price"])
     if abs(left_exit - right_exit) > fill_price_atol:
