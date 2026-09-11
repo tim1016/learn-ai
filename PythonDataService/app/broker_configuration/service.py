@@ -556,29 +556,31 @@ class BrokerConfigurationService:
         concerns. A desk choice is admitted only after the operator explicitly
         verified and pinned an account on a complete saved revision.
         """
-        current = self._store.read_selection()
-        profiles = self._store.list_profiles(include_archived=False)
-        revisions_by_profile = {
-            profile.profile_id: self._store.list_revisions(profile.profile_id)
-            for profile in profiles
-        }
-        staged_revision = (
-            None
-            if current.staged_profile_id is None or current.staged_revision is None
-            else self._require_revision(current.staged_profile_id, current.staged_revision)
-        )
-        effective_revision = (
-            None
-            if current.effective_profile_id is None or current.effective_revision is None
-            else self._require_revision(current.effective_profile_id, current.effective_revision)
-        )
+        with self._store.read_snapshot():
+            current = self._store.read_selection()
+            profiles = self._store.list_profiles(include_archived=False)
+            revisions_by_profile = {
+                profile.profile_id: self._store.list_revisions(profile.profile_id)
+                for profile in profiles
+            }
+            staged_revision = (
+                None
+                if current.staged_profile_id is None or current.staged_revision is None
+                else self._require_revision(current.staged_profile_id, current.staged_revision)
+            )
+            effective_revision = (
+                None
+                if current.effective_profile_id is None or current.effective_revision is None
+                else self._require_revision(current.effective_profile_id, current.effective_revision)
+            )
+            nicknames = self._store.list_nicknames()
         return project_desk_state(
             selection=current,
             profiles=profiles,
             revisions_by_profile=revisions_by_profile,
             staged_revision=staged_revision,
             effective_revision=effective_revision,
-            nicknames=self._store.list_nicknames(),
+            nicknames=nicknames,
         )
 
     def stage_selection(
