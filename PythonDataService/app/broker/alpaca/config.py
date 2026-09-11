@@ -12,17 +12,20 @@ spec §10):
 3. The runtime relies on Alpaca's own paper endpoint isolation — the paper base
    URL simply cannot reach live funds.
 
-Credentials come from ``.env`` (never committed): ``ALPACA_API_KEY_ID``,
-``ALPACA_API_SECRET_KEY``, ``ALPACA_MODE``.
+Credentials and deployment topology come from ``.env`` (never committed).
+Endpoint mode and the live envelope come from the effective profile after an
+installation has migrated to ADR 0060.
 
 This class stays the shape every consumer accepts. What changes under ADR 0060
 is *where its values come from*: ``app/broker/alpaca/profile/`` builds one of
 these from a saved profile revision's validated values plus the credential pair
 an allowlisted slot resolves to, instead of from the process environment. The
-three things that remain environment reads even then are the credential pairs
+inputs that remain environment reads even then are the credential pairs
 themselves (secrets), ``ALPACA_CLERK_DIR`` (deployment bootstrap — it must
-exist before a profile can be loaded), and this module's own lazy singleton,
-which Package D retires from the worker's boot path.
+exist before a profile can be loaded), and
+``ALPACA_MARKET_STATUS_UPSTREAM_URL`` (optional Paper-worker topology). The
+module's lazy singleton remains only for pre-cutover bootstrap and direct unit
+tests; Package D retired it from the bound worker's consumer paths.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic import Field, HttpUrl, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The registry key and ``{broker}`` path segment for this vendor.
@@ -89,6 +92,10 @@ class AlpacaSettings(BaseSettings):
     # constructed (select_active_clerk_runtime), never here.
     mode: Literal["paper", "live"] = "paper"
     clerk_dir: Path = _SERVICE_ROOT / "artifacts" / "alpaca_clerk"
+    # Optional deployment topology, never a profile-authored endpoint: a Paper
+    # twin can share the owner's one stock-data connection while retaining its
+    # separate trading credentials and broker clock.
+    market_status_upstream_url: HttpUrl | None = None
 
     # The live envelope and ceremony values (ADR 0059 D4). Required when
     # ``mode == "live"``; deliberately no defaults in code — a number nobody
@@ -108,6 +115,11 @@ class AlpacaSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:
+        if self.market_status_upstream_url is not None:
+            if self.mode != "paper":
+                raise ValueError("Shared market-status sources are supported only for Paper workers.")
+            if self.market_status_upstream_url.username or self.market_status_upstream_url.password:
+                raise ValueError("Shared market-status URLs must not contain credentials.")
         if self.mode != "live":
             return self
         missing = [

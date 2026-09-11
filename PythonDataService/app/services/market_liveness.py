@@ -26,6 +26,7 @@ from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
+    MarketStatusSnapshot,
     SymbolTradingStatusEvidence,
 )
 
@@ -317,6 +318,7 @@ class MarketLivenessStore:
         # the expected, common case.
         self._connected = False
         self._connection_changed_at_ms = 0
+        self._upstream_observed_at_ms: int | None = None
 
     def observe_clock(self, clock: BrokerClockEvidence) -> None:
         """Record one fresh market-wide broker-clock observation."""
@@ -365,6 +367,36 @@ class MarketLivenessStore:
         """
         self._symbol_statuses.clear()
 
+    def status_snapshot(self, *, now_ms: int) -> MarketStatusSnapshot:
+        """Export connection proof and unchanged vendor halt/resume evidence."""
+        return MarketStatusSnapshot(
+            connected=self._status_connected(now_ms),
+            observed_at_ms=(
+                now_ms if self._upstream_observed_at_ms is None
+                else min(now_ms, self._upstream_observed_at_ms)
+            ),
+            connection_changed_at_ms=self._connection_changed_at_ms,
+            symbol_statuses=tuple(self._symbol_statuses[key] for key in sorted(self._symbol_statuses)),
+        )
+
+    def apply_status_snapshot(self, snapshot: MarketStatusSnapshot, *, now_ms: int) -> None:
+        """Import fresh source proof without refreshing or erasing vendor events."""
+        if not 0 <= now_ms - snapshot.observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS:
+            raise ValueError("Shared market-status snapshot is stale or future-dated.")
+        if self._upstream_observed_at_ms is not None and snapshot.observed_at_ms < self._upstream_observed_at_ms:
+            raise ValueError("Shared market-status snapshot is older than retained evidence.")
+        self._upstream_observed_at_ms = snapshot.observed_at_ms
+        self._connected = snapshot.connected
+        self._connection_changed_at_ms = snapshot.connection_changed_at_ms
+        for evidence in snapshot.symbol_statuses:
+            self.observe_symbol_status(evidence)
+
+    def _status_connected(self, now_ms: int) -> bool:
+        return self._connected and (
+            self._upstream_observed_at_ms is None
+            or 0 <= now_ms - self._upstream_observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS
+        )
+
     def fact(self, symbol: str, *, now_ms: int) -> MarketLivenessFact:
         """Return the one current live fact for Start, panel, and Clerk gates."""
         normalized_symbol = symbol.upper()
@@ -372,7 +404,7 @@ class MarketLivenessStore:
             normalized_symbol,
             now_ms=now_ms,
             market_clock=self._market_clock,
-            connected=self._connected,
+            connected=self._status_connected(now_ms),
             connection_changed_at_ms=self._connection_changed_at_ms,
             symbol_status=self._symbol_statuses.get(normalized_symbol),
         )

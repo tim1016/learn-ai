@@ -22,11 +22,13 @@ from pathlib import Path
 from typing import Final
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker_configuration.runtime import resolve_clerk_dir
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
+from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -282,7 +284,7 @@ def _read_active_sqlite_evidence(
 ) -> tuple[list[EvidenceEntry], str | None, int, bool]:
     """Read the selected SQLite authority, never a latent database by path."""
     runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.authority_kind != "sqlite":
+    if runtime is None or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES:
         raise RuntimeError("The activated SQLite Clerk evidence authority is unavailable")
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
@@ -313,6 +315,7 @@ def _read_active_sqlite_evidence(
 
 def read_evidence_page(
     *,
+    broker: str,
     account_id: str,
     sid: str,
     transaction_ref: str | None,
@@ -324,6 +327,7 @@ def read_evidence_page(
     """Return one bounded, redacted, audit-logged evidence page.
 
     Args:
+        broker: Public broker route whose custody account owns the evidence.
         account_id: The account whose journal to read.
         sid: Filter to this bot's namespace only.
         transaction_ref: If given, filter to the selected SQLite effect operation.
@@ -342,7 +346,7 @@ def read_evidence_page(
     read_at = now_ms_utc()
 
     sqlite_page = _read_active_sqlite_evidence(
-        account_id=account_id,
+        account_id=custody_account_id_for_route(broker, account_id),
         sid=sid,
         transaction_ref=transaction_ref,
         cursor=cursor,

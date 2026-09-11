@@ -29,9 +29,11 @@ and refuses anything else as ``revision_incomplete``. An ``int`` supplied for a
 "convert explicitly on load" the contract asks for.
 
 What this module deliberately does **not** take: an API base URL (derived from
-mode, contract §2.3), an environment-variable name, or the Clerk directory. The
-last is deployment bootstrap and stays an environment read inside
-``AlpacaSettings``, so a profile can never relocate the custody volume.
+mode, contract §2.3), an environment-variable name, the Clerk directory, or the
+optional shared market-status service address. The last two are deployment
+bootstrap and stay environment reads inside ``AlpacaSettings``, so a profile
+can neither relocate the custody volume nor redirect the authenticated internal
+status request.
 """
 
 from __future__ import annotations

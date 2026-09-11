@@ -90,6 +90,35 @@ recheck at ENTER now runs on the shadow authority as well as the real one: a
 refusal the real Clerk would make has to appear in the paper twin too, or the
 two stop reconciling trade-for-trade.
 
+## Sharing the market-status connection with the Paper twin
+
+The rehearsal keeps IBKR price bars and separate Alpaca custody/execution in
+each worker. Alpaca may reject the second stock-data status socket with error
+406, including across an owner's Paper and Live credentials
+([vendor streaming contract](https://docs.alpaca.markets/us/docs/streaming-market-data)).
+No additional data subscription is required by this implementation: the Paper
+worker can set `ALPACA_MARKET_STATUS_UPSTREAM_URL` to the Shadow service's
+`/api/brokers/alpaca/market-status-snapshot` endpoint. Both workers must share
+the existing protected control-channel secret; no trading credential is sent
+to this endpoint. The option is refused in Live mode.
+
+The Paper worker polls that source instead of opening another status socket.
+It still reads its own broker clock and uses its own trade-update stream.
+Snapshots preserve original vendor halt/resume timestamps and retain known
+halts across upstream reconnects. Missing, rejected, future-dated or stale
+source evidence blocks new exposure; cached connection proof expires after
+five seconds even if polling stalls. Only a status subscription or valid
+status event can establish the vendor connection: connection greetings,
+authentication errors and error 406 cannot briefly admit a run. Regression
+coverage is in `tests/broker/alpaca/test_market_liveness.py`.
+
+Shadow lifecycle projection and boot recovery use the same closed set of
+SQLite-backed primary authorities as the other operator surfaces. The public
+account route maps to its Shadow custody namespace for authority facts;
+foreign accounts remain refused. Composed-runtime tests in
+`tests/broker/v2panel/test_shadow_operator_surfaces.py` cover launch, stop,
+resume, and recovery of a failed activation without replacing its binding.
+
 ## Fill models
 
 The fill model is chosen by leg shape (ruling R4), and both models live in the

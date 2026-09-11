@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
+from app.broker.alpaca.active_binding import reset_active_alpaca_binding_for_testing
 from app.broker.alpaca.clerk import (
     get_alpaca_clerk,
     reset_alpaca_clerk_for_testing,
@@ -35,6 +37,41 @@ _LIVE_REQUIRED = {
 _IN_DOMAIN_ENVELOPE = LiveEnvelopeValues(
     **{name.removeprefix("live_"): value for name, value in _LIVE_REQUIRED.items()}
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_alpaca_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configuration tests must never inherit the developer's trading account."""
+    monkeypatch.setitem(AlpacaSettings.model_config, "env_file", None)
+    for name in tuple(os.environ):
+        if name.startswith("ALPACA_"):
+            monkeypatch.delenv(name)
+
+
+def test_shared_status_source_is_explicit_and_paper_only() -> None:
+    url = "http://shadow-service:8000/api/brokers/alpaca/market-status-snapshot"
+    paper = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        mode="paper",
+        market_status_upstream_url=url,
+    )
+    assert str(paper.market_status_upstream_url) == url
+    assert paper.base_url == "https://paper-api.alpaca.markets"
+    with pytest.raises(ValidationError, match="only for Paper"):
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            mode="live",
+            market_status_upstream_url=url,
+            **_LIVE_REQUIRED,
+        )
+    with pytest.raises(ValidationError, match="must not contain credentials"):
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            market_status_upstream_url="http://user:secret@shadow-service:8000/",
+        )
 
 
 def test_paper_mode_derives_paper_base_url() -> None:
@@ -146,6 +183,7 @@ async def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
         assert "ALPACA_MODE=live requires" in rendered
         assert secret not in rendered
     finally:
+        reset_active_alpaca_binding_for_testing()
         reset_alpaca_clerk_for_testing()
         reset_alpaca_settings_for_testing()
 

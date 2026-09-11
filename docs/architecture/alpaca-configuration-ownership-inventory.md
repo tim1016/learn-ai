@@ -89,13 +89,14 @@ The same service hardcodes `ALPACA_FAULT_INJECTION_ENABLED=true` (`:286`) and gu
 
 `ALPACA_CLERK_DIR` never appears in `compose.yaml`. Compose instead masks the *default* path with the external named volume `alpaca-clerk-data` → `learn-ai-alpaca-clerk-data` at `/app/artifacts/alpaca_clerk` (`compose.yaml:126`, volume declaration in the `volumes:` block), for the macOS virtiofs/WAL reason documented at `:120-125`. **This is the volume ADR 0060 puts the profiles database on.** The `python-service` service sets no `ALPACA_*` entries at all; it loads `env_file: ./PythonDataService/.env` (`:80-82`), and the comment at `:76-79` records that the running data plane reads only that file while the repo-root `.env` feeds compose interpolation.
 
-## E. Names that appear in docs but are not settings
+## E. Provisional, deployment-only, and stale names
 
-Recorded so a future sweep does not migrate something that does not exist.
+Recorded so a future sweep does not migrate a deployment address or a name that
+does not exist.
 
 | Name | Where | Status at `037ffe12` |
 |---|---|---|
-| `ALPACA_MARKET_STATUS_UPSTREAM_URL` | the plan, §2 and §6 | **Not present anywhere in code, `compose.yaml`, or either `.env.example`** — independently confirmed by grep. It is an uncommitted rehearsal edit on another branch, described by the plan itself as provisional evidence outside its baseline. Classify it when it lands: the *choice* to use a shared status feed is user-owned; the *address* is deployment bootstrap, and it must never become a free-form credential-bearing URL input. |
+| `ALPACA_MARKET_STATUS_UPSTREAM_URL` | `app/broker/alpaca/config.py`; `market_liveness.py` | Optional Paper-worker deployment topology added by #2026. The address remains environment-owned bootstrap and is validated as a credential-free HTTP(S) URL; it is never stored in a profile or exposed as a free-form browser input. Enabling the topology is deployment-owned in v1. If a later UI makes the semantic source choice user-selectable, persist only a closed source selector in the profile and continue resolving its address from deployment configuration. |
 | `ALPACA_MARKET_ENDPOINT` | `docs/audits/alpaca-paper-live-workflow-2026-09-09.md:274` | Present in some operator's untracked env file with **no** application or script consumer. The endpoint is derived from `ALPACA_MODE`. A leftover of exactly the kind open question 1 is about. |
 | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | `docs/superpowers/plans/2026-09-08-live-slice-5-risk-envelope.md:150-151,161` | Stale plan-doc names that never shipped; the real fields are `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY`. `extra="ignore"` would drop them silently. |
 
@@ -136,8 +137,8 @@ Nothing in this table migrates in this delivery.
 | Disposition | Settings |
 |---|---|
 | **This delivery** | the six `ALPACA_LIVE_*` values; `ALPACA_MODE` as a per-revision endpoint mode (runtime path only); `PANEL_OPERATOR_IDENTITY` as the local-owner display label; the credential *slot reference* that replaces the direct key/secret read |
-| **Later** | `ALPACA_MARKET_STATUS_UPSTREAM_URL` once it lands (choice user-owned, address deployment); the four *later (candidate)* rows in §E2, each needing its own decision and caller sweep |
-| **Never** | `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`, `ALPACA_QUALIFICATION_API_KEY_ID`, `ALPACA_QUALIFICATION_API_SECRET_KEY` (secrets); `ALPACA_CLERK_DIR`, `ALPACA_CLERK_PRODUCTION_ACCOUNT_ID`, `ALPACA_CLERK_UI_EVIDENCE_PATH` (deployment bootstrap); `ALPACA_MODE` inside the qualification container (paper-only proof); `ALPACA_SQLITE_MANUAL_TRADING_ENABLED`, `ALPACA_FAULT_INJECTION_ENABLED` (capability gates); `ALPACA_PAPER_CARRYOVER_ENABLED` (dead — retire or wire, separately); `base_url` / `is_paper` / `is_live` (derived code invariants) |
+| **Later** | a user-selectable shared-status source choice, if one is introduced; the four *later (candidate)* rows in §E2, each needing its own decision and caller sweep |
+| **Never** | `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`, `ALPACA_QUALIFICATION_API_KEY_ID`, `ALPACA_QUALIFICATION_API_SECRET_KEY` (secrets); `ALPACA_CLERK_DIR`, `ALPACA_CLERK_PRODUCTION_ACCOUNT_ID`, `ALPACA_CLERK_UI_EVIDENCE_PATH`, `ALPACA_MARKET_STATUS_UPSTREAM_URL` (deployment bootstrap); `ALPACA_MODE` inside the qualification container (paper-only proof); `ALPACA_SQLITE_MANUAL_TRADING_ENABLED`, `ALPACA_FAULT_INJECTION_ENABLED` (capability gates); `ALPACA_PAPER_CARRYOVER_ENABLED` (dead — retire or wire, separately); `base_url` / `is_paper` / `is_live` (derived code invariants) |
 
 **Cutover status (package F, 2026-09-10).** The "this delivery" row is built. The seven runtime-path names — `ALPACA_MODE` and the six `ALPACA_LIVE_*` values — are encoded as `RETIRED_SETTINGS` in `app/broker_configuration/legacy_environment.py`, and everything in the "Never" column that could plausibly be mistaken for one is encoded beside it as `NEVER_RETIRED_SETTINGS`, with a test asserting the two stay disjoint. `scripts/manage_broker_configuration.py` imports an existing deployment's values into a profile under the repo's plan/apply confirmation ceremony. `PANEL_OPERATOR_IDENTITY` migrates by *seeding* the local-owner record on first read and is **not** retired: it keeps its deployment-bootstrap role for an installation that has not created an owner yet, and an existing owner label is never overwritten.
 

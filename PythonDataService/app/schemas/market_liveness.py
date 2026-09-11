@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 MarketLivenessState = Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
 MarketClockState = Literal["OPEN", "CLOSED", "UNKNOWN"]
 SymbolTradingState = Literal["TRADABLE", "HALTED", "UNKNOWN"]
@@ -29,8 +31,8 @@ class MarketClockLivenessEvidence(BaseModel):
 
     state: MarketClockState
     source: str
-    observed_at_ms: int = Field(ge=0)
-    vendor_timestamp_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    vendor_timestamp_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     reason: str | None = None
 
 
@@ -48,8 +50,8 @@ class SymbolTradingStatusEvidence(BaseModel):
     symbol: str
     state: SymbolTradingState
     source: str
-    observed_at_ms: int = Field(ge=0)
-    source_timestamp_ms: int | None = Field(default=None, ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    source_timestamp_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     reason_code: str | None = None
     reason: str | None = None
 
@@ -61,8 +63,24 @@ class MarketLivenessFact(BaseModel):
 
     symbol: str
     state: MarketLivenessState
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     market_clock: MarketClockLivenessEvidence
     symbol_status: SymbolTradingStatusEvidence | None
     reason_code: str
     reason: str
+
+
+class MarketStatusSnapshot(BaseModel):
+    """Authenticated status-source observation shared with a Paper worker.
+
+    Vendor transition times remain unchanged. The snapshot timestamp proves
+    only the source's current connection state, never a new symbol event.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: Literal["alpaca.stock_data.status"] = "alpaca.stock_data.status"
+    connected: bool
+    observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    symbol_statuses: tuple[SymbolTradingStatusEvidence, ...]

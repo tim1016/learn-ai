@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     active_program_leg_policy,
 )
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
@@ -1693,7 +1694,7 @@ class BotTaskRegistry:
             getattr(clerk, "lifecycle_recovery_candidates", None)
         )
         if (
-            getattr(clerk, "authority_kind", None) != "sqlite"
+            getattr(clerk, "authority_kind", None) not in SQLITE_FACADE_AUTHORITIES
             and not has_sqlite_candidate_capability
         ):
             return tuple(candidates.values())

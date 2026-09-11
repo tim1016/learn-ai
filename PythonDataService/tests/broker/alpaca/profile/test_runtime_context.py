@@ -314,13 +314,38 @@ def test_the_clerk_directory_stays_a_deployment_bootstrap_environment_read(
     assert context.settings.clerk_dir == tmp_path / "clerk"
 
 
-@pytest.mark.parametrize("forbidden", ["base_url", "clerk_dir"])
-def test_a_revision_cannot_supply_an_endpoint_url_or_a_clerk_directory(
+def test_the_shared_status_address_stays_paper_only_deployment_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    url = "http://shadow-service:8000/api/brokers/alpaca/market-status-snapshot"
+    monkeypatch.setenv("ALPACA_MARKET_STATUS_UPSTREAM_URL", url)
+
+    paper = resolve_runtime_context(
+        endpoint_mode="paper",
+        credential_slot="default",
+        environment=only_default_slot_injected,
+    )
+
+    assert str(paper.settings.market_status_upstream_url) == url
+    with pytest.raises(RevisionIncomplete, match="only for Paper"):
+        resolve_runtime_context(
+            endpoint_mode="live",
+            credential_slot="default",
+            live_envelope=COMPLETE_ENVELOPE,
+            environment=only_default_slot_injected,
+        )
+
+
+@pytest.mark.parametrize(
+    "forbidden", ["base_url", "clerk_dir", "market_status_upstream_url"]
+)
+def test_a_revision_cannot_supply_deployment_endpoints_or_a_clerk_directory(
     forbidden: str,
     only_default_slot_injected: AlpacaCredentialEnvironment,
 ) -> None:
-    # The endpoint is derived from the mode and the Clerk directory is
-    # deployment bootstrap; neither is a thing a profile gets to say.
+    # The broker endpoint is derived from mode; the Clerk directory and shared
+    # status address are deployment bootstrap. A profile gets to say none.
     with pytest.raises(TypeError):
         resolve_runtime_context(
             endpoint_mode="paper",
