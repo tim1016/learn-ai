@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
 from app.research.backtest_runs import repository as backtest_repo
 from app.research.backtest_runs.records import record_from_payload
+from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload
 
@@ -44,10 +46,24 @@ def _certificate_payload(*, group: str, left: int, right: int, status: str) -> d
         "status": status,
         "reason": "trade_reconciliation_diverged" if divergences else None,
         "tolerances": {"fill_price_atol": "0.01"},
-        "native_metric_parity": {"status": "match"},
-        "readiness_parity": {"status": "match"},
-        "input_parity": {"status": "match", "fixture_id": "fixture", "fixture_sha256": "a" * 64},
-        "parameter_parity": {"status": "match"},
+        "native_metric_parity": {
+            "status": "match",
+            "contract_id": "lean-native-statistics-commit",
+            "source_commit": "fixture-commit",
+            "absolute_tolerance": 0.00005,
+            "native_metric_count": 66,
+            "formatted_metric_count": 25,
+            "divergence_count": 0,
+        },
+        "readiness_parity": {"status": "match", "compared_field_count": 17, "mismatched_fields": []},
+        "input_parity": {
+            "status": "match",
+            "fixture_id": "fixture",
+            "fixture_sha256": "a" * 64,
+            "compared_field_count": 16,
+            "mismatched_fields": [],
+        },
+        "parameter_parity": {"status": "match", "compared_field_count": 2, "mismatched_fields": []},
         "program_version_parity": {
             "status": "match",
             "left_program_version": "ema-signal-v1",
@@ -60,7 +76,7 @@ def _certificate_payload(*, group: str, left: int, right: int, status: str) -> d
 
 
 async def test_designation_freezes_the_exact_case_and_missing_evidence_is_explicit(conn, unique: str) -> None:
-    run_id = await _run(conn, engine_payload(symbol=unique))
+    run_id = await _run(conn, engine_payload(symbol=unique, program_version=None))
 
     dossier = await _designate(conn, run_id, unique)
 
@@ -90,8 +106,39 @@ async def test_designation_freezes_the_exact_case_and_missing_evidence_is_explic
     assert same.golden_run.label == "Chosen baseline"
 
 
+async def test_deployment_scope_lookup_is_exact_and_not_a_history_page(conn, unique: str) -> None:
+    exact_run = await _run(conn, engine_payload(symbol=unique))
+    exact = await _designate(conn, exact_run, f"exact-{unique}")
+    drifted_run = await _run(
+        conn,
+        engine_payload(
+            symbol=unique,
+            parameters={"symbol": unique.upper(), "gap_bps": 25.0},
+        ),
+    )
+    await _designate(conn, drifted_run, f"drifted-{unique}")
+
+    candidates = await service.find_deployment_scope_dossiers(
+        conn,
+        strategy_name="ema_crossover_signal",
+        symbol=unique.upper(),
+        parameters={"symbol": unique.upper(), "gap_bps": 0.0},
+    )
+    absent_scope = await service.find_deployment_scope_dossiers(
+        conn,
+        strategy_name="ema_crossover_signal",
+        symbol=unique.upper(),
+        parameters={"symbol": unique.upper(), "gap_bps": 50.0},
+    )
+
+    assert [item.golden_run.id for item in candidates.dossiers] == [exact.golden_run.id]
+    assert candidates.strategy_has_golden_runs is True
+    assert absent_scope.dossiers == ()
+    assert absent_scope.strategy_has_golden_runs is True
+
+
 async def test_human_can_accept_missing_evidence_only_as_a_visible_manual_override(conn, unique: str) -> None:
-    run_id = await _run(conn, engine_payload(symbol=unique))
+    run_id = await _run(conn, engine_payload(symbol=unique, program_version=None))
     designated = await _designate(conn, run_id, unique)
 
     accepted = await service.review(
@@ -112,6 +159,169 @@ async def test_human_can_accept_missing_evidence_only_as_a_visible_manual_overri
     assert accepted.latest_review.classification == "manual_override"
     assert json.loads(accepted.latest_review.evidence_json)["computed_state"] == "missing"
     assert accepted.review_is_current is True
+
+
+async def test_rejected_review_cannot_authorize_a_program_version(conn, unique: str) -> None:
+    run_id = await _run(conn, engine_payload(symbol=unique))
+    designated = await _designate(conn, run_id, unique)
+
+    with pytest.raises(service.GoldenRunIneligibleError, match="cannot authorize"):
+        await service.review(
+            conn,
+            golden_run_id=designated.golden_run.id,
+            command_id=f"reject-version-{unique}",
+            expected_evidence_revision=designated.evidence.revision,
+            decision="reject",
+            reason="This evidence is not suitable for promotion.",
+            quantconnect_backtest_id=None,
+            authorized_program_version="ema-crossover-signal/v1",
+            actor="local:reviewer",
+        )
+
+
+async def test_designation_locks_landed_companion_until_protection_is_visible(
+    conn,
+    second_conn,
+    unique: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = f"lock-pg-{unique}"
+    left = await _run(
+        conn,
+        engine_payload(
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            program_version="ema-signal-v1",
+        ),
+    )
+    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
+    await backtest_repo.freeze_parity_verdict(
+        conn,
+        parity_group_id=group,
+        left_run_id=left,
+        right_run_id=right,
+        status="agree",
+        verdict_json=json.dumps(_certificate_payload(group=group, left=left, right=right, status="agree")),
+    )
+    locked = asyncio.Event()
+    release = asyncio.Event()
+    original_lock = golden_repo.lock_paired_evidence_for_golden_case
+
+    async def pause_after_lock(connection, parity_group_id: str):
+        verdict = await original_lock(connection, parity_group_id)
+        locked.set()
+        await release.wait()
+        return verdict
+
+    monkeypatch.setattr(golden_repo, "lock_paired_evidence_for_golden_case", pause_after_lock)
+    designation = asyncio.create_task(_designate(conn, left, unique))
+    await locked.wait()
+    deletion = asyncio.create_task(backtest_repo.delete_run(second_conn, right))
+    await asyncio.sleep(0.05)
+    assert deletion.done() is False
+
+    release.set()
+    designated = await designation
+
+    assert designated.golden_run.source_run_id == left
+    assert await deletion == "golden_validation_evidence"
+
+
+async def test_designation_locks_a_landed_companion_before_its_verdict_exists(
+    conn,
+    second_conn,
+    unique: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = f"landed-before-verdict-{unique}"
+    left = await _run(
+        conn,
+        engine_payload(
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            program_version="ema-signal-v1",
+        ),
+    )
+    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
+    locked = asyncio.Event()
+    release = asyncio.Event()
+    original_lock = golden_repo.lock_paired_evidence_for_golden_case
+
+    async def pause_after_lock(connection, parity_group_id: str):
+        verdict = await original_lock(connection, parity_group_id)
+        locked.set()
+        await release.wait()
+        return verdict
+
+    monkeypatch.setattr(golden_repo, "lock_paired_evidence_for_golden_case", pause_after_lock)
+    designation = asyncio.create_task(_designate(conn, left, unique))
+    await locked.wait()
+    deletion = asyncio.create_task(backtest_repo.delete_run(second_conn, right))
+    await asyncio.sleep(0.05)
+    assert deletion.done() is False
+
+    release.set()
+    await designation
+
+    assert await deletion == "golden_validation_evidence"
+
+
+async def test_designation_refuses_without_waiting_when_companion_delete_owns_run_lock(
+    conn,
+    second_conn,
+    unique: str,
+) -> None:
+    group = f"delete-wins-{unique}"
+    left = await _run(
+        conn,
+        engine_payload(
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            program_version="ema-signal-v1",
+        ),
+    )
+    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
+    await backtest_repo.freeze_parity_verdict(
+        conn,
+        parity_group_id=group,
+        left_run_id=left,
+        right_run_id=right,
+        status="agree",
+        verdict_json=json.dumps(_certificate_payload(group=group, left=left, right=right, status="agree")),
+    )
+
+    async with second_conn.transaction():
+        await second_conn.fetchval(
+            "SELECT id FROM research_backtest_runs WHERE id = $1 FOR UPDATE",
+            right,
+        )
+        with pytest.raises(service.GoldenRunIneligibleError, match="Retry the designation"):
+            await asyncio.wait_for(_designate(conn, left, unique), timeout=1.0)
+
+    assert await golden_repo.get_golden_run_by_source(conn, left) is None
+
+
+async def test_companion_landing_after_designation_is_protected_before_a_verdict_exists(
+    conn,
+    unique: str,
+) -> None:
+    group = f"pending-companion-{unique}"
+    left = await _run(
+        conn,
+        engine_payload(
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            program_version="ema-signal-v1",
+        ),
+    )
+    await _designate(conn, left, unique)
+    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
+
+    assert await backtest_repo.delete_run(conn, right) == "golden_validation_evidence"
 
 
 @pytest.mark.parametrize(

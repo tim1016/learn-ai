@@ -12,6 +12,10 @@ from dataclasses import dataclass
 import asyncpg
 
 
+class PairedEvidenceLockUnavailableError(RuntimeError):
+    """A companion run is being deleted while a designation is authored."""
+
+
 @dataclass(frozen=True, slots=True)
 class GoldenRunRow:
     id: int
@@ -116,6 +120,70 @@ async def list_golden_runs(
     return [GoldenRunRow(**row) for row in rows]
 
 
+async def list_golden_runs_for_deployment_scope(
+    conn: asyncpg.Connection,
+    *,
+    strategy_name: str,
+    symbol: str,
+    parameters_json: str,
+) -> list[GoldenRunRow]:
+    """Return every immutable case for one exact deployable parameter scope.
+
+    This is intentionally not paginated: deployment admission must not change
+    merely because newer, unrelated research cases pushed an older exact match
+    off a history page.
+    """
+    rows = await conn.fetch(
+        f"""
+        SELECT {_GOLDEN_COLUMNS}
+          FROM research_validation_golden_runs
+         WHERE strategy_name = $1
+           AND symbol = $2
+           AND validation_case_json->'parameters' = $3::jsonb
+         ORDER BY designated_at_ms DESC, id DESC
+        """,
+        strategy_name,
+        symbol,
+        parameters_json,
+    )
+    return [GoldenRunRow(**row) for row in rows]
+
+
+async def golden_runs_exist_for_strategy(conn: asyncpg.Connection, strategy_name: str) -> bool:
+    """Report whether a strategy has crossed into Golden-scoped admission."""
+    return bool(
+        await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM research_validation_golden_runs WHERE strategy_name = $1)",
+            strategy_name,
+        )
+    )
+
+
+async def list_latest_accepted_golden_runs(
+    conn: asyncpg.Connection,
+    *,
+    symbol: str | None,
+) -> list[GoldenRunRow]:
+    """Return cases whose latest human disposition is acceptance, without a page cap."""
+    rows = await conn.fetch(
+        f"""
+        SELECT {_GOLDEN_COLUMNS}
+          FROM research_validation_golden_runs AS golden
+          JOIN LATERAL (
+              SELECT decision
+                FROM research_golden_validation_reviews
+               WHERE golden_run_id = golden.id
+               ORDER BY reviewed_at_ms DESC, id DESC
+               LIMIT 1
+          ) AS latest_review ON latest_review.decision = 'accept'
+         WHERE ($1::text IS NULL OR golden.symbol = $1)
+         ORDER BY golden.designated_at_ms DESC, golden.id DESC
+        """,
+        symbol,
+    )
+    return [GoldenRunRow(**row) for row in rows]
+
+
 async def insert_golden_run(
     conn: asyncpg.Connection,
     *,
@@ -195,6 +263,37 @@ async def parity_verdict_for_case(
     )
 
 
+async def lock_paired_evidence_for_golden_case(
+    conn: asyncpg.Connection,
+    parity_group_id: str,
+) -> asyncpg.Record | None:
+    """Hold a landed verdict and companion run until designation commits.
+
+    ``delete_run`` locks its target run before consulting the Golden evidence
+    guard.  The ``NOWAIT`` run lock is therefore intentional: if a delete won
+    that race, designation rolls back with a retryable authored refusal rather
+    than deadlocking while each transaction holds half of the evidence pair.
+    """
+    verdict = await parity_verdict_for_case(conn, parity_group_id, lock=True)
+    try:
+        companions = await conn.fetch(
+            """
+            SELECT id
+              FROM research_backtest_runs
+             WHERE parity_group_id = $1 AND source = 'lean-sidecar'
+             ORDER BY id
+             FOR KEY SHARE NOWAIT
+            """,
+            parity_group_id,
+        )
+    except asyncpg.exceptions.LockNotAvailableError as exc:
+        raise PairedEvidenceLockUnavailableError from exc
+    companion_ids = {row["id"] for row in companions}
+    if verdict is not None and verdict["right_run_id"] is not None and verdict["right_run_id"] not in companion_ids:
+        raise PairedEvidenceLockUnavailableError
+    return verdict
+
+
 async def insert_review(
     conn: asyncpg.Connection,
     *,
@@ -256,6 +355,12 @@ async def is_run_protected(conn: asyncpg.Connection, run_id: int) -> bool:
               JOIN research_parity_verdicts verdict
                 ON verdict.parity_group_id = (golden.validation_case_json ->> 'parity_group_id')
              WHERE verdict.left_run_id = $1 OR verdict.right_run_id = $1
+            UNION ALL
+            SELECT 1
+              FROM research_validation_golden_runs golden
+              JOIN research_backtest_runs companion
+                ON companion.parity_group_id = (golden.validation_case_json ->> 'parity_group_id')
+             WHERE companion.id = $1
             UNION ALL
             SELECT 1
               FROM research_golden_validation_reviews review

@@ -74,6 +74,8 @@ An accepted record does not bypass any other admission condition, including brok
 
 The applicable-record check is deliberately exact. A record may be stale or inapplicable when its configuration no longer matches or a declared freshness policy says it no longer applies. That applicability projection is not an edit to the record, its engine evidence result, or its human decision; a Manual override remains visibly an override rather than being silently converted into a different result.
 
+Paper/Live admission projects that exact case onto the facts a future-running bot can truthfully carry: strategy identity, exact program version, signal ticker, and the fully resolved parameter set. The selected case's historical data identity/window and backtest execution assumptions remain frozen provenance on the Golden Validation record; admission does not manufacture equality by pretending that a future live run has the same historical window or simulated fill model. A fresh Start may select the newest applicable record for those four deployable facts. Resume is pinned to the exact Golden review named by its immutable Signal Program seal and fails closed if that review is later stale, rejected, unreadable, or inapplicable.
+
 ### 5. Golden Validation is distinct from fixtures, corpus qualification, and existing validation evidence
 
 The following concepts remain separate:

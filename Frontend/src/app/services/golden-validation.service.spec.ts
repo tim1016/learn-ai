@@ -4,10 +4,9 @@ import { TestBed } from "@angular/core/testing";
 import { firstValueFrom } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { environment } from "../../environments/environment";
 import { GoldenValidationService } from "./golden-validation.service";
 
-const BASE = `${environment.pythonServiceUrl}/api/research/golden-validations`;
+const BASE = "/api/research/golden-validations";
 
 describe("GoldenValidationService", () => {
   let service: GoldenValidationService;
@@ -56,5 +55,18 @@ describe("GoldenValidationService", () => {
     expect(reviewRequest.request.body.decision).toBe("accept");
     reviewRequest.flush({ id: 8 });
     await review;
+  });
+
+  it("uses the local API proxy so protected writes receive the control secret", async () => {
+    const pending = firstValueFrom(service.designate({
+      source_run_id: 44,
+      command_id: "designate-proxy",
+      rationale: "Verify the proxy-compatible request path.",
+    }));
+    const request = http.expectOne(BASE);
+
+    expect(request.request.url.startsWith("/api/")).toBe(true);
+    request.flush({ id: 9 });
+    await pending;
   });
 });

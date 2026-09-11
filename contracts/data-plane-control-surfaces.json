@@ -5,6 +5,7 @@
     "/api/broker",
     "/api/brokers",
     "/api/data-lake",
+    "/api/research/golden-validations",
     "/api/strategy-validation"
   ],
   "protected_read_prefixes": [

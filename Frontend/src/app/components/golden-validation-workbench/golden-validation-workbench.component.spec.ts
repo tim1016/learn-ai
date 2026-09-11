@@ -26,7 +26,11 @@ const CASE: GoldenValidation = {
     symbol: "SPY",
     parameters: { crossover_gap: 0.2, rsi_min: 50, rsi_max: 70 },
     window: { start_ms: 1767589200000, end_ms: 1767675600000, timespan: "minute" },
-    data_policy: { source: "polygon", fixture_id: "spy-fixture" },
+    data_policy: {
+      source: "polygon",
+      fixture_id: "spy-fixture",
+      fixture_sha256: "a4f729d1e8c0",
+    },
     execution: {
       fill_mode: "signal_bar_close",
       initial_cash: 100000,
@@ -39,6 +43,7 @@ const CASE: GoldenValidation = {
         session_entry_cutoff: null,
         force_flat_at: null,
         limit_penetration: 0,
+        source_ref: "references/lean/ema-crossover.py",
       },
     },
     requested_engine: "both",
@@ -131,7 +136,11 @@ describe("GoldenValidationWorkbenchComponent", () => {
     expect(screen.getByText("Deviations")).toBeTruthy();
     expect(screen.getByText(/minute/i)).toBeTruthy();
     await user.click(screen.getByText("Exact parameters, data, and execution scope"));
-    expect(screen.getByText(/compatibility_profile/)).toBeTruthy();
+    expect(screen.getByText(/Compatibility Profile/)).toBeTruthy();
+    expect(screen.getByText("Us Equity Raw IBKR V1")).toBeTruthy();
+    expect(screen.getByText("spy-fixture")).toBeTruthy();
+    expect(screen.getByText("a4f729d1e8c0")).toBeTruthy();
+    expect(screen.getByText("references/lean/ema-crossover.py")).toBeTruthy();
     await user.type(screen.getByRole("textbox", { name: "Review note" }), "Reviewed the extra LEAN trade.");
     await user.click(screen.getByRole("button", { name: "Save review" }));
 
@@ -141,6 +150,29 @@ describe("GoldenValidationWorkbenchComponent", () => {
     })));
     expect(screen.getByText("Deviations")).toBeTruthy();
     expect(await screen.findByText(/Golden validation accepted as Reviewed Deviations/i)).toBeTruthy();
+  });
+
+  it("shows an explicit absence when execution configuration was not recorded", async () => {
+    const withoutExecutionConfiguration: GoldenValidation = {
+      ...CASE,
+      validation_case: {
+        ...CASE.validation_case,
+        execution: { ...CASE.validation_case.execution, configuration: null },
+      },
+    };
+    const service = fakeService({ list: vi.fn(() => of([withoutExecutionConfiguration])) });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: GoldenValidationService, useValue: service },
+      ],
+    });
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText("Exact parameters, data, and execution scope"));
+
+    expect(screen.getByText("Configuration")).toBeTruthy();
+    expect(screen.getByText("Not recorded")).toBeTruthy();
   });
 
   it("reuses the same review command when a response is lost and the intent is unchanged", async () => {

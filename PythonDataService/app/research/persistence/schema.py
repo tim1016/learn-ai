@@ -39,13 +39,16 @@ human reviews.  A case freezes the exact scientific scope copied from one
 Python history run.  A review preserves the computed parity evidence as a
 separate fact from the human decision, including explicit risk acceptance
 when evidence is missing or unhealthy.
+
+Version 8 closes the review invariant at rest: only an accepting review may
+carry an explicitly authorized program version.
 """
 
 from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -453,6 +456,15 @@ DDL_V7: tuple[str, ...] = (
     """,
 )
 
+DDL_V8: tuple[str, ...] = (
+    """
+    ALTER TABLE research_golden_validation_reviews
+        ADD CONSTRAINT ck_research_golden_validation_reviews_authorized_only_on_accept
+        CHECK (decision = 'accept' OR authorized_program_version IS NULL)
+        NOT VALID
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -461,6 +473,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (5, DDL_V5),
     (6, DDL_V6),
     (7, DDL_V7),
+    (8, DDL_V8),
 )
 
 

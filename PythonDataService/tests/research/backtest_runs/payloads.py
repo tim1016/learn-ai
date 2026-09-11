@@ -65,6 +65,60 @@ def data_policy(symbol: str = "SPY", *, fixture_id: str | None = None) -> dict[s
     }
 
 
+def certificate_evidence_overrides(symbol: str, *, lean: bool) -> dict[str, Any]:
+    """Certificate-grade receipts for persistence tests that expect a comparable pair."""
+    run_verdict = {
+        "verdict_version": 2,
+        "status": "complete",
+        "composite": 76,
+        "grade": "A",
+        "signal": "Paper-trade",
+        "red_flags": [],
+        "dimensions": [{"key": "return_quality", "score": 70, "sub_scores": []}],
+        "missing_metrics": [],
+        "missing_required_metrics": [],
+        "available_required_metrics": 17,
+        "required_metrics": 17,
+        "normalized_weights": False,
+        "parity_signature": {
+            "contract_id": "readiness-core-v2",
+            "absolute_tolerance": "0.000000000001",
+            "status": "complete",
+            "composite": 76,
+            "grade": "A",
+            "signal": "Paper-trade",
+            "red_flags": [],
+            "missing_required_metrics": [],
+            "available_required_metrics": 17,
+            "required_metrics": 17,
+            "normalized_weights": False,
+            "required_inputs": [],
+        },
+    }
+    overrides: dict[str, Any] = {
+        "run_verdict_json": json.dumps(run_verdict),
+        "data_policy_json": json.dumps(data_policy(symbol, fixture_id="bar-store-v1-exact")),
+    }
+    if lean:
+        overrides.update(
+            {
+                "fill_mode": "signal_bar_close",
+                "lean_statistics": {
+                    "namespaces": {
+                        "status": "match",
+                        "contract_id": "lean-native-statistics-commit",
+                        "source_commit": "fixture-commit",
+                        "absolute_tolerance": 0.0000500001,
+                        "native_metric_count": 66,
+                        "formatted_metric_count": 25,
+                        "divergences": [],
+                    }
+                },
+            }
+        )
+    return overrides
+
+
 def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
     """A complete engine-source payload: every column the row has is populated."""
     payload: dict[str, Any] = {
@@ -73,6 +127,7 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
         "requested_engine": "python",
         "parity_group_id": None,
         "strategy_name": "ema_crossover_signal",
+        "program_version": "ema-crossover-signal/v1",
         "execution_config_json": json.dumps(
             {
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
@@ -163,7 +218,7 @@ def lean_payload(lean_run_id: str, symbol: str = "SPY", **overrides: Any) -> dic
             }
         ),
         "symbol": symbol,
-        "parameters": {"symbol": symbol},
+        "parameters": {"symbol": symbol, "gap_bps": 0.0},
         "starting_cash": 100_000.0,
         "start_date": "2025-01-06",
         "end_date": "2025-01-10",

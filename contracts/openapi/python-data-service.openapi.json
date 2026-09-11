@@ -54289,6 +54289,22 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
           }
         ],
         "responses": {
@@ -54324,6 +54340,24 @@
       },
       "post": {
         "operationId": "designate_golden_run_api_research_golden_validations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -54374,6 +54408,22 @@
               "title": "Golden Run Id",
               "type": "integer"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
           }
         ],
         "responses": {
@@ -54415,6 +54465,22 @@
             "schema": {
               "title": "Golden Run Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
             }
           }
         ],
@@ -54467,6 +54533,22 @@
             "schema": {
               "title": "Golden Run Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
             }
           }
         ],

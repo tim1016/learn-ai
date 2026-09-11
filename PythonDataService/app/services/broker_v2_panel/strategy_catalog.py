@@ -28,6 +28,7 @@ not touched here.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -263,6 +264,40 @@ def _disposition(
     )
 
 
+def _golden_disposition(
+    *,
+    has_runtime: bool,
+    paper_access_state: PaperAccessState,
+) -> _Disposition:
+    """Compose a current Golden review without bypassing runtime or access gates."""
+    if not has_runtime:
+        return _Disposition(
+            has_runtime=False,
+            evidence_status="blocked",
+            paper_access_state="blocked",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
+        )
+    if paper_access_state == "available":
+        return _Disposition(
+            has_runtime=True,
+            evidence_status="accepted",
+            paper_access_state="available",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION,
+        )
+    return _Disposition(
+        has_runtime=True,
+        evidence_status="accepted",
+        paper_access_state=paper_access_state,
+        selectable=True,
+        override_explanation=None,
+        blocked_explanation=None,
+    )
+
+
 def _active_canary_pairings_snapshot() -> frozenset[tuple[str, str]]:
     """Resolve one immutable pairing view for the complete catalog response."""
     source_pairings = canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS
@@ -277,6 +312,7 @@ def compose_strategy_catalog(
     entries: list[StrategyValidationEntry],
     *,
     account_id: str,
+    golden_validation_symbols: Mapping[str, str] | None = None,
 ) -> tuple[CatalogEntry, ...]:
     """Compose the strategy catalog from the definition and validation facets.
 
@@ -285,38 +321,58 @@ def compose_strategy_catalog(
     An entry that is missing, invalidated, rejected, or not catalog-visible
     at all produces no row, unchanged from before this slice.
     """
+    golden_symbols = golden_validation_symbols or {}
+    entries_by_key = {entry.strategy_key: entry for entry in entries}
+    strategy_keys = list(entries_by_key)
+    strategy_keys.extend(key for key in golden_symbols if key not in entries_by_key)
     runtime_keys = supported_alpaca_paper_strategy_keys()
     active_pairings = _active_canary_pairings_snapshot()
     catalog: list[CatalogEntry] = []
-    for entry in entries:
-        if not _is_catalog_visible(entry.strategy_key):
+    for strategy_key in strategy_keys:
+        if not _is_catalog_visible(strategy_key):
             continue
-        event = entry.current_flag_event
-        if entry.validation_state != "validated" or event is None or event.flag != "validated":
+        entry = entries_by_key.get(strategy_key)
+        event = entry.current_flag_event if entry is not None else None
+        has_golden_validation = strategy_key in golden_symbols
+        has_current_event = (
+            entry is not None
+            and entry.validation_state == "validated"
+            and event is not None
+            and event.flag == "validated"
+        )
+        if not has_current_event and not has_golden_validation:
             continue
-        registration = _STRATEGY_REGISTRY[entry.strategy_key]
+        registration = _STRATEGY_REGISTRY[strategy_key]
         paper_access_state: PaperAccessState
         if registration.signal_program_contract is None:
             paper_access_state = "not_required"
-        elif (entry.strategy_key, account_id) in active_pairings:
+        elif (strategy_key, account_id) in active_pairings:
             paper_access_state = "enabled"
         else:
             paper_access_state = "available"
-        disposition = _disposition(
-            entry,
-            event,
-            has_runtime=entry.strategy_key in runtime_keys,
-            paper_access_state=paper_access_state,
-        )
-        snapshot = event.evidence_snapshot
-        validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
-            entry.strategy_key
-        )
+        if has_golden_validation:
+            disposition = _golden_disposition(
+                has_runtime=strategy_key in runtime_keys,
+                paper_access_state=paper_access_state,
+            )
+        else:
+            assert entry is not None and event is not None
+            disposition = _disposition(
+                entry,
+                event,
+                has_runtime=strategy_key in runtime_keys,
+                paper_access_state=paper_access_state,
+            )
+        validation_case_symbol = golden_symbols.get(strategy_key) or (
+            event.evidence_snapshot.validation_case_symbol
+            if event is not None
+            else None
+        ) or alpaca_paper_strategy_default_symbol(strategy_key)
         catalog.append(
             CatalogEntry(
-                strategy_key=entry.strategy_key,
-                label=entry.display_name,
-                explanation=entry.description,
+                strategy_key=strategy_key,
+                label=entry.display_name if entry is not None else registration.display_name,
+                explanation=entry.description if entry is not None else registration.description,
                 validation_case_symbol=validation_case_symbol,
                 has_runtime=disposition.has_runtime,
                 evidence_status=disposition.evidence_status,

@@ -48,14 +48,17 @@ from app.services.signal_program_admission import (
     prove_running_program_build,
     reconstruct_legacy_program_seal,
 )
-from app.services.strategy_validation_admission import current_strategy_validation_fact
+from app.services.strategy_validation_admission import (
+    ValidationFactResolver,
+    current_strategy_validation_fact,
+    resolve_strategy_validation_fact,
+)
 
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
 TerminalEvidenceResolver = Callable[[BrokerBotBinding], TerminalEvidenceAdmissionFact]
-ValidationFactResolver = Callable[[BrokerBotBinding, int], StrategyValidationAdmissionFact]
 
 
 class LegacyMigrationLineageWriter(Protocol):
@@ -292,7 +295,15 @@ class BotResumeAdmission:
                 # own freshness check would then see `now_ms < observed_at_ms`
                 # and refuse Resume outright.
                 observed_at_ms = self._now_ms()
-                validation = self._validation_fact(prior, observed_at_ms)
+                validation = await resolve_strategy_validation_fact(
+                    self._validation_fact,
+                    prior,
+                    observed_at_ms,
+                )
+                # The DB-backed validation resolver can yield while live
+                # market evidence advances; evaluate all following facts at
+                # a newly captured instant.
+                observed_at_ms = self._now_ms()
                 proposed, program_build = self._resolve_program_build(
                     prior=prior,
                     proposed=proposed,

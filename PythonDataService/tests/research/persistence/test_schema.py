@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 
 import asyncpg
+import pytest
 
 from app.research.persistence.schema import SCHEMA_VERSION, VERSIONED_DDL, ensure_schema
 
@@ -24,6 +25,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     5: "5bafa2856e347d82",
     6: "ff9c91a7adf7ac30",
     7: "69a0fae284dcaa08",
+    8: "bb246cd8379cf33e",
 }
 
 
@@ -114,6 +116,96 @@ async def test_version_7_declares_append_only_golden_validation_ledgers(scratch_
         "research_golden_validation_reviews_no_update_or_delete",
         "research_validation_golden_runs_no_update_or_delete",
     ]
+
+
+async def test_version_8_rejects_program_authorization_on_a_rejected_review(
+    scratch_db: asyncpg.Connection,
+) -> None:
+    await ensure_schema(scratch_db)
+
+    constraint = await scratch_db.fetchrow(
+        """
+        SELECT pg_get_constraintdef(oid) AS definition, convalidated
+          FROM pg_constraint
+         WHERE conname = 'ck_research_golden_validation_reviews_authorized_only_on_accept'
+        """
+    )
+
+    assert constraint is not None
+    assert "decision = 'accept'" in constraint["definition"]
+    assert constraint["convalidated"] is False
+
+
+async def test_version_8_preserves_a_previously_legal_rejected_authorization(
+    scratch_db: asyncpg.Connection,
+) -> None:
+    """V7 history is immutable, so the stricter rule applies prospectively."""
+    await ensure_schema(scratch_db)
+    await scratch_db.execute(
+        "ALTER TABLE research_golden_validation_reviews "
+        "DROP CONSTRAINT ck_research_golden_validation_reviews_authorized_only_on_accept"
+    )
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 8")
+    source_run_id = await scratch_db.fetchval(
+        """
+        INSERT INTO research_backtest_runs (
+            source, strategy_name, symbol, start_ms, end_ms, timespan,
+            fill_mode, executed_at_ms, total_trades, winning_trades,
+            losing_trades, win_rate, total_pnl, initial_cash, final_equity,
+            total_fees
+        ) VALUES (
+            'engine', 'ema_crossover_signal', 'SPY', 1, 2, 'minute',
+            'signal_bar_close', 3, 0, 0, 0, 0, 0, 100000, 100000, 0
+        )
+        RETURNING id
+        """
+    )
+    golden_run_id = await scratch_db.fetchval(
+        """
+        INSERT INTO research_validation_golden_runs (
+            source_run_id, command_id, command_sha256, strategy_name, symbol,
+            validation_case_json, case_sha256, rationale, designated_by,
+            designated_at_ms
+        ) VALUES ($1, 'v7-designation', 'command-sha', 'ema_crossover_signal',
+                  'SPY', '{}'::jsonb, 'case-sha', 'historical', 'local:test', 4)
+        RETURNING id
+        """,
+        source_run_id,
+    )
+    await scratch_db.execute(
+        """
+        INSERT INTO research_golden_validation_reviews (
+            golden_run_id, command_id, command_sha256,
+            expected_evidence_revision, decision, classification,
+            evidence_state, evidence_json, evidence_sha256, reason,
+            authorized_program_version, reviewed_by, reviewed_at_ms
+        ) VALUES ($1, 'v7-review', 'review-sha', 'revision', 'reject', NULL,
+                  'missing', '{}'::jsonb, 'evidence-sha', 'historical refusal',
+                  'ema-crossover-signal/v1', 'local:test', 5)
+        """,
+        golden_run_id,
+    )
+
+    await ensure_schema(scratch_db)
+
+    assert await scratch_db.fetchval(
+        "SELECT authorized_program_version FROM research_golden_validation_reviews "
+        "WHERE command_id = 'v7-review'"
+    ) == "ema-crossover-signal/v1"
+    with pytest.raises(asyncpg.CheckViolationError):
+        await scratch_db.execute(
+            """
+            INSERT INTO research_golden_validation_reviews (
+                golden_run_id, command_id, command_sha256,
+                expected_evidence_revision, decision, classification,
+                evidence_state, evidence_json, evidence_sha256, reason,
+                authorized_program_version, reviewed_by, reviewed_at_ms
+            ) VALUES ($1, 'v8-review', 'review-sha-2', 'revision', 'reject', NULL,
+                      'missing', '{}'::jsonb, 'evidence-sha-2', 'new refusal',
+                      'ema-crossover-signal/v1', 'local:test', 6)
+            """,
+            golden_run_id,
+        )
 
 
 async def test_version_5_nulls_every_recency_study_reference(scratch_db: asyncpg.Connection) -> None:

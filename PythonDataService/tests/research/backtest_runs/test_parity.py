@@ -142,6 +142,39 @@ def _verdict(**right_overrides) -> tuple[str, dict]:
     return verdict.status, json.loads(verdict.verdict_json)
 
 
+def _hard_coded_twin_verdict(
+    *,
+    strategy_name: str,
+    program_version: str,
+    parameters: dict[str, object],
+    data_policy_document: dict[str, object] | None = None,
+    **right_overrides: object,
+) -> tuple[str, dict]:
+    """Build the asymmetric persistence shape used by hard-coded LEAN twins."""
+    policy = MATCHING_DATA_POLICY if data_policy_document is None else data_policy_document
+    left = _run(
+        1,
+        "engine",
+        strategy_name=strategy_name,
+        program_version=program_version,
+        parameters_json=json.dumps(parameters),
+        data_policy_json=json.dumps(policy),
+    )
+    right = _run(
+        2,
+        "lean-sidecar",
+        strategy_name=strategy_name,
+        program_version=program_version,
+        # Hard-coded templates receive no strategy_parameters, so their
+        # persisted payload records their runtime symbol only.
+        parameters_json=json.dumps({"symbol": "SPY"}),
+        data_policy_json=json.dumps(policy),
+        **right_overrides,
+    )
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    return verdict.status, json.loads(verdict.verdict_json)
+
+
 def test_no_divergences_agree_with_every_receipt_matching() -> None:
     status, verdict = _verdict()
 
@@ -201,6 +234,70 @@ def test_changed_resolved_parameter_is_not_a_comparable_pair() -> None:
     assert status == "unavailable"
     assert verdict["reason"] == "strategy_parameter_mismatch"
     assert verdict["parameter_parity"]["mismatched_fields"] == ["gap"]
+
+
+@pytest.mark.parametrize(
+    ("strategy_name", "program_version", "parameters"),
+    (
+        (
+            "rsi_mean_reversion",
+            "rsi-mean-reversion/v1",
+            {"symbol": "SPY", "window": 14, "oversold": 30.0, "overbought": 70.0, "resolution_minutes": 15},
+        ),
+        (
+            "deployment_validation",
+            "deployment-validation/v1",
+            {"symbol": "SPY", "trade_symbol": "SPY"},
+        ),
+    ),
+)
+def test_default_hard_coded_twin_compares_full_resolved_python_configuration(
+    strategy_name: str,
+    program_version: str,
+    parameters: dict[str, object],
+) -> None:
+    status, verdict = _hard_coded_twin_verdict(
+        strategy_name=strategy_name,
+        program_version=program_version,
+        parameters=parameters,
+    )
+
+    assert status == "agree"
+    assert verdict["parameter_parity"] == {
+        "status": "match",
+        "reason": None,
+        "compared_field_count": len(parameters),
+        "mismatched_fields": [],
+    }
+
+
+def test_hard_coded_twin_uses_its_persisted_policy_cadence_for_full_parameter_comparison() -> None:
+    policy = json.loads(json.dumps(MATCHING_DATA_POLICY))
+    policy["strategy_bars"]["multiplier"] = 30
+
+    status, verdict = _hard_coded_twin_verdict(
+        strategy_name="rsi_mean_reversion",
+        program_version="rsi-mean-reversion/v1",
+        parameters={"symbol": "SPY", "window": 14, "oversold": 30.0, "overbought": 70.0, "resolution_minutes": 30},
+        data_policy_document=policy,
+        trades=(_trade_row(exit_price=712.5),),
+    )
+
+    assert status == "diverged"
+    assert verdict["parameter_parity"]["status"] == "match"
+    assert verdict["counts_by_category"]["FILL_PRICE_DRIFT"] == 1
+
+
+def test_hard_coded_twin_does_not_treat_non_default_python_values_as_twin_values() -> None:
+    status, verdict = _hard_coded_twin_verdict(
+        strategy_name="rsi_mean_reversion",
+        program_version="rsi-mean-reversion/v1",
+        parameters={"symbol": "SPY", "window": 21, "oversold": 30.0, "overbought": 70.0, "resolution_minutes": 15},
+    )
+
+    assert status == "unavailable"
+    assert verdict["reason"] == "strategy_parameter_mismatch"
+    assert verdict["parameter_parity"]["mismatched_fields"] == ["window"]
 
 
 def test_changed_program_version_is_not_a_comparable_pair() -> None:

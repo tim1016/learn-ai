@@ -75,7 +75,44 @@
           </dl>
           <details>
             <summary>Exact parameters, data, and execution scope</summary>
-            <pre>{{ json({ parameters: golden.validation_case.parameters, data_policy: golden.validation_case.data_policy, execution: golden.validation_case.execution }) }}</pre>
+            <div class="golden-card__scope">
+              <section>
+                <h4>Parameters</h4>
+                <pre>{{ json(golden.validation_case.parameters) }}</pre>
+              </section>
+              <section>
+                <h4>Data policy</h4>
+                @if (dataPolicyFacts().length > 0) {
+                  <dl class="golden-card__scope-facts">
+                    @for (fact of dataPolicyFacts(); track fact.label) {
+                      <div>
+                        <dt>{{ fact.label }}</dt>
+                        <dd [class.golden-card__opaque-value]="fact.opaque">
+                          @if (fact.symbol; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" /> } @else { {{ fact.value }} }
+                        </dd>
+                      </div>
+                    }
+                  </dl>
+                } @else {
+                  <p>Not recorded</p>
+                }
+              </section>
+              <section>
+                <h4>Execution configuration</h4>
+                @if (executionFacts().length > 0) {
+                  <dl class="golden-card__scope-facts">
+                    @for (fact of executionFacts(); track fact.label) {
+                      <div>
+                        <dt>{{ fact.label }}</dt>
+                        <dd [class.golden-card__opaque-value]="fact.opaque">{{ fact.value }}</dd>
+                      </div>
+                    }
+                  </dl>
+                } @else {
+                  <p>Not recorded</p>
+                }
+              </section>
+            </div>
           </details>
           <p class="golden-card__rationale"><strong>Baseline note:</strong> {{ golden.rationale }}</p>
         </article>

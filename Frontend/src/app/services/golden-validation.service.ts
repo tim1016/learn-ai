@@ -2,7 +2,6 @@ import { HttpClient, HttpParams } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { Observable } from "rxjs";
 
-import { environment } from "../../environments/environment";
 import type {
   DesignateGoldenValidationRequest,
   GoldenValidation,
@@ -13,7 +12,7 @@ import type {
 @Injectable({ providedIn: "root" })
 export class GoldenValidationService {
   private readonly http = inject(HttpClient);
-  private readonly base = `${environment.pythonServiceUrl}/api/research/golden-validations`;
+  private readonly base = "/api/research/golden-validations";
 
   list(filters: { strategyName?: string; symbol?: string } = {}): Observable<GoldenValidation[]> {
     let params = new HttpParams();

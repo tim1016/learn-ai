@@ -93,6 +93,14 @@ class GoldenValidationDossier:
 
 
 @dataclass(frozen=True, slots=True)
+class GoldenDeploymentCandidates:
+    """Exact deployment candidates plus the strategy's migration state."""
+
+    dossiers: tuple[GoldenValidationDossier, ...]
+    strategy_has_golden_runs: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicabilityReceipt:
     golden_validation_id: int
     applicable: bool
@@ -415,6 +423,14 @@ async def designate(
         if run is None:
             raise GoldenRunNotFoundError(f"Backtest run {source_run_id} was not found.")
         validation_case = _case_snapshot(run)
+        parity_group_id = validation_case.get("parity_group_id")
+        if isinstance(parity_group_id, str) and parity_group_id:
+            try:
+                await repo.lock_paired_evidence_for_golden_case(conn, parity_group_id)
+            except repo.PairedEvidenceLockUnavailableError as exc:
+                raise GoldenRunIneligibleError(
+                    "The paired engine evidence is changing. Retry the designation after the history update completes."
+                ) from exc
         case_json = _canonical_json(validation_case)
         golden_run = await repo.insert_golden_run(
             conn,
@@ -455,6 +471,37 @@ async def list_dossiers(
     limit: int,
 ) -> list[GoldenValidationDossier]:
     rows = await repo.list_golden_runs(conn, strategy_name=strategy_name, symbol=symbol, limit=limit)
+    return [await _load_dossier(conn, row) for row in rows]
+
+
+async def find_deployment_scope_dossiers(
+    conn: asyncpg.Connection,
+    *,
+    strategy_name: str,
+    symbol: str,
+    parameters: Mapping[str, Any],
+) -> GoldenDeploymentCandidates:
+    """Find every exact case without coupling admission to history pagination."""
+    rows = await repo.list_golden_runs_for_deployment_scope(
+        conn,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        parameters_json=_canonical_json(parameters),
+    )
+    has_any = bool(rows) or await repo.golden_runs_exist_for_strategy(conn, strategy_name)
+    return GoldenDeploymentCandidates(
+        dossiers=tuple([await _load_dossier(conn, row) for row in rows]),
+        strategy_has_golden_runs=has_any,
+    )
+
+
+async def list_latest_accepted_dossiers(
+    conn: asyncpg.Connection,
+    *,
+    symbol: str | None,
+) -> list[GoldenValidationDossier]:
+    """Load reviewed catalog candidates without applying a history-page cap."""
+    rows = await repo.list_latest_accepted_golden_runs(conn, symbol=symbol)
     return [await _load_dossier(conn, row) for row in rows]
 
 
@@ -504,6 +551,10 @@ async def review(
         if decision == "accept" and not case_program_version and not authorized_program_version:
             raise GoldenRunIneligibleError(
                 "This historical run did not record a program version. Enter the exact version being authorized."
+            )
+        if decision == "reject" and authorized_program_version is not None:
+            raise GoldenRunIneligibleError(
+                "A rejected review cannot authorize a program version."
             )
         if case_program_version and authorized_program_version is not None:
             raise GoldenRunIneligibleError(
@@ -581,6 +632,59 @@ def assess(dossier: GoldenValidationDossier, proposed_configuration: dict[str, A
         explanation = (
             "This accepted Golden Validation matches the proposed configuration exactly. "
             "All independent Paper or Live safety gates still apply."
+        )
+    applicable = not mismatches and review is not None and review.decision == "accept" and dossier.review_is_current is True
+    return ApplicabilityReceipt(
+        golden_validation_id=dossier.golden_run.id,
+        applicable=applicable,
+        state=dossier.state,
+        classification=classification,
+        mismatched_fields=mismatches,
+        explanation=explanation,
+    )
+
+
+def assess_deployment_scope(
+    dossier: GoldenValidationDossier,
+    proposed_configuration: dict[str, Any],
+) -> ApplicabilityReceipt:
+    """Project applicability onto the four facts a running bot can carry.
+
+    The historical window, input-data identity, and backtest execution model
+    remain frozen provenance on the selected case.  A Paper/Live run cannot
+    truthfully claim those are its own future window or broker execution
+    model, so admission matches only the deployable strategy identity: exact
+    program version, symbol, and fully resolved parameters.
+    """
+    case = dossier.validation_case
+    strategy = case.get("strategy") if isinstance(case.get("strategy"), dict) else {}
+    review = dossier.latest_review
+    authorized_program_version = (
+        review.authorized_program_version
+        if review is not None and review.decision == "accept"
+        else None
+    )
+    expected = {
+        "strategy_name": strategy.get("name"),
+        "program_version": strategy.get("program_version") or authorized_program_version,
+        "symbol": case.get("symbol"),
+        "parameters": case.get("parameters"),
+    }
+    mismatches = tuple(field for field, value in expected.items() if proposed_configuration.get(field) != value)
+    classification = review.classification if review is not None and review.decision == "accept" else None
+    if mismatches:
+        explanation = "The proposed deployment differs from this Golden Validation scope."
+    elif review is None:
+        explanation = "This Golden Validation candidate has not been reviewed."
+    elif review.decision != "accept":
+        explanation = "The latest human review rejected this Golden Validation case."
+    elif dossier.review_is_current is not True:
+        explanation = "Computed evidence changed after the latest human review; review the new evidence revision."
+    else:
+        explanation = (
+            "This accepted Golden Validation matches the exact program, symbol, and resolved parameters. "
+            "Its historical data window and execution assumptions remain frozen evidence provenance, and all "
+            "independent Paper or Live safety gates still apply."
         )
     applicable = not mismatches and review is not None and review.decision == "accept" and dossier.review_is_current is True
     return ApplicabilityReceipt(

@@ -15,7 +15,12 @@ import { firstValueFrom } from "rxjs";
 import { GoldenValidationService } from "../../services/golden-validation.service";
 import type { GoldenReviewDecision, GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
-import { formatReceiptLabel, ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
+import {
+  formatReceiptLabel,
+  formatReceiptValue,
+  isOpaqueReceiptValueLabel,
+  ReceiptLabelPipe,
+} from "../../shared/pipes/receipt-label.pipe";
 import { TimestampDisplayPipe } from "../../shared/timestamp";
 
 interface ParityCheckView {
@@ -31,6 +36,13 @@ interface DivergenceView {
   message: string;
 }
 
+interface ScopeFact {
+  label: string;
+  value: string;
+  opaque: boolean;
+  symbol: string | null;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -43,6 +55,23 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function flattenScope(value: unknown, path: string[] = []): ScopeFact[] {
+  const object = record(value);
+  if (object !== null) {
+    return Object.entries(object).flatMap(([key, child]) => flattenScope(child, [...path, key]));
+  }
+  if (path.length === 0 || (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean" && value !== null)) {
+    return [];
+  }
+  const key = path[path.length - 1];
+  return [{
+    label: path.map((segment) => formatReceiptLabel(segment)).join(" · "),
+    value: value === null ? "Not recorded" : formatReceiptValue(key, value),
+    opaque: isOpaqueReceiptValueLabel(key),
+    symbol: key === "symbol" && typeof value === "string" ? value : null,
+  }];
 }
 
 /**
@@ -114,6 +143,8 @@ export class GoldenValidationWorkbenchComponent {
     const raw = this.selected()?.parity_evidence["qualification_warnings"];
     return Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [];
   });
+  protected readonly dataPolicyFacts = computed(() => flattenScope(this.selected()?.validation_case.data_policy));
+  protected readonly executionFacts = computed(() => flattenScope(this.selected()?.validation_case.execution));
   protected readonly parityChecks = computed<ParityCheckView[]>(() => {
     const payload = this.parityPayload();
     if (payload === null) return [];

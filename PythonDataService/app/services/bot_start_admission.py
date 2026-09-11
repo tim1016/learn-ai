@@ -28,7 +28,6 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
-    StrategyValidationAdmissionFact,
 )
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -42,7 +41,11 @@ from app.services.signal_program_admission import (
     build_start_program_seal,
     prove_running_program_build,
 )
-from app.services.strategy_validation_admission import current_strategy_validation_fact
+from app.services.strategy_validation_admission import (
+    ValidationFactResolver,
+    current_strategy_validation_fact,
+    resolve_strategy_validation_fact,
+)
 
 if TYPE_CHECKING:
     from app.services.bot_boot_recovery import BootRecoveryReport
@@ -73,7 +76,6 @@ RECOVERY_SWEEP_LIVENESS_BOUND_MS = 60_000
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
-ValidationFactResolver = Callable[[BrokerBotBinding, int], StrategyValidationAdmissionFact]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
@@ -520,7 +522,15 @@ class BotStartAdmission:
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)
-                validation = self._validation_fact(binding, observed_at_ms)
+                validation = await resolve_strategy_validation_fact(
+                    self._validation_fact,
+                    binding,
+                    observed_at_ms,
+                )
+                # Golden Validation may read the research database. Re-capture
+                # after that await so newer market-clock evidence cannot look
+                # as though it came from the future.
+                observed_at_ms = self._now_ms()
                 if binding.sealed_program is None:
                     try:
                         sealed_program = build_start_program_seal(

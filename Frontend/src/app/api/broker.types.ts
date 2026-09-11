@@ -30294,7 +30294,9 @@ export interface operations {
                 symbol?: string | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -30323,7 +30325,9 @@ export interface operations {
     designate_golden_run_api_research_golden_validations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -30356,7 +30360,9 @@ export interface operations {
     get_golden_run_api_research_golden_validations__golden_run_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 golden_run_id: number;
             };
@@ -30387,7 +30393,9 @@ export interface operations {
     assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 golden_run_id: number;
             };
@@ -30422,7 +30430,9 @@ export interface operations {
     review_golden_run_api_research_golden_validations__golden_run_id__reviews_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 golden_run_id: number;
             };

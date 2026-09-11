@@ -432,9 +432,19 @@ def compare_parameters(left: RunDetail, right: RunDetail) -> ParameterParityRece
 
     ``record_from_payload`` writes the authoritative row symbol back into the
     parameter object after trimming and upper-casing it.  Normalize that one
-    field in the same way for historical rows, but do not invent defaults or
-    coerce other strategy values: absent or differently typed values are
-    evidence that the two resolved configurations are not comparable.
+    field in the same way for historical rows.  A bundled hard-coded LEAN
+    twin is the one narrow exception to "do not invent defaults": its
+    persistence payload contains only its runtime symbol because strategy
+    values are constants in the checked-in template.  Materialize those
+    constants from the registered parameter schema, and materialize a
+    policy-backed cadence from the run's persisted data policy, before
+    comparing the full resolved Python configuration.  This keeps a default
+    hard-coded twin comparable while still exposing a non-default Python
+    value as a mismatch rather than pretending the twin received it.
+
+    All other absent or differently typed values remain evidence that the
+    resolved configurations are not comparable.  In particular, this does
+    not infer defaults for historical or parameterized LEAN rows.
     """
     left_parameters = _read_parameters(left.parameters_json)
     right_parameters = _read_parameters(right.parameters_json)
@@ -445,6 +455,12 @@ def compare_parameters(left: RunDetail, right: RunDetail) -> ParameterParityRece
     right_normalized = _normalize_parameters(right_parameters)
     if left_normalized is None or right_normalized is None:
         return ParameterParityReceipt.unavailable("strategy_parameters_invalid")
+
+    right_normalized = _materialize_hard_coded_twin_parameters(
+        left=left,
+        right=right,
+        right_parameters=right_normalized,
+    ) or right_normalized
 
     fields = tuple(sorted(set(left_normalized) | set(right_normalized)))
     mismatches = tuple(
@@ -460,6 +476,77 @@ def compare_parameters(left: RunDetail, right: RunDetail) -> ParameterParityRece
         compared_field_count=len(fields),
         mismatched_fields=mismatches,
     )
+
+
+def _materialize_hard_coded_twin_parameters(
+    *,
+    left: RunDetail,
+    right: RunDetail,
+    right_parameters: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a hard-coded LEAN twin's effective resolved configuration.
+
+    The companion launcher deliberately sends no ``strategy_parameters`` to
+    a template whose strategy values are compile-time constants.  Its history
+    row therefore has only ``symbol`` even though the Python row correctly
+    retains its full resolved configuration.  The registry is the authority
+    for which twins are hard-coded and for their schema defaults; only that
+    closed shape may be completed here.
+
+    ``resolution_minutes`` is different from a strategy constant for the
+    current RSI twin: the template receives it via the persisted data policy
+    as ``strategy_bars.multiplier``.  Read it from that right-side evidence so
+    the comparison remains about what LEAN actually executed, not what Python
+    claims it requested.
+    """
+    if (
+        right.source != "lean-sidecar"
+        or left.strategy_name != right.strategy_name
+        or set(right_parameters) != {"symbol"}
+    ):
+        return None
+
+    # Import locally: the parity module is used by persistence code, while
+    # the registry imports strategy implementations and their program wiring.
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    registration = _STRATEGY_REGISTRY.get(left.strategy_name)
+    if (
+        registration is None
+        or registration.lean_twin != right.strategy_name
+        or registration.lean_parameter_names
+    ):
+        return None
+
+    try:
+        resolved = registration.param_schema.model_validate(
+            {"symbol": right_parameters["symbol"]}
+        ).model_dump()
+    except (TypeError, ValueError):
+        return None
+
+    policy_parameter_names = registration.lean_data_policy_parameter_names
+    if not policy_parameter_names:
+        return resolved
+    try:
+        policy = json.loads(right.data_policy_json or "")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(policy, Mapping):
+        return None
+
+    for name in policy_parameter_names:
+        # The registry declares this only for templates whose runtime input is
+        # the strategy-bar cadence.  Keep the mapping closed: a new kind of
+        # policy-backed parameter must add its own explicit evidence mapping.
+        if name != "resolution_minutes":
+            return None
+        strategy_bars = policy.get("strategy_bars")
+        multiplier = strategy_bars.get("multiplier") if isinstance(strategy_bars, Mapping) else None
+        if not isinstance(multiplier, int) or isinstance(multiplier, bool) or multiplier <= 0:
+            return None
+        resolved[name] = multiplier
+    return resolved
 
 
 def compare_program_versions(left: RunDetail, right: RunDetail) -> ProgramVersionParityReceipt:

@@ -28,6 +28,9 @@ const OPAQUE_RECEIPT_VALUE_LABEL_TOKENS = new Set([
   'id',
   'path',
   'ref',
+  'sha1',
+  'sha256',
+  'sha512',
   'url',
 ]);
 const LABEL_OVERRIDES = new Map<string, string>([
