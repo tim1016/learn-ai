@@ -1,5 +1,15 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource, signal, viewChild } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  linkedSignal,
+  resource,
+  signal,
+  viewChild,
+} from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import type {
   BrokerInstallationSelection,
@@ -26,6 +36,14 @@ import { ConfigurationStatusPanelComponent } from './configuration-status-panel.
 interface RevisionRef {
   readonly profileId: string;
   readonly revision: number;
+}
+
+function reviewRef(params: { get(name: string): string | null }): RevisionRef | null {
+  const profileId = params.get('profileId');
+  const revision = Number(params.get('revision'));
+  return profileId === null || profileId.length === 0 || !Number.isInteger(revision) || revision < 1
+    ? null
+    : { profileId, revision };
 }
 
 function revisionRef(
@@ -78,10 +96,24 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
 })
 export class AlpacaConfigurationPageComponent {
   private readonly service = inject(BrokerConfigurationService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly queryParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  private readonly requestedReview = computed(() => reviewRef(this.queryParams()));
   private readonly createForm = viewChild(ConfigurationProfileCreateComponent);
 
   protected readonly includeArchived = signal(false);
-  protected readonly selectedProfileId = signal<string | null>(null);
+  protected readonly selectedProfileId = linkedSignal<RevisionRef | null, string | null>({
+    source: this.requestedReview,
+    computation: (request) => request?.profileId ?? null,
+  });
+  protected readonly reviewRevision = computed(() => {
+    const request = this.requestedReview();
+    return request !== null && this.selectedProfileId() === request.profileId
+      ? request.revision
+      : null;
+  });
   /**
    * The last verification, carrying the exact revision it was taken for.
    *
@@ -111,6 +143,7 @@ export class AlpacaConfigurationPageComponent {
     loader: () => this.service.listNicknames(),
     defaultValue: [],
   });
+  private readonly deskState = resource({ loader: () => this.service.readDeskState() });
   protected readonly selection = resource({ loader: () => this.service.readSelection() });
   protected readonly detail = resource({
     params: () => this.selectedProfileId() ?? undefined,
@@ -158,12 +191,45 @@ export class AlpacaConfigurationPageComponent {
 
   protected readonly supplementalReadFailed = computed(() => Boolean(
     this.nicknames.error() || this.revisions.error()
-    || this.stagedRevision.error() || this.effectiveRevision.error(),
+    || this.stagedRevision.error() || this.effectiveRevision.error()
+    || this.deskState.error(),
   ));
+  protected readonly requestedRevisionMissing = computed(() =>
+    this.reviewRevision() !== null
+      && this.revisions.hasValue()
+      && !this.revisions.value().some((revision) => revision.revision === this.reviewRevision()),
+  );
 
   protected readonly currentSelection = computed(() =>
     this.selection.hasValue() ? this.selection.value() : null,
   );
+  protected readonly reviewContext = computed(() => {
+    const request = this.requestedReview();
+    const revisionNumber = this.reviewRevision();
+    if (request === null || revisionNumber === null) return null;
+    const introduction = `Revision ${revisionNumber} was selected from the Alpaca desk for review.`;
+    const selection = this.currentSelection();
+    if (!this.deskState.hasValue() || selection === null) {
+      return { introduction, detail: null, consequence: null };
+    }
+    const state = this.deskState.value();
+    if (state.selection_generation !== selection.selection_generation) {
+      return { introduction, detail: null, consequence: null };
+    }
+    const staged = state.staged_choice;
+    if (
+      state.action.kind !== 'review_configuration'
+      && staged?.profile_id === request.profileId
+      && staged.revision === request.revision
+    ) {
+      return { introduction, detail: state.detail, consequence: state.consequence };
+    }
+    return {
+      introduction,
+      detail: 'No configuration changes until you explicitly Stage and Apply.',
+      consequence: null,
+    };
+  });
 
   /**
    * The profile this page has open, with its latest revision. Every write that
@@ -211,6 +277,7 @@ export class AlpacaConfigurationPageComponent {
     this.slots.reload();
     this.profiles.reload();
     this.nicknames.reload();
+    this.deskState.reload();
     this.selection.reload();
     this.detail.reload();
     this.revisions.reload();
@@ -224,6 +291,7 @@ export class AlpacaConfigurationPageComponent {
       this.createForm()?.reset();
       this.selectedProfileId.set(created.profile.profile_id);
       this.profiles.reload();
+      this.deskState.reload();
     });
   }
 
@@ -266,6 +334,7 @@ export class AlpacaConfigurationPageComponent {
         current.selection_generation,
       ),
     );
+    this.deskState.reload();
   }
 
   protected applySelection(): void {
@@ -273,6 +342,7 @@ export class AlpacaConfigurationPageComponent {
       const current = this.currentSelection();
       if (current === null) return;
       this.selection.set(await this.service.applySelection(current.selection_generation));
+      this.deskState.reload();
     });
   }
 
@@ -281,6 +351,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.updateProfile(request.profileId, { archived: request.archived });
       this.profiles.reload();
       this.detail.reload();
+      this.deskState.reload();
     });
   }
 
@@ -291,6 +362,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.updateProfile(open.profileId, { displayName });
       this.profiles.reload();
       this.detail.reload();
+      this.deskState.reload();
     });
   }
 
@@ -301,6 +373,7 @@ export class AlpacaConfigurationPageComponent {
       const cloned = await this.service.cloneProfile(open.profileId, displayName);
       this.selectedProfileId.set(cloned.profile.profile_id);
       this.profiles.reload();
+      this.deskState.reload();
     });
   }
 
@@ -338,6 +411,7 @@ export class AlpacaConfigurationPageComponent {
       await this.service.pinAccount(target.profileId, target.revision, accountId);
       this.detail.reload();
       this.revisions.reload();
+      this.deskState.reload();
     });
   }
 
@@ -347,6 +421,7 @@ export class AlpacaConfigurationPageComponent {
     void this.run(async () => {
       await this.service.putNickname(accountId, nickname);
       this.nicknames.reload();
+      this.deskState.reload();
     });
   }
 

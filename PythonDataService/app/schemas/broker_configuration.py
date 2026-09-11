@@ -46,9 +46,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.records import (
     AccountNickname,
+    AlpacaDeskState,
     BrokerProfile,
     ConfigurationEvent,
     CredentialSlotStatus,
+    DeskAccountChoice,
+    DeskAction,
+    DeskLifecycleStep,
+    DeskSelectionSummary,
     InstallationSelection,
     LocalOwner,
     ObservedAccount,
@@ -147,6 +152,150 @@ class CredentialSlotResponse(_Response):
 
 class CredentialSlotsResponse(_Response):
     slots: tuple[CredentialSlotResponse, ...]
+
+
+class DeskLifecycleStepResponse(_Response):
+    key: Literal["effective_configuration", "selected_configuration", "worker_handoff"]
+    label: str
+    status: Literal["complete", "current", "pending"]
+    status_label: str
+
+    @classmethod
+    def from_record(cls, step: DeskLifecycleStep) -> DeskLifecycleStepResponse:
+        return cls(
+            key=step.key,
+            label=step.label,
+            status=step.status,
+            status_label=step.status_label,
+        )
+
+
+class DeskActionResponse(_Response):
+    kind: Literal[
+        "review_configuration",
+        "review_staged_configuration",
+        "view_restart_steps",
+    ]
+    label: str
+    enabled: bool
+
+    @classmethod
+    def from_record(cls, action: DeskAction) -> DeskActionResponse:
+        return cls(kind=action.kind, label=action.label, enabled=action.enabled)
+
+
+class DeskSelectionSummaryResponse(_Response):
+    selection_id: str
+    profile_id: str
+    revision: int = Field(ge=1)
+    profile_label: str
+    account_id: str | None
+    nickname: str | None
+    account_label: str
+    endpoint_mode: Literal["paper", "live"]
+    badge_label: str
+    description: str
+
+    @classmethod
+    def from_record(cls, summary: DeskSelectionSummary) -> DeskSelectionSummaryResponse:
+        return cls(
+            selection_id=summary.selection_id,
+            profile_id=summary.profile_id,
+            revision=summary.revision,
+            profile_label=summary.profile_label,
+            account_id=summary.account_id,
+            nickname=summary.nickname,
+            account_label=summary.account_label,
+            endpoint_mode=summary.endpoint_mode,
+            badge_label=summary.badge_label,
+            description=summary.description,
+        )
+
+
+class DeskAccountChoiceResponse(DeskSelectionSummaryResponse):
+    account_id: str
+    action_kind: Literal[
+        "review_configuration",
+        "review_staged_configuration",
+        "view_restart_steps",
+    ]
+    action_label: str
+    action_consequence: str
+    is_staged: bool
+    is_effective: bool
+
+    @classmethod
+    def from_record(cls, choice: DeskAccountChoice) -> DeskAccountChoiceResponse:
+        return cls(
+            selection_id=choice.selection_id,
+            profile_id=choice.profile_id,
+            revision=choice.revision,
+            profile_label=choice.profile_label,
+            account_id=choice.account_id,
+            nickname=choice.nickname,
+            account_label=choice.account_label,
+            endpoint_mode=choice.endpoint_mode,
+            badge_label=choice.badge_label,
+            description=choice.description,
+            action_kind=choice.action_kind,
+            action_label=choice.action_label,
+            action_consequence=choice.action_consequence,
+            is_staged=choice.is_staged,
+            is_effective=choice.is_effective,
+        )
+
+
+class AlpacaDeskStateResponse(_Response):
+    activation_state: Literal[
+        "no_selection",
+        "staged_not_applied",
+        "apply_requested_restart_required",
+        "effective_selection",
+    ]
+    headline: str
+    detail: str
+    lifecycle: tuple[DeskLifecycleStepResponse, ...]
+    selection_label: str
+    consequence: str
+    action: DeskActionResponse
+    selection_generation: int = Field(ge=0)
+    staged_choice: DeskSelectionSummaryResponse | None
+    effective_choice: DeskSelectionSummaryResponse | None
+    choices: tuple[DeskAccountChoiceResponse, ...]
+    empty_choices_message: str | None
+    profiles_requiring_setup: int = Field(ge=0)
+    setup_required_message: str | None
+
+    @classmethod
+    def from_record(cls, state: AlpacaDeskState) -> AlpacaDeskStateResponse:
+        return cls(
+            activation_state=state.activation_state,
+            headline=state.headline,
+            detail=state.detail,
+            lifecycle=tuple(
+                DeskLifecycleStepResponse.from_record(step) for step in state.lifecycle
+            ),
+            selection_label=state.selection_label,
+            consequence=state.consequence,
+            action=DeskActionResponse.from_record(state.action),
+            selection_generation=state.selection_generation,
+            staged_choice=(
+                None
+                if state.staged_choice is None
+                else DeskSelectionSummaryResponse.from_record(state.staged_choice)
+            ),
+            effective_choice=(
+                None
+                if state.effective_choice is None
+                else DeskSelectionSummaryResponse.from_record(state.effective_choice)
+            ),
+            choices=tuple(
+                DeskAccountChoiceResponse.from_record(choice) for choice in state.choices
+            ),
+            empty_choices_message=state.empty_choices_message,
+            profiles_requiring_setup=state.profiles_requiring_setup,
+            setup_required_message=state.setup_required_message,
+        )
 
 
 class ProfileResponse(_Response):
@@ -371,6 +520,7 @@ __all__ = [
     "SERVER_RESOLVED_FIELDS",
     "AccountPinRequest",
     "AccountVerificationResponse",
+    "AlpacaDeskStateResponse",
     "ApplyRequest",
     "ConfigurationEventListResponse",
     "ConfigurationEventResponse",

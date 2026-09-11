@@ -92,6 +92,123 @@ async def test_credential_slots_report_labels_and_availability_only(client: Asyn
     ]
 
 
+async def test_desk_state_reports_no_active_account_through_one_read_model(
+    client: AsyncClient,
+) -> None:
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "activation_state": "no_selection",
+        "headline": "No Alpaca account is active for this installation",
+        "detail": "Choose a verified account configuration for this worker.",
+        "lifecycle": [
+            {
+                "key": "effective_configuration",
+                "label": "Effective configuration",
+                "status": "current",
+                "status_label": "Current step",
+            },
+            {
+                "key": "selected_configuration",
+                "label": "Selected configuration",
+                "status": "pending",
+                "status_label": "Pending",
+            },
+            {
+                "key": "worker_handoff",
+                "label": "Worker handoff",
+                "status": "pending",
+                "status_label": "Pending",
+            },
+        ],
+        "selection_label": "Choose an account configuration",
+        "consequence": (
+            "Choosing here only opens the saved configuration for review. Stage and Apply "
+            "remain explicit actions on the Configuration page."
+        ),
+        "action": {
+            "kind": "review_configuration",
+            "label": "Set up an account",
+            "enabled": True,
+        },
+        "selection_generation": 0,
+        "staged_choice": None,
+        "effective_choice": None,
+        "choices": [],
+        "empty_choices_message": "No account configurations are saved yet. Set one up to continue.",
+        "profiles_requiring_setup": 0,
+        "setup_required_message": None,
+    }
+
+
+async def test_desk_state_returns_verified_choices_without_configuration_secrets(
+    client: AsyncClient,
+) -> None:
+    profile_id = await _create_paper_profile(client, name="Alpaca-Paper")
+    pinned = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions/1/account-pin",
+        json={"account_id": "PA000PAPER"},
+    )
+    assert pinned.status_code == 200, pinned.text
+
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["selection_generation"] == 0
+    assert body["choices"] == [
+        {
+            "selection_id": f"{profile_id}@1",
+            "profile_id": profile_id,
+            "revision": 1,
+            "profile_label": "Alpaca-Paper",
+            "account_id": "PA000PAPER",
+            "nickname": None,
+            "account_label": "Alpaca-Paper",
+            "endpoint_mode": "paper",
+            "badge_label": "Paper account",
+            "description": "Alpaca-Paper uses the verified paper account.",
+            "action_kind": "review_configuration",
+            "action_label": "Review Alpaca-Paper",
+            "action_consequence": (
+                "Reviewing this saved revision does not stage or apply it, restart a worker, "
+                "or arm live trading."
+            ),
+            "is_staged": False,
+            "is_effective": False,
+        }
+    ]
+    assert "credential_slot" not in response.text
+    assert "api_secret" not in response.text.lower()
+
+
+async def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
+    client: AsyncClient,
+) -> None:
+    profile_id = await _create_paper_profile(client)
+    archived = await client.patch(
+        f"{PREFIX}/profiles/{profile_id}",
+        json={"archived": True},
+    )
+    assert archived.status_code == 200, archived.text
+
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["choices"] == []
+    assert response.json()["empty_choices_message"] == (
+        "All saved account configurations are archived. Restore one on the Configuration "
+        "page, or set up a new account."
+    )
+    assert response.json()["action"] == {
+        "kind": "review_configuration",
+        "label": "Review account configurations",
+        "enabled": True,
+    }
+    assert "No account configurations are saved yet" not in response.text
+
+
 async def test_profile_lifecycle_over_http(client: AsyncClient) -> None:
     profile_id = await _create_paper_profile(client)
 

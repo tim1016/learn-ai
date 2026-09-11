@@ -1,12 +1,15 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
+import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  AlpacaDeskAccountChoice,
+  AlpacaDeskState,
   BrokerAccountNickname,
   BrokerCredentialSlot,
   BrokerInstallationSelection,
@@ -74,6 +77,49 @@ function selection(
   };
 }
 
+function deskChoice(
+  overrides: Partial<AlpacaDeskAccountChoice> = {},
+): AlpacaDeskAccountChoice {
+  return {
+    selection_id: 'profile-paper@1',
+    profile_id: 'profile-paper',
+    revision: 1,
+    profile_label: 'Paper — strategy testing',
+    account_id: 'PA000PAPER',
+    nickname: null,
+    account_label: 'Paper — strategy testing',
+    endpoint_mode: 'paper',
+    badge_label: 'Paper account',
+    description: 'Paper — strategy testing uses the verified paper account.',
+    action_kind: 'review_configuration',
+    action_label: 'Review Paper — strategy testing',
+    action_consequence: 'Review this saved revision without changing the running worker.',
+    is_staged: false,
+    is_effective: false,
+    ...overrides,
+  };
+}
+
+function deskState(overrides: Partial<AlpacaDeskState> = {}): AlpacaDeskState {
+  return {
+    activation_state: 'no_selection',
+    headline: 'No Alpaca account is active for this installation',
+    detail: 'Choose a verified account configuration for this worker.',
+    lifecycle: [],
+    selection_label: 'Choose an account configuration',
+    consequence: 'Choosing here only opens the saved configuration for review.',
+    action: { kind: 'review_configuration', label: 'Choose an account', enabled: true },
+    selection_generation: 0,
+    staged_choice: null,
+    effective_choice: null,
+    choices: [],
+    empty_choices_message: null,
+    profiles_requiring_setup: 0,
+    setup_required_message: null,
+    ...overrides,
+  };
+}
+
 /**
  * A stand-in for the whole configuration surface, holding the state the real
  * service persists so a test can reload the page against it.
@@ -83,6 +129,7 @@ class FakeConfigurationService {
   revisions: BrokerProfileRevision[] = [];
   nicknames: BrokerAccountNickname[] = [];
   current: BrokerInstallationSelection = selection();
+  desk: AlpacaDeskState = deskState();
   observed: readonly BrokerObservedAccount[] = [
     { account_id: 'PA3ZK9QWERTY', account_mode: 'paper', account_status: 'ACTIVE' },
   ];
@@ -96,6 +143,7 @@ class FakeConfigurationService {
     this.profiles.filter((entry) => options.includeArchived === true || !entry.archived),
   );
   listRevisions = vi.fn(async () => this.revisions);
+  readDeskState = vi.fn(async () => this.desk);
   readSelection = vi.fn(async () => this.current);
 
   readRevision = vi.fn(async (profileId: string, rev: number) => {
@@ -162,13 +210,25 @@ class FakeConfigurationService {
   });
 }
 
-async function renderPage(service: FakeConfigurationService) {
-  return render(AlpacaConfigurationPageComponent, {
+async function renderPage(
+  service: FakeConfigurationService,
+  query: Record<string, string> = {},
+) {
+  const queryParamMap = new BehaviorSubject(convertToParamMap(query));
+  const view = await render(AlpacaConfigurationPageComponent, {
     providers: [
       provideRouter([]),
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          queryParamMap,
+          snapshot: { queryParamMap: queryParamMap.value },
+        },
+      },
       { provide: BrokerConfigurationService, useValue: service },
     ],
   });
+  return { ...view, queryParamMap };
 }
 
 async function saveProfile(name: string): Promise<void> {
@@ -178,11 +238,159 @@ async function saveProfile(name: string): Promise<void> {
 }
 
 describe('AlpacaConfigurationPageComponent', () => {
+  it('opens and highlights the exact revision selected from the desk without mutating it', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText('Selected from desk')).toBeTruthy();
+    expect(screen.getByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stage revision 1' })).toBeTruthy();
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
+  it('shows restart guidance when the selected revision already has Apply recorded', async () => {
+    const service = new FakeConfigurationService();
+    const staged = deskChoice({
+      is_staged: true,
+      action_kind: 'view_restart_steps',
+      action_label: 'View restart steps',
+    });
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+    service.current = selection({
+      staged_profile_id: 'profile-paper',
+      staged_revision: 1,
+      apply_requested: true,
+      apply_requested_at_ms: 1_757_000_500_000,
+      apply_requested_generation: 2,
+      selection_generation: 2,
+    });
+    service.desk = deskState({
+      activation_state: 'apply_requested_restart_required',
+      detail: 'Apply is recorded. A controlled restart is required.',
+      consequence: 'The running worker has not changed.',
+      staged_choice: staged,
+      choices: [staged],
+      selection_generation: 2,
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    });
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.getByText('Apply is recorded. A controlled restart is required.')).toBeTruthy();
+    expect(screen.getByText(/The running worker has not changed/)).toBeTruthy();
+    expect(screen.queryByText(/until you explicitly Stage and Apply/)).toBeNull();
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
+  it('renders backend guidance when the selected revision is already staged', async () => {
+    const service = new FakeConfigurationService();
+    const staged = deskChoice({
+      is_staged: true,
+      action_kind: 'review_staged_configuration',
+      action_label: 'Review & apply Paper — strategy testing',
+    });
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+    service.current = selection({
+      staged_profile_id: 'profile-paper',
+      staged_revision: 1,
+      selection_generation: 1,
+    });
+    service.desk = deskState({
+      activation_state: 'staged_not_applied',
+      detail: 'Paper — strategy testing is staged. Review it before recording Apply.',
+      consequence: 'Apply records the change for the next controlled worker restart.',
+      staged_choice: staged,
+      choices: [staged],
+      selection_generation: 1,
+      action: {
+        kind: 'review_staged_configuration',
+        label: 'Review & apply Paper — strategy testing',
+        enabled: true,
+      },
+    });
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText(/is staged. Review it before recording Apply/)).toBeTruthy();
+    expect(screen.getByText(/Apply records the change/)).toBeTruthy();
+    expect(screen.queryByText(/until you explicitly Stage and Apply/)).toBeNull();
+  });
+
+  it('does not render guidance from a different selection generation', async () => {
+    const service = new FakeConfigurationService();
+    const staged = deskChoice({
+      is_staged: true,
+      action_kind: 'view_restart_steps',
+      action_label: 'View restart steps',
+    });
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+    service.current = selection({
+      staged_profile_id: 'profile-paper',
+      staged_revision: 1,
+      apply_requested: true,
+      selection_generation: 3,
+    });
+    service.desk = deskState({
+      activation_state: 'apply_requested_restart_required',
+      detail: 'Stale restart guidance',
+      consequence: 'Stale restart consequence',
+      staged_choice: staged,
+      choices: [staged],
+      selection_generation: 2,
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    });
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.queryByText('Stale restart guidance')).toBeNull();
+    expect(screen.queryByText('Stale restart consequence')).toBeNull();
+    expect(screen.queryByText(/until you explicitly Stage and Apply/)).toBeNull();
+  });
+
+  it('follows a new exact revision when the desk changes the query on the same route', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(
+      profile(),
+      profile({ profile_id: 'profile-live', display_name: 'Live — guarded' }),
+    );
+    service.revisions.push(
+      revision({ account_pin: 'PA000PAPER' }),
+      revision({
+        profile_id: 'profile-live',
+        revision: 2,
+        endpoint_mode: 'live',
+        account_pin: 'LIVE0001',
+      }),
+    );
+
+    const view = await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+    expect(await screen.findByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+
+    view.queryParamMap.next(convertToParamMap({ profileId: 'profile-live', revision: '2' }));
+
+    expect(await screen.findByText(/Revision 2 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stage revision 2' })).toBeTruthy();
+    expect(service.readProfile).toHaveBeenCalledWith('profile-live');
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
   it.each([
     'listProfiles',
     'listCredentialSlots',
     'listNicknames',
     'listRevisions',
+    'readDeskState',
     'readRevision',
   ] as const)('keeps configuration readable and offers Retry when %s fails', async (failedRead) => {
     const service = new FakeConfigurationService();
@@ -316,18 +524,58 @@ describe('AlpacaConfigurationPageComponent', () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile({ profile_id: 'profile-1' }));
     service.revisions.push(revision({ profile_id: 'profile-1' }));
-    await renderPage(service);
+    service.current = selection({
+      staged_profile_id: 'profile-1',
+      staged_revision: 1,
+      selection_generation: 4,
+    });
+    service.desk = deskState({
+      activation_state: 'staged_not_applied',
+      detail: 'Paper — strategy testing is staged. Review it before recording Apply.',
+      consequence: 'Apply records the change for the next controlled worker restart.',
+      action: {
+        kind: 'review_staged_configuration',
+        label: 'Review & apply Paper — strategy testing',
+        enabled: true,
+      },
+      selection_generation: 4,
+      staged_choice: deskChoice({
+        profile_id: 'profile-1',
+        selection_id: 'profile-1@1',
+        is_staged: true,
+        action_kind: 'review_staged_configuration',
+        action_label: 'Review & apply Paper — strategy testing',
+        action_consequence: 'Apply records the change for the next controlled worker restart.',
+      }),
+    });
+    await renderPage(service, { profileId: 'profile-1', revision: '1' });
 
-    await userEvent.click(await screen.findByText('Paper — strategy testing'));
+    expect(await screen.findByText(/Paper — strategy testing is staged/)).toBeTruthy();
     const nameField = await screen.findByLabelText('Profile name');
     await userEvent.clear(nameField);
     await userEvent.type(nameField, 'Paper — overnight');
+    service.desk = deskState({
+      ...service.desk,
+      detail: 'Paper — overnight is staged. Review it before recording Apply.',
+      staged_choice: deskChoice({
+        profile_id: 'profile-1',
+        selection_id: 'profile-1@1',
+        profile_label: 'Paper — overnight',
+        account_label: 'Paper — overnight',
+        is_staged: true,
+        action_kind: 'review_staged_configuration',
+        action_label: 'Review & apply Paper — overnight',
+        action_consequence: 'Apply records the change for the next controlled worker restart.',
+      }),
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
 
     expect(service.updateProfile).toHaveBeenCalledWith('profile-1', {
       displayName: 'Paper — overnight',
     });
     expect(service.profiles[0].display_name).toBe('Paper — overnight');
+    expect(await screen.findByText(/Paper — overnight is staged/)).toBeTruthy();
+    expect(service.readDeskState).toHaveBeenCalledTimes(2);
   });
 
   it('says what an unavailable credential slot means and who can fix it', async () => {

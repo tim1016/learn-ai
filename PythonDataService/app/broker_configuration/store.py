@@ -254,6 +254,26 @@ class ProfilesStore:
                     self._conn.rollback()
                 raise
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[None]:
+        """Keep a multi-query read on one WAL snapshot without reserving a write.
+
+        The connection lock prevents another request from reusing this
+        connection mid-snapshot. A separate process can still commit through
+        WAL; every query here continues to see the state fixed by the first
+        read. When called inside a write transaction, the outer transaction
+        already owns the snapshot and its commit boundary.
+        """
+        with self._lock:
+            if self._conn.in_transaction:
+                yield
+                return
+            self._conn.execute("BEGIN")
+            try:
+                yield
+            finally:
+                self._conn.rollback()
+
     def _query(self, sql: str, parameters: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(sql, parameters).fetchall()

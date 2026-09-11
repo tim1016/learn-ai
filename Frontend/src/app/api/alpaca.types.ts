@@ -76,6 +76,9 @@ export type BrokerInstallationSelection = components['schemas']['SelectionRespon
 export type BrokerObservedAccount = components['schemas']['ObservedAccountResponse'];
 export type BrokerAccountNickname = components['schemas']['NicknameResponse'];
 export type BrokerLiveEnvelope = components['schemas']['LiveEnvelopePayload'];
+export type AlpacaDeskState = components['schemas']['AlpacaDeskStateResponse'];
+export type AlpacaDeskAccountChoice = components['schemas']['DeskAccountChoiceResponse'];
+export type AlpacaDeskSelectionSummary = components['schemas']['DeskSelectionSummaryResponse'];
 // The endpoint mode a revision declares — `paper` or `live`. Derived from the
 // revision field rather than named separately, so the closed set cannot drift.
 export type BrokerEndpointMode = BrokerProfileRevision['endpoint_mode'];

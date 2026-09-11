@@ -10,8 +10,8 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
 
 /**
  * Alpaca account summary card (equity / cash / buying power / status).
- * Read-only. Loading and error are distinct renders; there is no "empty"
- * state — a paper account always exists.
+ * Read-only. Loading and connectivity errors are distinct renders; the parent
+ * desk owns the valid no-effective-account activation state.
  */
 @Component({
   selector: 'app-alpaca-account-card',

@@ -923,6 +923,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/configuration/desk-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Desk State
+         * @description One backend-authored account-selection model for the Alpaca desk.
+         */
+        get: operations["read_desk_state_api_brokers_alpaca_configuration_desk_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/configuration/events": {
         parameters: {
             query?: never;
@@ -5586,6 +5606,37 @@ export interface components {
              */
             schema_version: "1.0";
             trader: components["schemas"]["TraderDiagnosticView"];
+        };
+        /** AlpacaDeskStateResponse */
+        AlpacaDeskStateResponse: {
+            action: components["schemas"]["DeskActionResponse"];
+            /**
+             * Activation State
+             * @enum {string}
+             */
+            activation_state: "no_selection" | "staged_not_applied" | "apply_requested_restart_required" | "effective_selection";
+            /** Choices */
+            choices: components["schemas"]["DeskAccountChoiceResponse"][];
+            /** Consequence */
+            consequence: string;
+            /** Detail */
+            detail: string;
+            effective_choice: components["schemas"]["DeskSelectionSummaryResponse"] | null;
+            /** Empty Choices Message */
+            empty_choices_message: string | null;
+            /** Headline */
+            headline: string;
+            /** Lifecycle */
+            lifecycle: components["schemas"]["DeskLifecycleStepResponse"][];
+            /** Profiles Requiring Setup */
+            profiles_requiring_setup: number;
+            /** Selection Generation */
+            selection_generation: number;
+            /** Selection Label */
+            selection_label: string;
+            /** Setup Required Message */
+            setup_required_message: string | null;
+            staged_choice: components["schemas"]["DeskSelectionSummaryResponse"] | null;
         };
         /** AlpacaLiveVerdict */
         AlpacaLiveVerdict: {
@@ -10344,6 +10395,100 @@ export interface components {
              * @default true
              */
             use_rth?: boolean;
+        };
+        /** DeskAccountChoiceResponse */
+        DeskAccountChoiceResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Account Label */
+            account_label: string;
+            /** Action Consequence */
+            action_consequence: string;
+            /**
+             * Action Kind
+             * @enum {string}
+             */
+            action_kind: "review_configuration" | "review_staged_configuration" | "view_restart_steps";
+            /** Action Label */
+            action_label: string;
+            /** Badge Label */
+            badge_label: string;
+            /** Description */
+            description: string;
+            /**
+             * Endpoint Mode
+             * @enum {string}
+             */
+            endpoint_mode: "paper" | "live";
+            /** Is Effective */
+            is_effective: boolean;
+            /** Is Staged */
+            is_staged: boolean;
+            /** Nickname */
+            nickname: string | null;
+            /** Profile Id */
+            profile_id: string;
+            /** Profile Label */
+            profile_label: string;
+            /** Revision */
+            revision: number;
+            /** Selection Id */
+            selection_id: string;
+        };
+        /** DeskActionResponse */
+        DeskActionResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "review_configuration" | "review_staged_configuration" | "view_restart_steps";
+            /** Label */
+            label: string;
+        };
+        /** DeskLifecycleStepResponse */
+        DeskLifecycleStepResponse: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "effective_configuration" | "selected_configuration" | "worker_handoff";
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "complete" | "current" | "pending";
+            /** Status Label */
+            status_label: string;
+        };
+        /** DeskSelectionSummaryResponse */
+        DeskSelectionSummaryResponse: {
+            /** Account Id */
+            account_id: string | null;
+            /** Account Label */
+            account_label: string;
+            /** Badge Label */
+            badge_label: string;
+            /** Description */
+            description: string;
+            /**
+             * Endpoint Mode
+             * @enum {string}
+             */
+            endpoint_mode: "paper" | "live";
+            /** Nickname */
+            nickname: string | null;
+            /** Profile Id */
+            profile_id: string;
+            /** Profile Label */
+            profile_label: string;
+            /** Revision */
+            revision: number;
+            /** Selection Id */
+            selection_id: string;
         };
         /** Diagnostics */
         Diagnostics: {
@@ -24735,6 +24880,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialSlotsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_desk_state_api_brokers_alpaca_configuration_desk_state_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlpacaDeskStateResponse"];
                 };
             };
             /** @description Validation Error */

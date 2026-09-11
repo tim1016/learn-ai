@@ -13,14 +13,16 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { DialogModule } from 'primeng/dialog';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
-import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import type { AlpacaDeskSelectionSummary } from '../../../api/alpaca.types';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
+import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
+import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
 import {
   BrokersService,
@@ -83,8 +85,8 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaDeployDrawerComponent,
-    AlpacaAccountCardComponent,
     AlpacaCustodyResolutionComponent,
+    AlpacaDeskAccountStateComponent,
     AlpacaHoldBannerComponent,
     AlpacaOperatorLensComponent,
     AlpacaOrderEntryComponent,
@@ -102,9 +104,17 @@ export class AlpacaDeskComponent {
   private readonly operatorData = inject(AlpacaOperatorLensDataService);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly brokers = inject(BrokersService);
+  private readonly configuration = inject(BrokerConfigurationService);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
+
+  private readonly configurationState = resource({
+    loader: () => this.configuration.readDeskState(),
+  });
+  protected readonly deskState = computed(() =>
+    this.configurationState.hasValue() ? this.configurationState.value() : null,
+  );
 
   protected readonly lens = linkedSignal<AlpacaDeskLens>(() =>
     lensFrom(this.queryParams().get('lens')) ?? storedLens() ?? 'trader',
@@ -116,6 +126,12 @@ export class AlpacaDeskComponent {
   );
   protected readonly ticketAccountId = computed(() =>
     this.accountData.account.hasValue() ? this.accountData.account.value().account_id : null,
+  );
+  protected readonly operatingDeskVisible = computed(
+    () => this.accountData.account.hasValue(),
+  );
+  protected readonly accountFailed = computed(
+    () => this.accountData.account.error() !== undefined,
   );
   protected readonly orderPrefill = computed(() => {
     const routed = this.routedOrderPrefill();
@@ -152,7 +168,7 @@ export class AlpacaDeskComponent {
 
   constructor() {
     effect(() => {
-      if (this.lens() === 'operator') this.operatorData.loadOnce();
+      if (this.operatingDeskVisible() && this.lens() === 'operator') this.operatorData.loadOnce();
     });
     effect(() => {
       this.orderEntryOpen.set(
@@ -173,6 +189,7 @@ export class AlpacaDeskComponent {
   }
 
   protected openDeploy(): void {
+    if (!this.operatingDeskVisible()) return;
     this.deployOpen.set(true);
     void this.router.navigate([], {
       relativeTo: this.route,
@@ -193,6 +210,16 @@ export class AlpacaDeskComponent {
 
   protected refreshDesk(): void {
     this.historyRefreshVersion.update((version) => version + 1);
+  }
+
+  protected reviewAccount(choice: AlpacaDeskSelectionSummary | null): void {
+    if (choice === null) {
+      void this.router.navigate(['/brokers/alpaca/configuration']);
+      return;
+    }
+    void this.router.navigate(['/brokers/alpaca/configuration'], {
+      queryParams: { profileId: choice.profile_id, revision: choice.revision },
+    });
   }
 
   protected onLensKeydown(event: KeyboardEvent): void {

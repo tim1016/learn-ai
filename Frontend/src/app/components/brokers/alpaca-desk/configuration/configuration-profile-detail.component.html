@@ -59,15 +59,21 @@
     </button>
   </form>
 
-  <details class="detail__history">
+  <details class="detail__history" [open]="reviewRevision() !== null">
     @let history = revisions();
     <summary>
       Revision history {{ history === null ? '(not read)' : '(' + history.length + ')' }}
     </summary>
     <ul>
       @for (revision of history ?? []; track revision.revision) {
-        <li>
+        <li
+          [class.detail__history-target]="revision.revision === reviewRevision()"
+          [attr.aria-current]="revision.revision === reviewRevision() ? 'true' : null"
+        >
           <strong>{{ revision.revision }}</strong>
+          @if (revision.revision === reviewRevision()) {
+            <span class="detail__reviewing">Selected from desk</span>
+          }
           <span>{{ revision.endpoint_mode | receiptLabel }}</span>
           <span>{{ slotLabel(revision.credential_slot) }}</span>
           <span>{{ revision.account_pin ?? 'no approved account' }}</span>

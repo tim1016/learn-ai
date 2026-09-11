@@ -10,6 +10,24 @@
     </p>
   </header>
 
+  @if (reviewContext(); as context) {
+    <p class="configuration__review-context" role="status">
+      <span>{{ context.introduction }}</span>
+      @if (context.detail; as detail) {
+        <span>{{ detail }}</span>
+      }
+      @if (context.consequence; as consequence) {
+        <span>{{ consequence }}</span>
+      }
+    </p>
+  }
+
+  @if (requestedRevisionMissing()) {
+    <p class="configuration__error" role="alert">
+      The selected revision is no longer available. Nothing was staged or applied.
+    </p>
+  }
+
   @if (refusal(); as detail) {
     <app-configuration-refusal [refusal]="detail" (reloadRequested)="reloadAll()" />
   }
@@ -98,6 +116,7 @@
       [slots]="slots.hasValue() ? slots.value() : []"
       [observed]="observedAccounts()"
       [nickname]="detailNickname()"
+      [reviewRevision]="reviewRevision()"
       [busy]="busy()"
       (renamed)="renameProfile($event)"
       (cloned)="cloneProfile($event)"

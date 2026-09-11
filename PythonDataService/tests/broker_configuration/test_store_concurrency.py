@@ -205,6 +205,51 @@ def test_staging_refuses_a_profile_archived_before_its_write_transaction(
         rival.close()
 
 
+def test_desk_state_keeps_one_snapshot_during_reselection_and_archive(
+    clerk_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read cannot combine an old selection with a newly archived profile."""
+    service = _service(clerk_dir, clock)
+    rival = _service(clerk_dir, clock)
+    try:
+        first = paper_profile(service, display_name="First")
+        second = paper_profile(service, display_name="Second")
+        first_profile_id = first.profile.profile_id
+        second_profile_id = second.profile.profile_id
+        service.stage_selection(
+            profile_id=first_profile_id,
+            revision=1,
+            expected_selection_generation=0,
+        )
+        original_list_profiles = service._store.list_profiles
+        rival_wrote = False
+
+        def list_profiles_after_rival_write(*, include_archived: bool):
+            nonlocal rival_wrote
+            if not rival_wrote:
+                rival_wrote = True
+                rival.stage_selection(
+                    profile_id=second_profile_id,
+                    revision=1,
+                    expected_selection_generation=1,
+                )
+                rival.update_profile(first_profile_id, archived=True)
+            return original_list_profiles(include_archived=include_archived)
+
+        monkeypatch.setattr(service._store, "list_profiles", list_profiles_after_rival_write)
+
+        state = service.desk_state()
+
+        assert state.selection_generation == 1
+        assert state.staged_choice is not None
+        assert state.staged_choice.profile_id == first_profile_id
+        assert service.selection().staged_profile_id == second_profile_id
+        assert service.read_profile(first_profile_id).profile.archived is True
+    finally:
+        service.close()
+        rival.close()
+
+
 def test_write_selection_refuses_a_generation_that_moved(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
