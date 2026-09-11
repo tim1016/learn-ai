@@ -8,16 +8,22 @@
     <section class="selection-change selection-change--unavailable" aria-live="polite">
       <div>
         <span>Effective configuration</span>
-        <strong>{{ current.headline }}</strong>
-        <p>{{ current.consequence }}</p>
+        <strong>{{ current.effective_choice!.profile_label }}</strong>
+        <p>
+          {{ current.effective_choice!.account_label }} ·
+          {{ current.effective_choice!.badge_label }} ·
+          Revision {{ current.effective_choice!.revision }}
+        </p>
       </div>
-      <button
-        type="button"
-        [disabled]="!current.action.enabled"
-        (click)="requestReview(current, actionTarget(current))"
-      >
-        {{ current.action.label }}
-      </button>
+      @if (current.activation_state === 'effective_selection') {
+        <button
+          type="button"
+          [disabled]="!current.action.enabled"
+          (click)="requestReview(current, actionTarget(current))"
+        >
+          {{ current.action.label }}
+        </button>
+      }
     </section>
   }
   <app-alpaca-account-card class="desk-account-summary" />

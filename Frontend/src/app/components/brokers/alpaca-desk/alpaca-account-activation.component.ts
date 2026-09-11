@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 
 import type {
+  AlpacaDeskAccountChoice,
   AlpacaDeskSelectionSummary,
   AlpacaDeskState,
 } from '../../../api/alpaca.types';
@@ -55,6 +56,12 @@ export class AlpacaAccountActivationComponent {
         || (this.view().choices.length === 0 && action.kind === 'review_configuration')
       );
   });
+
+  protected choiceActionLabel(choice: AlpacaDeskAccountChoice): string {
+    return choice.selection_id === this.view().staged_choice?.selection_id
+      ? this.view().action.label
+      : choice.action_label;
+  }
 
   protected selectChoice(selectionId: string): void {
     this.selectedSelectionId.set(selectionId);

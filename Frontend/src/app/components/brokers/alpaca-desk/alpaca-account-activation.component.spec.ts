@@ -198,11 +198,17 @@ describe('AlpacaAccountActivationComponent', () => {
   });
 
   it('keeps the restart action after Apply is recorded for the preselected staged choice', async () => {
-    const staged = deskState.choices[0];
+    const staged = {
+      ...deskState.choices[0],
+      action_kind: 'review_staged_configuration' as const,
+      action_label: 'Review & apply Alpaca Paper',
+      is_staged: true,
+    };
     const restartState: AlpacaDeskState = {
       ...deskState,
       activation_state: 'apply_requested_restart_required',
       staged_choice: staged,
+      choices: [staged, deskState.choices[1]],
       action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
     };
     await render(AlpacaAccountActivationComponent, { inputs: { view: restartState } });
@@ -211,7 +217,7 @@ describe('AlpacaAccountActivationComponent', () => {
       'checked',
       true,
     );
-    expect(screen.getByRole('button', { name: 'View restart steps' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Select Paper account' })).toBeNull();
+    expect(screen.getAllByText('View restart steps')).toHaveLength(2);
+    expect(screen.queryByText('Review & apply Alpaca Paper')).toBeNull();
   });
 });

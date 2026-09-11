@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AlpacaDeskAccountChoice, AlpacaDeskState } from '../../../api/alpaca.types';
@@ -102,6 +102,47 @@ describe('AlpacaDeskAccountStateComponent', () => {
 
     expect(reviewRequested).toHaveBeenCalledWith(staged);
     expect(reviewRequested).not.toHaveBeenCalledWith(effective);
+  });
+
+  it('separates the effective account from a pending restart when connectivity fails', async () => {
+    const effective = choice();
+    const staged = choice({
+      selection_id: 'live-profile:2',
+      profile_id: 'live-profile',
+      revision: 2,
+      profile_label: 'Alpaca Live',
+      account_id: 'LIVE-456',
+      account_label: 'LIVE-456',
+      endpoint_mode: 'live',
+      badge_label: 'Live',
+      is_staged: true,
+      is_effective: false,
+    });
+    const current = state({
+      activation_state: 'apply_requested_restart_required',
+      headline: 'Alpaca Live is ready for the next controlled restart',
+      detail: 'The current worker still owns Alpaca Paper.',
+      consequence: 'Restart this installation before Alpaca Live can become effective.',
+      effective_choice: effective,
+      staged_choice: staged,
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: { state: current, accountAvailable: false, accountFailed: true },
+      providers: [{ provide: BrokersService, useValue: brokersService() }],
+    });
+
+    const effectiveSection = screen.getByText('Effective configuration').closest('section');
+    if (effectiveSection === null) throw new Error('effective configuration section missing');
+    expect(within(effectiveSection).getByText(effective.profile_label)).toBeTruthy();
+    expect(within(effectiveSection).getByText(/Strategy lab · PA-123.*Paper.*Revision 3/)).toBeTruthy();
+    expect(within(effectiveSection).queryByText(current.headline)).toBeNull();
+
+    const pendingSection = screen.getByText('Configuration change pending').closest('section');
+    if (pendingSection === null) throw new Error('pending configuration section missing');
+    expect(within(pendingSection).getByText(current.headline)).toBeTruthy();
+    expect(within(pendingSection).getByText(current.consequence)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: current.action.label })).toHaveLength(1);
   });
 
   it('keeps a connected account visible with the full backend-authored pending warning', async () => {

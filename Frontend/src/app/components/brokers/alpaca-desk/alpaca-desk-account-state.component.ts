@@ -35,8 +35,9 @@ export class AlpacaDeskAccountStateComponent {
   });
   protected readonly showSelectionChange = computed(() => {
     const state = this.state();
-    return this.accountAvailable()
+    return (this.accountAvailable() || this.accountFailed())
       && state !== null
+      && state.effective_choice !== null
       && state.staged_choice !== null
       && state.activation_state !== 'effective_selection';
   });

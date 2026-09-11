@@ -284,9 +284,12 @@ describe('AlpacaDeskComponent', () => {
     brokers.getAccount.mockRejectedValue(new HttpErrorResponse({ status: 503 }));
 
     await renderDesk({}, brokers, effectiveSelection);
+    const effective = effectiveSelection.effective_choice;
+    if (effective === null) throw new Error('effective selection fixture is incomplete');
 
     expect(await screen.findByText(/Couldn't reach Alpaca/)).toBeTruthy();
-    expect(screen.getByText(effectiveSelection.headline)).toBeTruthy();
+    expect(screen.getByText(effective.profile_label)).toBeTruthy();
+    expect(screen.getByText(/Strategy lab · PA-123.*Paper.*Revision 3/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Review account configuration' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();

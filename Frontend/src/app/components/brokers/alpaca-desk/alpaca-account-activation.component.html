@@ -50,7 +50,7 @@
                 <span>Revision {{ choice.revision }}</span>
               </span>
               <small>{{ choice.description }}</small>
-              <span class="account-choice__action">{{ choice.action_label }}</span>
+              <span class="account-choice__action">{{ choiceActionLabel(choice) }}</span>
             </span>
           </label>
         } @empty {
