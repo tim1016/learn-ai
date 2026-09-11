@@ -27,10 +27,8 @@ from app.broker.alpaca.active_binding import (
     BrokerUnbound,
 )
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
-from app.broker_configuration import legacy_environment
 from app.broker_configuration.alpaca_seams import AlpacaCredentialSlotDirectory
 from app.broker_configuration.cli_binding import effective_broker
-from app.broker_configuration.legacy_environment import LegacyEnvironmentPresence
 from app.broker_configuration.records import ObservedAccount
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
@@ -84,11 +82,6 @@ def reads_the_real_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     "absent" so a developer's real ``.env`` cannot decide an unrelated binding
     test. These tests need the real reader back; a later patch wins.
     """
-    monkeypatch.setattr(
-        legacy_environment,
-        "current_retired_settings",
-        lambda: LegacyEnvironmentPresence(_env_file=None),
-    )
 
 
 async def _effective_paper_profile(service: BrokerConfigurationService) -> None:
@@ -212,7 +205,50 @@ async def test_a_pre_cutover_installation_still_boots_from_the_environment(
     assert resolved.candidate is None  # the environment bootstrap, not a profile
 
 
-@pytest.mark.usefixtures("reads_the_real_environment")
+async def test_a_refused_apply_is_consumed_so_a_later_tidy_up_cannot_re_arm_it(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0060 D4.3: a refused Apply is consumed, not left pending.
+
+    Otherwise an operator presses Apply on a live revision, restarts, meets this
+    refusal and walks away -- and weeks later someone deletes the stale line for
+    an unrelated reason, restarts, and the pending Apply silently takes effect.
+    The change has to be re-authorised after the environment is fixed.
+    """
+    await _effective_paper_profile(service)
+    created = service.create_profile(
+        display_name="A change the operator applied",
+        credential_slot=PAPER_SLOT,
+        endpoint_mode="paper",
+        live_envelope=None,
+    )
+    service.stage_selection(
+        profile_id=created.profile.profile_id,
+        revision=1,
+        expected_selection_generation=service.selection().selection_generation,
+    )
+    service.request_apply(
+        expected_selection_generation=service.selection().selection_generation
+    )
+    monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
+
+    resolved = await resolve_worker_binding(
+        service_factory=lambda: service, environment=environment
+    )
+
+    assert isinstance(resolved, UnboundWorker)
+    assert resolved.unbound.reason == RETIRED_ENVIRONMENT_SETTINGS
+    selection = service.selection()
+    assert selection.apply_requested is False
+    assert selection.last_apply_outcome == "refused"
+    assert selection.last_apply_refusal_reason is not None
+    # The previously-effective revision is untouched: the refusal blocked a
+    # *change*, it did not rewrite what was already bound.
+    assert selection.effective_profile_id != created.profile.profile_id
+
+
 async def test_the_operator_clis_refuse_the_same_way(
     service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:

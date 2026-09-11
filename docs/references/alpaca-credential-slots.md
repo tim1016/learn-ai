@@ -188,8 +188,18 @@ podman compose run --rm --no-deps python-service \
   --plan-out /app/artifacts/broker-config-import.json
 ```
 
-Review the six values it prints, then `apply` with the printed token. The order
-after that is fixed, and the middle step is what the refusal above enforces:
+Review the six values it prints, then `apply` with the printed token.
+
+**Do the whole cutover in one sitting, with the worker stopped, no open position
+and nothing armed.** Applying the import is the moment this installation becomes
+configuration-owned: `has_any_profile` turns true, so the worker stops
+bootstrapping from the environment — and it does not bind the imported revision
+either, because only an Apply makes a revision effective. Until you finish, a
+restart leaves the worker with **no broker**, and therefore unable to place an
+EXIT. `python-service` is `restart: always`, so that restart need not be
+deliberate. The plan prints this warning first and hashes it into the token.
+
+The order after that is fixed:
 
 1. Verify and approve the profile's broker account on the configuration page.
    The import never observes or pins an account.
@@ -197,10 +207,15 @@ after that is fixed, and the middle step is what the refusal above enforces:
 3. Delete the retired lines from `PythonDataService/.env`.
 4. Restart the service so the worker binds the profile.
 
-Between steps 2 and 3 the worker would refuse — that is the intended order, and
-the refusal names exactly which lines are left. Re-running the whole ceremony
-after step 3 is a no-op: the already-imported check precedes the
-environment-drift check for exactly this reason.
+Steps 3 and 4 are in that order for a reason. Restarting with the lines still
+present meets the refusal above — and that refusal **consumes** the one-shot
+Apply (ADR 0060 D4.3), so you must press Apply again after deleting them. That
+is deliberate: a pending Apply that survived a refusal would let a later,
+unrelated tidy-up of `.env` silently apply a live configuration change nobody
+re-authorised.
+
+Re-running the whole ceremony after step 3 is a no-op: the already-imported
+check precedes the environment-drift check for exactly this reason.
 
 ### Rolling back
 

@@ -109,14 +109,17 @@ class ExistingConfiguration:
 
         The plan is built against this rather than against a freshly-created
         empty database, so a preview does not bring one into being. Slot
-        availability is still read: it comes from the environment, not the
-        database.
+        availability is read from the module directly here, and *only* here:
+        with no database there is no service to hold the injected seam, and slot
+        availability comes from the environment rather than the database anyway.
         """
         return cls(
             owner_display_label=None,
             profiles=(),
             selection_generation=0,
-            available_slots=_available_slots(),
+            available_slots=frozenset(
+                slot.slot for slot in describe_credential_slots() if slot.available
+            ),
         )
 
     @classmethod
@@ -140,7 +143,13 @@ class ExistingConfiguration:
             owner_display_label=None if owner is None else owner.display_label,
             profiles=tuple(profiles),
             selection_generation=service.selection().selection_generation,
-            available_slots=_available_slots(),
+            # Through the service's injected ``CredentialSlotDirectory``, not the
+            # module function: ``seams.py`` exists so this package asks the
+            # service rather than reaching into ``app/broker/alpaca``, and a test
+            # that injects a directory must see its answer here.
+            available_slots=frozenset(
+                slot.slot for slot in service.credential_slots() if slot.available
+            ),
         )
 
 
@@ -150,6 +159,8 @@ class ImportedProfileRef:
 
     profile_id: str
     revision: int
+    archived: bool = False
+    """Archived profiles are matched too — but they cannot be staged."""
 
 
 @dataclass(frozen=True)
@@ -178,6 +189,9 @@ class ImportPlan:
     stage_selection: bool
     expected_selection_generation: int
     already_imported: ImportedProfileRef | None
+    warnings: tuple[str, ...]
+    """What this import costs while it is half-finished. Hashed into the token."""
+
     notes: tuple[str, ...]
 
     @property
@@ -203,11 +217,6 @@ class ImportReceipt:
 
 def _refused(message: str) -> Exception:
     return ConfigurationImportRefused(message)
-
-
-def _available_slots() -> frozenset[str]:
-    """Which credential slots have their pair injected. Names and booleans only."""
-    return frozenset(slot.slot for slot in describe_credential_slots() if slot.available)
 
 
 def _envelope_from(values: LegacyEnvironmentValues) -> ValidatedLiveEnvelope | None:
@@ -270,7 +279,11 @@ def plan_import(
     if not display_name.strip():
         raise _refused("the imported profile needs a display name")
 
-    endpoint_mode: EndpointMode = values.mode or "paper"
+    # Explicit, not ``values.mode or "paper"``: the reader types ``mode`` as
+    # optional where ``AlpacaSettings`` defaults it to "paper", so that absence
+    # is distinguishable from a choice. Re-applying the canonical default is
+    # this one line, and an empty string is not a mode either way.
+    endpoint_mode: EndpointMode = "paper" if values.mode is None else values.mode
     envelope = _envelope_from(values)
     missing = _missing_envelope_variables(values)
     notes: list[str] = []
@@ -323,6 +336,17 @@ def plan_import(
     already = _already_imported(existing, content_sha256)
     if already is None:
         _require_display_name_free(existing, display_name)
+    elif already.archived and stage_selection:
+        # Caught here rather than at apply, where `stage_selection` would raise
+        # `ProfileArchived` telling the operator to "restore the profile, then
+        # stage it" — advice about a profile they were not trying to stage, with
+        # no way forward that the message mentions.
+        raise _refused(
+            f"profile {already.profile_id} already holds exactly these values but is "
+            "archived, and an archived profile cannot be staged. Restore it on the "
+            "configuration page, or re-run with --no-stage to adopt it without "
+            "staging."
+        )
     else:
         notes.append(
             "These exact values are already saved as revision "
@@ -335,6 +359,27 @@ def plan_import(
             f"Credential slot {credential_slot!r} has no injected pair right now. "
             "The revision saves fine; binding it will refuse until the pair is "
             "present."
+        )
+
+    warnings: list[str] = []
+    if already is None and not existing.profiles:
+        # The disarm window. `decide()` keys "has this installation cut over?"
+        # on `has_any_profile`, so the moment this import writes the first
+        # profile the worker stops bootstrapping from the environment -- and it
+        # does not bind the imported revision either, because only an Apply
+        # makes a revision effective (ADR 0060 D4). Between those two moments a
+        # restart leaves the worker with no broker, and `python-service` is
+        # `restart: always`.
+        #
+        # This is stated in the plan rather than only in the CLI's next steps
+        # because the plan is the document the confirmation token attests to:
+        # the operator confirms having read this, not just the six numbers.
+        warnings.append(
+            "This import makes the installation configuration-owned. From the "
+            "moment it is applied until you press Apply and restart, a restart "
+            "leaves the worker with NO broker and therefore unable to place an "
+            "EXIT. Run the whole cutover in one sitting, with the worker "
+            "stopped, no open position, and nothing armed."
         )
 
     draft = ImportPlan(
@@ -356,6 +401,7 @@ def plan_import(
         stage_selection=stage_selection,
         expected_selection_generation=existing.selection_generation,
         already_imported=already,
+        warnings=tuple(warnings),
         notes=tuple(notes),
     )
     token = plan_content_token(_import_plan_payload(draft))
@@ -385,7 +431,9 @@ def _already_imported(
     for profile in existing.profiles:
         if profile.latest_content_sha256 == content_sha256 and profile.latest_revision is not None:
             return ImportedProfileRef(
-                profile_id=profile.profile_id, revision=profile.latest_revision
+                profile_id=profile.profile_id,
+                revision=profile.latest_revision,
+                archived=profile.archived,
             )
     return None
 
@@ -429,6 +477,12 @@ def apply_import(
     )
 
     existing = ExistingConfiguration.read(service)
+    # Every refusal below this line runs *before* the first write. `create_profile`
+    # commits on its own, so a guard placed after it would leave a profile behind
+    # while the ceremony reported failure -- and that orphan would make
+    # `has_any_profile` true, which is the one thing an operator must be able to
+    # rely on not happening when they are told the import did not happen.
+    _require_selection_unchanged(plan, existing)
     already = _already_imported(existing, plan.revision_content_sha256)
     if already is not None:
         owner = service.owner()
@@ -444,7 +498,6 @@ def apply_import(
         )
 
     _require_environment_unchanged(plan, values)
-    _require_display_name_free(existing, plan.display_name)
 
     # Reads the owner first, which creates it when absent, seeded from
     # ``PANEL_OPERATOR_IDENTITY``. An existing label is never overwritten:
@@ -460,7 +513,14 @@ def apply_import(
     revision = created.latest_revision
     if revision is None:  # pragma: no cover - create_profile always writes revision 1
         raise _refused("the imported profile was created without a revision")
-    _require_envelope_fidelity(plan, revision)
+    # Re-read rather than trusting the object `create_profile` handed back: that
+    # object is the very `ValidatedLiveEnvelope` this plan carried, so comparing
+    # against it would compare a value with itself and could never fail. The
+    # obligation ADR 0060 Decision 6 states is about *storage*, so the read has
+    # to come from storage.
+    _require_envelope_fidelity(
+        plan, service.read_revision(created.profile.profile_id, revision.revision)
+    )
 
     reference = ImportedProfileRef(profile_id=created.profile.profile_id, revision=revision.revision)
     staged = _stage(service, reference, plan=plan)
@@ -473,6 +533,26 @@ def apply_import(
         envelope_sha=plan.envelope_sha,
         notes=plan.notes,
     )
+
+
+def _require_selection_unchanged(plan: ImportPlan, existing: ExistingConfiguration) -> None:
+    """Refuse a stale plan *before* anything is written.
+
+    `_stage` fences on `plan.expected_selection_generation`, so a selection
+    changed since the preview raises `SelectionGenerationConflict` -- correctly,
+    but from *after* `create_profile` has committed. Checking the same fact up
+    here turns an everyday two-tab race from "refused, and an orphan profile left
+    behind" into a clean refusal. The store-level fence stays as the authority
+    for the genuine race between this check and the write.
+    """
+    if not plan.stage_selection:
+        return
+    if existing.selection_generation != plan.expected_selection_generation:
+        raise _refused(
+            "the installation selection changed since this plan was written "
+            f"(generation {plan.expected_selection_generation} → "
+            f"{existing.selection_generation}); re-run the plan"
+        )
 
 
 def _stage(service: BrokerConfigurationService, reference: ImportedProfileRef, *, plan: ImportPlan) -> bool:
@@ -536,8 +616,10 @@ def _require_envelope_fidelity(plan: ImportPlan, revision: ProfileRevision) -> N
         return
     if stored.sha != plan.envelope_sha:
         raise _refused(
-            "the imported revision's live envelope hashes differently from the "
-            "environment it came from; the import was rolled back"
+            "the imported revision's live envelope does not hash to the value the "
+            "environment produced, so storage is not round-tripping these numbers. "
+            "The revision WAS written -- archive it, do not apply it, and treat "
+            "this as a storage defect."
         )
     for field in ENVELOPE_FIELDS:
         planned = getattr(plan.live_envelope, field)

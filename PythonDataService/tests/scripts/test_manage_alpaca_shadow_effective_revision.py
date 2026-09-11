@@ -69,7 +69,12 @@ def clerk_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     monkeypatch.setenv("ALPACA_CREDENTIAL_LIVE_KEY_ID", "live-key")
     monkeypatch.setenv("ALPACA_CREDENTIAL_LIVE_SECRET_KEY", "live-secret")
-    monkeypatch.setenv("ALPACA_MODE", "paper")
+    # No ``ALPACA_MODE``: these tests make a revision effective, i.e. the
+    # installation has cut over, and package F refuses to resolve a binding
+    # while a retired variable is still set. Deleting it is what a real
+    # cut-over deployment does, and ``AlpacaSettings.mode`` defaults to
+    # "paper" regardless, so nothing else here changes.
+    monkeypatch.delenv("ALPACA_MODE", raising=False)
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(root))
     # ``tests/conftest.py`` pins the profiles database inside tmp_path by
     # patching this resolver; a test that needs its own location patches it

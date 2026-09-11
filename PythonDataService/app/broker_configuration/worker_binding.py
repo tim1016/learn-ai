@@ -61,6 +61,7 @@ from app.broker_configuration.binding_decision import (
 )
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.legacy_environment import (
+    current_retired_settings,
     retired_environment_refusal,
     stale_retired_settings,
 )
@@ -201,16 +202,29 @@ async def resolve_worker_binding(
     # Order matters. It is *below* ``_bind_nothing`` because a pre-cutover
     # installation legitimately runs on these variables, and above the two
     # binding paths because both of them install a revision.
-    stale_refusal = retired_environment_refusal()
+    #
+    # One read, off the loop thread. ``LegacyEnvironmentPresence()`` parses
+    # ``.env`` from disk; reading it twice — once for the refusal, once for the
+    # log line — would both block here and let the two disagree.
+    presence = await asyncio.to_thread(current_retired_settings)
+    stale_refusal = retired_environment_refusal(presence)
     if stale_refusal is not None:
+        stale = stale_retired_settings(presence)
         logger.error(
             "Retired broker settings are still present; no broker binding installed",
             extra={
                 "action": "worker_binding_retired_environment",
                 "reason_code": stale_refusal.reason,
-                "retired_variables": list(stale_retired_settings()),
+                "retired_variables": list(stale),
             },
         )
+        # An Apply must be *consumed* even when it is refused (ADR 0060 D4.3):
+        # leaving the one-shot request pending would let a later restart — after
+        # someone tidies ``.env`` for an unrelated reason — silently apply the
+        # very change this boot refused. ``_record_refusal`` is the same path
+        # every other apply refusal takes.
+        if chosen.is_apply:
+            _record_refusal(service, candidate=chosen, reason=stale_refusal.reason)
         return UnboundWorker(stale_refusal)
 
     if chosen.intent is BindingIntent.APPLY:

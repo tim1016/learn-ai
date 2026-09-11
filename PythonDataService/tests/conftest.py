@@ -202,19 +202,23 @@ def _isolate_retired_alpaca_environment(monkeypatch: pytest.MonkeyPatch) -> None
     ``.env`` on disk: green in CI and in a fresh worktree, red in the main
     checkout. That is the "worktree verification false green" trap in reverse.
 
-    So the reader is neutered by default and a test that wants a stale variable
-    asks for one explicitly, by passing its own ``LegacyEnvironmentPresence``,
-    which bypasses this substitution entirely. Patching the reader -- rather than
-    deleting environment variables -- keeps the blast radius to this one
-    detector: ``AlpacaSettings`` and every other ``ALPACA_``-prefixed reader
-    still see whatever the test set up.
+    So the *file* source is dropped for the duration of a test, and only that.
+    A test that sets one of these variables still sees it -- the process
+    environment half of the reader is the real one, and the tests that are about
+    the detector rely on that. What no test inherits is a developer's ``.env``.
+
+    Patching the reader rather than deleting environment variables keeps the
+    blast radius to this one detector: ``AlpacaSettings`` and every other
+    ``ALPACA_``-prefixed reader still see whatever the test set up. The ``.env``
+    half that this drops is covered deliberately, in a tmp-path directory, by
+    ``tests/broker_configuration/test_legacy_environment.py``.
     """
     import app.broker_configuration.legacy_environment as legacy_environment
 
     monkeypatch.setattr(
         legacy_environment,
         "current_retired_settings",
-        legacy_environment.no_retired_settings,
+        lambda: legacy_environment.LegacyEnvironmentPresence(_env_file=None),
     )
 
 

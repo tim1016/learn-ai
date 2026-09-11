@@ -200,8 +200,14 @@ def test_an_empty_environment_refuses_rather_than_importing_nothing(tmp_path: Pa
 
 
 @pytest.mark.usefixtures("legacy_environment")
-def test_a_plan_file_with_an_unexpected_key_is_refused(tmp_path: Path) -> None:
-    """Exact key-set equality: an extra key means this is not the hashed document."""
+def test_a_plan_file_with_an_unexpected_key_exits_one(tmp_path: Path) -> None:
+    """Exact key-set equality: an extra key means this is not the hashed document.
+
+    Exit **1**, not 2: "this file is not an import plan" is *could not be run as
+    asked*, which is a different thing from the ceremony understanding a plan
+    and refusing it. Exit 2 is reserved for the latter, so an operator scripting
+    around this can tell a typo from a refusal.
+    """
     _run_plan(tmp_path)
     payload = json.loads(_plan_file(tmp_path).read_text(encoding="utf-8"))
     payload["smuggled"] = "value"
@@ -219,7 +225,25 @@ def test_a_plan_file_with_an_unexpected_key_is_refused(tmp_path: Path) -> None:
         ]
     )
 
-    assert code == 2
+    assert code == 1
+
+
+@pytest.mark.usefixtures("legacy_environment")
+def test_an_out_of_range_confirmation_window_exits_one(tmp_path: Path) -> None:
+    """Bounded at the flag, so a mistyped window is a usage error, not a refusal."""
+    code = cli.main(
+        [
+            "--clerk-dir",
+            str(tmp_path / "clerk"),
+            "plan",
+            "--plan-out",
+            str(_plan_file(tmp_path)),
+            "--confirmation-ttl-ms",
+            "99999999",
+        ]
+    )
+
+    assert code == 1
 
 
 @pytest.mark.usefixtures("legacy_environment")

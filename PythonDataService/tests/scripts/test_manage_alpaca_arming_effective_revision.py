@@ -102,7 +102,12 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Ite
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     monkeypatch.setenv(LIVE_KEY_ID_VAR, "live-key")
     monkeypatch.setenv(LIVE_SECRET_VAR, "live-secret")
-    monkeypatch.setenv("ALPACA_MODE", "paper")
+    # No ``ALPACA_MODE``: these tests make a revision effective, i.e. the
+    # installation has cut over, and package F refuses to resolve a binding
+    # while a retired variable is still set. Deleting it is what a real
+    # cut-over deployment does, and ``AlpacaSettings.mode`` defaults to
+    # "paper" regardless, so nothing else here changes.
+    monkeypatch.delenv("ALPACA_MODE", raising=False)
     for suffix in (
         "LOSS_FRACTION",
         "LOSS_USD",

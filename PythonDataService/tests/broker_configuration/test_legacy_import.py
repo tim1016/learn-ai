@@ -9,6 +9,7 @@ explicitly rather than guessed at.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,37 @@ def test_the_stored_revision_reproduces_the_envelope_sha(
     assert type(stored.live_envelope.shadow_sessions) is int
 
 
+def test_the_fidelity_guard_fires_when_storage_returns_different_values(
+    service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard reads back through the store, so it can actually fail.
+
+    Written because the obvious implementation cannot: `create_profile` returns
+    the very `ValidatedLiveEnvelope` the plan handed it, so comparing against
+    that object compares a value with itself and would pass through any storage
+    regression. ADR 0060 Decision 6's obligation is about *storage*, so the read
+    has to come from storage — this test simulates the regression the guard
+    exists to catch.
+    """
+    from app.broker_configuration.envelope import ValidatedLiveEnvelope
+
+    real_read = service.read_revision
+
+    def _regressed(profile_id: str, revision: int):
+        stored = real_read(profile_id, revision)
+        if stored.live_envelope is None:
+            return stored
+        corrupted = ValidatedLiveEnvelope.from_mapping(
+            {**stored.live_envelope.to_mapping(), "loss_usd": 4_999.0}
+        )
+        return replace(stored, live_envelope=corrupted)
+
+    monkeypatch.setattr(service, "read_revision", _regressed)
+
+    with pytest.raises(ConfigurationImportRefused, match="does not hash"):
+        _plan_and_apply(service, _live_values())
+
+
 # ---- empty and partial environments ----------------------------------------
 
 
@@ -209,6 +241,40 @@ def test_an_absent_mode_defaults_to_paper_like_the_settings_do() -> None:
     plan = _plan(_values(live_loss_usd=5000.0), ExistingConfiguration.absent())
 
     assert plan.endpoint_mode == "paper"
+
+
+def test_the_plan_warns_that_importing_disarms_the_broker_until_apply(
+    service: BrokerConfigurationService,
+) -> None:
+    """The window between "configured" and "applied" has no broker at all.
+
+    `decide()` keys "has this installation cut over?" on `has_any_profile`, so
+    writing the first profile stops the environment bootstrap — and only an
+    Apply makes the imported revision effective. A restart in between leaves the
+    worker unable to EXIT, and `python-service` is `restart: always`.
+
+    The warning lives on the plan, not only in the CLI's output, because the
+    plan is what the confirmation token attests to.
+    """
+    plan = _plan(_live_values(), ExistingConfiguration.read(service))
+
+    assert any("NO broker" in warning for warning in plan.warnings)
+    assert any("one sitting" in warning for warning in plan.warnings)
+
+
+def test_a_second_import_does_not_repeat_the_disarm_warning(
+    service: BrokerConfigurationService,
+) -> None:
+    """The window is opened once. An installation already holding profiles is past it."""
+    _plan_and_apply(service, _live_values())
+
+    plan = _plan(
+        _values(mode="paper", live_loss_usd=5000.0),
+        ExistingConfiguration.read(service),
+        display_name="A second one",
+    )
+
+    assert plan.warnings == ()
 
 
 # ---- what apply writes -----------------------------------------------------
@@ -379,19 +445,22 @@ def test_an_environment_edited_after_planning_is_refused(
     assert service.list_profiles(include_archived=True) == []
 
 
-def test_a_selection_staged_since_the_preview_conflicts(
+def test_a_selection_staged_since_the_preview_refuses_without_writing(
     service: BrokerConfigurationService,
 ) -> None:
-    """The staging fence is the plan's generation, not one re-read at apply time.
+    """The staging fence is the plan's generation, and it refuses before writing.
 
-    A generation re-read a moment earlier always matches, so it fences nothing.
+    A generation re-read at apply time always matches, so it fences nothing.
     Carrying the plan's makes a selection another browser tab staged between
-    preview and apply a `selection_generation_conflict` — contract §5's "two
-    browser tabs cannot silently clobber each other" — rather than a silent
-    replacement.
-    """
-    from app.broker_configuration.errors import SelectionGenerationConflict
+    preview and apply a refusal -- contract §5's "two browser tabs cannot
+    silently clobber each other".
 
+    Checked *before* `create_profile`, deliberately. That call commits on its
+    own, so fencing only inside `_stage` would refuse the ceremony and still
+    leave the imported profile behind -- and that orphan would flip
+    `has_any_profile`, taking the environment bootstrap away from a worker whose
+    operator was just told the import did not happen.
+    """
     plan = _plan(_live_values(), ExistingConfiguration.read(service))
     # Someone else stages something in the confirmation window.
     other = service.create_profile(
@@ -406,7 +475,7 @@ def test_a_selection_staged_since_the_preview_conflicts(
         expected_selection_generation=service.selection().selection_generation,
     )
 
-    with pytest.raises(SelectionGenerationConflict):
+    with pytest.raises(ConfigurationImportRefused, match="selection changed"):
         apply_import(
             plan=plan,
             confirmation_token=plan.confirmation_token,
@@ -415,8 +484,82 @@ def test_a_selection_staged_since_the_preview_conflicts(
             now_ms=NOW_MS,
         )
 
-    # The other tab's selection stands.
+    # No orphan, and the other tab's selection stands.
+    assert [p.display_name for p in service.list_profiles(include_archived=True)] == [
+        "Staged by another tab"
+    ]
     assert service.selection().staged_profile_id == other.profile.profile_id
+
+
+def test_an_archived_profile_holding_the_content_refuses_at_preview(
+    service: BrokerConfigurationService,
+) -> None:
+    """An archived match cannot be staged, so say so before the operator applies.
+
+    Left to apply, `stage_selection` raises `ProfileArchived` — "restore the
+    profile, then stage it" — advice about a profile the operator was not trying
+    to stage, with no way forward that the message mentions.
+    """
+    existing = service.create_profile(
+        display_name="Retired copy",
+        credential_slot="default",
+        endpoint_mode="live",
+        live_envelope=_plan(_live_values(), ExistingConfiguration.absent()).live_envelope,
+    )
+    service.update_profile(existing.profile.profile_id, archived=True)
+
+    with pytest.raises(ConfigurationImportRefused, match="archived"):
+        _plan(_live_values(), ExistingConfiguration.read(service))
+
+
+def test_an_archived_match_is_adoptable_without_staging(
+    service: BrokerConfigurationService,
+) -> None:
+    """The remedy the refusal names actually works."""
+    existing = service.create_profile(
+        display_name="Retired copy",
+        credential_slot="default",
+        endpoint_mode="live",
+        live_envelope=_plan(_live_values(), ExistingConfiguration.absent()).live_envelope,
+    )
+    service.update_profile(existing.profile.profile_id, archived=True)
+
+    plan = _plan(
+        _live_values(), ExistingConfiguration.read(service), stage_selection=False
+    )
+    receipt = apply_import(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        service=service,
+        values=_live_values(),
+        now_ms=NOW_MS,
+    )
+
+    assert receipt.created is False
+    assert receipt.staged is False
+
+
+def test_slot_availability_comes_from_the_injected_directory(
+    service: BrokerConfigurationService,
+) -> None:
+    """Through the service's seam, not a module-level read of the real environment.
+
+    `seams.py` exists so this package asks the service rather than reaching into
+    `app/broker/alpaca`. Without that, a test could inject a directory and the
+    plan would still answer from whatever the developer's shell happens to hold.
+    """
+    plan = _plan(_live_values(), ExistingConfiguration.read(service))
+
+    assert plan.credential_slot == "default"
+    assert plan.credential_slot_available is True
+
+    from tests.broker_configuration.conftest import FakeSlotDirectory
+
+    service._slots = FakeSlotDirectory()  # no slots available at all
+    blind = _plan(_live_values(), ExistingConfiguration.read(service))
+
+    assert blind.credential_slot_available is False
+    assert any("no injected pair" in note for note in blind.notes)
 
 
 def test_an_unknown_credential_slot_never_becomes_a_lookup() -> None:

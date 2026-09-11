@@ -28,10 +28,8 @@ from app.broker.alpaca.active_binding import RETIRED_ENVIRONMENT_SETTINGS
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_testing
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
-from app.broker_configuration import legacy_environment
 from app.broker_configuration.alpaca_seams import AlpacaCredentialSlotDirectory
 from app.broker_configuration.legacy_environment import (
-    LegacyEnvironmentPresence,
     LegacyEnvironmentValues,
 )
 from app.broker_configuration.legacy_import import (
@@ -98,11 +96,6 @@ def rehearsal_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("ALPACA_API_KEY_ID", DEFAULT_SLOT_KEY)
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", DEFAULT_SLOT_SECRET)
-    monkeypatch.setattr(
-        legacy_environment,
-        "current_retired_settings",
-        lambda: LegacyEnvironmentPresence(_env_file=None),
-    )
     reset_alpaca_settings_for_testing()
     yield
     reset_alpaca_settings_for_testing()
@@ -168,13 +161,22 @@ async def test_the_whole_cutover_and_its_rollback(
     assert refused.unbound.reason == RETIRED_ENVIRONMENT_SETTINGS
     for name in LEGACY_LIVE_ENVIRONMENT:
         assert name in refused.unbound.next_step
+    #    The one-shot Apply is *consumed* by that refusal (ADR 0060 D4.3), so a
+    #    later restart -- after someone tidies `.env` for an unrelated reason --
+    #    cannot silently apply the change this boot refused. The operator has to
+    #    say yes again, which is the point.
+    assert service.selection().apply_requested is False
+    assert service.selection().last_apply_outcome == "refused"
 
-    # 5. Delete the lines and restart. Now the worker binds the profile, and the
-    #    envelope it binds is the one the environment described in step 1 --
-    #    same values, same sha, so every arming record sealed before the cutover
-    #    still verifies against it.
+    # 5. Delete the lines, press Apply again, and restart. Now the worker binds
+    #    the profile, and the envelope it binds is the one the environment
+    #    described in step 1 -- same values, same sha, so every arming record
+    #    sealed before the cutover still verifies against it.
     _delete_retired_lines(monkeypatch)
     reset_alpaca_settings_for_testing()
+    service.request_apply(
+        expected_selection_generation=service.selection().selection_generation
+    )
     after = await resolve_worker_binding(
         service_factory=lambda: service, environment=credential_environment
     )

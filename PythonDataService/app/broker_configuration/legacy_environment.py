@@ -2,7 +2,7 @@
 
 Package F's half of ADR 0060: the six ``ALPACA_LIVE_*`` values and ``ALPACA_MODE``
 stopped being the runtime's source of truth when an installation cut over to a
-saved profile. This module owns two things that must not drift apart:
+saved profile. This module owns three things that must not drift apart:
 
 1. **Which variables are retired** — :data:`RETIRED_SETTINGS`. Exactly seven, and
    the list is closed. ``docs/architecture/alpaca-configuration-ownership-inventory.md``
@@ -11,7 +11,7 @@ saved profile. This module owns two things that must not drift apart:
 2. **How to read them without ever refusing to construct** — the two readers
    below.
 3. **The refusal their presence produces after cutover** —
-   :func:`retired_environment_refusal`, stated once so the worker and the three
+   :func:`retired_environment_refusal`, stated once so the worker and the four
    operator CLIs answer a stale ``.env`` with the same sentence.
 
 Why two readers rather than one, and why neither is ``AlpacaSettings``:
@@ -60,14 +60,10 @@ class RetiredSetting:
     field: str
     """The ``AlpacaSettings`` field it populated — also this module's field name."""
 
-    replaced_by: str
-    """Where the value lives now, in the operator's words."""
-
 
 _ENDPOINT_MODE = RetiredSetting(
     env_var="ALPACA_MODE",
     field="mode",
-    replaced_by="the effective profile revision's endpoint mode",
 )
 
 # The six risk-envelope values, in ``LiveEnvelopeValues`` field order so the
@@ -76,32 +72,26 @@ _ENVELOPE_SETTINGS: Final[tuple[RetiredSetting, ...]] = (
     RetiredSetting(
         env_var="ALPACA_LIVE_LOSS_FRACTION",
         field="live_loss_fraction",
-        replaced_by="the effective profile revision's live envelope",
     ),
     RetiredSetting(
         env_var="ALPACA_LIVE_LOSS_USD",
         field="live_loss_usd",
-        replaced_by="the effective profile revision's live envelope",
     ),
     RetiredSetting(
         env_var="ALPACA_LIVE_SHADOW_SESSIONS",
         field="live_shadow_sessions",
-        replaced_by="the effective profile revision's live envelope",
     ),
     RetiredSetting(
         env_var="ALPACA_LIVE_ARMING_MAX_SESSIONS",
         field="live_arming_max_sessions",
-        replaced_by="the effective profile revision's live envelope",
     ),
     RetiredSetting(
         env_var="ALPACA_LIVE_XH_ENTRY_BPS",
         field="live_xh_entry_bps",
-        replaced_by="the effective profile revision's live envelope",
     ),
     RetiredSetting(
         env_var="ALPACA_LIVE_XH_EXIT_BPS",
         field="live_xh_exit_bps",
-        replaced_by="the effective profile revision's live envelope",
     ),
 )
 
@@ -178,8 +168,10 @@ class LegacyEnvironmentValues(BaseSettings):
     """The retired values, typed exactly as ``AlpacaSettings`` types them.
 
     Field-for-field identical to ``AlpacaSettings``' declarations — same
-    annotations, same ``Field`` constraints — minus the credential pair and
-    ``_enforce_mode_agreement``. That is the whole point: a value parsed here is
+    annotations, same ``Field`` constraints — with three deliberate differences:
+    no credential pair, no ``_enforce_mode_agreement``, and ``mode`` optional
+    here where it defaults to ``"paper"`` there, so that a *missing* mode is
+    distinguishable from a chosen one. That is the whole point: a value parsed here is
     the value the environment boot would have used, so the envelope built from it
     hashes to the same ``sha``, and a *partial* live environment is reported
     field by field instead of refusing to construct at all.
@@ -202,24 +194,12 @@ class LegacyEnvironmentValues(BaseSettings):
 def current_retired_settings() -> LegacyEnvironmentPresence:
     """Read this process's environment for the retired variables.
 
-    The seam ``tests/conftest.py`` replaces with :func:`no_retired_settings`, so
-    a developer's real ``PythonDataService/.env`` cannot decide whether a binding
-    test passes. Production has exactly one implementation, and a caller that
-    already holds a reading passes it instead of going through here.
+    Both sources ``AlpacaSettings`` reads: the process environment *and* the
+    ``.env`` file beside the working directory. A caller that already holds a
+    reading passes it to the functions below instead of going through here, so
+    one boot reads once.
     """
     return LegacyEnvironmentPresence()
-
-
-def no_retired_settings() -> LegacyEnvironmentPresence:
-    """A reading in which every retired variable is absent.
-
-    Built without consulting the environment at all, which is the point: it is
-    what a caller passes to ask the question about a *known* environment rather
-    than this process's.
-    """
-    return LegacyEnvironmentPresence.model_construct(
-        mode=None, **dict.fromkeys(ENVELOPE_FIELD_BY_SETTING, None)
-    )
 
 
 def stale_retired_settings(
@@ -251,13 +231,20 @@ def describe_stale_settings(stale: tuple[str, ...]) -> str:
     return f"{listed} are still set in the environment"
 
 
+_FIELD_TO_ENV_VAR: Final[dict[str, str]] = {
+    setting.field: setting.env_var for setting in RETIRED_SETTINGS
+}
+
+
 @dataclass(frozen=True)
 class LegacyEnvironmentReadFailure:
     """The retired environment holds a value that will not parse.
 
-    ``messages`` carries pydantic's ``msg`` text only, never the offending input:
-    the same containment ``alpaca_configuration_error_detail`` applies, for the
-    same reason.
+    Each message names the ``ALPACA_*`` variable it came from and carries
+    pydantic's ``msg`` text, never the offending input. The variable name comes
+    from the error's ``loc`` — a *field* name, never a value — so naming it costs
+    nothing in containment and is the whole difference between "Input should be a
+    valid number" and an operator knowing which of seven lines to fix.
     """
 
     messages: tuple[str, ...]
@@ -302,13 +289,27 @@ def retired_environment_refusal(
     )
 
 
+def _named_messages(exc: ValidationError) -> tuple[str, ...]:
+    """Pydantic's ``msg`` text, each prefixed with the variable it belongs to."""
+    named: list[str] = []
+    for error in exc.errors():
+        message = str(error.get("msg", ""))
+        if not message:
+            continue
+        location = error.get("loc") or ()
+        field = str(location[0]) if location else ""
+        env_var = _FIELD_TO_ENV_VAR.get(field)
+        named.append(f"{env_var}: {message}" if env_var else message)
+    return tuple(named)
+
+
 def read_legacy_values(
     values: LegacyEnvironmentValues | None = None,
 ) -> LegacyEnvironmentValues | LegacyEnvironmentReadFailure:
     """Parse the retired variables, reporting a bad value rather than raising.
 
     The importer needs to *tell the operator* that ``ALPACA_LIVE_LOSS_USD`` is
-    out of domain; a ``ValidationError` escaping into a CLI traceback would say
+    out of domain; a ``ValidationError`` escaping into a CLI traceback would say
     the same thing far less usefully, and on some paths would echo the input.
     """
     if values is not None:
@@ -316,10 +317,7 @@ def read_legacy_values(
     try:
         return LegacyEnvironmentValues()
     except ValidationError as exc:
-        messages = tuple(
-            str(error.get("msg", "")) for error in exc.errors() if error.get("msg")
-        )
-        return LegacyEnvironmentReadFailure(messages=messages)
+        return LegacyEnvironmentReadFailure(messages=_named_messages(exc))
 
 
 __all__ = [
@@ -333,7 +331,6 @@ __all__ = [
     "RetiredSetting",
     "current_retired_settings",
     "describe_stale_settings",
-    "no_retired_settings",
     "read_legacy_values",
     "retired_environment_refusal",
     "stale_retired_settings",
