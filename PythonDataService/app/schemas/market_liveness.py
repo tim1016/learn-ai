@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 MarketLivenessState = Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
 MarketClockState = Literal["OPEN", "CLOSED", "UNKNOWN"]
 SymbolTradingState = Literal["TRADABLE", "HALTED", "UNKNOWN"]
@@ -66,3 +68,19 @@ class MarketLivenessFact(BaseModel):
     symbol_status: SymbolTradingStatusEvidence | None
     reason_code: str
     reason: str
+
+
+class MarketStatusSnapshot(BaseModel):
+    """Authenticated status-source observation shared with a Paper worker.
+
+    Vendor transition times remain unchanged. The snapshot timestamp proves
+    only the source's current connection state, never a new symbol event.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: Literal["alpaca.stock_data.status"] = "alpaca.stock_data.status"
+    connected: bool
+    observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    symbol_statuses: tuple[SymbolTradingStatusEvidence, ...]

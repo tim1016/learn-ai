@@ -869,6 +869,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/market-status-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Market Status Snapshot
+         * @description Share vendor status evidence with an authenticated Paper worker.
+         */
+        get: operations["get_market_status_snapshot_api_brokers_alpaca_market_status_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -14251,6 +14271,29 @@ export interface components {
             success: boolean;
         };
         /**
+         * MarketStatusSnapshot
+         * @description Authenticated status-source observation shared with a Paper worker.
+         *
+         *     Vendor transition times remain unchanged. The snapshot timestamp proves
+         *     only the source's current connection state, never a new symbol event.
+         */
+        MarketStatusSnapshot: {
+            /** Connected */
+            connected: boolean;
+            /** Connection Changed At Ms */
+            connection_changed_at_ms: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /**
+             * Source
+             * @default alpaca.stock_data.status
+             * @constant
+             */
+            source?: "alpaca.stock_data.status";
+            /** Symbol Statuses */
+            symbol_statuses: components["schemas"]["SymbolTradingStatusEvidence"][];
+        };
+        /**
          * MatrixGridResponse
          * @description Matrix grid of IV surface values.
          */
@@ -20670,6 +20713,34 @@ export interface components {
             symbol: string;
         };
         /**
+         * SymbolTradingStatusEvidence
+         * @description One symbol-scoped live trading-status observation.
+         *
+         *     A status stream sends state transitions rather than scheduled-calendar
+         *     windows. Its connection epoch is recorded separately so reconnection can
+         *     invalidate every previously remembered symbol state before new evidence is
+         *     accepted.
+         */
+        SymbolTradingStatusEvidence: {
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Reason */
+            reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Source */
+            source: string;
+            /** Source Timestamp Ms */
+            source_timestamp_ms?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "TRADABLE" | "HALTED" | "UNKNOWN";
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * TargetMetadataResponse
          * @description Audit trail of what the target pipeline actually computed.
          */
@@ -24007,6 +24078,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManualOrderCancellationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_market_status_snapshot_api_brokers_alpaca_market_status_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketStatusSnapshot"];
                 };
             };
             /** @description Validation Error */

@@ -21036,6 +21036,48 @@
         "title": "MarketStatusResponse",
         "type": "object"
       },
+      "MarketStatusSnapshot": {
+        "additionalProperties": false,
+        "description": "Authenticated status-source observation shared with a Paper worker.\n\nVendor transition times remain unchanged. The snapshot timestamp proves\nonly the source's current connection state, never a new symbol event.",
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "connection_changed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Connection Changed At Ms",
+            "type": "integer"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "source": {
+            "const": "alpaca.stock_data.status",
+            "default": "alpaca.stock_data.status",
+            "title": "Source"
+          },
+          "symbol_statuses": {
+            "items": {
+              "$ref": "#/components/schemas/SymbolTradingStatusEvidence"
+            },
+            "title": "Symbol Statuses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "connected",
+          "observed_at_ms",
+          "connection_changed_at_ms",
+          "symbol_statuses"
+        ],
+        "title": "MarketStatusSnapshot",
+        "type": "object"
+      },
       "MatrixGridResponse": {
         "description": "Matrix grid of IV surface values.",
         "properties": {
@@ -35608,6 +35650,76 @@
         "title": "SymbolCoverageSpan",
         "type": "object"
       },
+      "SymbolTradingStatusEvidence": {
+        "additionalProperties": false,
+        "description": "One symbol-scoped live trading-status observation.\n\nA status stream sends state transitions rather than scheduled-calendar\nwindows. Its connection epoch is recorded separately so reconnection can\ninvalidate every previously remembered symbol state before new evidence is\naccepted.",
+        "properties": {
+          "observed_at_ms": {
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_timestamp_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Timestamp Ms"
+          },
+          "state": {
+            "enum": [
+              "TRADABLE",
+              "HALTED",
+              "UNKNOWN"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "state",
+          "source",
+          "observed_at_ms"
+        ],
+        "title": "SymbolTradingStatusEvidence",
+        "type": "object"
+      },
       "TargetMetadataResponse": {
         "description": "Audit trail of what the target pipeline actually computed.",
         "properties": {
@@ -43069,6 +43181,56 @@
           }
         },
         "summary": "Cancel Sqlite Manual Order",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/market-status-snapshot": {
+      "get": {
+        "description": "Share vendor status evidence with an authenticated Paper worker.",
+        "operationId": "get_market_status_snapshot_api_brokers_alpaca_market_status_snapshot_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketStatusSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Market Status Snapshot",
         "tags": [
           "brokers-v2"
         ]

@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -39,9 +40,15 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.routers.broker_v2_panel import router as panel_router
 from app.routers.brokers import router as brokers_router
+from app.schemas.broker_bots import BotProcessFact
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from app.services.bot_runner import set_bot_task_registry
+from app.services.bot_lifecycle_projection import (
+    ActiveSqliteAlpacaLifecycleAuthority,
+    AlpacaLifecycleAuthorityUnavailableError,
+)
+from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
@@ -57,6 +64,10 @@ from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     custody_account_id_for_route,
 )
+from app.utils.timestamps import now_ms_utc
+from tests._helpers.bot_runner.doubles import _FakeFeed
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     SHADOW_ACCT,
@@ -151,6 +162,166 @@ async def shadow_app(
     """The same composed authority, for the many consumers that unpack a 2-tuple."""
     app, runtime, _broker = shadow_app_and_broker
     return app, runtime
+
+
+@pytest.fixture()
+async def shadow_registry(
+    shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[BotTaskRegistry]:
+    """Drive real runner activation against the composed Shadow Clerk."""
+    _app, runtime, broker = shadow_app_and_broker
+    broker.now_ms = now_ms_utc()
+    patch_fresh_live_market_liveness(monkeypatch)
+    admit_canary_pairing(monkeypatch, "deployment_validation", SHADOW_ACCT)
+    registry = BotTaskRegistry(
+        tmp_path / "runner",
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        boot_recovery_required=False,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=runtime.clerk.start_admission_snapshot,
+        now_ms=now_ms_utc,
+    )
+    set_bot_task_registry(registry)
+    try:
+        yield registry
+    finally:
+        await registry.stop_all()
+
+
+async def test_shadow_runner_can_deploy_stop_and_resume(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    shadow_registry: BotTaskRegistry,
+) -> None:
+    """A real Shadow launch must cross the SQLite-to-runner projection boundary."""
+    app, runtime = shadow_app
+    deployed = await shadow_registry.deploy(
+        broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
+    )
+    assert deployed.running is True
+    assert deployed.phase == "ON_DUTY"
+    assert runtime.sqlite_repository.active_run(SID).lifecycle_run_id == deployed.active_run_id
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/authority-facts"
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["process"]["state"] == "RUNNING"
+    assert response.json()["clerk"]["account_id"] == SHADOW_ACCT
+
+    stopped = await shadow_registry.stop("alpaca", SID)
+    assert stopped.phase == "OFF_DUTY"
+    assert runtime.sqlite_repository.active_run(SID) is None
+    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    assert resumed.running is True
+    assert resumed.active_run_id != deployed.active_run_id
+    assert runtime.sqlite_repository.active_run(SID).lifecycle_run_id == resumed.active_run_id
+
+
+async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    shadow_registry: BotTaskRegistry,
+) -> None:
+    """A crash before the binding write must not strand a Shadow Clerk run."""
+    _app, runtime = shadow_app
+    _register_instance(runtime.clerk)
+    submit_start_run(
+        runtime.sqlite_repository,
+        account_id=SHADOW_ACCT,
+        strategy_instance_id=SID,
+        lifecycle_run_id="orphaned-shadow-run",
+    )
+
+    report = await shadow_registry.run_boot_recovery()
+
+    assert report.interrupted_instances == (SID,)
+    assert report.authority_unavailable_instances == ()
+    assert runtime.sqlite_repository.active_run(SID) is None
+
+
+async def test_shadow_failed_activation_recovers_and_resumes_the_existing_binding(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    shadow_registry: BotTaskRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recover the actual rehearsal failure without deleting its durable evidence."""
+    _app, runtime = shadow_app
+
+    def unavailable_repository() -> None:
+        raise AlpacaLifecycleAuthorityUnavailableError(
+            "SQLite Alpaca lifecycle authority is unavailable"
+        )
+
+    with monkeypatch.context() as broken:
+        broken.setattr(
+            ActiveSqliteAlpacaLifecycleAuthority,
+            "_active_repository",
+            staticmethod(unavailable_repository),
+        )
+        with pytest.raises(ActivationFailedCleanupProvenError):
+            await shadow_registry.deploy(
+                broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
+            )
+
+    failed_binding = shadow_registry.binding_for_control("alpaca", SID)
+    assert runtime.sqlite_repository.active_run(SID) is None
+    assert shadow_registry.process_fact("alpaca", SID).state == "UNKNOWN"
+
+    report = await shadow_registry.run_boot_recovery()
+
+    assert report.interrupted_instances == (SID,)
+    assert report.authority_unavailable_instances == ()
+    recovered = shadow_registry.status("alpaca", SID)
+    assert recovered.running is False
+    assert recovered.phase == "OFF_DUTY"
+    assert recovered.duty_outcome.run_id == failed_binding.run_id
+    assert recovered.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
+    assert shadow_registry.process_fact("alpaca", SID).state == "EXITED"
+
+    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    assert resumed.running is True
+    assert resumed.active_run_id != failed_binding.run_id
+    history = shadow_registry.run_history("alpaca", SID, cursor=None, limit=10)
+    failed_run = next(run for run in history.runs if run.run_id == failed_binding.run_id)
+    assert failed_run.terminal_outcome.reason_code == "INTERRUPTED_BY_RESTART"
+
+
+@pytest.mark.parametrize("route_account", [LIVE_ACCT, "9LIVE9999", SHADOW_ACCT])
+async def test_shadow_authority_facts_preserve_public_route_account_scope(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+    route_account: str,
+) -> None:
+    """The public account maps to its Shadow custody; other route ids stay refused."""
+    app, runtime = shadow_app
+    _register_instance(runtime.clerk)
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.bot_process_fact",
+        lambda _broker, _sid: BotProcessFact(
+            strategy_instance_id=SID,
+            run_id="run-1",
+            process_identity=None,
+            state="UNKNOWN",
+            registry_generation="test-registry",
+            observed_at_ms=NOW_MS,
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/authority-facts"
+        )
+    if route_account == LIVE_ACCT:
+        assert response.status_code == 200, response.text
+        assert response.json()["clerk"]["account_id"] == SHADOW_ACCT
+        assert response.json()["process"]["state"] == "UNKNOWN"
+    else:
+        assert response.status_code == 404, response.text
 
 
 async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(

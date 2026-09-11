@@ -86,6 +86,7 @@ from app.schemas.manual_orders import (
     ManualOrderSubmitRequest,
     ManualOrderTicketResponse,
 )
+from app.schemas.market_liveness import MarketStatusSnapshot
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -102,6 +103,7 @@ from app.services.alpaca_live_verdict import (
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
@@ -383,6 +385,18 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     # Vendor evidence only — the canonical calendar module remains the sole
     # authority for scheduled session structure (no authority change).
     return await _run(broker, lambda port: port.get_clock_evidence())
+
+
+@router.get(
+    "/alpaca/market-status-snapshot",
+    response_model=MarketStatusSnapshot,
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+)
+async def get_market_status_snapshot(
+    store: MarketLivenessStore = Depends(get_market_liveness_store),
+) -> MarketStatusSnapshot:
+    """Share vendor status evidence with an authenticated Paper worker."""
+    return store.status_snapshot(now_ms=now_ms_utc())
 
 
 @router.get("/{broker}/portfolio-history", response_model=BrokerPortfolioHistory)

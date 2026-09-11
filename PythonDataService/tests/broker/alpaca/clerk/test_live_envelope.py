@@ -43,6 +43,7 @@ def test_the_sha_is_stable_and_changes_with_any_value() -> None:
 
 def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> None:
     settings = AlpacaSettings(
+        _env_file=None,
         api_key_id="k",
         api_secret_key="s",
         mode="live",
@@ -54,7 +55,11 @@ def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> No
         live_xh_exit_bps=10.0,
     )
     assert LiveEnvelopeValues.from_settings(settings) == TEST_ENVELOPE_VALUES
-    paper = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
+    # Exercise absent values, independent of the developer's live .env.
+    paper = AlpacaSettings(
+        _env_file=None, api_key_id="k", api_secret_key="s", mode="paper",
+        **{field: None for field in _LIVE_REQUIRED_FIELDS},
+    )
     with pytest.raises(LiveEnvelopeIncomplete, match="live_loss_fraction"):
         LiveEnvelopeValues.from_settings(paper)
 

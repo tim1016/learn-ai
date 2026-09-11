@@ -202,7 +202,7 @@ async def get_authority_facts(
             detail="The Clerk cannot author current custody facts.",
         )
     custody = await clerk.custody_snapshot(sid)
-    if custody.account_id != resolved_account_id:
+    if custody.account_id != custody_account_id_for_route(broker, resolved_account_id):
         raise PanelUnavailableError(
             "The Clerk custody account does not match the panel account.",
             detail="Recover the account-scoped Clerk before using control actions.",

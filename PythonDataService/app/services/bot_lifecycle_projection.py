@@ -103,10 +103,11 @@ class ActiveSqliteAlpacaLifecycleAuthority:
     def _active_repository() -> ClerkSqliteRepository:
         """The selected Clerk's SQLite repository, or refuse."""
         from app.broker.alpaca.clerk import get_alpaca_clerk
+        from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 
         clerk = get_alpaca_clerk()
         repository = getattr(clerk, "repository", None)
-        if getattr(clerk, "authority_kind", None) != "sqlite" or not isinstance(
+        if getattr(clerk, "authority_kind", None) not in SQLITE_FACADE_AUTHORITIES or not isinstance(
             repository, ClerkSqliteRepository
         ):
             raise AlpacaLifecycleAuthorityUnavailableError(

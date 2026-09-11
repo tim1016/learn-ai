@@ -20,11 +20,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
+import httpx
+
 from app.broker.alpaca import adapter
 from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
 from app.broker.contract.ports import BrokerReadPort
-from app.schemas.market_liveness import SymbolTradingStatusEvidence
+from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 type FrameSource = Callable[[], AsyncIterator[bytes | str]]
 type Backoff = Callable[[int], Awaitable[None]]
+type StatusSnapshotSource = Callable[[], Awaitable[MarketStatusSnapshot]]
 
 _STATUS_SOURCE = "alpaca.stock_data.status"
 _STATUS_STREAM = "market_statuses"
@@ -66,6 +69,7 @@ class AlpacaMarketLivenessConsumer:
         backoff: Backoff = _default_backoff,
         max_reconnects: int | None = None,
         clock_poll_interval_s: float = _CLOCK_POLL_INTERVAL_S,
+        status_snapshot_source: StatusSnapshotSource | None = None,
     ) -> None:
         self._read = read
         self._frame_source = frame_source
@@ -75,6 +79,7 @@ class AlpacaMarketLivenessConsumer:
         self._backoff = backoff
         self._max_reconnects = max_reconnects
         self._clock_poll_interval_s = clock_poll_interval_s
+        self._status_snapshot_source = status_snapshot_source
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -111,7 +116,12 @@ class AlpacaMarketLivenessConsumer:
         """Run clock polling and status-stream reconnects until cancelled."""
         clock_task = asyncio.create_task(self._poll_clock(), name="alpaca-market-clock")
         try:
-            await self._consume_statuses()
+            if self._status_snapshot_source is None:
+                await self._consume_statuses()
+            else:
+                while True:
+                    await self.refresh_shared_status()
+                    await asyncio.sleep(self._clock_poll_interval_s)
         finally:
             clock_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -140,6 +150,22 @@ class AlpacaMarketLivenessConsumer:
         while True:
             await self.refresh_clock()
             await asyncio.sleep(self._clock_poll_interval_s)
+
+    async def refresh_shared_status(self) -> None:
+        """Import status proof for Paper; its own broker clock stays local."""
+        if self._status_snapshot_source is None:
+            raise RuntimeError("No shared market-status source is configured.")
+        try:
+            snapshot = await self._status_snapshot_source()
+            self._store.apply_status_snapshot(snapshot, now_ms=self._clock())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._store.mark_stream_disconnected(observed_at_ms=self._clock())
+            logger.warning(
+                "Shared market-status source unavailable; new exposure is blocked",
+                extra={"action": "market_liveness_shared_source_unavailable"},
+            )
 
     async def _consume_statuses(self) -> None:
         attempt = 0
@@ -186,10 +212,9 @@ class AlpacaMarketLivenessConsumer:
         silently un-halt every symbol this connection cycle had legitimately
         proven halted. Nor does a reconnect invalidate that map (see
         ``_consume_statuses``) — only a genuine resume transition for that
-        symbol does. Receiving a frame at all — good or bad — still proves
-        the socket itself is alive.
+        symbol does. Only a status subscription or event proves the source;
+        connection/authentication errors must never imply tradability.
         """
-        self._store.mark_stream_connected(observed_at_ms=self._clock())
         raw = frame.encode("utf-8") if isinstance(frame, str) else frame
         captured = self._journal.record(
             broker="alpaca",
@@ -220,7 +245,23 @@ class AlpacaMarketLivenessConsumer:
                 extra={"action": "market_liveness_status_shape_error"},
             )
             return
+        if any(message.get("T") == "error" for message in messages):
+            self._store.mark_stream_disconnected(observed_at_ms=self._clock())
+            return
         for message in messages:
+            if message.get("T") == "subscription":
+                statuses = message.get("statuses")
+                if isinstance(statuses, list) and "*" in statuses:
+                    self._store.mark_stream_connected(observed_at_ms=self._clock())
+                else:
+                    self._store.mark_stream_disconnected(observed_at_ms=self._clock())
+            elif (
+                message.get("T") == "s"
+                and isinstance(message.get("S"), str)
+                and message["S"].strip()
+                and _message_timestamp_ms(message) is not None
+            ):
+                self._store.mark_stream_connected(observed_at_ms=self._clock())
             self._handle_status_message(message)
 
     def _handle_status_message(self, message: dict[str, Any]) -> None:
@@ -320,18 +361,53 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
     ) -> AlpacaMarketLivenessConsumer:
-        """Build the production consumer with Alpaca's raw data websocket."""
+        """Use the vendor socket, or an explicitly configured Paper status source."""
         resolved = settings or get_alpaca_settings()
 
         def frame_source() -> AsyncIterator[bytes | str]:
             return alpaca_market_status_frames(resolved)
+
+        status_source = None
+        if resolved.market_status_upstream_url is not None:
+            from app.config import settings as service_settings
+
+            if not service_settings.DATA_PLANE_CONTROL_SECRET:
+                raise ValueError("A shared market-status source requires control-channel authentication.")
+
+            async def status_source() -> MarketStatusSnapshot:
+                return await read_shared_market_status(
+                    str(resolved.market_status_upstream_url),
+                    control_secret=service_settings.DATA_PLANE_CONTROL_SECRET,
+                    journal=journal or get_capture_journal(),
+                )
 
         return cls(
             read=read,
             frame_source=frame_source,
             store=store,
             journal=journal,
+            status_snapshot_source=status_source,
         )
+
+
+async def read_shared_market_status(
+    url: str, *, control_secret: str, journal: CaptureJournal,
+) -> MarketStatusSnapshot:
+    """Read protected status evidence without forwarding trading credentials."""
+    async with httpx.AsyncClient(timeout=3.0, follow_redirects=False, trust_env=False) as client:
+        response = await client.get(url, headers={"X-Data-Plane-Control-Secret": control_secret})
+    captured = journal.record(
+        broker="alpaca",
+        endpoint=CaptureEndpoint.STREAM,
+        method="GET",
+        params={"stream": "shared_market_status"},
+        status=response.status_code,
+        raw_body=response.content,
+    )
+    if not captured:
+        raise RuntimeError("Shared market-status evidence could not be captured.")
+    response.raise_for_status()
+    return MarketStatusSnapshot.model_validate_json(response.content)
 
 
 def _message_timestamp_ms(message: dict[str, Any]) -> int | None:
