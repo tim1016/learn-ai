@@ -24,7 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from stat import S_ISLNK
 
 from app.broker.alpaca.active_binding import (
     BROKER_UNCONFIGURED,
@@ -44,7 +43,7 @@ from app.broker_configuration.legacy_environment import retired_environment_refu
 from app.broker_configuration.records import InstallationSelection
 from app.broker_configuration.selection import reference as revision_reference
 from app.broker_configuration.service import BrokerConfigurationService
-from app.broker_configuration.store import profiles_database_path
+from app.broker_configuration.store import profiles_database_exists
 
 
 @dataclass(frozen=True)
@@ -83,23 +82,8 @@ def _installed_profiles_service() -> BrokerConfigurationService | None:
     ``runtime.resolve_clerk_dir``, and a ``from``-import here would hold the
     original function and reach a developer's real Clerk volume instead.
     """
-    db_path = profiles_database_path(broker_configuration_runtime.resolve_clerk_dir())
-    try:
-        # Inspect parents first: ENOENT through a dangling volume/directory
-        # symlink is an unavailable installation, not a fresh installation.
-        # lstat distinguishes an absent entry from a present, broken link.
-        for entry in reversed((db_path, *db_path.parents)):
-            try:
-                metadata = entry.lstat()
-            except FileNotFoundError:
-                return None
-            if S_ISLNK(metadata.st_mode):
-                entry.stat()
-    except OSError as exc:
-        raise ProfilesDatabaseUnavailable(
-            "The broker configuration path could not be inspected.",
-            next_step="Restore access to the Clerk volume and saved profiles, then retry.",
-        ) from exc
+    if not profiles_database_exists(broker_configuration_runtime.resolve_clerk_dir()):
+        return None
     return broker_configuration_runtime.get_broker_configuration_service()
 
 

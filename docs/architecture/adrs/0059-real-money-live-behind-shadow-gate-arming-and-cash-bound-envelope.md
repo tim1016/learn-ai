@@ -8,6 +8,8 @@
 **Amended 2026-09-09 (owner decision, slice 7):** Decisions 2, 3 and 8 are amended in place — D2 and D3's shadow-receipt sentences now say the receipt is recorded on the arming record when the instance holds one, never required to arm or to graduate; D8's mid-session halt refuses new entries under the instance's own arming code — and logs the transition once as `live_verdict_transition_halt` — without writing `desired_state = PAUSED`. Reasons: the slice-7 design's R3 (graduation needs no shadow receipt), R7 (arming needs no shadow receipt), R10 (`PAUSED` is observe-only for EXIT too and would strand a real position) and R12 (D2 names `sealed_account_id`, not `submit_mode`). Authority: the owner's two 2026-09-09 grill-me decisions — no `desired_state = PAUSED`, only the ENTER refusal; and "shadow should be just a mode, not a requirement to run a bot."
 **Supersedes:** ADR 0042's Consequences statement that real-money Live remains unreachable (that sentence only). Amends ADR 0021 §6 guardrail 2 and its non-consequence "Does not touch real-money/live trading" for the Alpaca V2 path. Supersedes PRD #1723 FR-035. Extends ADR 0011.
 
+**Partially superseded 2026-09-11:** [ADR 0060](0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) replaces only the environment-source rule for the six live-envelope values in Decisions 3, 4 and 5.3 and the corresponding rejected alternative. Their authority is now the effective profile revision. Required values, validation, sealed arming, mode agreement, account isolation and the Live/Shadow developer-reset refusals remain unchanged. The provenance above records the original decision.
+
 ## Context
 
 The scope memo established what this ADR takes as given:

@@ -61,8 +61,6 @@ from app.engine.live.bot_lifecycle_state import (
     stable_bot_lifecycle_state_path,
 )
 from app.services.bot_binding_repository import (
-    BINDING_FILENAME,
-    STRATEGY_INSTANCE_FILENAME,
     BrokerBotBinding,
     live_state_binding_repository,
 )
@@ -75,7 +73,6 @@ ALPACA_BROKER = "alpaca"
 #: Repeated here because the repo has no shared constant for it — every reader
 #: of that tree spells the literal (``cutover_roster``, ``dev_reset``,
 #: ``catalog_quarantine``, and the repository itself).
-LIVE_STATE_DIRECTORY = "live_state"
 
 #: How many identities a blocking fact names before it elides the rest. A
 #: refusal reason is operator prose, not a roster dump.
@@ -320,11 +317,8 @@ def _binding_facts(account_id: str, *, live_state_root: Path) -> tuple[str, ...]
 def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[BrokerBotBinding]:
     """Nonterminal Alpaca bindings on this account; unreadable evidence refuses.
 
-    ``BotBindingRepository.list_for_broker`` logs and skips a row it cannot
-    parse. That is right for a listing surface — one bad row must not hide the
-    rest — and wrong here, because the row we cannot read is precisely the row
-    that might be the obligation. So the walk is repeated with the skip removed
-    and a corrupt row propagates, making the probe unreadable.
+    The canonical repository's strict listing propagates corrupt or incomplete
+    rows rather than skipping a bot whose obligations cannot be established.
 
     Two further departures from ``instance_seal_hashes``, which asks a similar
     question for arming:
@@ -344,30 +338,10 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
     corrupt evidence propagates. Independent custody reads still block any
     exposure, active run or unfinished order attributed to a terminal bot.
     """
-    root = Path(live_state_root) / LIVE_STATE_DIRECTORY
-    if not root.is_dir():
-        return []
     repository = live_state_binding_repository(live_state_root)
     admissible = custody_account_ids_for(account_id)
     bound: list[BrokerBotBinding] = []
-    for child in sorted(root.iterdir()):
-        if not child.is_dir() or not (
-            (child / STRATEGY_INSTANCE_FILENAME).is_file() or (child / BINDING_FILENAME).is_file()
-        ):
-            continue
-        binding = repository.read(child.name)
-        if binding is None:
-            # ``read`` does not always *raise* on a row it cannot materialise:
-            # it returns ``None`` when ``current_run.json`` is missing, or when
-            # the run record it names is gone. Those directories still pass the
-            # filter above, and their ``strategy_instance.json`` may well carry
-            # a ``sealed_account_id`` for the very account being proven clear —
-            # so treating ``None`` as "not a binding" is a fail-open, and it is
-            # the shape an ungraceful stop leaves behind, because
-            # ``record_launch`` writes ``current_run.json`` last.
-            raise _Unprovable(f"binding row {child.name!r} could not be read")
-        if binding.broker != ALPACA_BROKER:
-            continue
+    for binding in repository.list_for_broker(ALPACA_BROKER, strict=True):
         if binding.sealed_account_id in admissible:
             lifecycle = BotLifecycleStateRepo(
                 stable_bot_lifecycle_state_path(live_state_root, binding.strategy_instance_id)

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateReset,
     DeveloperCleanSlateResetRegistry,
@@ -24,21 +25,16 @@ from app.broker.alpaca.clerk.sqlite.operational_files import (
     tree_sha256,
 )
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
-from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, MIRROR_FILENAME
+from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, MIRROR_FILENAME, RecoveryInProgress
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
     exclusive_recovery_fence,
 )
 from app.broker.alpaca.clerk.sqlite.writes import account_paths
 from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain, safe_path_component
-from app.engine.live.account_binding_ledger import (
-    BINDING_COMMAND_LEDGER_FILENAME,
-    read_account_binding_commands,
-)
-from app.engine.live.account_registry import (
-    ACCOUNT_INSTANCE_REGISTRY_FILENAME,
-    read_account_instance_registry,
-)
+from app.broker_configuration.errors import BrokerConfigurationError
+from app.broker_configuration.paper_reset import paper_configuration_reset
+from app.services.bot_binding_repository import live_state_binding_repository
 from app.utils.timestamps import Clock, now_ms_utc
 
 DEV_RESET_QUARANTINE_DIRECTORY = "dev-reset-quarantine"
@@ -49,11 +45,6 @@ _SQLITE_ARTIFACT_NAMES = (
     f"{DB_FILENAME}-wal",
     f"{DB_FILENAME}-shm",
     MIRROR_FILENAME,
-)
-_RUNNER_ACCOUNT_ARTIFACT_NAMES = (
-    ACCOUNT_INSTANCE_REGISTRY_FILENAME,
-    BINDING_COMMAND_LEDGER_FILENAME,
-    "bots",
 )
 
 
@@ -97,6 +88,35 @@ class _PlannedArtifact:
     sha256: str
 
 
+def persisted_developer_reset_mode(
+    *, account_id: str, artifacts_root: Path,
+) -> Literal["paper", "live"] | None:
+    """Resolve target-local mode, including a completed Paper reset's retry.
+
+    Only old, unactivated authorities lack persisted mode and need the caller's
+    configured mode. An unreadable activation can never use that fallback.
+    """
+    accounts_root, _ = account_paths(artifacts_root, account_id)
+    try:
+        activation = ActivationStore(accounts_root).latest(account_id)
+        if activation is not None:
+            return ActivationStore.account_mode(activation, artifacts_root=artifacts_root)
+        established = EstablishedAccountsRegistry(accounts_root).latest(account_id)
+        if established is not None and DeveloperCleanSlateResetRegistry(
+            accounts_root,
+        ).authorizes_reinitialize(
+            account_id=account_id,
+            prior_authority_generation=established.authority_generation,
+            artifacts_root=artifacts_root,
+        ):
+            return "paper"
+    except (ActivationRecordInvalid, OSError, ValueError) as exc:
+        raise DeveloperCleanSlateResetRefused(
+            f"target account activation evidence is unreadable: {exc}"
+        ) from exc
+    return None
+
+
 def developer_clean_slate_reset(
     *,
     account_id: str,
@@ -105,7 +125,7 @@ def developer_clean_slate_reset(
     account_mode: str,
     clock: Clock = now_ms_utc,
 ) -> DevResetReceipt:
-    """Move paper authority aside without broker contact, import, or deletion."""
+    """Quarantine Paper custody and bots, then clear their saved configuration."""
     if is_shadow_account_id(account_id):
         raise DeveloperCleanSlateResetRefused(
             "developer clean-slate reset never touches a shadow authority (ADR 0059 D10)"
@@ -115,9 +135,9 @@ def developer_clean_slate_reset(
             "developer clean-slate reset is available only for paper accounts"
         )
     try:
-        with exclusive_recovery_fence(
-            artifacts_root=artifacts_root,
-            account_id=account_id,
+        with (
+            paper_configuration_reset(account_id=account_id, clerk_dir=artifacts_root),
+            exclusive_recovery_fence(artifacts_root=artifacts_root, account_id=account_id),
         ):
             return _reset_fenced(
                 account_id=account_id,
@@ -126,16 +146,12 @@ def developer_clean_slate_reset(
                 account_mode=account_mode,
                 clock=clock,
             )
-    except DeveloperCleanSlateResetRefused:
-        raise
-    except Exception as exc:
-        from app.broker.alpaca.clerk.sqlite.repository import RecoveryInProgress
-
-        if isinstance(exc, RecoveryInProgress):
-            raise DeveloperCleanSlateResetRefused(
-                f"account {account_id!r} startup or recovery is already in progress"
-            ) from exc
-        raise
+    except BrokerConfigurationError as exc:
+        raise DeveloperCleanSlateResetRefused(exc.message) from exc
+    except RecoveryInProgress as exc:
+        raise DeveloperCleanSlateResetRefused(
+            f"account {account_id!r} startup or recovery is already in progress"
+        ) from exc
 
 
 def _reset_fenced(
@@ -148,19 +164,18 @@ def _reset_fenced(
 ) -> DevResetReceipt:
     accounts_root, account_dir = account_paths(artifacts_root, account_id)
     _require_directory_or_absent(account_dir, "Clerk account directory")
-    runner_account_dir = _runner_account_dir(runner_artifacts_root, account_id)
-    _require_directory_or_absent(runner_account_dir, "runner account directory")
     now = clock()
     established = EstablishedAccountsRegistry(accounts_root).latest(account_id)
     if established is None:
         raise DeveloperCleanSlateResetRefused(
             "developer reset requires an established SQLite authority"
         )
+    if persisted_developer_reset_mode(account_id=account_id, artifacts_root=artifacts_root) == "live":
+        raise DeveloperCleanSlateResetRefused("developer reset never touches a known Live authority")
     _assert_stopped_sqlite_authority(account_dir, now_ms=now)
     planned = _collect_artifacts(
         account_dir=account_dir,
         runner_artifacts_root=runner_artifacts_root,
-        runner_account_dir=runner_account_dir,
         account_id=account_id,
     )
     if not planned:
@@ -285,7 +300,6 @@ def _collect_artifacts(
     *,
     account_dir: Path,
     runner_artifacts_root: Path,
-    runner_account_dir: Path,
     account_id: str,
 ) -> tuple[_PlannedArtifact, ...]:
     planned = [
@@ -295,13 +309,6 @@ def _collect_artifacts(
             names=_SQLITE_ARTIFACT_NAMES,
             destination_prefix=Path("sqlite-authority"),
             allowed_directories=frozenset(),
-        ),
-        *_plan_named_artifacts(
-            source_scope="runner",
-            source_root=runner_account_dir,
-            names=_RUNNER_ACCOUNT_ARTIFACT_NAMES,
-            destination_prefix=Path("runner-account"),
-            allowed_directories=frozenset({"bots"}),
         ),
     ]
     for strategy_instance_id in _runner_strategy_instance_ids(
@@ -404,19 +411,18 @@ def _runner_strategy_instance_ids(
     account_id: str,
 ) -> tuple[str, ...]:
     try:
-        registry_ids = {
+        instance_ids = {
             binding.strategy_instance_id
-            for binding in read_account_instance_registry(runner_artifacts_root, account_id)
-        }
-        ledger_ids = {
-            command.strategy_instance_id
-            for command in read_account_binding_commands(runner_artifacts_root, account_id)
+            for binding in live_state_binding_repository(runner_artifacts_root).list_for_broker(
+                "alpaca", strict=True,
+            )
+            if binding.sealed_account_id == account_id
         }
     except (OSError, ValueError) as exc:
         raise DeveloperCleanSlateResetRefused(
             f"runner catalog authority for {account_id!r} is unreadable: {exc}"
         ) from exc
-    return tuple(sorted(registry_ids | ledger_ids))
+    return tuple(sorted(instance_ids))
 
 
 def _assert_stopped_sqlite_authority(account_dir: Path, *, now_ms: int) -> None:
@@ -623,11 +629,6 @@ def _verify_quarantined_artifact(
         raise DeveloperCleanSlateResetRefused(
             "developer reset quarantined artifact hash does not verify"
         )
-
-
-def _runner_account_dir(runner_artifacts_root: Path, account_id: str) -> Path:
-    safe_account_id = safe_path_component(account_id, "account_id")
-    return runner_artifacts_root / "accounts" / safe_account_id
 
 
 def _runner_quarantine_root(runner_artifacts_root: Path, account_id: str) -> Path:

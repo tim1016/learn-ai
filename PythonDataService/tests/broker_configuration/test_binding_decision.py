@@ -135,9 +135,15 @@ def test_a_configured_installation_with_nothing_effective_is_not_unconfigured() 
 
 def test_an_installation_with_no_profiles_at_all_is_unconfigured() -> None:
     """Every deployment before package F's import. The bootstrap path."""
-    chosen = decide(_selection(), has_any_profile=False)
+    chosen = decide(_selection(selection_generation=0), has_any_profile=False)
 
-    assert chosen == NothingToBind(installation_is_unconfigured=True, selection_generation=7)
+    assert chosen == NothingToBind(installation_is_unconfigured=True, selection_generation=0)
+
+
+def test_resetting_the_last_profile_cannot_restore_environment_bootstrap() -> None:
+    chosen = decide(_selection(selection_generation=8), has_any_profile=False)
+
+    assert chosen == NothingToBind(installation_is_unconfigured=False, selection_generation=8)
 
 
 # ---- whether binding it is a switch ----------------------------------------

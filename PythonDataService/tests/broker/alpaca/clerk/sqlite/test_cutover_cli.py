@@ -13,8 +13,18 @@ import pytest
 import scripts.manage_alpaca_sqlite_clerk as recovery_cli_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
-from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
-from app.broker.alpaca.clerk.sqlite.dev_reset import DeveloperCleanSlateResetRefused
+from app.broker.alpaca.clerk.sqlite.cutover import (
+    BrokerCutoverEvidence,
+    CutoverRefused,
+    apply_cutover,
+    initialize_cutover_authority,
+    plan_cutover,
+)
+from app.broker.alpaca.clerk.sqlite.dev_reset import (
+    DeveloperCleanSlateResetRefused,
+    developer_clean_slate_reset,
+)
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_testing
 from app.broker_configuration import runtime as broker_configuration_runtime
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
@@ -507,6 +517,76 @@ def test_dev_reset_cli_refuses_live_mode_without_moving_authority(
     assert runner_registry.read_bytes() == runner_bytes
     assert not (account_dir / "dev-reset-quarantine").exists()
     assert not (runner_root / "dev-reset-quarantine").exists()
+
+
+@pytest.mark.parametrize("damage_proof", [False, True])
+def test_dev_reset_cli_paper_selection_cannot_reset_an_activated_live_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage_proof: bool,
+) -> None:
+    clerk_root, runner_root = tmp_path / "clerk", tmp_path / "runner"
+    account_id = "LIVERESET01"
+    write_stopped_runner_bot(runner_root, account_id=account_id)
+    evidence = BrokerCutoverEvidence(
+        account_id=account_id, account_mode="live", observed_at_ms=PLAN_MS,
+        proof_reference="isolated-test-proof", positions={}, open_order_ids=(),
+    )
+    common = dict(
+        artifacts_root=clerk_root, runner_artifacts_root=runner_root,
+        broker_evidence=evidence, max_broker_evidence_age_ms=1_000,
+        clock=lambda: PLAN_MS,
+    )
+    initialize_cutover_authority(account_id=account_id, **common)
+    plan = plan_cutover(account_id=account_id, **common)
+    activated = apply_cutover(plan=plan, confirmation_token=plan.confirmation_token, **common)
+    if damage_proof:
+        (clerk_root / activated.activation.broker_proof_reference).write_text("{}", encoding="utf-8")
+    account_dir = clerk_root / "accounts" / "alpaca" / account_id
+    database = account_dir / "clerk.db"
+    before = database.read_bytes()
+    monkeypatch.setattr(
+        recovery_cli_module, "effective_alpaca_settings", lambda: SimpleNamespace(mode="paper"),
+    )
+
+    with pytest.raises(DeveloperCleanSlateResetRefused, match=r"Live|activation"):
+        developer_clean_slate_reset(
+            account_id=account_id, artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root, account_mode="paper",
+        )
+    with pytest.raises(DeveloperCleanSlateResetRefused, match=r"paper|activation"):
+        recovery_cli([
+            "--artifacts-root", str(clerk_root), "--account-id", account_id,
+            "dev-reset", "--runner-artifacts-root", str(runner_root),
+        ])
+
+    assert database.read_bytes() == before
+    assert not (account_dir / "dev-reset-quarantine").exists()
+
+
+def test_dev_reset_cli_retries_completed_reset_without_an_effective_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    clerk_root, runner_root = tmp_path / "clerk", tmp_path / "runner"
+    repository = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=clerk_root,
+    )
+    repository.close()
+    monkeypatch.setattr(
+        recovery_cli_module, "effective_alpaca_settings", lambda: SimpleNamespace(mode="paper"),
+    )
+    command = [
+        "--artifacts-root", str(clerk_root), "--account-id", ACCOUNT_ID,
+        "dev-reset", "--runner-artifacts-root", str(runner_root),
+    ]
+    assert recovery_cli(command) == 0
+    first_receipt = json.loads(capsys.readouterr().out)
+
+    def cleared_configuration() -> None:
+        raise AssertionError("a completed reset must not need the profile it removed")
+
+    monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", cleared_configuration)
+
+    assert recovery_cli(command) == 0
+    assert json.loads(capsys.readouterr().out) == first_receipt
 
 
 def test_read_process_stop_evidence_requires_exact_account_bound_fields(

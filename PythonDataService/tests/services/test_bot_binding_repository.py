@@ -77,6 +77,56 @@ def _binding(
     )
 
 
+@pytest.mark.parametrize(
+    ("relative_path", "damage"),
+    [
+        ("strategy_instance.json", "directory"),
+        ("strategy_instance.json", "dangling_link"),
+        ("strategy_instance.json", "link"),
+        ("current_run.json", "link"),
+        ("runs", "link"),
+        ("runs/run-001.json", "link"),
+        ("sealed_program_v2.json", "link"),
+    ],
+)
+def test_strict_listing_refuses_unsafe_identity_evidence(
+    tmp_path: Path, relative_path: str, damage: str,
+) -> None:
+    repository = _repository(tmp_path)
+    repository.record_launch(_binding(sealed_program=_sealed_program()), launch_reason="deploy")
+    evidence = tmp_path / "live_state" / _SID / relative_path
+    preserved = tmp_path / "preserved-evidence"
+    evidence.rename(preserved)
+    if damage == "directory":
+        evidence.mkdir()
+    else:
+        evidence.symlink_to(preserved if damage == "link" else tmp_path / "missing")
+
+    with pytest.raises(ValueError, match=r"regular|symbolic"):
+        repository.list_for_broker("alpaca", strict=True)
+
+
+@pytest.mark.parametrize("damage", ["directory", "dangling_link"])
+def test_strict_listing_refuses_unsafe_legacy_marker(tmp_path: Path, damage: str) -> None:
+    marker = tmp_path / "live_state" / _SID / "broker_binding.json"
+    marker.parent.mkdir(parents=True)
+    if damage == "directory":
+        marker.mkdir()
+    else:
+        marker.symlink_to(tmp_path / "missing")
+
+    with pytest.raises(ValueError, match=r"regular|symbolic"):
+        _repository(tmp_path).list_for_broker("alpaca", strict=True)
+
+
+def test_strict_listing_refuses_unavailable_artifacts_root(tmp_path: Path) -> None:
+    runner_root = tmp_path / "runner"
+    runner_root.symlink_to(tmp_path / "unavailable-volume")
+
+    with pytest.raises(OSError):
+        _repository(runner_root).list_for_broker("alpaca", strict=True)
+
+
 def _sealed_program(*, run_id: str = "run-001") -> SealedBotProgram:
     configured = ConfiguredSignalProgramSeal(
         program_key="ema_crossover_signal",
@@ -780,4 +830,3 @@ def test_the_frozen_replay_and_the_live_proof_offer_the_same_drift_remedy() -> N
     replayed = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
 
     assert replayed.next_step == WIRING_DRIFT_NEXT_STEP
-

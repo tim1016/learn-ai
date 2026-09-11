@@ -4,7 +4,7 @@
 **Audience:** packages B (persistence), C (credentials and verification), D (worker composition) and E (UI). **This is the shared contract they implement — not a starting point for four private designs.** Where it disagrees with a package's own convenience, this file wins; where it disagrees with ADR 0060, the ADR wins.
 **Baseline:** route and auth facts verified on disk at `037ffe12`, 2026-09-10.
 
-No Pydantic module ships with this document on purpose. Package B owns the shared schemas and the generated OpenAPI artifacts (plan §6, dependency schedule); an unwired schema file landing here would be dead code that B would immediately have to move, and ADR 0060's delivery is docs-only.
+Package B supplies the shared request/response schemas and generated OpenAPI artifacts. This contract records the accepted design implemented by the integrated packages.
 
 ## 1. Conventions that are not negotiable
 
@@ -46,7 +46,7 @@ Label-only edits alter no execution identity and **never invalidate an arming**.
 | Field | Type | Notes |
 |---|---|---|
 | `profile_id` | `str` | |
-| `revision` | `int` | Monotonic per profile, starting at 1. Immutable once written. |
+| `revision` | `int` | Monotonic per profile, starting at 1; gaps after Paper reset are allowed and deleted references are never reused. |
 | `schema_version` | `int` | The revision payload's own version, for forward migration. |
 | `credential_slot` | `str` | An opaque slot name from the allowlist (§3). Never a variable name or a URL. |
 | `endpoint_mode` | `Literal["paper","live"]` | Replaces the runtime read of `ALPACA_MODE`. The API base URL stays **derived** from this and is never a field. |
@@ -57,6 +57,8 @@ Label-only edits alter no execution identity and **never invalidate an arming**.
 | `complete` | `bool` | A draft may be saved; only a complete revision may be staged or applied. |
 | `author_owner_id` | `str` | |
 | `created_at_ms` | `int` | |
+
+The offline Paper developer reset in ADR 0060 Decision 8 is the sole revision-retention exception. It removes the target account's pinned Paper revisions and associated unpinned Paper drafts while retaining Live and other-account revisions. New revision numbers exceed the maximum in both remaining revisions and immutable configuration events; clients use the latest retained revision for `expected_revision` and the returned revision number.
 
 ### 2.4 The live envelope block — the type-fidelity contract
 
@@ -97,7 +99,7 @@ A nickname is an installation-local label. Two installations may name the same a
 | `apply_requested` | `bool` | The one-shot request. |
 | `apply_requested_at_ms` | `int \| None` | |
 | `selection_generation` | `int` | Monotonic. Incremented on each stage and each apply request. Fences a stale worker. |
-| `effective_profile_id`, `effective_revision` | `str \| None`, `int \| None` | The durable last-effective binding. **Written only by the worker**, only after construction succeeds and it owns the required execution lease. |
+| `effective_profile_id`, `effective_revision` | `str \| None`, `int \| None` | The durable last-effective binding. **Established only by the worker**, after construction succeeds and it owns the required execution lease; offline Paper reset may clear a reference to a removed revision. |
 | `effective_account_id` | `str \| None` | The account the worker actually bound. |
 | `effective_acknowledged_at_ms` | `int \| None` | A historical acknowledgement. It does **not** prove the worker is running now. |
 | `last_apply_outcome` | `Literal["applied","refused"] \| None` | |
@@ -135,7 +137,7 @@ Rules:
 
 **Prefix: `/api/brokers/alpaca/configuration`.** Checked against the live route table at `037ffe12`: `configuration` is not a claimed depth-2 segment under the `/api/brokers/{broker}/…` wildcard routes (claimed today: `account`, `positions`, `orders`, `order-groups`, `activities`, `fees`, `assets`, `clock`, `portfolio-history`, `portfolio-history-proof`, `clerk`, `live-verdict`, `live-envelope`, `panel-profile`, `accounts`, `bots`, `fault-injection`), and no existing route has a wildcard at path position 3. Five routers already share the `/api/brokers` prefix, so **a contract test pins that no `/{broker}` route shadows this prefix** rather than leaving it to registration order.
 
-**This surface is provisional until ADR 0060 is Accepted.** Open questions 2 and 5 can still change `/credential-slots` and the `PATCH` semantics, so package B should not freeze a committed OpenAPI snapshot against it before then.
+**This surface implements accepted ADR 0060.** The credential allowlist is code-owned; metadata `PATCH` and nickname saves update the UI immediately without Apply.
 
 **Auth:** identical to the existing control surface — `Depends(require_data_plane_control_secret_always)` on reads and `Depends(require_data_plane_control_secret)` on mutations, header `X-Data-Plane-Control-Secret`, `DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL` unchanged (`app/security/data_plane_control.py`).
 
@@ -166,7 +168,7 @@ Notes that packages must not reinterpret:
 - **`PUT /selection` is staging, not switching.** Navigating the UI or picking a default in a form is not staging.
 - **`POST /selection/apply` returns `202` and changes no runtime.** It records intent; the effective revision changes at the next controlled restart. There is no `ACTIVE_PROFILE` variable, and **the web UI does not restart containers** in this scope.
 - **`GET /selection` always reports both states** so a surface can never render "staged" as if it were running.
-- **Only the worker writes the effective fields.** No route does.
+- **Only the worker establishes an effective binding.** Offline Paper reset may clear a removed binding. No route writes effective fields.
 
 ## 5. Idempotency, conflicts and archive
 
@@ -262,3 +264,7 @@ and the profile/revision identifies the effective selection that invalidated it.
 The event and effective acknowledgement commit together. Reverting values never
 revives these records; a new CLI arming can grant permission again. Existing
 arming/custody/activation records and envelope hashes retain their original shape.
+
+### Offline Paper configuration cleanup
+
+Developer reset holds the installation-worker and selection-handover locks and one profiles transaction across the custody reset. It refuses inaccessible configuration and any historical Live pin for the target before moving custody. It removes only the Paper configuration described in §2.3 and the target nickname, preserves owner and append-only events (including Live invalidation fences), clears selection references to deleted revisions, cancels pending Apply, and keeps selection generation positive and monotonic. An empty post-reset installation is broker-unconfigured until a fresh Apply; it cannot fall back to environment bootstrap. A failure after durable custody publication leaves the old authority fenced and configuration unchanged; retry resumes that receipt and completes cleanup.

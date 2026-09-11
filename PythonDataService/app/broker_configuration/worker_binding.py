@@ -310,8 +310,9 @@ def _bind_nothing(
     # Pre-cutover: this installation has never saved a profile, so there is no
     # user-owned configuration to prefer and the environment is still the only
     # description of the worker. Package F's import retires this branch by
-    # writing the first profile; from that moment ``has_any_profile`` is true
-    # and this code is unreachable. It is deliberately *not* a failure
+    # writing the first profile. An offline Paper reset that removes the final
+    # profile advances the selection generation, so it cannot reopen this path.
+    # It is deliberately *not* a failure
     # fallback — a configured installation that fails to bind lands above, with
     # the gate closed.
     return _bootstrap_from_environment(environment=environment)

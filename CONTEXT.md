@@ -2023,11 +2023,11 @@ Decision record: ADR 0052.
 - **Inert terminal row** — a registration that has taken an exit and against which nothing bot-scoped is outstanding: no unresolved uncertainty, no non-zero attributed position, no active run. The catalog projects such a row from identity alone, which is what keeps read cost linear in live rows rather than in every row ever registered. A row that fails the test — an exited bot still holding custody — is projected in full and keeps its authored cure.
   _Avoid_: dead row, archived row (the second names one of the two exits, and the test is about outstanding custody, not about which exit was taken).
 
-## Broker configuration profiles (resolved 2026-09-10)
+## Broker configuration profiles (resolved 2026-09-11)
 
 **Lineage: live.**
 
-Decision record: ADR 0060; owner decisions D1–D5 and the accepted nickname and rename choices.
+Decision record: ADR 0060; owner decisions D1–D5 and the accepted nickname, rename and Paper-reset choices.
 
 - **Broker profile** — a named set of broker configuration choices owned by the installation's local operator. Its name is a changeable label, not an execution identity.
 - **Profile revision** — one saved version of a broker profile's execution settings. Later edits create another revision rather than changing the saved version.
@@ -2038,6 +2038,7 @@ Decision record: ADR 0060; owner decisions D1–D5 and the accepted nickname and
 - **Account nickname** — an installation-local display label for an observed broker account. It can change immediately without Apply and never replaces the account's identity.
 - **Local owner** — the single operator identity to which an installation's profiles belong. Renaming its display label does not change that identity.
 - **Installation** — one independently operated deployment with its own broker configuration and a single worker. A Paper twin is a separate installation, even when operated by the same person.
+- **Paper developer reset** — an offline clean slate for one disposable Paper account, including its bots and associated saved configuration. It preserves unrelated Live profiles, other accounts, the installation owner and audit history; recreating Paper requires a fresh Apply and authority activation.
 
 ## Data lake (resolved 2026-08-27)
 

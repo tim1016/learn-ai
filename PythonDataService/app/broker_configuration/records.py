@@ -106,9 +106,10 @@ class InstallationSelection:
     binding; the generation is the only fence, since Decision 5 ships no worker
     identity.
 
-    The ``effective_*`` fields and ``last_apply_*`` are written **only** by the
-    worker, after construction succeeds and it owns the required execution
-    lease. No route writes them.
+    The worker establishes ``effective_*`` and ``last_apply_*`` only after
+    construction succeeds and it owns the required execution lease. Offline
+    Paper reset may clear the removed binding and advances the generation;
+    it never installs another binding. No route writes them.
     """
 
     staged_profile_id: str | None

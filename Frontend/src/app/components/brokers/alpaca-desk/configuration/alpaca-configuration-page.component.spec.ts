@@ -420,7 +420,7 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     // A new revision is now the latest; the observation belongs to the old one.
     service.revisions.push(revision({ profile_id: 'profile-1', revision: 2 }));
-    await userEvent.click(screen.getByRole('button', { name: 'Save revision 2' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save next revision' }));
     await rendered.fixture.whenStable();
 
     expect(screen.queryByRole('button', { name: 'Approve this account' })).toBeNull();

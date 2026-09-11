@@ -364,13 +364,16 @@ class BrokerConfigurationService:
             if (
                 latest is not None
                 and latest.content_sha256 == content_sha256
-                and expected_revision in (latest.revision, latest.revision - 1)
+                and expected_revision in (
+                    latest.revision,
+                    self._store.previous_revision_number(conn, profile_id, latest.revision),
+                )
             ):
                 return latest
             self._require_expected_revision(expected_revision, latest)
             revision = self._build_revision(
                 profile_id=profile_id,
-                revision=1 if latest is None else latest.revision + 1,
+                revision=self._store.next_revision_number(conn, profile_id),
                 credential_slot=credential_slot,
                 endpoint_mode=endpoint_mode,
                 live_envelope=live_envelope,

@@ -55,7 +55,7 @@
       [problems]="revisionProblems()"
     />
     <button type="submit" class="detail__save" [disabled]="!canSaveRevision()">
-      Save revision {{ (latest()?.revision ?? 0) + 1 }}
+      Save next revision
     </button>
   </form>
 

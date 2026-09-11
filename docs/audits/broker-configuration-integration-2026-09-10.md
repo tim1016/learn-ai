@@ -78,12 +78,12 @@ Regression cases reproduced the behavioral failures before correction. Targeted
 follow-up validation: **548 Python tests and 40 frontend tests passed**; production
 build, full frontend lint, project-scope Python lint and whitespace checks passed.
 Independent checks found no remaining blocker within these review findings.
-The separate local Paper-reset regression intentionally still fails and is not
-part of this follow-up: its reset scope awaits the owner's answer below.
+Commit `500f488a` passed all GitHub checks. The subsequent Paper-reset work records
+the owner's final scope resolution and its additional evidence below.
 
 ## Release and cutover checklist
 
-1. Resolve ADR 0060's remaining owner choices before marking that ADR Accepted.
+1. ADR 0060 is Accepted (2026-09-11); all five owner choices are resolved.
 2. Use the [credential-slot and cutover runbook](../references/alpaca-credential-slots.md).
    Inject the permitted secret pairs and retain the external Clerk volume.
 3. Schedule the installation cutover with its worker stopped, no open account
@@ -99,8 +99,41 @@ part of this follow-up: its reset scope awaits the owner's answer below.
    reviewed prior code/deployment settings; retain profile records and never
    roll back custody databases, activation generations or arming ledgers.
 
-The owner accepted installation-local nicknames and immediate UI renames without
-Apply. ADR 0060 remains Proposed pending the Paper-reset scope: whether unrelated
-saved Live profiles survive. The current reset still preserves profiles, so the
-owner's requested Paper clean slate is not yet implemented. No operational reset
-or production cutover has been performed.
+The owner accepted installation-local nicknames, immediate UI renames without
+Apply, and preserving unrelated Live profiles during a Paper reset. ADR 0060
+records all three. No operational reset or production cutover has been performed.
+
+## Paper reset completion — 2026-09-11
+
+`broker_configuration/test_developer_reset.py` covers target-only configuration
+cleanup, retained Live/other-account revisions and immutable events, mixed profile
+history, worker/handover exclusion, separate-process and connection exclusion,
+transaction rollback, inaccessible databases, idempotent retry and never-reused
+revision numbers. The integrated commit-failure test publishes custody reset,
+refuses the stale authority while configuration rolls back, and completes cleanup
+on retry without publishing another reset.
+
+`broker/alpaca/clerk/sqlite/test_dev_reset.py` and the canonical bot repository
+suite cover current and retired Paper bots, retained Live/Shadow/other-account
+bots, preserved legacy IBKR history, and refusal on malformed canonical evidence.
+Target-account activation evidence and historical Live configuration pins prevent
+a Paper selection from authorizing reset of a stopped Live account. Empty saved
+configuration after reset cannot reactivate environment bootstrap.
+
+The original missing cleanup/locking and revision-number reuse were reproduced
+before correction. All new tests use temporary artifacts and fake broker evidence.
+
+Final reset validation: **4,316 Python consumer tests passed** across
+`tests/broker_configuration`, `tests/broker/alpaca`, `tests/services`,
+`tests/scripts` and `tests/contracts` (144 seconds). The two affected Frontend
+specs passed **30 tests**. Production build, full frontend lint, project-scope
+Python lint, OpenAPI contract, ADR/documentation guards and whitespace checks
+passed. The build reports the existing unrelated `NG8102` template diagnostic
+in `strategy-lab-run-stats.component.html`.
+
+The final activation-mode compatibility cases exercise a real test cutover,
+two ordinary authority resets and then developer reset: Paper succeeds, Live
+refuses, and a corrupted predecessor refuses. Each inherited mode is derived
+from verified same-account activation ancestry; no sealed record is changed.
+The final focused activation/reset/cutover run passed **113 tests**, including
+missing and duplicate predecessor refusals.

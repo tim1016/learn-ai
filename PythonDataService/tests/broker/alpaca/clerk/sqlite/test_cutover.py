@@ -14,7 +14,7 @@ import pytest
 from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
 from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite import cutover as cutover_module
-from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
+from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
 from app.broker.alpaca.clerk.sqlite.cutover import (
     BrokerCutoverEvidence,
     CutoverRefused,
@@ -22,7 +22,11 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
     plan_cutover,
 )
-from app.broker.alpaca.clerk.sqlite.dev_reset import developer_clean_slate_reset
+from app.broker.alpaca.clerk.sqlite.dev_reset import (
+    DeveloperCleanSlateResetRefused,
+    developer_clean_slate_reset,
+)
+from app.broker.alpaca.clerk.sqlite.recovery import ResetBrokerProof, reset_authority
 from app.broker.alpaca.clerk.sqlite.repository import (
     MIRROR_FILENAME,
     ClerkSqliteRepository,
@@ -1246,6 +1250,70 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts_for_a_gra
         / "spy"
         / "decision_journal.jsonl"
     ).is_file()
+
+
+@pytest.mark.parametrize(
+    ("account_mode", "corruption"),
+    [("paper", None), ("live", None), ("paper", "proof"), ("paper", "missing"), ("paper", "duplicate")],
+)
+def test_developer_reset_follows_verified_mode_through_normal_resets(
+    tmp_path: Path, account_mode: str, corruption: str | None,
+) -> None:
+    clerk_root, account_dir, runner_root, evidence, clock = _setup(
+        tmp_path, account_mode=account_mode,
+    )
+    common = dict(
+        artifacts_root=clerk_root, runner_artifacts_root=runner_root,
+        broker_evidence=evidence, max_broker_evidence_age_ms=1_000, clock=clock,
+    )
+    plan = plan_cutover(account_id=ACCOUNT_ID, **common)
+    cutover = apply_cutover(plan=plan, confirmation_token=plan.confirmation_token, **common)
+    proof_paths = [clerk_root / cutover.activation.broker_proof_reference]
+    activations = ActivationStore(clerk_root / "accounts" / "alpaca")
+    for _ in range(2):
+        clock.value += 1
+        reset_authority(
+            account_id=ACCOUNT_ID, artifacts_root=clerk_root,
+            broker_proof=ResetBrokerProof(
+                account_id=ACCOUNT_ID, observed_at_ms=clock(),
+                proof_reference="isolated-flat-account", positions={}, open_order_ids=(),
+            ),
+            stopped_strategy_instance_ids=("spy",), expected_strategy_instance_ids=("spy",),
+            max_proof_age_ms=1_000, clock=clock,
+        )
+        current = activations.latest(ACCOUNT_ID)
+        assert current is not None
+        proof_paths.append(clerk_root / current.broker_proof_reference)
+    if corruption == "proof":
+        proof_paths[0].write_text("{}", encoding="utf-8")
+    elif corruption in ("missing", "duplicate"):
+        rows = activations.path.read_text(encoding="utf-8").splitlines(keepends=True)
+        activations.path.write_text(
+            "".join(rows[1:] if corruption == "missing" else [rows[0], *rows]), encoding="utf-8",
+        )
+        with pytest.raises(ActivationRecordInvalid):
+            ActivationStore.account_mode(current, artifacts_root=clerk_root)
+    preserved = {path: path.read_bytes() for path in [activations.path, *proof_paths]}
+    database = account_dir / "clerk.db"
+
+    def reset() -> None:
+        developer_clean_slate_reset(
+            account_id=ACCOUNT_ID, artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root, account_mode="paper", clock=clock,
+        )
+
+    if account_mode == "paper" and corruption is None:
+        reset()
+        assert not database.exists()
+    else:
+        with pytest.raises(
+            DeveloperCleanSlateResetRefused,
+            match="activation evidence is unreadable" if corruption is not None else "known Live",
+        ):
+            reset()
+        assert database.exists()
+        assert not (account_dir / "dev-reset-quarantine").exists()
+    assert {path: path.read_bytes() for path in preserved} == preserved
 
 
 def test_developer_reset_allows_a_successor_generation_to_reactivate(

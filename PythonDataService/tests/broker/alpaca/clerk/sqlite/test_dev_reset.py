@@ -26,6 +26,13 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
 )
+from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo, stable_bot_lifecycle_state_path
+from app.services.bot_binding_repository import (
+    CURRENT_RUN_FILENAME,
+    BrokerBotBinding,
+    alpaca_v1_action_plan,
+    live_state_binding_repository,
+)
 from tests._helpers.legacy_ibkr_artifacts import (
     write_historical_account_binding,
 )
@@ -86,7 +93,7 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
     repo.close()
     (account_dir / "clerk.db-wal").touch()
     (account_dir / "clerk.db-shm").touch()
-    catalog = _register_runner_catalog(runner_root, "spy-dev")
+    catalog = _record_alpaca_bot(runner_root, "spy-dev", ACCOUNT_ID)
 
     receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
 
@@ -123,6 +130,84 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
     )
     assert regenerated.control_meta_snapshot().authority_generation == 2
     regenerated.close()
+
+
+def _record_alpaca_bot(runner_root: Path, sid: str, account_id: str) -> Path:
+    live_state_binding_repository(runner_root).record_launch(
+        BrokerBotBinding(
+            strategy_instance_id=sid, broker="alpaca", symbol="SPY",
+            action_plan=alpaca_v1_action_plan("SPY"), sealed_account_id=account_id,
+            run_id=f"run-{sid}", created_at_ms=NOW_MS,
+        ),
+        launch_reason="deploy",
+    )
+    return runner_root / "live_state" / sid
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_reset_clears_canonical_paper_bots_and_preserves_other_accounts(
+    tmp_path: Path, retired: bool,
+) -> None:
+    clerk_root, runner_root = tmp_path / "clerk", tmp_path / "runner"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=clerk_root, clock=_clock,
+    )
+    repo.close()
+    # A historical runner catalog is not authority to erase a current Live seal.
+    _register_runner_catalog(runner_root, "live-bot")
+    legacy_only = _register_runner_catalog(runner_root, "ibkr-history")
+    paper = _record_alpaca_bot(runner_root, "paper-bot", ACCOUNT_ID)
+    kept = [
+        _record_alpaca_bot(runner_root, "live-bot", "LIVE-OTHER"),
+        _record_alpaca_bot(runner_root, "shadow-bot", "shadow:LIVE-OTHER"),
+        _record_alpaca_bot(runner_root, "other-paper-bot", "PA-OTHER"),
+    ]
+    if retired:
+        BotLifecycleStateRepo(stable_bot_lifecycle_state_path(runner_root, "paper-bot")).retire(
+            now_ms=NOW_MS, updated_by="operator", reason="Archived Paper experiment",
+        )
+    hashes = {path: dev_reset_module.tree_sha256(path) for path in kept}
+    legacy_hash = dev_reset_module.tree_sha256(runner_root / "accounts")
+
+    receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
+
+    assert not paper.exists()
+    assert {path: dev_reset_module.tree_sha256(path) for path in kept} == hashes
+    assert legacy_only.exists()
+    assert dev_reset_module.tree_sha256(runner_root / "accounts") == legacy_hash
+    assert any(artifact.source_reference == "live_state/paper-bot" for artifact in receipt.moved_artifacts)
+
+
+@pytest.mark.parametrize("damage", ["missing_current_run", "wrong_directory_identity", "stale_legacy_fallback"])
+def test_reset_refuses_unreadable_current_bot_before_moving_any_authority(
+    tmp_path: Path, damage: str,
+) -> None:
+    clerk_root, runner_root = tmp_path / "clerk", tmp_path / "runner"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=clerk_root, clock=_clock,
+    )
+    database = repo.db_path
+    repo.close()
+    paper = _record_alpaca_bot(runner_root, "paper-bot", ACCOUNT_ID)
+    if damage in ("missing_current_run", "stale_legacy_fallback"):
+        (paper / CURRENT_RUN_FILENAME).unlink()
+        if damage == "stale_legacy_fallback":
+            from app.services.bot_binding_repository import BINDING_FILENAME
+
+            stale = BrokerBotBinding(
+                strategy_instance_id="paper-bot", broker="alpaca", symbol="SPY",
+                action_plan=alpaca_v1_action_plan("SPY"), sealed_account_id="LIVE-OTHER",
+                run_id="old-run", created_at_ms=NOW_MS - 1,
+            )
+            (paper / BINDING_FILENAME).write_text(stale.model_dump_json(), encoding="utf-8")
+    else:
+        paper.rename(paper.with_name("other-identity"))
+
+    with pytest.raises(DeveloperCleanSlateResetRefused, match="unreadable"):
+        _reset(clerk_root=clerk_root, runner_root=runner_root)
+
+    assert database.exists()
+    assert not (database.parent / "dev-reset-quarantine").exists()
 
 
 def test_reset_refuses_unactivated_legacy_authority_without_moving_it(

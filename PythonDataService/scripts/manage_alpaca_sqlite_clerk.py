@@ -39,7 +39,10 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     plan_cutover,
 )
 from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
-from app.broker.alpaca.clerk.sqlite.dev_reset import developer_clean_slate_reset
+from app.broker.alpaca.clerk.sqlite.dev_reset import (
+    developer_clean_slate_reset,
+    persisted_developer_reset_mode,
+)
 from app.broker.alpaca.clerk.sqlite.offline_v9_upgrade import (
     rollback_v9_upgrade_offline,
     upgrade_v8_authority_offline,
@@ -206,10 +209,11 @@ def main(argv: list[str] | None = None) -> int:
             max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
         )
     elif args.operation == "dev-reset":
+        account_mode = persisted_developer_reset_mode(**common)
         result = developer_clean_slate_reset(
             **common,
             runner_artifacts_root=args.runner_artifacts_root,
-            account_mode=effective_alpaca_settings().mode,
+            account_mode=account_mode if account_mode is not None else effective_alpaca_settings().mode,
         )
     elif args.operation == "cutover-initialize":
         result = initialize_cutover_authority(

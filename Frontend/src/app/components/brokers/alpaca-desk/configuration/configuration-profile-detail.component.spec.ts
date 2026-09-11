@@ -66,7 +66,7 @@ describe('ConfigurationProfileDetailComponent', () => {
     const revisionSaved = vi.fn();
     await renderDetail({}, { revisionSaved });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Save revision 4' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save next revision' }));
 
     expect(revisionSaved).toHaveBeenCalledWith({
       expectedRevision: 3,
@@ -107,7 +107,7 @@ describe('ConfigurationProfileDetailComponent', () => {
     await rendered.fixture.whenStable();
 
     expect((screen.getByLabelText('Endpoint') as HTMLSelectElement).value).toBe('paper');
-    expect(screen.getByRole('button', { name: 'Save revision 5' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save next revision' })).toBeTruthy();
   });
 
   it('keeps a clone name that was refused, so it does not have to be retyped', async () => {
@@ -186,6 +186,6 @@ describe('ConfigurationProfileDetailComponent', () => {
     await renderDetail({ latest_revision: null });
 
     expect(screen.getByText('This profile has no revision yet.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Save revision 1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save next revision' })).toBeTruthy();
   });
 });

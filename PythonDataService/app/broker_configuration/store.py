@@ -18,6 +18,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from stat import S_ISLNK
 from threading import RLock
 from typing import Any
 
@@ -76,6 +77,27 @@ def profiles_database_path(clerk_dir: Path) -> Path:
     records it explains survive a ``podman compose down -v`` (ADR 0060 D2).
     """
     return clerk_dir / DATABASE_DIRECTORY / DATABASE_FILENAME
+
+
+def profiles_database_exists(clerk_dir: Path) -> bool:
+    """Distinguish a fresh installation from an inaccessible saved database."""
+    db_path = profiles_database_path(clerk_dir)
+    try:
+        # Inspect parents first: a dangling volume/directory link is an
+        # unavailable installation, not permission to bootstrap a new one.
+        for entry in reversed((db_path, *db_path.parents)):
+            try:
+                metadata = entry.lstat()
+            except FileNotFoundError:
+                return False
+            if S_ISLNK(metadata.st_mode):
+                entry.stat()
+    except OSError as exc:
+        raise ProfilesDatabaseUnavailable(
+            "The broker configuration path could not be inspected.",
+            next_step="Restore access to the Clerk volume and saved profiles, then retry.",
+        ) from exc
+    return True
 
 
 def _discard_partial_database(db_path: Path) -> None:
@@ -347,6 +369,27 @@ class ProfilesStore:
             (profile_id,),
         )
         return [_revision_from_row(row) for row in rows]
+
+    def next_revision_number(self, conn: sqlite3.Connection, profile_id: str) -> int:
+        """Never reuse a revision reference removed by a Paper reset."""
+        row = conn.execute(
+            "SELECT COALESCE(MAX(revision), 0) + 1 FROM ("
+            "SELECT revision FROM profile_revisions WHERE profile_id = ? UNION ALL "
+            "SELECT revision FROM configuration_events WHERE profile_id = ?)",
+            (profile_id, profile_id),
+        ).fetchone()
+        return int(row[0])
+
+    def previous_revision_number(
+        self, conn: sqlite3.Connection, profile_id: str, revision: int,
+    ) -> int:
+        """The preceding retained revision, including across Paper reset gaps."""
+        row = conn.execute(
+            "SELECT COALESCE(MAX(revision), 0) FROM profile_revisions "
+            "WHERE profile_id = ? AND revision < ?",
+            (profile_id, revision),
+        ).fetchone()
+        return int(row[0])
 
     def insert_revision(self, conn: sqlite3.Connection, revision: ProfileRevision) -> None:
         envelope = revision.live_envelope

@@ -84,6 +84,44 @@ The `.venv/bin/python` in those examples is `PythonDataService/.venv`. Provision
 with `./bootstrap-host-venv.sh` from the repo root; it installs the same
 heavy + light + dev requirement set CI does.
 
+## Disposable Paper developer reset
+
+Use `dev-reset` only for an intentional clean slate of a disposable Paper account
+([ADR 0060 Decision 8](../architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md)).
+Stop the installation worker and freeze runner artifact writers first. The command
+requires an established, stopped SQLite authority and refuses Live or Shadow targets,
+conflicting account evidence, unreadable configuration, an active worker or an
+in-progress configuration handover.
+
+From the repository root in the default compose deployment:
+
+```bash
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  dev-reset --runner-artifacts-root /app/artifacts
+```
+
+The command quarantines the target's custody files and canonical Alpaca bot
+directories, including retired bots. It deletes that account's pinned Paper
+configuration, associated unpinned Paper drafts and nickname. It preserves Live
+profiles, other accounts, unrelated drafts, owner identity, append-only configuration
+events, sealed activation/arming history and legacy IBKR history. The forensic
+quarantine and receipt remain available; this does not reset the account at Alpaca
+or change injected credentials.
+
+Selection references to deleted revisions are cleared, pending Apply is cancelled,
+and stale generations are refused. Recreate and verify the Paper configuration,
+request a fresh Apply and complete a new Paper authority activation before running
+again. Reset never automatically selects a retained Live profile or returns to
+environment bootstrap.
+
+If custody reset publishes its receipt but configuration cleanup fails, leave the
+worker stopped and retry the same command. The old authority remains fenced and
+the retry finishes cleanup against the recorded receipt. A completed retry is
+idempotent. Keep the resulting receipt with the local reset record.
+
 ## Stop boundary
 
 Online backup is the only ceremony allowed while the Clerk is running. Before restore,

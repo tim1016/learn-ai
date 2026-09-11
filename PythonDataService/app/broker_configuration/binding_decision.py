@@ -120,11 +120,13 @@ class NothingToBind:
     """No revision can be bound, and whether that is because nothing is configured.
 
     ``installation_is_unconfigured`` separates two states a worker must not
-    confuse. An installation with **no profiles at all** has never been
-    configured — this is every deployment before package F's import runs — and
+    confuse. An installation with **no profiles and generation zero** has never been
+    selected — this is every deployment before package F's import runs — and
     the worker bootstraps from the process environment exactly as it always
     has. An installation that *has* profiles but no effective selection is
-    configured and simply not applied yet: that is the contract's
+    configured and simply not applied yet. A developer reset can remove its
+    final Paper profile but preserves the advanced generation: it must still
+    require a new explicit Apply. These are the contract's
     ``broker_unconfigured``, the gate stays closed, and there is no environment
     fallback, because falling back on a *configured* installation is how a
     worker ends up trading under settings nobody selected.
@@ -169,7 +171,7 @@ def decide(
         )
 
     return NothingToBind(
-        installation_is_unconfigured=not has_any_profile,
+        installation_is_unconfigured=not has_any_profile and selection.selection_generation == 0,
         selection_generation=selection.selection_generation,
     )
 
