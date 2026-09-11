@@ -221,6 +221,7 @@ class DeskLifecycleStep:
     key: DeskLifecycleKey
     label: str
     status: DeskLifecycleStatus
+    status_label: str
 
 
 @dataclass(frozen=True)

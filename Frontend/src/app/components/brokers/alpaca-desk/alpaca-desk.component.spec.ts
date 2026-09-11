@@ -18,9 +18,24 @@ const accountActivation: AlpacaDeskState = {
   headline: 'No Alpaca account is active',
   detail: 'Choose an approved account to prepare this desk.',
   lifecycle: [
-    { key: 'effective_configuration', label: 'No active account', status: 'current' },
-    { key: 'selected_configuration', label: 'Select configuration', status: 'pending' },
-    { key: 'worker_handoff', label: 'Restart worker', status: 'pending' },
+    {
+      key: 'effective_configuration',
+      label: 'No active account',
+      status: 'current',
+      status_label: 'Current step',
+    },
+    {
+      key: 'selected_configuration',
+      label: 'Select configuration',
+      status: 'pending',
+      status_label: 'Pending',
+    },
+    {
+      key: 'worker_handoff',
+      label: 'Restart worker',
+      status: 'pending',
+      status_label: 'Pending',
+    },
   ],
   selection_label: 'Approved accounts',
   empty_choices_message: 'No approved accounts are available. Verify one in Configuration.',
@@ -305,6 +320,7 @@ describe('AlpacaDeskComponent', () => {
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
     expect(await screen.findByText(pending.headline)).toBeTruthy();
+    expect(screen.getByText(pending.consequence)).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Trader' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
 

@@ -10459,6 +10459,8 @@ export interface components {
              * @enum {string}
              */
             status: "complete" | "current" | "pending";
+            /** Status Label */
+            status_label: string;
         };
         /** DeskSelectionSummaryResponse */
         DeskSelectionSummaryResponse: {

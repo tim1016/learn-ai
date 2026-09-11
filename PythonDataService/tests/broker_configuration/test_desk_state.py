@@ -71,7 +71,7 @@ def test_desk_state_does_not_probe_credential_availability(
         service.close()
 
 
-async def test_desk_state_offers_only_complete_explicitly_pinned_latest_revisions(
+async def test_desk_state_offers_only_complete_explicitly_pinned_revisions(
     service: BrokerConfigurationService,
 ) -> None:
     pinned_profile_id = await _pinned_paper_profile(service)
@@ -108,6 +108,25 @@ async def test_desk_state_offers_only_complete_explicitly_pinned_latest_revision
     )
 
 
+async def test_desk_state_keeps_an_approved_revision_after_a_new_draft_is_saved(
+    service: BrokerConfigurationService,
+) -> None:
+    profile_id = await _pinned_paper_profile(service)
+    service.create_revision(
+        profile_id,
+        expected_revision=1,
+        credential_slot="alpaca_live_primary",
+        endpoint_mode="live",
+        live_envelope=ValidatedLiveEnvelope.from_mapping(LIVE_ENVELOPE_PAYLOAD),
+    )
+
+    state = service.desk_state()
+
+    assert [choice.selection_id for choice in state.choices] == [f"{profile_id}@1"]
+    assert state.profiles_requiring_setup == 0
+    assert state.setup_required_message is None
+
+
 async def test_projector_authors_the_live_choice_safety_copy(
     service: BrokerConfigurationService,
 ) -> None:
@@ -123,7 +142,7 @@ async def test_projector_authors_the_live_choice_safety_copy(
     state = project_desk_state(
         selection=service.selection(),
         profiles=service.list_profiles(),
-        latest_revisions={profile_id: pinned},
+        revisions_by_profile={profile_id: [pinned]},
         staged_revision=None,
         effective_revision=None,
         nicknames=service.list_nicknames(),
@@ -180,6 +199,8 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert effective_state.effective_choice is not None
     assert effective_state.effective_choice.account_id == "PA000PAPER"
     assert effective_state.staged_choice == effective_state.effective_choice
+    assert effective_state.choices[0].action_kind == "review_configuration"
+    assert effective_state.choices[0].action_label == "Review Alpaca-Paper"
     assert "not a connectivity claim" in effective_state.consequence
 
 
@@ -233,4 +254,6 @@ async def test_desk_state_keeps_effective_and_staged_drift_visibly_separate(
     )
     assert state.headline == "Paper primary remains the effective selection"
     assert state.lifecycle[0].status == "complete"
+    assert state.lifecycle[0].status_label == "Complete"
     assert state.lifecycle[1].status == "current"
+    assert state.lifecycle[1].status_label == "Current step"

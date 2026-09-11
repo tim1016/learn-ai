@@ -4,7 +4,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/route
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { of } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -167,20 +167,21 @@ async function renderPage(
   service: FakeConfigurationService,
   query: Record<string, string> = {},
 ) {
-  const queryParamMap = convertToParamMap(query);
-  return render(AlpacaConfigurationPageComponent, {
+  const queryParamMap = new BehaviorSubject(convertToParamMap(query));
+  const view = await render(AlpacaConfigurationPageComponent, {
     providers: [
       provideRouter([]),
       {
         provide: ActivatedRoute,
         useValue: {
-          queryParamMap: of(queryParamMap),
-          snapshot: { queryParamMap },
+          queryParamMap,
+          snapshot: { queryParamMap: queryParamMap.value },
         },
       },
       { provide: BrokerConfigurationService, useValue: service },
     ],
   });
+  return { ...view, queryParamMap };
 }
 
 async function saveProfile(name: string): Promise<void> {
@@ -200,6 +201,34 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(await screen.findByText('Selected from desk')).toBeTruthy();
     expect(screen.getByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Stage revision 1' })).toBeTruthy();
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
+  it('follows a new exact revision when the desk changes the query on the same route', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(
+      profile(),
+      profile({ profile_id: 'profile-live', display_name: 'Live — guarded' }),
+    );
+    service.revisions.push(
+      revision({ account_pin: 'PA000PAPER' }),
+      revision({
+        profile_id: 'profile-live',
+        revision: 2,
+        endpoint_mode: 'live',
+        account_pin: 'LIVE0001',
+      }),
+    );
+
+    const view = await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+    expect(await screen.findByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+
+    view.queryParamMap.next(convertToParamMap({ profileId: 'profile-live', revision: '2' }));
+
+    expect(await screen.findByText(/Revision 2 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stage revision 2' })).toBeTruthy();
+    expect(service.readProfile).toHaveBeenCalledWith('profile-live');
     expect(service.staged).toEqual([]);
     expect(service.applied).toEqual([]);
   });

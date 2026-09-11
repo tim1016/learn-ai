@@ -1,0 +1,42 @@
+@if (showActivation() && state(); as activation) {
+  <app-alpaca-account-activation
+    [view]="activation"
+    (reviewRequested)="reviewRequested.emit($event)"
+  />
+} @else {
+  @if (showConnectivityContext() && state(); as current) {
+    <section class="selection-change selection-change--unavailable" aria-live="polite">
+      <div>
+        <span>Effective configuration</span>
+        <strong>{{ current.headline }}</strong>
+        <p>{{ current.consequence }}</p>
+      </div>
+      <button
+        type="button"
+        [disabled]="!current.action.enabled"
+        (click)="requestReview(current, actionTarget(current))"
+      >
+        {{ current.action.label }}
+      </button>
+    </section>
+  }
+  <app-alpaca-account-card class="desk-account-summary" />
+}
+
+@if (showSelectionChange() && state(); as current) {
+  <section class="selection-change" aria-live="polite">
+    <div>
+      <span>Configuration change pending</span>
+      <strong>{{ current.headline }}</strong>
+      <p>{{ current.detail }}</p>
+      <small>{{ current.consequence }}</small>
+    </div>
+    <button
+      type="button"
+      [disabled]="!current.action.enabled"
+      (click)="requestReview(current, current.staged_choice)"
+    >
+      {{ current.action.label }}
+    </button>
+  </section>
+}

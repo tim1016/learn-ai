@@ -558,8 +558,8 @@ class BrokerConfigurationService:
         """
         current = self._store.read_selection()
         profiles = self._store.list_profiles(include_archived=False)
-        latest_by_profile = {
-            profile.profile_id: self._store.latest_revision(profile.profile_id)
+        revisions_by_profile = {
+            profile.profile_id: self._store.list_revisions(profile.profile_id)
             for profile in profiles
         }
         staged_revision = (
@@ -575,7 +575,7 @@ class BrokerConfigurationService:
         return project_desk_state(
             selection=current,
             profiles=profiles,
-            latest_revisions=latest_by_profile,
+            revisions_by_profile=revisions_by_profile,
             staged_revision=staged_revision,
             effective_revision=effective_revision,
             nicknames=self._store.list_nicknames(),

@@ -1,4 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource, signal, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  linkedSignal,
+  resource,
+  signal,
+  viewChild,
+} from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import type {
@@ -86,15 +96,20 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
 })
 export class AlpacaConfigurationPageComponent {
   private readonly service = inject(BrokerConfigurationService);
-  private readonly requestedReview = reviewRef(inject(ActivatedRoute).snapshot.queryParamMap);
+  private readonly route = inject(ActivatedRoute);
+  private readonly queryParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  private readonly requestedReview = computed(() => reviewRef(this.queryParams()));
   private readonly createForm = viewChild(ConfigurationProfileCreateComponent);
 
   protected readonly includeArchived = signal(false);
-  protected readonly selectedProfileId = signal<string | null>(
-    this.requestedReview?.profileId ?? null,
-  );
+  protected readonly selectedProfileId = linkedSignal<RevisionRef | null, string | null>({
+    source: this.requestedReview,
+    computation: (request) => request?.profileId ?? null,
+  });
   protected readonly reviewRevision = computed(() => {
-    const request = this.requestedReview;
+    const request = this.requestedReview();
     return request !== null && this.selectedProfileId() === request.profileId
       ? request.revision
       : null;

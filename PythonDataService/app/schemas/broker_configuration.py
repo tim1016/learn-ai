@@ -158,10 +158,16 @@ class DeskLifecycleStepResponse(_Response):
     key: Literal["effective_configuration", "selected_configuration", "worker_handoff"]
     label: str
     status: Literal["complete", "current", "pending"]
+    status_label: str
 
     @classmethod
     def from_record(cls, step: DeskLifecycleStep) -> DeskLifecycleStepResponse:
-        return cls(key=step.key, label=step.label, status=step.status)
+        return cls(
+            key=step.key,
+            label=step.label,
+            status=step.status,
+            status_label=step.status_label,
+        )
 
 
 class DeskActionResponse(_Response):

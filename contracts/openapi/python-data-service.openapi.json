@@ -12161,12 +12161,17 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "status_label": {
+            "title": "Status Label",
+            "type": "string"
           }
         },
         "required": [
           "key",
           "label",
-          "status"
+          "status",
+          "status_label"
         ],
         "title": "DeskLifecycleStepResponse",
         "type": "object"

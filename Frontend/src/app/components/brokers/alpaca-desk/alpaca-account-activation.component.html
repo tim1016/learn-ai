@@ -13,6 +13,7 @@
       <li [attr.data-status]="step.status">
         <span class="activation__node" aria-hidden="true"></span>
         <strong>{{ step.label }}</strong>
+        <span class="activation__status">{{ step.status_label }}</span>
       </li>
     }
   </ol>
@@ -34,7 +35,8 @@
               [checked]="selectedSelectionId() === choice.selection_id"
               [attr.aria-label]="choice.profile_label + ', ' + choice.badge_label + ', '
                 + choice.account_label + ', account ' + choice.account_id + ', '
-                + (choice.is_staged ? 'staged' : choice.is_effective ? 'effective' : 'available')"
+                + 'revision ' + choice.revision + ', '
+                + (choice.is_effective ? 'effective' : choice.is_staged ? 'staged' : 'available')"
               (change)="selectChoice(choice.selection_id)"
             />
             <span class="account-choice__content">
@@ -45,6 +47,7 @@
               <span class="account-choice__identity">
                 @if (choice.nickname; as nickname) { <span>{{ nickname }}</span> }
                 <code>{{ choice.account_id }}</code>
+                <span>Revision {{ choice.revision }}</span>
               </span>
               <small>{{ choice.description }}</small>
               <span class="account-choice__action">{{ choice.action_label }}</span>

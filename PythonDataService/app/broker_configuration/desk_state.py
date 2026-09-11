@@ -78,7 +78,7 @@ def _choice(
     is_effective: bool,
 ) -> DeskAccountChoice:
     action_kind: DeskActionKind
-    if is_staged:
+    if is_staged and not is_effective:
         action_kind = "review_staged_configuration"
         action_label = f"Review & apply {summary.profile_label}"
     else:
@@ -134,7 +134,16 @@ def _lifecycle(
     else:
         statuses = ("complete", "complete", "complete")
     return tuple(
-        DeskLifecycleStep(key=key, label=label, status=status)
+        DeskLifecycleStep(
+            key=key,
+            label=label,
+            status=status,
+            status_label={
+                "complete": "Complete",
+                "current": "Current step",
+                "pending": "Pending",
+            }[status],
+        )
         for key, label, status in zip(
             ("effective_configuration", "selected_configuration", "worker_handoff"),
             ("Effective configuration", "Selected configuration", "Worker handoff"),
@@ -179,7 +188,7 @@ def project_desk_state(
     *,
     selection: InstallationSelection,
     profiles: Sequence[BrokerProfile],
-    latest_revisions: Mapping[str, ProfileRevision | None],
+    revisions_by_profile: Mapping[str, Sequence[ProfileRevision]],
     staged_revision: ProfileRevision | None,
     effective_revision: ProfileRevision | None,
     nicknames: Sequence[AccountNickname],
@@ -190,33 +199,35 @@ def project_desk_state(
         nickname.account_id: nickname.nickname for nickname in nicknames
     }
     choices: list[DeskAccountChoice] = []
+    profiles_with_choices: set[str] = set()
     for profile in profiles:
-        revision = latest_revisions[profile.profile_id]
-        if revision is None or not revision.complete or revision.account_pin is None:
-            continue
-        summary = _selection_summary(
-            profile=profile,
-            revision=revision,
-            account_id=revision.account_pin,
-            nicknames=nickname_by_account,
-        )
-        choices.append(
-            _choice(
-                summary=summary,
-                is_staged=_same_selection(
-                    profile.profile_id,
-                    revision.revision,
-                    selection.staged_profile_id,
-                    selection.staged_revision,
-                ),
-                is_effective=_same_selection(
-                    profile.profile_id,
-                    revision.revision,
-                    selection.effective_profile_id,
-                    selection.effective_revision,
-                ),
+        for revision in reversed(revisions_by_profile[profile.profile_id]):
+            if not revision.complete or revision.account_pin is None:
+                continue
+            profiles_with_choices.add(profile.profile_id)
+            summary = _selection_summary(
+                profile=profile,
+                revision=revision,
+                account_id=revision.account_pin,
+                nicknames=nickname_by_account,
             )
-        )
+            choices.append(
+                _choice(
+                    summary=summary,
+                    is_staged=_same_selection(
+                        profile.profile_id,
+                        revision.revision,
+                        selection.staged_profile_id,
+                        selection.staged_revision,
+                    ),
+                    is_effective=_same_selection(
+                        profile.profile_id,
+                        revision.revision,
+                        selection.effective_profile_id,
+                        selection.effective_revision,
+                    ),
+                )
+            )
 
     staged = _selection_reference(
         profile_id=selection.staged_profile_id,
@@ -233,7 +244,7 @@ def project_desk_state(
         nicknames=nickname_by_account,
     )
     activation_state = _activation_state(selection)
-    profiles_requiring_setup = len(profiles) - len(choices)
+    profiles_requiring_setup = len(profiles) - len(profiles_with_choices)
 
     if activation_state == "no_selection":
         headline = "No Alpaca account is active for this installation"

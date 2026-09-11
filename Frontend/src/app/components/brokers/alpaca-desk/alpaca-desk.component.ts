@@ -14,10 +14,9 @@ import { DialogModule } from 'primeng/dialog';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import type { AlpacaDeskSelectionSummary } from '../../../api/alpaca.types';
-import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
-import { AlpacaAccountActivationComponent } from './alpaca-account-activation.component';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
+import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
@@ -86,9 +85,8 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaDeployDrawerComponent,
-    AlpacaAccountActivationComponent,
-    AlpacaAccountCardComponent,
     AlpacaCustodyResolutionComponent,
+    AlpacaDeskAccountStateComponent,
     AlpacaHoldBannerComponent,
     AlpacaOperatorLensComponent,
     AlpacaOrderEntryComponent,
@@ -132,25 +130,9 @@ export class AlpacaDeskComponent {
   protected readonly operatingDeskVisible = computed(
     () => this.accountData.account.hasValue(),
   );
-  protected readonly showActivation = computed(
-    () => this.accountData.account.error() !== undefined
-      && this.deskState()?.effective_choice === null,
+  protected readonly accountFailed = computed(
+    () => this.accountData.account.error() !== undefined,
   );
-  protected readonly showConnectivityContext = computed(
-    () => {
-      const state = this.deskState();
-      return this.accountData.account.error() !== undefined
-        && state !== null
-        && state.effective_choice !== null;
-    },
-  );
-  protected readonly showSelectionChange = computed(() => {
-    const state = this.deskState();
-    return this.operatingDeskVisible()
-      && state !== null
-      && state.staged_choice !== null
-      && state.activation_state !== 'effective_selection';
-  });
   protected readonly orderPrefill = computed(() => {
     const routed = this.routedOrderPrefill();
     return routed !== null && routed.accountId === this.ticketAccountId() ? routed : null;

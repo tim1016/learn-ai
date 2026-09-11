@@ -107,13 +107,20 @@ async def test_desk_state_reports_no_active_account_through_one_read_model(
                 "key": "effective_configuration",
                 "label": "Effective configuration",
                 "status": "current",
+                "status_label": "Current step",
             },
             {
                 "key": "selected_configuration",
                 "label": "Selected configuration",
                 "status": "pending",
+                "status_label": "Pending",
             },
-            {"key": "worker_handoff", "label": "Worker handoff", "status": "pending"},
+            {
+                "key": "worker_handoff",
+                "label": "Worker handoff",
+                "status": "pending",
+                "status_label": "Pending",
+            },
         ],
         "selection_label": "Choose an account configuration",
         "consequence": (

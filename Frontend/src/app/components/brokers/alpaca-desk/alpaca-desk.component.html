@@ -15,41 +15,14 @@
     }
   </header>
 
-  @if (showActivation() && deskState(); as activation) {
-    <app-alpaca-account-activation
-      [view]="activation"
-      (reviewRequested)="reviewAccount($event)"
-    />
-  } @else {
-    @if (showConnectivityContext() && deskState(); as state) {
-      <section class="selection-change selection-change--unavailable" aria-live="polite">
-        <div>
-          <span>Effective configuration</span>
-          <strong>{{ state.headline }}</strong>
-          <p>{{ state.consequence }}</p>
-        </div>
-        <button type="button" (click)="reviewAccount(state.effective_choice)">
-          {{ state.action.label }}
-        </button>
-      </section>
-    }
-    <app-alpaca-account-card class="desk-account-summary" />
-  }
+  <app-alpaca-desk-account-state
+    [state]="deskState()"
+    [accountAvailable]="operatingDeskVisible()"
+    [accountFailed]="accountFailed()"
+    (reviewRequested)="reviewAccount($event)"
+  />
 
   @if (operatingDeskVisible()) {
-    @if (showSelectionChange() && deskState(); as state) {
-      <section class="selection-change" aria-live="polite">
-        <div>
-          <span>Configuration change pending</span>
-          <strong>{{ state.headline }}</strong>
-          <p>{{ state.detail }}</p>
-        </div>
-        <button type="button" (click)="reviewAccount(state.staged_choice)">
-          {{ state.action.label }}
-        </button>
-      </section>
-    }
-
     <app-alpaca-hold-banner />
 
     @if (orderRouteMismatch(); as mismatch) {

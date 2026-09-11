@@ -10,9 +10,24 @@ const deskState: AlpacaDeskState = {
   headline: 'No Alpaca account is active',
   detail: 'Choose an approved account to prepare this desk.',
   lifecycle: [
-    { key: 'effective_configuration', label: 'No active account', status: 'current' },
-    { key: 'selected_configuration', label: 'Select configuration', status: 'pending' },
-    { key: 'worker_handoff', label: 'Restart worker', status: 'pending' },
+    {
+      key: 'effective_configuration',
+      label: 'No active account',
+      status: 'current',
+      status_label: 'Current step',
+    },
+    {
+      key: 'selected_configuration',
+      label: 'Select configuration',
+      status: 'pending',
+      status_label: 'Pending',
+    },
+    {
+      key: 'worker_handoff',
+      label: 'Restart worker',
+      status: 'pending',
+      status_label: 'Pending',
+    },
   ],
   selection_label: 'Approved accounts',
   empty_choices_message: 'No approved accounts are available. Verify one in Configuration.',
@@ -71,6 +86,8 @@ describe('AlpacaAccountActivationComponent', () => {
     expect(screen.getByText(deskState.detail)).toBeTruthy();
     expect(screen.getByText(deskState.consequence)).toBeTruthy();
     expect(screen.getByRole('group', { name: deskState.selection_label })).toBeTruthy();
+    expect(screen.getByText('Current step')).toBeTruthy();
+    expect(screen.getAllByText('Pending')).toHaveLength(2);
     expect(screen.getByRole('button', { name: deskState.action.label })).toHaveProperty(
       'disabled',
       true,
@@ -83,6 +100,7 @@ describe('AlpacaAccountActivationComponent', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Strategy lab · PA-123/ }));
 
     expect(screen.getByText('PA-123')).toBeTruthy();
+    expect(screen.getByText('Revision 3')).toBeTruthy();
     expect(screen.getByText('LIVE-456')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Select Paper account' })).toHaveProperty(
       'disabled',
