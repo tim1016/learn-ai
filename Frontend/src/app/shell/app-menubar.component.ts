@@ -30,7 +30,7 @@ import { menuItemsFor } from './app-menu';
 export class AppMenubarComponent {
   /**
    * Collapses to the overflow trigger below the width the row needs.
-   * Seven triggers plus the wordmark and connection control measure ~1130px;
+   * Six triggers plus the centered brand and broker controls measure ~1130px;
    * PrimeNG's 960px default would let the row overflow before collapsing.
    */
   protected readonly collapseBelow = '1150px';

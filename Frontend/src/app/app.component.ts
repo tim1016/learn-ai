@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
+import { ActivatedRouteSnapshot, Router, RouterLink, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
@@ -22,6 +22,7 @@ import { CurrentUrlService } from './shell/current-url.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterOutlet,
+    RouterLink,
     AppMenubarComponent,
     BrokerBannerComponent,
     AlpacaLiveBannerComponent,
@@ -44,6 +45,58 @@ import { CurrentUrlService } from './shell/current-url.service';
       min-width: 0;
       min-height: 100dvh;
       flex-direction: column;
+    }
+
+    .shell-actions {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-2);
+      white-space: nowrap;
+    }
+
+    .shell-quick-link {
+      display: inline-flex;
+      min-height: 30px;
+      align-items: center;
+      gap: 5px;
+      padding: 0 7px;
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-size: var(--fs-xs);
+      font-weight: var(--fw-semi);
+      text-decoration: none;
+    }
+
+    .shell-quick-link:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .shell-quick-link i {
+      color: var(--text-subtle);
+      font-size: 0.7rem;
+    }
+
+    @media (max-width: 760px) {
+      .shell-actions {
+        gap: 3px;
+      }
+
+      .shell-quick-link {
+        width: 30px;
+        justify-content: center;
+        padding: 0;
+      }
+
+      .shell-quick-link span {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+      }
     }
 
     /* Named container "ide" drives the .ide-grid breakpoints declared in
@@ -70,10 +123,20 @@ import { CurrentUrlService } from './shell/current-url.service';
   `],
   template: `
     <div class="shell">
-      <app-top-bar>
+      <app-top-bar [accountMode]="shellAccountMode()">
         <app-menubar shell-nav />
-        <app-broker-banner shell-connection />
-        <app-alpaca-live-banner shell-connection />
+        <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
+          <a class="shell-quick-link" routerLink="/brokers/alpaca/bots">
+            <i class="pi pi-server" aria-hidden="true"></i>
+            <span>Bots</span>
+          </a>
+          <a class="shell-quick-link" routerLink="/brokers/alpaca/gallery">
+            <i class="pi pi-th-large" aria-hidden="true"></i>
+            <span>Gallery</span>
+          </a>
+          <app-broker-banner />
+          <app-alpaca-live-banner />
+        </nav>
       </app-top-bar>
       <main class="main">
         <div class="main-content">
@@ -94,13 +157,19 @@ export class AppComponent {
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
   protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
+  protected readonly shellAccountMode = computed(() => {
+    const verdict = this.alpacaLive.verdict()?.final_verdict;
+    if (verdict === 'paper') return 'paper';
+    if (verdict === 'live-unarmed' || verdict === 'live-armed') return 'live';
+    return 'unknown';
+  });
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();
     return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
   });
 
   constructor() {
-    effect(() => this.title.setTitle(this.pageTitle() ?? 'Market Scope'));
+    effect(() => this.title.setTitle(this.pageTitle() ?? 'Botasur'));
     // Single-source-of-truth poll for the global banner. Components
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.

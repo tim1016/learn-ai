@@ -1,6 +1,7 @@
 import { signal } from '@angular/core';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
+import axe from 'axe-core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
@@ -40,11 +41,15 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('renders the server headline for a paper account, quietly', async () => {
+  it('renders paper mode as a compact Paper money chip', async () => {
     await renderWith(verdict({}));
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Paper account PA9');
+    expect(status.textContent).toContain('Paper money');
+    expect(status.getAttribute('title')).toBe('ALPACA_MODE=paper.');
     expect(status.className).toContain('is-paper');
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations).toEqual([]);
   });
 
   it('renders a live-unarmed account loudly with the account id and armed count', async () => {
@@ -64,7 +69,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-live-unarmed');
     expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('0 armed');
-    expect(status.textContent).toContain('real money');
+    expect(status.textContent).toContain('Live');
   });
 
   it('shows the loss hold on a live account when held', async () => {
@@ -129,7 +134,7 @@ describe('AlpacaLiveBannerComponent', () => {
     });
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-unknown');
-    expect(status.textContent).toContain('unavailable');
+    expect(status.textContent).toContain('Mode unavailable');
   });
 
   it('renders a live-armed account in the loudest treatment with the armed count', async () => {
@@ -148,7 +153,7 @@ describe('AlpacaLiveBannerComponent', () => {
     );
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-live-armed');
-    expect(status.textContent).toContain('1 instance armed');
+    expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('1 armed');
   });
 });

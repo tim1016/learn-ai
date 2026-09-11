@@ -19,7 +19,9 @@ class FakeBrokerHealthService {
 }
 
 class FakeAlpacaLiveVerdictService {
-  verdict = signal(null);
+  verdict = signal<{
+    final_verdict: 'paper' | 'live-unarmed' | 'live-armed' | 'unknown';
+  } | null>(null);
   lastError = signal(null);
   start = vi.fn();
 }
@@ -67,7 +69,20 @@ describe('AppComponent', () => {
   it('renders the universal top bar and applies the fallback browser title', () => {
     expect(fixture.nativeElement.querySelector('.shell > app-top-bar')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('app-page-body')).toBeTruthy();
-    expect(TestBed.inject(Title).getTitle()).toBe('Market Scope');
+    expect(TestBed.inject(Title).getTitle()).toBe('Botasur');
+  });
+
+  it.each([
+    ['paper', 'top-bar--paper'],
+    ['live-unarmed', 'top-bar--live'],
+    ['live-armed', 'top-bar--live'],
+  ] as const)('colors the shell from the server-owned %s verdict', (finalVerdict, expectedClass) => {
+    const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
+
+    service.verdict.set({ final_verdict: finalVerdict });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains(expectedClass)).toBe(true);
   });
 
   it('sets the browser title from the current menu page title', async () => {
@@ -119,11 +134,13 @@ describe('AppComponent', () => {
     }
   });
 
-  it('renders the global broker banner in the top-bar connection region', () => {
+  it('renders quick broker links and global status controls in the top-bar connection region', () => {
     const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
     expect(nav?.querySelector('app-broker-banner')).toBeNull();
     expect(connection?.querySelector('app-broker-banner')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca/bots"]')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeTruthy();
   });
 
   it('should contain a router-outlet', () => {

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 /**
  * Layout coverage for the top-bar menubar that replaced the sidebar in
@@ -9,10 +9,9 @@ import { expect, test } from '@playwright/test';
 
 /** Every group AppMenu exposes, in menubar order (see app/shell/app-menu.ts). */
 const GROUPS = [
-  'Data Lab',
+  'Stocks',
   'Options',
   'Research',
-  'Edge Analysis',
   'Alpaca',
   'Strategy Tools',
   'Documentation',
@@ -21,6 +20,13 @@ const GROUPS = [
 /** Straddles AppMenubarComponent's 1150px collapse breakpoint. */
 const WIDE = { width: 1440, height: 900 };
 const NARROW = { width: 900, height: 900 };
+
+async function requiredBox(locator: Locator) {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) throw new Error('Expected the shell region to have a layout box.');
+  return box;
+}
 
 test.describe('Shell menubar', () => {
   test('lays every group out inline above the collapse breakpoint', async ({ page }) => {
@@ -51,17 +57,15 @@ test.describe('Shell menubar', () => {
     // 24px and squeezed every entry to 14px — icon only, no readable
     // label. Nothing overflowed, so `toBeVisible()` still passed; the
     // measured widths are what actually catch it.
-    const panelBox = await panel.boundingBox();
-    expect(panelBox).not.toBeNull();
-    expect(panelBox!.width).toBeGreaterThanOrEqual(200);
+    const panelBox = await requiredBox(panel);
+    expect(panelBox.width).toBeGreaterThanOrEqual(200);
 
     for (const group of GROUPS) {
       const entry = panel.getByRole('menuitem', { name: group });
       await expect(entry).toBeVisible();
 
-      const entryBox = await entry.boundingBox();
-      expect(entryBox).not.toBeNull();
-      expect(entryBox!.width).toBeGreaterThanOrEqual(120);
+      const entryBox = await requiredBox(entry);
+      expect(entryBox.width).toBeGreaterThanOrEqual(120);
     }
   });
 
@@ -72,8 +76,28 @@ test.describe('Shell menubar', () => {
     await page.getByRole('button', { name: 'Navigation' }).click();
 
     const panel = page.getByRole('menubar');
-    await panel.getByRole('menuitem', { name: 'Edge Analysis' }).click();
+    await panel.getByRole('menuitem', { name: 'Research' }).click();
 
+    await expect(panel.getByRole('menuitem', { name: 'Edge Analysis' })).toBeVisible();
     await expect(panel.getByRole('menuitem', { name: 'Regimes' })).toBeVisible();
+  });
+
+  test('keeps navigation, brand, and quick actions in one header row', async ({ page }) => {
+    await page.setViewportSize(NARROW);
+    await page.goto('/data-lab');
+
+    const header = page.getByRole('banner', { name: 'Botasur application' });
+    const headerBox = await requiredBox(header);
+    expect(headerBox.height).toBeLessThanOrEqual(60);
+
+    for (const region of [
+      page.getByRole('navigation', { name: 'Primary' }),
+      page.getByRole('link', { name: 'Botasur home' }),
+      page.getByRole('navigation', { name: 'Quick links and account status' }),
+    ]) {
+      const box = await requiredBox(region);
+      expect(box.y).toBeGreaterThanOrEqual(headerBox.y);
+      expect(box.y + box.height).toBeLessThanOrEqual(headerBox.y + headerBox.height);
+    }
   });
 });

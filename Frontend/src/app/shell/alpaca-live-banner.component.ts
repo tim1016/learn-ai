@@ -4,11 +4,9 @@ import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.servic
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
 
 /**
- * Global Alpaca account-mode banner (ADR 0059 D8; the ADR 0011 trust anchor
- * for the Alpaca path). Renders the server verdict and nothing it derives
- * itself: the headline and detail are backend-authored, the mode class is
- * the verdict's own ``final_verdict``. On a live account the account id,
- * the mode and the armed count are always on screen.
+ * Compact Alpaca account-mode trust anchor (ADR 0059 D8; ADR 0011).
+ * The server verdict remains the only truth source. Live mode keeps the
+ * account id and armed count visible even in the dense global header.
  */
 @Component({
   selector: 'app-alpaca-live-banner',
@@ -17,18 +15,19 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
   styles: [`
     :host { display: contents; }
     .alpaca-banner {
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.25rem 0.75rem; border-radius: var(--radius-pill);
-      font-size: 0.8rem; line-height: 1.2; white-space: nowrap;
-      border: 1px solid var(--border-strong); color: var(--text-secondary);
+      display: inline-flex; min-height: 30px; align-items: center; gap: 0.35rem;
+      padding: 0 0.65rem; border-radius: var(--radius-pill);
+      font-size: var(--fs-xs); line-height: 1.2; white-space: nowrap;
+      border: 1px solid rgba(178, 181, 190, 0.45); color: var(--text-primary);
+      background: rgba(5, 8, 14, 0.42); font-variant-numeric: tabular-nums;
     }
-    .alpaca-banner.is-paper { background: var(--info-soft); color: var(--info); border-color: var(--info); }
-    .alpaca-banner.is-live-unarmed { background: var(--warn-soft); color: var(--warn); border-color: currentColor; font-weight: 600; }
-    .alpaca-banner.is-live-armed { background: var(--bear-soft); color: var(--bear); border-color: currentColor; font-weight: 700; }
-    .alpaca-banner.is-unknown { background: var(--bg-sunken); color: var(--text-secondary); border-style: dashed; }
-    .alpaca-banner__kicker { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.68rem; }
-    .alpaca-banner__armed { opacity: 0.85; }
-    .alpaca-banner__hold { font-weight: 700; color: var(--bear); }
+    .alpaca-banner.is-paper { color: #b9edff; border-color: #45b9e1; }
+    .alpaca-banner.is-live-unarmed { color: #ffd0cf; border-color: #f06b68; font-weight: 650; }
+    .alpaca-banner.is-live-armed { color: #fff; border-color: #ff8b88; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
+    .alpaca-banner.is-unknown { color: var(--text-secondary); border-style: dashed; }
+    .alpaca-banner__mode { font-weight: 750; }
+    .alpaca-banner__detail { opacity: 0.86; }
+    .alpaca-banner__hold { font-weight: 750; color: #ffaaa8; }
   `],
   template: `
     @let v = verdict();
@@ -40,12 +39,17 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
         [class.is-live-armed]="v.final_verdict === 'live-armed'"
         [class.is-unknown]="v.final_verdict === 'unknown'"
         role="status"
+        [attr.aria-label]="v.headline"
         [attr.title]="v.detail"
       >
-        <span class="alpaca-banner__kicker">Alpaca</span>
-        <span>{{ v.headline }}</span>
-        @if (v.configured_mode === 'live') {
-          <span class="alpaca-banner__armed">· {{ v.armed_instance_count }} armed</span>
+        @if (v.configured_mode === 'paper') {
+          <span class="alpaca-banner__mode">Paper money</span>
+        } @else if (v.configured_mode === 'live') {
+          <span class="alpaca-banner__mode">Live</span>
+          <span class="alpaca-banner__detail">· {{ v.observed_account_id ?? 'account unknown' }}</span>
+          <span class="alpaca-banner__detail">· {{ v.armed_instance_count }} armed</span>
+        } @else {
+          <span class="alpaca-banner__mode">Mode unknown</span>
         }
         @if (v.loss_hold === 'held') {
           <span class="alpaca-banner__hold">· loss hold</span>
@@ -55,9 +59,13 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
         }
       </div>
     } @else if (lastError()) {
-      <div class="alpaca-banner is-unknown" role="status" [attr.title]="unavailableDetail">
-        <span class="alpaca-banner__kicker">Alpaca</span>
-        <span>{{ unavailableHeadline }}</span>
+      <div
+        class="alpaca-banner is-unknown"
+        role="status"
+        [attr.aria-label]="unavailableHeadline"
+        [attr.title]="unavailableDetail"
+      >
+        <span class="alpaca-banner__mode">Mode unavailable</span>
       </div>
     }
   `,
