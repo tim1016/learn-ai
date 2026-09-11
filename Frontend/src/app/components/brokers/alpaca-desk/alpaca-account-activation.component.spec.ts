@@ -138,7 +138,7 @@ describe('AlpacaAccountActivationComponent', () => {
       'checked',
       true,
     );
-    expect(screen.getByRole('button', { name: 'Select Paper account' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'Review staged account' })).toHaveProperty(
       'disabled',
       false,
     );
@@ -195,5 +195,23 @@ describe('AlpacaAccountActivationComponent', () => {
     await userEvent.click(screen.getByRole('button', { name: 'View restart steps' }));
 
     expect(reviewRequested).toHaveBeenCalledWith(staged);
+  });
+
+  it('keeps the restart action after Apply is recorded for the preselected staged choice', async () => {
+    const staged = deskState.choices[0];
+    const restartState: AlpacaDeskState = {
+      ...deskState,
+      activation_state: 'apply_requested_restart_required',
+      staged_choice: staged,
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    };
+    await render(AlpacaAccountActivationComponent, { inputs: { view: restartState } });
+
+    expect(screen.getByRole('radio', { name: /Strategy lab · PA-123/ })).toHaveProperty(
+      'checked',
+      true,
+    );
+    expect(screen.getByRole('button', { name: 'View restart steps' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Select Paper account' })).toBeNull();
   });
 });
