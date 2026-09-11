@@ -246,6 +246,47 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.getByText(/nothing has changed yet/)).toBeTruthy();
   });
 
+  it.each([false, true])('stages an exact historical revision with conflict=%s', async (conflict) => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile());
+    service.revisions.push(revision(), revision({ revision: 2 }), revision({ revision: 3, complete: false }));
+    service.current = selection({
+      effective_profile_id: 'profile-paper',
+      effective_revision: 1,
+      staged_profile_id: 'profile-paper',
+      staged_revision: 2,
+      selection_generation: 8,
+      last_apply_outcome: 'refused',
+      last_apply_refusal_reason: 'The prior account has outstanding obligations.',
+    });
+    if (conflict) {
+      service.stageRefusal = new HttpErrorResponse({
+        status: 409,
+        error: { detail: {
+          reason: 'selection_generation_conflict',
+          message: 'Another tab changed the selection.',
+          next_step: 'Reload the configuration and stage again.',
+        } },
+      });
+    }
+    await renderPage(service);
+    await userEvent.click(await screen.findByText('Paper — strategy testing', { exact: true }));
+    await userEvent.click(await screen.findByText('Revision history (3)'));
+    expect((screen.getByRole('button', { name: 'Stage revision 3' }) as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Stage revision 1' }));
+
+    expect(service.stageSelection).toHaveBeenCalledExactlyOnceWith('profile-paper', 1, 8);
+    expect(service.applied).toEqual([]);
+    expect(service.current.effective_revision).toBe(1);
+    if (conflict) {
+      expect(service.current.staged_revision).toBe(2);
+      expect(await screen.findByRole('button', { name: 'Reload configuration' })).toBeTruthy();
+    } else {
+      expect(service.current.staged_revision).toBe(1);
+    }
+  });
+
   it('surfaces a newer tab’s write as a reload, and never retries it', async () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile({ profile_id: 'profile-1' }));

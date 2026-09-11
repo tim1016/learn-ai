@@ -279,10 +279,13 @@ class BrokerConfigurationService:
                     archived=next_archived,
                     updated_at_ms=now,
                 )
+            action = "profile_renamed"
+            if next_archived != profile.archived:
+                action = "profile_archived" if next_archived else "profile_restored"
             self._record_event(
                 conn,
                 actor=owner.owner_id,
-                action="profile_archived" if next_archived != profile.archived else "profile_renamed",
+                action=action,
                 profile_id=profile_id,
                 previous_ref=profile.display_name,
                 next_ref=next_name,
@@ -500,6 +503,17 @@ class BrokerConfigurationService:
         return record
 
     # ---- selection ------------------------------------------------------
+
+    @contextmanager
+    def import_transaction(self) -> Iterator[None]:
+        """Publish owner, imported profile and optional staging as one change.
+
+        Acquire the handover fence before the database write lock, matching
+        selection writes. Existing service operations use nested savepoints;
+        a refusal anywhere in the import rolls all of their changes back.
+        """
+        with self.selection_handover(), self._store.transaction():
+            yield
 
     @contextmanager
     def selection_handover(self) -> Iterator[None]:

@@ -62,6 +62,7 @@ export class ConfigurationProfileDetailComponent {
   readonly renamed = output<string>();
   readonly cloned = output<string>();
   readonly revisionSaved = output<RevisionSubmission>();
+  readonly revisionStaged = output<BrokerProfileRevision>();
   readonly verifyRequested = output();
   readonly pinRequested = output<string>();
   readonly nicknameSubmitted = output<string>();

@@ -72,6 +72,11 @@
           <span>{{ slotLabel(revision.credential_slot) }}</span>
           <span>{{ revision.account_pin ?? 'no approved account' }}</span>
           <app-timestamp-display [value]="revision.created_at_ms" mode="local" />
+          <button
+            type="button"
+            [disabled]="busy() || detail().profile.archived || !revision.complete"
+            (click)="revisionStaged.emit(revision)"
+          >Stage revision {{ revision.revision }}</button>
         </li>
       }
     </ul>

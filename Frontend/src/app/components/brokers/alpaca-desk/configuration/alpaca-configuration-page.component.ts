@@ -5,6 +5,7 @@ import type {
   BrokerInstallationSelection,
   BrokerObservedAccount,
   BrokerProfile,
+  BrokerProfileRevision,
 } from '../../../../api/alpaca.types';
 import {
   type ConfigurationRefusal,
@@ -228,16 +229,6 @@ export class AlpacaConfigurationPageComponent {
 
   protected stageProfile(profile: BrokerProfile): void {
     void this.run(async () => {
-      const current = this.currentSelection();
-      if (current === null) {
-        this.refusal.set(
-          clientRefusal(
-            'The current selection has not loaded, so staging cannot name the generation it is writing against.',
-            'Reload the configuration and stage again.',
-          ),
-        );
-        return;
-      }
       const detail = await this.service.readProfile(profile.profile_id);
       const revision = detail.latest_revision;
       if (revision === null) {
@@ -249,14 +240,32 @@ export class AlpacaConfigurationPageComponent {
         );
         return;
       }
-      this.selection.set(
-        await this.service.stageSelection(
-          profile.profile_id,
-          revision.revision,
-          current.selection_generation,
+      await this.stageExactRevision(revision);
+    });
+  }
+
+  protected stageRevision(revision: BrokerProfileRevision): void {
+    void this.run(() => this.stageExactRevision(revision));
+  }
+
+  private async stageExactRevision(revision: BrokerProfileRevision): Promise<void> {
+    const current = this.currentSelection();
+    if (current === null) {
+      this.refusal.set(
+        clientRefusal(
+          'The current selection has not loaded, so staging cannot name the generation it is writing against.',
+          'Reload the configuration and stage again.',
         ),
       );
-    });
+      return;
+    }
+    this.selection.set(
+      await this.service.stageSelection(
+        revision.profile_id,
+        revision.revision,
+        current.selection_generation,
+      ),
+    );
   }
 
   protected applySelection(): void {

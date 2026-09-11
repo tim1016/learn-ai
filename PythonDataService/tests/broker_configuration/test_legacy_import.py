@@ -17,6 +17,7 @@ import pytest
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker_configuration.alpaca_seams import AlpacaCredentialSlotDirectory
+from app.broker_configuration.errors import DisplayNameConflict, SelectionGenerationConflict
 from app.broker_configuration.legacy_environment import LegacyEnvironmentValues
 from app.broker_configuration.legacy_import import (
     ConfigurationImportRefused,
@@ -24,7 +25,7 @@ from app.broker_configuration.legacy_import import (
     apply_import,
     plan_import,
 )
-from app.broker_configuration.records import ObservedAccount
+from app.broker_configuration.records import ObservedAccount, ProfileRevision
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
 from tests.broker.alpaca.profile.conftest import (
@@ -99,6 +100,27 @@ def _plan_and_apply(service: BrokerConfigurationService, values: LegacyEnvironme
     )
 
 
+def _saved_state(service: BrokerConfigurationService) -> tuple[object, ...]:
+    profiles = service.list_profiles(include_archived=True)
+    return (
+        service.existing_owner(),
+        profiles,
+        [service.list_revisions(profile.profile_id) for profile in profiles],
+        service.selection(),
+        service.events(),
+    )
+
+
+@pytest.fixture
+def observer(clerk_dir: Path, service: BrokerConfigurationService) -> Iterator[BrokerConfigurationService]:
+    """A separate connection must never see half an import, even before refusal."""
+    observing = BrokerConfigurationService(
+        store=ProfilesStore.open(clerk_dir=clerk_dir), operator_identity=OPERATOR_IDENTITY
+    )
+    yield observing
+    observing.close()
+
+
 # ---- preview writes nothing ------------------------------------------------
 
 
@@ -159,8 +181,14 @@ def test_the_stored_revision_reproduces_the_envelope_sha(
     assert type(stored.live_envelope.shadow_sessions) is int
 
 
-def test_the_fidelity_guard_fires_when_storage_returns_different_values(
-    service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("adopt_existing", [False, True])
+@pytest.mark.parametrize("stage_selection", [False, True])
+def test_the_fidelity_guard_refuses_without_publishing_any_import_state(
+    service: BrokerConfigurationService,
+    observer: BrokerConfigurationService,
+    monkeypatch: pytest.MonkeyPatch,
+    adopt_existing: bool,
+    stage_selection: bool,
 ) -> None:
     """The guard reads back through the store, so it can actually fail.
 
@@ -173,9 +201,20 @@ def test_the_fidelity_guard_fires_when_storage_returns_different_values(
     """
     from app.broker_configuration.envelope import ValidatedLiveEnvelope
 
+    values = _live_values()
+    if adopt_existing:
+        prior = _plan(values, ExistingConfiguration.read(service), stage_selection=False)
+        apply_import(
+            plan=prior, confirmation_token=prior.confirmation_token,
+            service=service, values=values, now_ms=NOW_MS,
+        )
+    plan = _plan(values, ExistingConfiguration.read(service), stage_selection=stage_selection)
+    before = _saved_state(observer)
+    seen: list[tuple[object, ...]] = []
     real_read = service.read_revision
 
-    def _regressed(profile_id: str, revision: int):
+    def _regressed(profile_id: str, revision: int) -> ProfileRevision:
+        seen.append(_saved_state(observer))
         stored = real_read(profile_id, revision)
         if stored.live_envelope is None:
             return stored
@@ -187,7 +226,139 @@ def test_the_fidelity_guard_fires_when_storage_returns_different_values(
     monkeypatch.setattr(service, "read_revision", _regressed)
 
     with pytest.raises(ConfigurationImportRefused, match="does not hash"):
-        _plan_and_apply(service, _live_values())
+        apply_import(
+            plan=plan, confirmation_token=plan.confirmation_token,
+            service=service, values=values, now_ms=NOW_MS,
+        )
+
+    assert seen == [before]
+    assert _saved_state(observer) == before
+
+
+@pytest.mark.parametrize("adopt_existing", [False, True])
+def test_a_post_stage_refusal_rolls_back_the_whole_import(
+    service: BrokerConfigurationService,
+    observer: BrokerConfigurationService,
+    monkeypatch: pytest.MonkeyPatch,
+    adopt_existing: bool,
+) -> None:
+    values = _live_values()
+    if adopt_existing:
+        prior = _plan(values, ExistingConfiguration.read(service), stage_selection=False)
+        apply_import(
+            plan=prior, confirmation_token=prior.confirmation_token,
+            service=service, values=values, now_ms=NOW_MS,
+        )
+    plan = _plan(values, ExistingConfiguration.read(service))
+    before = _saved_state(observer)
+    real_stage = service.stage_selection
+    seen: list[tuple[object, ...]] = []
+
+    def stage_then_refuse(**kwargs: object) -> None:
+        real_stage(**kwargs)
+        seen.append(_saved_state(observer))
+        raise SelectionGenerationConflict("the import could not finish")
+
+    monkeypatch.setattr(service, "stage_selection", stage_then_refuse)
+    with pytest.raises(SelectionGenerationConflict):
+        apply_import(
+            plan=plan, confirmation_token=plan.confirmation_token,
+            service=service, values=values, now_ms=NOW_MS,
+        )
+
+    assert seen == [before]
+    assert _saved_state(observer) == before
+
+
+@pytest.mark.parametrize("stage_selection", [False, True])
+def test_a_successful_import_is_visible_only_when_complete(
+    service: BrokerConfigurationService,
+    observer: BrokerConfigurationService,
+    monkeypatch: pytest.MonkeyPatch,
+    stage_selection: bool,
+) -> None:
+    values = _live_values()
+    plan = _plan(values, ExistingConfiguration.read(service), stage_selection=stage_selection)
+    before = _saved_state(observer)
+    seen: list[tuple[object, ...]] = []
+    real_read = service.read_revision
+
+    def read_while_observing(profile_id: str, revision: int) -> ProfileRevision:
+        seen.append(_saved_state(observer))
+        return real_read(profile_id, revision)
+
+    monkeypatch.setattr(service, "read_revision", read_while_observing)
+    receipt = apply_import(
+        plan=plan, confirmation_token=plan.confirmation_token,
+        service=service, values=values, now_ms=NOW_MS,
+    )
+
+    assert seen == [before]
+    assert observer.existing_owner() is not None
+    assert [profile.profile_id for profile in observer.list_profiles()] == [receipt.profile_id]
+    assert observer.read_revision(receipt.profile_id, receipt.revision).live_envelope.sha == plan.envelope_sha
+    assert observer.selection().staged_profile_id == (receipt.profile_id if stage_selection else None)
+    assert len(observer.events()) == (2 if stage_selection else 1)
+
+
+def test_an_inner_write_refusal_preserves_the_outer_import_transaction(
+    service: BrokerConfigurationService, observer: BrokerConfigurationService
+) -> None:
+    """An inner service rollback cannot commit or discard its caller's work."""
+    before = _saved_state(observer)
+    with service.import_transaction():
+        first = service.create_profile(
+            display_name="Confirmed profile", credential_slot="default",
+            endpoint_mode="paper", live_envelope=None,
+        )
+        with pytest.raises(DisplayNameConflict):
+            service.create_profile(
+                display_name="Confirmed profile", credential_slot="default",
+                endpoint_mode="paper", live_envelope=None,
+            )
+        service.stage_selection(
+            profile_id=first.profile.profile_id, revision=1, expected_selection_generation=0
+        )
+        assert _saved_state(observer) == before
+
+    assert observer.selection().staged_profile_id == first.profile.profile_id
+    assert len(observer.list_profiles()) == 1
+    assert len(observer.events()) == 2
+
+
+def test_a_selection_race_after_import_preflight_leaves_no_orphan_profile(
+    service: BrokerConfigurationService,
+    observer: BrokerConfigurationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other = service.create_profile(
+        display_name="Other profile", credential_slot="default", endpoint_mode="paper",
+        live_envelope=None,
+    )
+    plan = _plan(_live_values(), ExistingConfiguration.read(service))
+    original_selection = service.selection
+
+    def read_then_race() -> object:
+        selected = original_selection()
+        monkeypatch.setattr(service, "selection", original_selection)
+        observer.stage_selection(
+            profile_id=other.profile.profile_id, revision=1,
+            expected_selection_generation=selected.selection_generation,
+        )
+        return selected
+
+    monkeypatch.setattr(service, "selection", read_then_race)
+    with pytest.raises(SelectionGenerationConflict):
+        apply_import(
+            plan=plan, confirmation_token=plan.confirmation_token,
+            service=service, values=_live_values(), now_ms=NOW_MS,
+        )
+
+    assert [profile.profile_id for profile in observer.list_profiles(include_archived=True)] == [
+        other.profile.profile_id
+    ]
+    assert all(event.action != "profile_created" or event.profile_id == other.profile.profile_id
+               for event in observer.events())
 
 
 # ---- empty and partial environments ----------------------------------------

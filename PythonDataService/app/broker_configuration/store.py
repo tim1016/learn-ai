@@ -209,16 +209,28 @@ class ProfilesStore:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
-        """One serialized, all-or-nothing write."""
+        """One serialized write; nested operations stay inside the outer commit.
+
+        Savepoints let composed service operations retain their own rollback
+        boundary without publishing a partial outer operation to other readers.
+        The reentrant connection lock remains held for the entire transaction.
+        """
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            savepoint = f"profiles_{secrets.token_hex(8)}" if self._conn.in_transaction else None
+            self._conn.execute(f"SAVEPOINT {savepoint}" if savepoint else "BEGIN IMMEDIATE")
             try:
                 yield self._conn
-            except Exception:
-                self._conn.rollback()
+                if savepoint:
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                else:
+                    self._conn.commit()
+            except BaseException:
+                if savepoint:
+                    self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                else:
+                    self._conn.rollback()
                 raise
-            else:
-                self._conn.commit()
 
     def _query(self, sql: str, parameters: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:

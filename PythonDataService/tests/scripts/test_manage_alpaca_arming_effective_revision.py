@@ -18,7 +18,9 @@ running container, or an injected credential.
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -222,6 +224,49 @@ def test_effective_broker_refuses_an_unreadable_profiles_database() -> None:
 
     with pytest.raises(BrokerUnbound) as refused:
         effective_broker(service_factory=_refuse)
+
+    assert refused.value.reason == PROFILES_DATABASE_UNAVAILABLE
+
+
+@pytest.mark.parametrize("broken_component", ["database", "directory"])
+def test_effective_broker_refuses_broken_configuration_links(
+    isolated_environment: None, roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+    broken_component: str,
+) -> None:
+    clerk_dir, _ = roots
+    database = profiles_database_path(clerk_dir)
+    target = database if broken_component == "database" else database.parent
+    target.parent.mkdir(parents=True, exist_ok=True)
+    missing = clerk_dir / "missing-target"
+    target.symlink_to(missing)
+    monkeypatch.setattr(broker_configuration_runtime, "resolve_clerk_dir", lambda: clerk_dir)
+
+    with pytest.raises(BrokerUnbound) as refused:
+        effective_broker()
+
+    assert refused.value.reason == PROFILES_DATABASE_UNAVAILABLE
+    assert not missing.exists()
+
+
+@pytest.mark.parametrize("error_number", [errno.EACCES, errno.EIO])
+def test_effective_broker_translates_configuration_stat_failures(
+    isolated_environment: None, roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+) -> None:
+    clerk_dir, _ = roots
+    database = profiles_database_path(clerk_dir)
+    database.parent.mkdir(parents=True)
+    monkeypatch.setattr(broker_configuration_runtime, "resolve_clerk_dir", lambda: clerk_dir)
+    original_stat = Path.stat
+
+    def unavailable(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == database:
+            raise OSError(error_number, "configuration volume unavailable")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", unavailable)
+    with pytest.raises(BrokerUnbound) as refused:
+        effective_broker()
 
     assert refused.value.reason == PROFILES_DATABASE_UNAVAILABLE
 

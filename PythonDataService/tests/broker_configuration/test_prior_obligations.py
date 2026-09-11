@@ -29,6 +29,11 @@ from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, ClerkSqliteRe
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
 from app.broker_configuration.worker_binding import PriorAccountObligations
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
 from app.services.bot_binding_repository import (
     STRATEGY_INSTANCE_FILENAME,
     BrokerBotBinding,
@@ -470,6 +475,87 @@ async def test_observe_account_with_a_sealed_binding_is_not_clear(
     described = observed.describe()
     assert "still bound to it" in described
     assert SID in described
+
+
+async def test_observe_a_terminal_binding_does_not_block_a_clean_account_switch(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
+) -> None:
+    """Archive and retire share RETIRED; their immutable binding remains evidence."""
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(live_state_root, SID)).retire(
+        now_ms=NOW_MS + 1, updated_by="operator", reason="Panel archive by operator"
+    )
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.readable
+    assert observed.is_clear
+    assert live_state_binding_repository(live_state_root).read(SID) is not None
+
+
+@pytest.mark.parametrize("phase", [BotLifecyclePhase.OFF_DUTY, BotLifecyclePhase.ON_DUTY])
+async def test_observe_a_nonterminal_binding_still_blocks_switching(
+    probe: ClerkPriorAccountObligations,
+    clerk_dir: Path,
+    live_state_root: Path,
+    phase: BotLifecyclePhase,
+) -> None:
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(live_state_root, SID)).set_phase(
+        phase, now_ms=NOW_MS + 1, updated_by="operator"
+    )
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.readable
+    assert not observed.is_clear
+    assert "still bound to it" in observed.describe()
+
+
+async def test_observe_unreadable_lifecycle_cannot_prove_a_binding_terminal(
+    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
+) -> None:
+    _activate(clerk_dir)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    stable_bot_lifecycle_state_path(live_state_root, SID).write_text("{ not json", encoding="utf-8")
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert not observed.readable
+    assert not observed.is_clear
+
+
+@pytest.mark.parametrize(
+    ("seed", "fact"),
+    [
+        (_fill_an_enter, "open position"),
+        (_accept_an_enter, "unresolved order"),
+        (_start_a_bot, "live custody"),
+        (_accept_a_manual_order, "unfinished manual order"),
+        (_observe_a_foreign_order, "outside the bots"),
+    ],
+)
+async def test_observe_terminal_lifecycle_does_not_hide_outstanding_custody(
+    probe: ClerkPriorAccountObligations,
+    clerk_dir: Path,
+    live_state_root: Path,
+    seed: Callable[[ClerkSqliteRepository], object],
+    fact: str,
+) -> None:
+    _activate(clerk_dir, seed=seed)
+    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID)
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(live_state_root, SID)).retire(
+        now_ms=NOW_MS + 1, updated_by="operator", reason="Panel retire by operator"
+    )
+
+    observed = await probe.observe(ACCOUNT_ID)
+
+    assert observed.readable
+    assert not observed.is_clear
+    assert fact in observed.describe()
+    assert "still bound to it" not in observed.describe()
 
 
 async def test_observe_account_with_a_shadow_sealed_binding_is_not_clear(

@@ -476,74 +476,73 @@ def apply_import(
         now_ms=now_ms, expires_at_ms=plan.expires_at_ms, refused=_refused, label=_LABEL
     )
 
-    existing = ExistingConfiguration.read(service)
-    # Every refusal below this line runs *before* the first write. `create_profile`
-    # commits on its own, so a guard placed after it would leave a profile behind
-    # while the ceremony reported failure -- and that orphan would make
-    # `has_any_profile` true, which is the one thing an operator must be able to
-    # rely on not happening when they are told the import did not happen.
-    _require_selection_unchanged(plan, existing)
-    already = _already_imported(existing, plan.revision_content_sha256)
-    if already is not None:
+    with service.import_transaction():
+        existing = ExistingConfiguration.read(service)
+        # Resolve adoption and every guard under the same write transaction. No
+        # owner, profile, revision, event or staged selection is visible until the
+        # whole import succeeds, including the read-back fidelity check.
+        _require_selection_unchanged(plan, existing)
+        already = _already_imported(existing, plan.revision_content_sha256)
+        if already is not None:
+            _require_envelope_fidelity(
+                plan, service.read_revision(already.profile_id, already.revision)
+            )
+            owner = service.owner()
+            staged = _stage(service, already, plan=plan)
+            return ImportReceipt(
+                profile_id=already.profile_id,
+                revision=already.revision,
+                created=False,
+                staged=staged,
+                owner_display_label=owner.display_label,
+                envelope_sha=plan.envelope_sha,
+                notes=("These values were already saved; no revision was created.",),
+            )
+
+        _require_environment_unchanged(plan, values)
+
+        # Reads the owner first, which creates it when absent, seeded from
+        # ``PANEL_OPERATOR_IDENTITY``. An existing label is never overwritten:
+        # importing operator identity must not rewrite history (plan §F), and a
+        # rename is a separate, explicit act.
         owner = service.owner()
-        staged = _stage(service, already, plan=plan)
+        created = service.create_profile(
+            display_name=plan.display_name,
+            credential_slot=plan.credential_slot,
+            endpoint_mode=plan.endpoint_mode,
+            live_envelope=plan.live_envelope,
+        )
+        revision = created.latest_revision
+        if revision is None:  # pragma: no cover - create_profile always writes revision 1
+            raise _refused("the imported profile was created without a revision")
+        # Re-read rather than trusting the object `create_profile` handed back: that
+        # object is the very `ValidatedLiveEnvelope` this plan carried, so comparing
+        # against it would compare a value with itself and could never fail. The
+        # obligation ADR 0060 Decision 6 states is about *storage*, so the read has
+        # to come from storage.
+        _require_envelope_fidelity(
+            plan, service.read_revision(created.profile.profile_id, revision.revision)
+        )
+
+        reference = ImportedProfileRef(profile_id=created.profile.profile_id, revision=revision.revision)
+        staged = _stage(service, reference, plan=plan)
         return ImportReceipt(
-            profile_id=already.profile_id,
-            revision=already.revision,
-            created=False,
+            profile_id=reference.profile_id,
+            revision=reference.revision,
+            created=True,
             staged=staged,
             owner_display_label=owner.display_label,
             envelope_sha=plan.envelope_sha,
-            notes=("These values were already saved; no revision was created.",),
+            notes=plan.notes,
         )
-
-    _require_environment_unchanged(plan, values)
-
-    # Reads the owner first, which creates it when absent, seeded from
-    # ``PANEL_OPERATOR_IDENTITY``. An existing label is never overwritten:
-    # importing operator identity must not rewrite history (plan §F), and a
-    # rename is a separate, explicit act.
-    owner = service.owner()
-    created = service.create_profile(
-        display_name=plan.display_name,
-        credential_slot=plan.credential_slot,
-        endpoint_mode=plan.endpoint_mode,
-        live_envelope=plan.live_envelope,
-    )
-    revision = created.latest_revision
-    if revision is None:  # pragma: no cover - create_profile always writes revision 1
-        raise _refused("the imported profile was created without a revision")
-    # Re-read rather than trusting the object `create_profile` handed back: that
-    # object is the very `ValidatedLiveEnvelope` this plan carried, so comparing
-    # against it would compare a value with itself and could never fail. The
-    # obligation ADR 0060 Decision 6 states is about *storage*, so the read has
-    # to come from storage.
-    _require_envelope_fidelity(
-        plan, service.read_revision(created.profile.profile_id, revision.revision)
-    )
-
-    reference = ImportedProfileRef(profile_id=created.profile.profile_id, revision=revision.revision)
-    staged = _stage(service, reference, plan=plan)
-    return ImportReceipt(
-        profile_id=reference.profile_id,
-        revision=reference.revision,
-        created=True,
-        staged=staged,
-        owner_display_label=owner.display_label,
-        envelope_sha=plan.envelope_sha,
-        notes=plan.notes,
-    )
 
 
 def _require_selection_unchanged(plan: ImportPlan, existing: ExistingConfiguration) -> None:
     """Refuse a stale plan *before* anything is written.
 
-    `_stage` fences on `plan.expected_selection_generation`, so a selection
-    changed since the preview raises `SelectionGenerationConflict` -- correctly,
-    but from *after* `create_profile` has committed. Checking the same fact up
-    here turns an everyday two-tab race from "refused, and an orphan profile left
-    behind" into a clean refusal. The store-level fence stays as the authority
-    for the genuine race between this check and the write.
+    The plan's generation is read under the import transaction and handover
+    fence. A stale preview therefore refuses before creation, while the outer
+    transaction also rolls back later refusals such as failed fidelity checks.
     """
     if not plan.stage_selection:
         return
@@ -618,8 +617,8 @@ def _require_envelope_fidelity(plan: ImportPlan, revision: ProfileRevision) -> N
         raise _refused(
             "the imported revision's live envelope does not hash to the value the "
             "environment produced, so storage is not round-tripping these numbers. "
-            "The revision WAS written -- archive it, do not apply it, and treat "
-            "this as a storage defect."
+            "No import changes were committed; investigate this storage defect "
+            "before retrying."
         )
     for field in ENVELOPE_FIELDS:
         planned = getattr(plan.live_envelope, field)

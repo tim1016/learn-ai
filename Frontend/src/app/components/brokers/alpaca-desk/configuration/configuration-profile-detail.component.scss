@@ -123,3 +123,7 @@
 .detail__history strong {
   color: var(--text-primary);
 }
+
+.detail__history button {
+  @include controls.secondary-button;
+}

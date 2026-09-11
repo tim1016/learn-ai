@@ -39,7 +39,7 @@ Exactly one owner exists in v1. The deployment is documented as single-operator;
 | `archived` | `bool` | |
 | `created_at_ms`, `updated_at_ms` | `int` | |
 
-Label-only edits alter no execution identity and **never invalidate an arming**.
+Label-only edits alter no execution identity and **never invalidate an arming**. Save updates the UI immediately without Apply; the running worker refreshes its display labels at its next restart. Historical records keep their original labels.
 
 ### 2.3 Profile revision — immutable
 
@@ -87,7 +87,7 @@ Field names are **exactly** `LiveEnvelopeValues`' field names, so the mapping to
 | `nickname` | `str` | |
 | `updated_at_ms` | `int` | |
 
-A nickname is a label. It never substitutes for the account ID in audit evidence, which preserves exact IDs.
+A nickname is an installation-local label. Two installations may name the same account differently; nicknames are not synchronized. Saving a nickname updates the UI without Apply. It never substitutes for the account ID in audit evidence, which preserves exact IDs.
 
 ### 2.6 Installation selection — one row in v1
 

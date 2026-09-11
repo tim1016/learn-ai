@@ -61,6 +61,26 @@ fencing and reversible arming disagreement gaps; each is covered by the tests
 above. Follow-up review checked the CLI handover race, unreadable arming cleanup
 and refusal precedence. No historical arming/custody/activation schema changed.
 
+## GitHub review follow-up
+
+The review of commit `476bc9d8` raised six findings. The follow-up corrects:
+
+- Missing-versus-unavailable CLI configuration detection, including broken
+  database and parent-directory links and permission/I/O failures.
+- Terminal bot lifecycle handling during prior-account obligation checks;
+  outstanding custody and unreadable lifecycle evidence still refuse switching.
+- Atomic import publication, including owner creation, adoption, storage-fidelity
+  verification, events and optional staging, with rollback on any refusal.
+- Exact historical revision staging from the UI without an implicit Apply.
+- Distinct restoration events and the location of live credential placeholders.
+
+Regression cases reproduced the behavioral failures before correction. Targeted
+follow-up validation: **548 Python tests and 40 frontend tests passed**; production
+build, full frontend lint, project-scope Python lint and whitespace checks passed.
+Independent checks found no remaining blocker within these review findings.
+The separate local Paper-reset regression intentionally still fails and is not
+part of this follow-up: its reset scope awaits the owner's answer below.
+
 ## Release and cutover checklist
 
 1. Resolve ADR 0060's remaining owner choices before marking that ADR Accepted.
@@ -79,6 +99,8 @@ and refusal precedence. No historical arming/custody/activation schema changed.
    reviewed prior code/deployment settings; retain profile records and never
    roll back custody databases, activation generations or arming ledgers.
 
-ADR 0060 remains Proposed pending its three recorded owner choices. The current
-implementation preserves profiles during account reset, uses installation-local nicknames,
-and updates display metadata without changing execution identity.
+The owner accepted installation-local nicknames and immediate UI renames without
+Apply. ADR 0060 remains Proposed pending the Paper-reset scope: whether unrelated
+saved Live profiles survive. The current reset still preserves profiles, so the
+owner's requested Paper clean slate is not yet implemented. No operational reset
+or production cutover has been performed.

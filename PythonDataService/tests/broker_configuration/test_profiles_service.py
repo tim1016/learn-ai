@@ -132,6 +132,26 @@ def test_archiving_a_staged_profile_is_refused(service: BrokerConfigurationServi
         service.update_profile(created.profile.profile_id, archived=True)
 
 
+@pytest.mark.parametrize("renamed", [None, "Restored profile"])
+def test_restoring_a_profile_records_restoration_in_the_audit_history(
+    service: BrokerConfigurationService, renamed: str | None,
+) -> None:
+    created = paper_profile(service)
+    profile_id = created.profile.profile_id
+    service.update_profile(profile_id, archived=True)
+    before = service.events()
+
+    restored = service.update_profile(profile_id, archived=False, display_name=renamed)
+
+    assert not restored.archived
+    added = [event for event in service.events() if event not in before]
+    assert len(added) == 1
+    assert added[0].action == "profile_restored"
+    assert added[0].profile_id == profile_id
+    assert added[0].previous_ref == created.profile.display_name
+    assert added[0].next_ref == restored.display_name
+
+
 def test_a_new_revision_is_appended_and_the_old_one_is_untouched(
     service: BrokerConfigurationService,
 ) -> None:

@@ -55,6 +55,11 @@ from app.broker.alpaca.clerk.sqlite.writes import account_paths, confined_accoun
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker_configuration.runtime import resolve_clerk_dir
 from app.broker_configuration.worker_binding import PriorObligations
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
 from app.services.bot_binding_repository import (
     BINDING_FILENAME,
     STRATEGY_INSTANCE_FILENAME,
@@ -202,8 +207,8 @@ def _never_activated_facts(
     ``clerk.db`` sitting there without a record is evidence of something this
     probe cannot account for, and evidence it cannot account for is a refusal.
 
-    Bindings are still read. A bot sealed to the account is an obligation
-    whether or not custody was ever activated here.
+    Bindings and their lifecycle are still read. A nonterminal bot sealed to
+    the account is an obligation whether or not custody was ever activated here.
     """
     if db_path.exists() or account_dir.exists():
         raise _Unprovable(
@@ -313,7 +318,7 @@ def _binding_facts(account_id: str, *, live_state_root: Path) -> tuple[str, ...]
 
 
 def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[BrokerBotBinding]:
-    """Every Alpaca binding sealed to this account, refusing to skip a corrupt row.
+    """Nonterminal Alpaca bindings on this account; unreadable evidence refuses.
 
     ``BotBindingRepository.list_for_broker`` logs and skips a row it cannot
     parse. That is right for a listing surface — one bad row must not hide the
@@ -332,6 +337,12 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
       be: counting every unattributable binding against every account would
       refuse every switch forever. What such a bot actually holds is answered by
       the account's own custody database instead.
+
+    Archive and retire both commit RETIRED (ADR 0052), keeping immutable binding
+    files for history. Read that terminal fact through the same lifecycle repo
+    as BotTaskRegistry. Missing lifecycle evidence keeps the binding blocking;
+    corrupt evidence propagates. Independent custody reads still block any
+    exposure, active run or unfinished order attributed to a terminal bot.
     """
     root = Path(live_state_root) / LIVE_STATE_DIRECTORY
     if not root.is_dir():
@@ -358,7 +369,11 @@ def _alpaca_bindings_on(account_id: str, *, live_state_root: Path) -> list[Broke
         if binding.broker != ALPACA_BROKER:
             continue
         if binding.sealed_account_id in admissible:
-            bound.append(binding)
+            lifecycle = BotLifecycleStateRepo(
+                stable_bot_lifecycle_state_path(live_state_root, binding.strategy_instance_id)
+            ).read()
+            if lifecycle is None or lifecycle.phase is not BotLifecyclePhase.RETIRED:
+                bound.append(binding)
     return bound
 
 
