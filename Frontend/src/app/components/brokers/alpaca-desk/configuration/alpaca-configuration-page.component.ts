@@ -23,6 +23,7 @@ import {
   toConfigurationRefusal,
 } from './broker-configuration-refusal';
 import { BrokerConfigurationService, type RevisionContent } from './broker-configuration.service';
+import { ConfigurationHandoffScriptComponent } from './configuration-handoff-script.component';
 import { ConfigurationProfileCreateComponent } from './configuration-profile-create.component';
 import {
   ConfigurationProfileDetailComponent,
@@ -31,6 +32,7 @@ import {
 import { ConfigurationProfileListComponent } from './configuration-profile-list.component';
 import { ConfigurationRefusalComponent } from './configuration-refusal.component';
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
+import { ConfigurationSwitchGuideComponent } from './configuration-switch-guide.component';
 
 /** The `(profile, revision)` pair one side of the selection names, if it names one. */
 interface RevisionRef {
@@ -87,8 +89,10 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
     ConfigurationProfileCreateComponent,
     ConfigurationProfileDetailComponent,
     ConfigurationProfileListComponent,
+    ConfigurationHandoffScriptComponent,
     ConfigurationRefusalComponent,
     ConfigurationStatusPanelComponent,
+    ConfigurationSwitchGuideComponent,
     RouterLink,
   ],
   templateUrl: './alpaca-configuration-page.component.html',

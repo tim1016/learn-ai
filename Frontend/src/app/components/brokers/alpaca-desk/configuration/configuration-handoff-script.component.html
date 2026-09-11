@@ -1,0 +1,38 @@
+<section class="handoff" aria-labelledby="handoff-script-title">
+  <header class="handoff__header">
+    <div>
+      <p class="handoff__eyebrow">Local operator tool</p>
+      <h2 id="handoff-script-title">Paper → Live handoff script</h2>
+      <p>
+        Run this from the repository root only after Alpaca reports the disposable Paper
+        account flat and order-free. It performs the supported Paper reset, opens this page
+        for your explicit Apply, and then completes the controlled restart.
+      </p>
+    </div>
+
+    @if (script.hasValue()) {
+      <app-copy-button
+        variant="button"
+        [text]="script.value()"
+        label="Copy handoff script"
+        copiedLabel="Script copied"
+        ariaLabel="Copy Paper-to-Live handoff script" />
+    }
+  </header>
+
+  <p class="handoff__warning" role="note">
+    The Paper workspace is moved into forensic quarantine. The script refuses Live or Shadow
+    reset targets, rechecks current safety evidence, and never arms or launches a Live bot.
+  </p>
+
+  @if (script.error()) {
+    <p class="handoff__error" role="alert">
+      The local handoff script could not be loaded.
+      <a [href]="scriptUrl">Open the script directly</a>.
+    </p>
+  } @else if (script.hasValue()) {
+    <pre class="handoff__source" tabindex="0"><code>{{ script.value() }}</code></pre>
+  } @else {
+    <p class="handoff__loading" role="status">Loading the local handoff script…</p>
+  }
+</section>

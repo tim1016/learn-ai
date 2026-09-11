@@ -1,0 +1,111 @@
+:host {
+  display: block;
+}
+
+.switch-guide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.switch-guide header {
+  max-width: 52rem;
+}
+
+.switch-guide__eyebrow {
+  margin: 0 0 var(--space-1);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.switch-guide h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.switch-guide header > p:last-child,
+.switch-guide__steps p,
+.switch-guide__directions p,
+.switch-guide__safety {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.switch-guide__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.switch-guide__steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+}
+
+.switch-guide__steps strong,
+.switch-guide__directions strong {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.switch-guide__number {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-faint);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.switch-guide__command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.switch-guide__command code {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+}
+
+.switch-guide__directions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--space-2);
+}
+
+.switch-guide__directions p,
+.switch-guide__safety {
+  margin: 0;
+  padding: var(--space-2);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-canvas);
+}
+
+.switch-guide__safety {
+  border-left-color: var(--warn);
+}
