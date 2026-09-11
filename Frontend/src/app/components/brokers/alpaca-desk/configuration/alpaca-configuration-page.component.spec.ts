@@ -1,9 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
+import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -162,10 +163,21 @@ class FakeConfigurationService {
   });
 }
 
-async function renderPage(service: FakeConfigurationService) {
+async function renderPage(
+  service: FakeConfigurationService,
+  query: Record<string, string> = {},
+) {
+  const queryParamMap = convertToParamMap(query);
   return render(AlpacaConfigurationPageComponent, {
     providers: [
       provideRouter([]),
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          queryParamMap: of(queryParamMap),
+          snapshot: { queryParamMap },
+        },
+      },
       { provide: BrokerConfigurationService, useValue: service },
     ],
   });
@@ -178,6 +190,20 @@ async function saveProfile(name: string): Promise<void> {
 }
 
 describe('AlpacaConfigurationPageComponent', () => {
+  it('opens and highlights the exact revision selected from the desk without mutating it', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText('Selected from desk')).toBeTruthy();
+    expect(screen.getByText(/Revision 1 was selected from the Alpaca desk/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stage revision 1' })).toBeTruthy();
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
   it.each([
     'listProfiles',
     'listCredentialSlots',

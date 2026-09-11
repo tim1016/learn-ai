@@ -7,78 +7,116 @@
       </div>
     </div>
     <a class="configuration-link" routerLink="/brokers/alpaca/configuration">Configuration</a>
-    <button type="button" class="deploy-button" (click)="openDeploy()">
-      <span aria-hidden="true">＋</span>
-      Deploy strategy
-    </button>
+    @if (operatingDeskVisible()) {
+      <button type="button" class="deploy-button" (click)="openDeploy()">
+        <span aria-hidden="true">＋</span>
+        Deploy strategy
+      </button>
+    }
   </header>
 
-  <app-alpaca-account-card class="desk-account-summary" />
-
-  <app-alpaca-hold-banner />
-
-  @if (orderRouteMismatch(); as mismatch) {
-    <p class="order-route-notice" role="alert">{{ mismatch }}</p>
-  } @else if (manualOrderNotice(); as notice) {
-    <p class="order-route-notice" role="alert">{{ notice }}</p>
+  @if (showActivation() && deskState(); as activation) {
+    <app-alpaca-account-activation
+      [view]="activation"
+      (reviewRequested)="reviewAccount($event)"
+    />
+  } @else {
+    @if (showConnectivityContext() && deskState(); as state) {
+      <section class="selection-change selection-change--unavailable" aria-live="polite">
+        <div>
+          <span>Effective configuration</span>
+          <strong>{{ state.headline }}</strong>
+          <p>{{ state.consequence }}</p>
+        </div>
+        <button type="button" (click)="reviewAccount(state.effective_choice)">
+          {{ state.action.label }}
+        </button>
+      </section>
+    }
+    <app-alpaca-account-card class="desk-account-summary" />
   }
 
-  <app-alpaca-custody-resolution />
+  @if (operatingDeskVisible()) {
+    @if (showSelectionChange() && deskState(); as state) {
+      <section class="selection-change" aria-live="polite">
+        <div>
+          <span>Configuration change pending</span>
+          <strong>{{ state.headline }}</strong>
+          <p>{{ state.detail }}</p>
+        </div>
+        <button type="button" (click)="reviewAccount(state.staged_choice)">
+          {{ state.action.label }}
+        </button>
+      </section>
+    }
 
-  <div class="lens-toggle" role="tablist" aria-label="Desk perspective">
-    <button
-      id="alpaca-trader-tab"
-      data-lens="trader"
-      type="button"
-      role="tab"
-      [class.lens-toggle__tab--active]="lens() === 'trader'"
-      [attr.aria-selected]="lens() === 'trader'"
-      [attr.tabindex]="lens() === 'trader' ? 0 : -1"
-      aria-controls="alpaca-trader-panel"
-      (click)="selectLens('trader')"
-      (keydown)="onLensKeydown($event)"
-    >Trader</button>
-    <button
-      id="alpaca-operator-tab"
-      data-lens="operator"
-      type="button"
-      role="tab"
-      [class.lens-toggle__tab--active]="lens() === 'operator'"
-      [attr.aria-selected]="lens() === 'operator'"
-      [attr.tabindex]="lens() === 'operator' ? 0 : -1"
-      aria-controls="alpaca-operator-panel"
-      (click)="selectLens('operator')"
-      (keydown)="onLensKeydown($event)"
-    >Operator</button>
-  </div>
+    <app-alpaca-hold-banner />
 
-  @if (lens() === 'trader') {
-    <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
-  } @else {
-    <app-alpaca-operator-lens
-      [refreshVersion]="historyRefreshVersion()"
-      [timelineQuery]="timelineQuery()"
-    />
+    @if (orderRouteMismatch(); as mismatch) {
+      <p class="order-route-notice" role="alert">{{ mismatch }}</p>
+    } @else if (manualOrderNotice(); as notice) {
+      <p class="order-route-notice" role="alert">{{ notice }}</p>
+    }
+
+    <app-alpaca-custody-resolution />
+
+    <div class="lens-toggle" role="tablist" aria-label="Desk perspective">
+      <button
+        id="alpaca-trader-tab"
+        data-lens="trader"
+        type="button"
+        role="tab"
+        [class.lens-toggle__tab--active]="lens() === 'trader'"
+        [attr.aria-selected]="lens() === 'trader'"
+        [attr.tabindex]="lens() === 'trader' ? 0 : -1"
+        aria-controls="alpaca-trader-panel"
+        (click)="selectLens('trader')"
+        (keydown)="onLensKeydown($event)"
+      >Trader</button>
+      <button
+        id="alpaca-operator-tab"
+        data-lens="operator"
+        type="button"
+        role="tab"
+        [class.lens-toggle__tab--active]="lens() === 'operator'"
+        [attr.aria-selected]="lens() === 'operator'"
+        [attr.tabindex]="lens() === 'operator' ? 0 : -1"
+        aria-controls="alpaca-operator-panel"
+        (click)="selectLens('operator')"
+        (keydown)="onLensKeydown($event)"
+      >Operator</button>
+    </div>
+
+    @if (lens() === 'trader') {
+      <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
+    } @else {
+      <app-alpaca-operator-lens
+        [refreshVersion]="historyRefreshVersion()"
+        [timelineQuery]="timelineQuery()"
+      />
+    }
   }
 </main>
 
-<app-alpaca-deploy-drawer [visible]="deployOpen()" (closed)="closeDeploy()" />
+@if (operatingDeskVisible()) {
+  <app-alpaca-deploy-drawer [visible]="deployOpen()" (closed)="closeDeploy()" />
 
-<p-dialog
-  header="Create Alpaca order"
-  [visible]="orderEntryOpen()"
-  (visibleChange)="orderEntryOpen.set($event)"
-  [modal]="true"
-  [dismissableMask]="true"
-  [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
-  styleClass="alpaca-order-dialog"
->
-  <app-alpaca-order-entry
-    [initialSymbol]="orderPrefill()?.symbol ?? ''"
-    [expectedAccountId]="ticketAccountId() ?? ''"
-    [manualTicketId]="orderPrefill()?.ticketId ?? null"
-    [manualLegId]="orderPrefill()?.legId ?? null"
-    [manualCapability]="manualTicketCapability()"
-    (submissionFinished)="refreshDesk()"
-  />
-</p-dialog>
+  <p-dialog
+    header="Create Alpaca order"
+    [visible]="orderEntryOpen()"
+    (visibleChange)="orderEntryOpen.set($event)"
+    [modal]="true"
+    [dismissableMask]="true"
+    [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
+    styleClass="alpaca-order-dialog"
+  >
+    <app-alpaca-order-entry
+      [initialSymbol]="orderPrefill()?.symbol ?? ''"
+      [expectedAccountId]="ticketAccountId() ?? ''"
+      [manualTicketId]="orderPrefill()?.ticketId ?? null"
+      [manualLegId]="orderPrefill()?.legId ?? null"
+      [manualCapability]="manualTicketCapability()"
+      (submissionFinished)="refreshDesk()"
+    />
+  </p-dialog>
+}

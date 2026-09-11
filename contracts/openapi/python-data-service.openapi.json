@@ -630,6 +630,124 @@
         "title": "AlpacaBotControlFixtureEnvelope",
         "type": "object"
       },
+      "AlpacaDeskStateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/DeskActionResponse"
+          },
+          "activation_state": {
+            "enum": [
+              "no_selection",
+              "staged_not_applied",
+              "apply_requested_restart_required",
+              "effective_selection"
+            ],
+            "title": "Activation State",
+            "type": "string"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/DeskAccountChoiceResponse"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "consequence": {
+            "title": "Consequence",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "effective_choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeskSelectionSummaryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "empty_choices_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Empty Choices Message"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "lifecycle": {
+            "items": {
+              "$ref": "#/components/schemas/DeskLifecycleStepResponse"
+            },
+            "title": "Lifecycle",
+            "type": "array"
+          },
+          "profiles_requiring_setup": {
+            "minimum": 0.0,
+            "title": "Profiles Requiring Setup",
+            "type": "integer"
+          },
+          "selection_generation": {
+            "minimum": 0.0,
+            "title": "Selection Generation",
+            "type": "integer"
+          },
+          "selection_label": {
+            "title": "Selection Label",
+            "type": "string"
+          },
+          "setup_required_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Required Message"
+          },
+          "staged_choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeskSelectionSummaryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "activation_state",
+          "headline",
+          "detail",
+          "lifecycle",
+          "selection_label",
+          "consequence",
+          "action",
+          "selection_generation",
+          "staged_choice",
+          "effective_choice",
+          "choices",
+          "empty_choices_message",
+          "profiles_requiring_setup",
+          "setup_required_message"
+        ],
+        "title": "AlpacaDeskStateResponse",
+        "type": "object"
+      },
       "AlpacaLiveVerdict": {
         "additionalProperties": false,
         "properties": {
@@ -11893,6 +12011,242 @@
           "symbol"
         ],
         "title": "DeployBotRequest",
+        "type": "object"
+      },
+      "DeskAccountChoiceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_label": {
+            "title": "Account Label",
+            "type": "string"
+          },
+          "action_kind": {
+            "enum": [
+              "review_configuration",
+              "review_staged_configuration"
+            ],
+            "title": "Action Kind",
+            "type": "string"
+          },
+          "action_label": {
+            "title": "Action Label",
+            "type": "string"
+          },
+          "badge_label": {
+            "title": "Badge Label",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Endpoint Mode",
+            "type": "string"
+          },
+          "is_effective": {
+            "title": "Is Effective",
+            "type": "boolean"
+          },
+          "is_staged": {
+            "title": "Is Staged",
+            "type": "boolean"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "profile_label": {
+            "title": "Profile Label",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "selection_id": {
+            "title": "Selection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selection_id",
+          "profile_id",
+          "revision",
+          "profile_label",
+          "account_id",
+          "nickname",
+          "account_label",
+          "endpoint_mode",
+          "badge_label",
+          "description",
+          "action_kind",
+          "action_label",
+          "is_staged",
+          "is_effective"
+        ],
+        "title": "DeskAccountChoiceResponse",
+        "type": "object"
+      },
+      "DeskActionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "review_configuration",
+              "review_staged_configuration",
+              "view_restart_steps"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "enabled"
+        ],
+        "title": "DeskActionResponse",
+        "type": "object"
+      },
+      "DeskLifecycleStepResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "enum": [
+              "effective_configuration",
+              "selected_configuration",
+              "worker_handoff"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "current",
+              "pending"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "status"
+        ],
+        "title": "DeskLifecycleStepResponse",
+        "type": "object"
+      },
+      "DeskSelectionSummaryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_label": {
+            "title": "Account Label",
+            "type": "string"
+          },
+          "badge_label": {
+            "title": "Badge Label",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Endpoint Mode",
+            "type": "string"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "profile_label": {
+            "title": "Profile Label",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "selection_id": {
+            "title": "Selection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selection_id",
+          "profile_id",
+          "revision",
+          "profile_label",
+          "account_id",
+          "nickname",
+          "account_label",
+          "endpoint_mode",
+          "badge_label",
+          "description"
+        ],
+        "title": "DeskSelectionSummaryResponse",
         "type": "object"
       },
       "Diagnostics": {
@@ -44268,6 +44622,56 @@
           }
         },
         "summary": "List Credential Slots",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/desk-state": {
+      "get": {
+        "description": "One backend-authored account-selection model for the Alpaca desk.",
+        "operationId": "read_desk_state_api_brokers_alpaca_configuration_desk_state_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlpacaDeskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Desk State",
         "tags": [
           "broker-configuration"
         ]

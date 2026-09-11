@@ -50,6 +50,7 @@ from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
     AccountVerificationResponse,
+    AlpacaDeskStateResponse,
     ApplyRequest,
     ConfigurationEventListResponse,
     ConfigurationEventResponse,
@@ -175,6 +176,17 @@ async def patch_owner(service: ServiceDep, body: OwnerPatchRequest) -> OwnerResp
 
 
 # ---- credential slots ----------------------------------------------------
+
+
+@router.get(
+    "/desk-state",
+    response_model=AlpacaDeskStateResponse,
+    dependencies=READ_DEPENDENCIES,
+)
+async def read_desk_state(service: ServiceDep) -> AlpacaDeskStateResponse:
+    """One backend-authored account-selection model for the Alpaca desk."""
+    projected = await asyncio.to_thread(service.desk_state)
+    return AlpacaDeskStateResponse.from_record(projected)
 
 
 @router.get(

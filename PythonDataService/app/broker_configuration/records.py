@@ -21,6 +21,23 @@ from app.broker_configuration.envelope import ValidatedLiveEnvelope
 
 EndpointMode = Literal["paper", "live"]
 ApplyOutcome = Literal["applied", "refused"]
+DeskActivationState = Literal[
+    "no_selection",
+    "staged_not_applied",
+    "apply_requested_restart_required",
+    "effective_selection",
+]
+DeskActionKind = Literal[
+    "review_configuration",
+    "review_staged_configuration",
+    "view_restart_steps",
+]
+DeskLifecycleKey = Literal[
+    "effective_configuration",
+    "selected_configuration",
+    "worker_handoff",
+]
+DeskLifecycleStatus = Literal["complete", "current", "pending"]
 
 # The only broker this delivery admits. The column exists so a second broker
 # does not need a migration (contract §2.2).
@@ -173,14 +190,83 @@ class ObservedAccount:
     account_status: str | None = None
 
 
+@dataclass(frozen=True)
+class DeskSelectionSummary:
+    """Safe account/profile identity for the Alpaca desk read model."""
+
+    selection_id: str
+    profile_id: str
+    revision: int
+    profile_label: str
+    account_id: str | None
+    nickname: str | None
+    account_label: str
+    endpoint_mode: EndpointMode
+    badge_label: str
+    description: str
+
+
+@dataclass(frozen=True)
+class DeskAccountChoice(DeskSelectionSummary):
+    """One explicitly pinned account the configuration page can review."""
+
+    action_kind: DeskActionKind
+    action_label: str
+    is_staged: bool
+    is_effective: bool
+
+
+@dataclass(frozen=True)
+class DeskLifecycleStep:
+    key: DeskLifecycleKey
+    label: str
+    status: DeskLifecycleStatus
+
+
+@dataclass(frozen=True)
+class DeskAction:
+    kind: DeskActionKind
+    label: str
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class AlpacaDeskState:
+    """Backend-authored account-selection UX; the browser only renders it."""
+
+    activation_state: DeskActivationState
+    headline: str
+    detail: str
+    lifecycle: tuple[DeskLifecycleStep, ...]
+    selection_label: str
+    consequence: str
+    action: DeskAction
+    selection_generation: int
+    staged_choice: DeskSelectionSummary | None
+    effective_choice: DeskSelectionSummary | None
+    choices: tuple[DeskAccountChoice, ...]
+    empty_choices_message: str | None
+    profiles_requiring_setup: int
+    setup_required_message: str | None
+
+
 __all__ = [
     "ALPACA_BROKER",
     "REVISION_SCHEMA_VERSION",
     "AccountNickname",
+    "AlpacaDeskState",
     "ApplyOutcome",
     "BrokerProfile",
     "ConfigurationEvent",
     "CredentialSlotStatus",
+    "DeskAccountChoice",
+    "DeskAction",
+    "DeskActionKind",
+    "DeskActivationState",
+    "DeskLifecycleKey",
+    "DeskLifecycleStatus",
+    "DeskLifecycleStep",
+    "DeskSelectionSummary",
     "EndpointMode",
     "InstallationSelection",
     "LocalOwner",

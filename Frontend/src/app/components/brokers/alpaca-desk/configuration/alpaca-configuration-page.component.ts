@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal, viewChild } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import type {
   BrokerInstallationSelection,
@@ -26,6 +26,14 @@ import { ConfigurationStatusPanelComponent } from './configuration-status-panel.
 interface RevisionRef {
   readonly profileId: string;
   readonly revision: number;
+}
+
+function reviewRef(params: { get(name: string): string | null }): RevisionRef | null {
+  const profileId = params.get('profileId');
+  const revision = Number(params.get('revision'));
+  return profileId === null || profileId.length === 0 || !Number.isInteger(revision) || revision < 1
+    ? null
+    : { profileId, revision };
 }
 
 function revisionRef(
@@ -78,10 +86,19 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
 })
 export class AlpacaConfigurationPageComponent {
   private readonly service = inject(BrokerConfigurationService);
+  private readonly requestedReview = reviewRef(inject(ActivatedRoute).snapshot.queryParamMap);
   private readonly createForm = viewChild(ConfigurationProfileCreateComponent);
 
   protected readonly includeArchived = signal(false);
-  protected readonly selectedProfileId = signal<string | null>(null);
+  protected readonly selectedProfileId = signal<string | null>(
+    this.requestedReview?.profileId ?? null,
+  );
+  protected readonly reviewRevision = computed(() => {
+    const request = this.requestedReview;
+    return request !== null && this.selectedProfileId() === request.profileId
+      ? request.revision
+      : null;
+  });
   /**
    * The last verification, carrying the exact revision it was taken for.
    *
@@ -160,6 +177,11 @@ export class AlpacaConfigurationPageComponent {
     this.nicknames.error() || this.revisions.error()
     || this.stagedRevision.error() || this.effectiveRevision.error(),
   ));
+  protected readonly requestedRevisionMissing = computed(() =>
+    this.reviewRevision() !== null
+      && this.revisions.hasValue()
+      && !this.revisions.value().some((revision) => revision.revision === this.reviewRevision()),
+  );
 
   protected readonly currentSelection = computed(() =>
     this.selection.hasValue() ? this.selection.value() : null,

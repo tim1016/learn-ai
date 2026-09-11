@@ -57,6 +57,7 @@ export class ConfigurationProfileDetailComponent {
   readonly slots = input.required<readonly BrokerCredentialSlot[]>();
   readonly observed = input<readonly BrokerObservedAccount[] | null>(null);
   readonly nickname = input<string | null>(null);
+  readonly reviewRevision = input<number | null>(null);
   readonly busy = input(false);
 
   readonly renamed = output<string>();

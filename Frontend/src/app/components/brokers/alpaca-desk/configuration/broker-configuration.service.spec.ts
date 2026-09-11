@@ -22,13 +22,14 @@ describe('BrokerConfigurationService', () => {
   afterEach(() => http.verify());
 
   it('addresses every route relatively so the dev proxy attaches the control secret', () => {
+    void service.readDeskState();
     void service.readSelection();
     void service.listCredentialSlots();
     void service.listNicknames();
     void service.listRevisions('profile-1');
 
     const requests = http.match(() => true);
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(5);
     for (const request of requests) {
       // An absolute `environment.pythonServiceUrl` URL bypasses the proxy that
       // supplies `X-Data-Plane-Control-Secret`, and every route here — reads

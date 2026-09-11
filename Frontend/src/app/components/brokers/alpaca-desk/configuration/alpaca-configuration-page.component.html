@@ -10,6 +10,19 @@
     </p>
   </header>
 
+  @if (reviewRevision(); as revision) {
+    <p class="configuration__review-context" role="status">
+      Revision {{ revision }} was selected from the Alpaca desk for review.
+      No configuration changes until you explicitly Stage and Apply.
+    </p>
+  }
+
+  @if (requestedRevisionMissing()) {
+    <p class="configuration__error" role="alert">
+      The selected revision is no longer available. Nothing was staged or applied.
+    </p>
+  }
+
   @if (refusal(); as detail) {
     <app-configuration-refusal [refusal]="detail" (reloadRequested)="reloadAll()" />
   }
@@ -98,6 +111,7 @@
       [slots]="slots.hasValue() ? slots.value() : []"
       [observed]="observedAccounts()"
       [nickname]="detailNickname()"
+      [reviewRevision]="reviewRevision()"
       [busy]="busy()"
       (renamed)="renameProfile($event)"
       (cloned)="cloneProfile($event)"

@@ -1,0 +1,73 @@
+@let current = view();
+<section class="activation" aria-labelledby="alpaca-activation-heading">
+  <header class="activation__copy" aria-live="polite">
+    <span class="activation__mark" aria-hidden="true"></span>
+    <div>
+      <h2 id="alpaca-activation-heading">{{ current.headline }}</h2>
+      <p>{{ current.detail }}</p>
+    </div>
+  </header>
+
+  <ol class="activation__lifecycle" aria-label="Account activation path">
+    @for (step of current.lifecycle; track step.key) {
+      <li [attr.data-status]="step.status">
+        <span class="activation__node" aria-hidden="true"></span>
+        <strong>{{ step.label }}</strong>
+      </li>
+    }
+  </ol>
+
+  <form (submit)="$event.preventDefault(); requestAction()">
+    <fieldset [disabled]="busy()">
+      <legend>{{ current.selection_label }}</legend>
+      <div class="activation__choices">
+        @for (choice of current.choices; track choice.selection_id) {
+          <label
+            class="account-choice"
+            [attr.data-mode]="choice.endpoint_mode"
+            [class.account-choice--selected]="selectedSelectionId() === choice.selection_id"
+          >
+            <input
+              type="radio"
+              name="alpaca-account-choice"
+              [value]="choice.selection_id"
+              [checked]="selectedSelectionId() === choice.selection_id"
+              [attr.aria-label]="choice.profile_label + ', ' + choice.badge_label + ', '
+                + choice.account_label + ', account ' + choice.account_id + ', '
+                + (choice.is_staged ? 'staged' : choice.is_effective ? 'effective' : 'available')"
+              (change)="selectChoice(choice.selection_id)"
+            />
+            <span class="account-choice__content">
+              <span class="account-choice__heading">
+                <strong>{{ choice.profile_label }}</strong>
+                <span class="account-choice__badge">{{ choice.badge_label }}</span>
+              </span>
+              <span class="account-choice__identity">
+                @if (choice.nickname; as nickname) { <span>{{ nickname }}</span> }
+                <code>{{ choice.account_id }}</code>
+              </span>
+              <small>{{ choice.description }}</small>
+              <span class="account-choice__action">{{ choice.action_label }}</span>
+            </span>
+          </label>
+        } @empty {
+          @if (current.empty_choices_message; as message) {
+            <p class="activation__empty">{{ message }}</p>
+          }
+        }
+      </div>
+      @if (current.setup_required_message; as message) {
+        <p class="activation__setup-note">{{ message }}</p>
+      }
+    </fieldset>
+
+    <footer class="activation__footer">
+      <p id="alpaca-activation-consequence">{{ current.consequence }}</p>
+      <button
+        type="submit"
+        [disabled]="!canRequestAction()"
+        aria-describedby="alpaca-activation-consequence"
+      >{{ actionLabel() }}</button>
+    </footer>
+  </form>
+</section>

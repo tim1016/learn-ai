@@ -31,6 +31,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker_configuration import selection
+from app.broker_configuration.desk_state import project_desk_state
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import (
     AccountModeDisagreement,
@@ -49,6 +50,7 @@ from app.broker_configuration.records import (
     ALPACA_BROKER,
     REVISION_SCHEMA_VERSION,
     AccountNickname,
+    AlpacaDeskState,
     BrokerProfile,
     ConfigurationEvent,
     CredentialSlotStatus,
@@ -545,6 +547,39 @@ class BrokerConfigurationService:
     def selection(self) -> InstallationSelection:
         """Staged **and** effective, so no surface can render one as the other."""
         return self._store.read_selection()
+
+    def desk_state(self) -> AlpacaDeskState:
+        """Project durable account selection into backend-authored desk copy.
+
+        The projection is intentionally broker-free: it does not resolve a
+        credential slot or test connectivity. Those are separate current-state
+        concerns. A desk choice is admitted only after the operator explicitly
+        verified and pinned an account on a complete saved revision.
+        """
+        current = self._store.read_selection()
+        profiles = self._store.list_profiles(include_archived=False)
+        latest_by_profile = {
+            profile.profile_id: self._store.latest_revision(profile.profile_id)
+            for profile in profiles
+        }
+        staged_revision = (
+            None
+            if current.staged_profile_id is None or current.staged_revision is None
+            else self._require_revision(current.staged_profile_id, current.staged_revision)
+        )
+        effective_revision = (
+            None
+            if current.effective_profile_id is None or current.effective_revision is None
+            else self._require_revision(current.effective_profile_id, current.effective_revision)
+        )
+        return project_desk_state(
+            selection=current,
+            profiles=profiles,
+            latest_revisions=latest_by_profile,
+            staged_revision=staged_revision,
+            effective_revision=effective_revision,
+            nicknames=self._store.list_nicknames(),
+        )
 
     def stage_selection(
         self, *, profile_id: str, revision: int, expected_selection_generation: int

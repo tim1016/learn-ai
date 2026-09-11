@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import type { components } from '../../../../api/broker.types';
 import type {
+  AlpacaDeskState,
   BrokerAccountNickname,
   BrokerCredentialSlot,
   BrokerEndpointMode,
@@ -53,6 +54,11 @@ export class BrokerConfigurationService {
 
   private revisionBase(profileId: string, revision: number): string {
     return `${this.profileBase(profileId)}/revisions/${encodeURIComponent(String(revision))}`;
+  }
+
+  /** Backend-authored activation guidance; reads durable configuration only. */
+  readDeskState(): Promise<AlpacaDeskState> {
+    return firstValueFrom(this.http.get<AlpacaDeskState>(`${this.base}/desk-state`));
   }
 
   listCredentialSlots(): Promise<readonly BrokerCredentialSlot[]> {

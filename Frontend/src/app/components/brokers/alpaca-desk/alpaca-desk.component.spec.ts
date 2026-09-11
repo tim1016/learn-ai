@@ -4,12 +4,63 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AlpacaDeskState } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
+
+const accountActivation: AlpacaDeskState = {
+  activation_state: 'no_selection',
+  headline: 'No Alpaca account is active',
+  detail: 'Choose an approved account to prepare this desk.',
+  lifecycle: [
+    { key: 'effective_configuration', label: 'No active account', status: 'current' },
+    { key: 'selected_configuration', label: 'Select configuration', status: 'pending' },
+    { key: 'worker_handoff', label: 'Restart worker', status: 'pending' },
+  ],
+  selection_label: 'Approved accounts',
+  empty_choices_message: 'No approved accounts are available. Verify one in Configuration.',
+  consequence: 'Reviewing a choice does not change the running worker.',
+  action: {
+    kind: 'review_configuration',
+    label: 'Review selected account',
+    enabled: true,
+  },
+  selection_generation: 0,
+  staged_choice: null,
+  effective_choice: null,
+  choices: [{
+    selection_id: 'paper-profile:3',
+    profile_id: 'paper-profile',
+    revision: 3,
+    profile_label: 'Alpaca Paper',
+    account_id: 'PA-123',
+    nickname: 'Strategy lab',
+    account_label: 'Strategy lab · PA-123',
+    endpoint_mode: 'paper',
+    badge_label: 'Paper',
+    description: 'For strategy testing with no live capital.',
+    is_staged: false,
+    is_effective: false,
+    action_kind: 'review_configuration',
+    action_label: 'Select Paper account',
+  }],
+  profiles_requiring_setup: 0,
+  setup_required_message: null,
+};
+
+const effectiveSelection: AlpacaDeskState = {
+  ...accountActivation,
+  activation_state: 'effective_selection',
+  headline: 'Strategy lab is the effective selection',
+  detail: 'The worker last acknowledged Alpaca Paper.',
+  effective_choice: accountActivation.choices[0],
+  action: { kind: 'review_configuration', label: 'Review account configuration', enabled: true },
+};
 
 function brokerService() {
   return {
@@ -100,6 +151,7 @@ function manualTicketQuery(overrides: Record<string, string> = {}): Record<strin
 async function renderDesk(
   query: Record<string, string> = {},
   brokers = brokerService(),
+  deskState: AlpacaDeskState = accountActivation,
 ) {
   const queryParamMap = convertToParamMap(query);
   const view = await render(AlpacaDeskComponent, {
@@ -134,6 +186,10 @@ async function renderDesk(
         provide: BrokerV2PanelService,
         useValue: { getDeployView: () => new Promise<never>(() => undefined) },
       },
+      {
+        provide: BrokerConfigurationService,
+        useValue: { readDeskState: vi.fn().mockResolvedValue(deskState) },
+      },
     ],
   });
 
@@ -146,7 +202,7 @@ describe('AlpacaDeskComponent', () => {
   it('defaults to the Trader lens while restoring account safety surfaces', async () => {
     const { brokers } = await renderDesk();
 
-    expect(screen.getByRole('tab', { name: 'Trader' }).getAttribute('aria-selected')).toBe('true');
+    expect((await screen.findByRole('tab', { name: 'Trader' })).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Operator desk' })).toBeNull();
     expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
@@ -176,15 +232,92 @@ describe('AlpacaDeskComponent', () => {
   it('opens the Operator lens from a query deep link', async () => {
     const { brokers } = await renderDesk({ lens: 'operator' });
 
-    expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-selected')).toBe('true');
+    expect((await screen.findByRole('tab', { name: 'Operator' })).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
     await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('offers account activation without rendering operating controls when no account is effective', async () => {
+    const brokers = brokerService();
+    brokers.getAccount.mockRejectedValue(new HttpErrorResponse({ status: 409 }));
+    const { router } = await renderDesk({}, brokers, accountActivation);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    expect(await screen.findByRole('heading', { name: accountActivation.headline })).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
+
+    await fireEvent.click(screen.getByRole('radio', { name: /Strategy lab · PA-123/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Select Paper account' }));
+
+    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca/configuration'], {
+      queryParams: { profileId: 'paper-profile', revision: 3 },
+    });
+  });
+
+  it('keeps the operating desk visible when account data succeeds during bootstrap', async () => {
+    await renderDesk({}, brokerService(), accountActivation);
+
+    expect(await screen.findByRole('tab', { name: 'Trader' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
+  });
+
+  it('keeps the connectivity failure distinct when activation guidance is unavailable', async () => {
+    const brokers = brokerService();
+    brokers.getAccount.mockRejectedValue(new HttpErrorResponse({ status: 503 }));
+
+    await renderDesk({}, brokers, effectiveSelection);
+
+    expect(await screen.findByText(/Couldn't reach Alpaca/)).toBeTruthy();
+    expect(screen.getByText(effectiveSelection.headline)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Review account configuration' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
+  });
+
+  it('keeps a connected account usable while showing the exact pending configuration', async () => {
+    const stagedChoice = {
+      ...accountActivation.choices[0],
+      selection_id: 'live-profile:1',
+      profile_id: 'live-profile',
+      revision: 1,
+      profile_label: 'Alpaca Live',
+      account_id: 'LIVE-1',
+      nickname: 'Live account',
+      account_label: 'Live account',
+      endpoint_mode: 'live' as const,
+      badge_label: 'Live',
+      description: 'Selecting this profile does not arm live trading.',
+      action_label: 'Review Alpaca Live',
+    };
+    const pending: AlpacaDeskState = {
+      ...accountActivation,
+      activation_state: 'staged_not_applied',
+      headline: 'Strategy lab remains the effective selection',
+      detail: 'Alpaca Live is selected next; the effective configuration remains Alpaca Paper.',
+      staged_choice: stagedChoice,
+      effective_choice: accountActivation.choices[0],
+      action: { kind: 'review_staged_configuration', label: 'Review & apply Alpaca Live', enabled: true },
+    };
+    const { router } = await renderDesk({}, brokerService(), pending);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    expect(await screen.findByText(pending.headline)).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Trader' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole('button', { name: pending.action.label }));
+    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca/configuration'], {
+      queryParams: { profileId: 'live-profile', revision: 1 },
+    });
   });
 
   it('opens Deploy strategy from the desk and closes back to the visible desk', async () => {
     const { router } = await renderDesk();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy strategy' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Deploy strategy' }));
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
     await vi.waitFor(() => expect(router.url).toContain('deploy='));
@@ -239,12 +372,12 @@ describe('AlpacaDeskComponent', () => {
 
     await renderDesk();
 
-    expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Operator desk' })).toBeTruthy();
   });
 
   it('moves focus and selection with the lens tab keyboard controls', async () => {
     await renderDesk();
-    const traderTab = screen.getByRole('tab', { name: 'Trader' });
+    const traderTab = await screen.findByRole('tab', { name: 'Trader' });
     const operatorTab = screen.getByRole('tab', { name: 'Operator' });
 
     traderTab.focus();
