@@ -10,9 +10,12 @@ saved profile. This module owns three things that must not drift apart:
    that table so the distinction is asserted rather than remembered.
 2. **How to read them without ever refusing to construct** — the two readers
    below.
-3. **The refusal their presence produces after cutover** —
-   :func:`retired_environment_refusal`, stated once so the worker and the four
-   operator CLIs answer a stale ``.env`` with the same sentence.
+3. **The refusal their presence produces when a cut-over installation is asked
+   to apply a change** — :func:`retired_environment_refusal`, stated once so the
+   worker and the four operator CLIs answer a stale ``.env`` with the same
+   sentence. A plain restart of an already-effective configuration is not such a
+   request: it logs the same names and binds anyway, because refusing it would
+   leave the worker with no broker while a position could be open.
 
 Why two readers rather than one, and why neither is ``AlpacaSettings``:
 
@@ -256,16 +259,27 @@ class LegacyEnvironmentReadFailure:
 def retired_environment_refusal(
     presence: LegacyEnvironmentPresence | None = None,
 ) -> UnboundBroker | None:
-    """The refusal a cut-over installation owes a stale retired variable, if any.
+    """What a stale retired variable *would* be refused with, if anything.
 
-    ``None`` when the environment is clean. Callers ask this **only** once they
-    know the installation has cut over — i.e. a profile revision is about to be
-    bound. Before cutover the same variables are the legitimate and only source
-    of the worker's configuration, and refusing on them would break every
-    deployment that has not run the import yet.
+    ``None`` when the environment is clean. This function states the refusal; it
+    does not decide who gets one. Two preconditions belong to the caller:
 
-    The prose lives here rather than at each call site so the worker and the
-    operator CLIs answer a stale ``.env`` with the same sentence. It names the
+    1. **The installation has cut over.** Before the import runs, these same
+       variables are the legitimate and only source of the worker's
+       configuration, and refusing on them would break every deployment that has
+       not cut over yet.
+    2. **The caller is about to *apply* a change**, not merely recover one.
+       Only a deliberate act — the worker binding a staged revision an Apply
+       named, or an operator CLI running a ceremony — refuses on this result.
+       An ordinary restart of an already-effective configuration must still
+       bind, or one leftover line would leave the worker with no broker while a
+       position could be open and nothing able to EXIT it (owner decision 4,
+       ADR 0060 D4.3). That path reads this result to *name* the stale variables
+       in a log line every boot, and then ignores the refusal —
+       ``resolve_worker_binding`` is where the two arms are chosen between.
+
+    The prose lives here rather than at each call site so every caller that does
+    refuse answers a stale ``.env`` with the same sentence. It names the
     variables, because "which line do I delete?" is the only question an
     operator has at this point, and a generic error does not answer it.
     """

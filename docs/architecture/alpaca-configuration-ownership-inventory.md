@@ -21,7 +21,7 @@ ADR 0060 Decision 1 owns these; they are repeated here only as column headings f
 
 ## A. Read by `AlpacaSettings` — `PythonDataService/app/broker/alpaca/config.py`
 
-`AlpacaSettings` uses `env_prefix="ALPACA_"`, `case_sensitive=False`, `extra="ignore"` (`config.py:60-65`), so the env name is `ALPACA_` + the upper-cased field name. **`extra="ignore"` is why a retired variable left in `.env` after cutover would be silently dropped.** ADR 0060 open question 1 is now resolved (owner, 2026-09-10): it is *not* dropped silently. A cut-over installation refuses to bind while any retired variable is present, naming the ones to delete — `app/broker_configuration/legacy_environment.py`. The gate closes; the service still boots.
+`AlpacaSettings` uses `env_prefix="ALPACA_"`, `case_sensitive=False`, `extra="ignore"` (`config.py:60-65`), so the env name is `ALPACA_` + the upper-cased field name. **`extra="ignore"` is why a retired variable left in `.env` after cutover would be silently dropped.** ADR 0060 open question 1 is now resolved (owner, 2026-09-10): it is *not* dropped silently. A cut-over installation names the retired variables to delete — `app/broker_configuration/legacy_environment.py` — and *refuses to bind* when the boot is a deliberate Apply (or an operator CLI): the gate closes, the service still boots. A plain restart of an already-effective configuration binds and logs the same names at `error` on every boot rather than refusing, because refusing there would leave the worker with no broker while a position could be open (ADR 0060 D4.3, narrowing the same day).
 
 | Env var | Declared | Type and constraints | Class | Migrates | Principal callers |
 |---|---|---|---|---|---|

@@ -190,46 +190,84 @@ async def resolve_worker_binding(
 
     # This installation has cut over: a saved revision is about to be bound, so
     # the variables it replaced are stale by definition. The owner's resolution
-    # of ADR 0060 open question 1 (2026-09-10) is to refuse rather than ignore
-    # them quietly, which ``extra="ignore"`` would otherwise do.
+    # of ADR 0060 open question 1 (2026-09-10) is to answer them rather than
+    # ignore them quietly, which ``extra="ignore"`` would otherwise do — and,
+    # as narrowed the same day, to answer them *differently* depending on why
+    # this worker is binding at all.
     #
-    # It is deliberately *this* refusal and not a raise: the gate closes with a
-    # named reason and the service still boots (#2014), so an operator who left
-    # a line behind fixes it by deleting the line, not by debugging a crash
-    # loop. The check sits above every broker and Clerk construction, so nothing
-    # takes an execution lease or reaches the network first.
+    # **Apply refuses; recovery complains and binds.** A deliberate Apply is a
+    # request to change what is in force, and a stale line means two documents
+    # claim to describe the change: refusing is the only honest answer, and an
+    # operator is right there to delete the line. An ordinary restart — a crash,
+    # a reboot, an OOM kill, ``restart: always`` — requests no change at all.
+    # Refusing *it* would collide with owner decision 4 (ADR 0060 D4.3), the
+    # rule this whole module is shaped around: a boot must never leave the
+    # worker with no broker while a position could be open, because nothing can
+    # EXIT it. One leftover harmless line must not strand the account on every
+    # restart from now until an operator happens to read the log.
+    #
+    # So the recovery path logs the same fact, at the same level, every boot,
+    # naming the same variables — the hygiene problem stays loud and visible —
+    # and then binds. Nothing it binds comes from these variables: the effective
+    # revision supplies the mode and the envelope, and ``resolved_alpaca_settings``
+    # answers every downstream consumer from the installed binding, so a stale
+    # value is never mistaken for the one in force.
+    #
+    # The Apply refusal is deliberately *this* refusal and not a raise: the gate
+    # closes with a named reason and the service still boots (#2014), so an
+    # operator who left a line behind fixes it by deleting the line, not by
+    # debugging a crash loop. The check sits above every broker and Clerk
+    # construction, so nothing takes an execution lease or reaches the network
+    # first.
     #
     # Order matters. It is *below* ``_bind_nothing`` because a pre-cutover
-    # installation legitimately runs on these variables, and above the two
-    # binding paths because both of them install a revision.
+    # installation legitimately runs on these variables, and *inside* the intent
+    # branch because the intent is exactly the distinction the owner drew.
     #
     # One read, off the loop thread. ``LegacyEnvironmentPresence()`` parses
     # ``.env`` from disk; reading it twice — once for the refusal, once for the
     # log line — would both block here and let the two disagree.
     presence = await asyncio.to_thread(current_retired_settings)
     stale_refusal = retired_environment_refusal(presence)
-    if stale_refusal is not None:
-        stale = stale_retired_settings(presence)
-        logger.error(
-            "Retired broker settings are still present; no broker binding installed",
-            extra={
-                "action": "worker_binding_retired_environment",
-                "reason_code": stale_refusal.reason,
-                "retired_variables": list(stale),
-            },
-        )
-        # An Apply must be *consumed* even when it is refused (ADR 0060 D4.3):
-        # leaving the one-shot request pending would let a later restart — after
-        # someone tidies ``.env`` for an unrelated reason — silently apply the
-        # very change this boot refused. ``_record_refusal`` is the same path
-        # every other apply refusal takes.
-        if chosen.is_apply:
-            _record_refusal(service, candidate=chosen, reason=stale_refusal.reason)
-        return UnboundWorker(stale_refusal)
 
     if chosen.intent is BindingIntent.APPLY:
+        if stale_refusal is not None:
+            logger.error(
+                "Retired broker settings are still present; the Apply is refused and "
+                "no broker binding installed",
+                extra={
+                    "action": "worker_binding_retired_environment",
+                    "reason_code": stale_refusal.reason,
+                    "retired_variables": list(stale_retired_settings(presence)),
+                },
+            )
+            # An Apply must be *consumed* even when it is refused (ADR 0060 D4.3):
+            # leaving the one-shot request pending would let a later restart — after
+            # someone tidies ``.env`` for an unrelated reason — silently apply the
+            # very change this boot refused. ``_record_refusal`` is the same path
+            # every other apply refusal takes.
+            _record_refusal(service, candidate=chosen, reason=stale_refusal.reason)
+            return UnboundWorker(stale_refusal)
         return await _bind_applied(
             chosen, service=service, probe=probe, environment=environment
+        )
+
+    if stale_refusal is not None:
+        # A recovery consumes nothing: no Apply is pending on this path, so
+        # there is no one-shot request to record a refusal against, and calling
+        # ``_record_refusal`` here would write a refusal for a change nobody
+        # asked for. The level stays ``error`` — this is operator-actionable and
+        # repeats every boot until the line is deleted — but the ``action``
+        # differs so a log search or an alert rule can tell "refused to bind"
+        # from "bound anyway, please tidy up".
+        logger.error(
+            "Retired broker settings are still present; this recovery binds the "
+            "effective revision anyway and does not read them",
+            extra={
+                "action": "worker_binding_retired_environment_recovery_warning",
+                "reason_code": stale_refusal.reason,
+                "retired_variables": list(stale_retired_settings(presence)),
+            },
         )
     return await _bind_candidate(chosen, service=service, environment=environment)
 

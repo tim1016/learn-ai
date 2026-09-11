@@ -1,22 +1,28 @@
-"""Refusing to bind while a retired setting is still in the environment.
+"""Answering a retired setting that is still in the environment after cutover.
 
 The owner's resolution of ADR 0060 open question 1 (2026-09-10): a variable the
-profiles database replaced, left behind after cutover, is **refused** rather
-than ignored quietly — which is what ``extra="ignore"`` does today.
+profiles database replaced, left behind after cutover, is **answered** rather
+than ignored quietly — which is what ``extra="ignore"`` does today. Narrowed the
+same day, after review found the first cut collided with owner decision 4: *what*
+the answer is depends on why the worker is binding.
 
-Three properties, and the second is the one that would break every deployment if
-it were wrong:
+Four properties, and the middle two are the ones that would break a live
+deployment if they were wrong:
 
-1. A cut-over installation refuses, names the variables, and **still boots** —
+1. A deliberate **Apply** refuses, names the variables, and **still boots** —
    the gate closes, the process does not crash-loop (#2014).
-2. A **pre-cutover** installation does not refuse. Before the import runs, those
+2. An ordinary **restart** of an already-effective configuration *binds*, and
+   says so loudly in the log. Refusing it would leave the worker with no broker
+   while a position could be open, and nothing able to EXIT it (ADR 0060 D4.3).
+3. A **pre-cutover** installation does not refuse. Before the import runs, those
    same variables are the only description of the worker there is.
-3. The operator CLIs refuse identically, so an arming ceremony cannot run
-   against a configuration the worker itself would not bind.
+4. The operator CLIs refuse, because running a ceremony is a deliberate act in
+   the same family as Apply.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -107,22 +113,115 @@ async def _effective_paper_profile(service: BrokerConfigurationService) -> None:
     )
 
 
+def _pending_apply_on_a_second_profile(service: BrokerConfigurationService) -> str:
+    """A staged revision with Apply pressed against it — a deliberate change."""
+    created = service.create_profile(
+        display_name="A change the operator applied",
+        credential_slot=PAPER_SLOT,
+        endpoint_mode="paper",
+        live_envelope=None,
+    )
+    service.stage_selection(
+        profile_id=created.profile.profile_id,
+        revision=1,
+        expected_selection_generation=service.selection().selection_generation,
+    )
+    service.request_apply(
+        expected_selection_generation=service.selection().selection_generation
+    )
+    return created.profile.profile_id
+
+
+def _logged_actions(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogRecord]:
+    """Every record this boot emitted under one structured ``action``."""
+    return [record for record in caplog.records if getattr(record, "action", None) == action]
+
+
 @pytest.mark.usefixtures("reads_the_real_environment")
-async def test_a_cut_over_worker_refuses_while_a_retired_variable_is_set(
+async def test_a_plain_restart_binds_and_complains_while_a_retired_variable_is_set(
     service: BrokerConfigurationService,
     environment: AlpacaCredentialEnvironment,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """The narrowing, and the reason for it (owner decision 4 / ADR 0060 D4.3).
+
+    Nothing is pending here: this is an already-effective installation coming
+    back from a crash, a reboot or an OOM kill. Refusing it — which this gate did
+    when it first landed — would leave the worker holding no broker on *every*
+    subsequent restart, and a worker with no broker cannot EXIT a position it
+    already has. One stale line must not be able to do that.
+
+    So the boot binds, and the stale fact is carried by the log instead. The two
+    assertions on the bound context are the other half of the bargain: binding
+    anyway is only safe because nothing in the binding comes from these
+    variables. ``ALPACA_MODE=live`` is set here and the worker still binds the
+    profile's ``paper``.
+    """
     await _effective_paper_profile(service)
+    monkeypatch.setenv("ALPACA_MODE", "live")
     monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
 
-    resolved = await resolve_worker_binding(
-        service_factory=lambda: service, environment=environment
-    )
+    with caplog.at_level(logging.ERROR, logger="app.broker_configuration.worker_binding"):
+        resolved = await resolve_worker_binding(
+            service_factory=lambda: service, environment=environment
+        )
+
+    assert isinstance(resolved, BoundWorker)
+    assert resolved.from_profile
+    assert resolved.context.settings.mode == "paper"
+    assert resolved.context.settings.live_loss_usd is None
+
+    complaints = _logged_actions(caplog, "worker_binding_retired_environment_recovery_warning")
+    assert len(complaints) == 1
+    assert complaints[0].levelno == logging.ERROR
+    assert complaints[0].__dict__["retired_variables"] == [
+        "ALPACA_MODE",
+        "ALPACA_LIVE_LOSS_USD",
+    ]
+    assert complaints[0].__dict__["reason_code"] == RETIRED_ENVIRONMENT_SETTINGS
+    # The refusal's own action is absent: nothing was refused on this boot, and
+    # an alert rule keyed on it must not fire for an ordinary restart.
+    assert _logged_actions(caplog, "worker_binding_retired_environment") == []
+
+
+@pytest.mark.usefixtures("reads_the_real_environment")
+async def test_a_pending_apply_still_refuses_while_a_retired_variable_is_set(
+    service: BrokerConfigurationService,
+    environment: AlpacaCredentialEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The other side of the narrowing: a deliberate change still refuses.
+
+    The environment is *identical* to the restart above, deliberately — the only
+    difference is the pending Apply, which is the whole of the distinction the
+    owner drew. Applying a change while a retired line still claims to describe
+    the configuration is the case that stays closed, and an operator who just
+    pressed Apply is standing there to delete the line.
+
+    What that refusal does to the one-shot Apply has its own test below; the one
+    assertion here is enough to say the two are wired together.
+    """
+    await _effective_paper_profile(service)
+    _pending_apply_on_a_second_profile(service)
+    monkeypatch.setenv("ALPACA_MODE", "live")
+    monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
+
+    with caplog.at_level(logging.ERROR, logger="app.broker_configuration.worker_binding"):
+        resolved = await resolve_worker_binding(
+            service_factory=lambda: service, environment=environment
+        )
 
     assert isinstance(resolved, UnboundWorker)
     assert resolved.unbound.reason == RETIRED_ENVIRONMENT_SETTINGS
     assert "ALPACA_LIVE_LOSS_USD" in resolved.unbound.next_step
+    assert service.selection().last_apply_outcome == "refused"
+
+    refusals = _logged_actions(caplog, "worker_binding_retired_environment")
+    assert len(refusals) == 1
+    assert refusals[0].__dict__["retired_variables"] == ["ALPACA_MODE", "ALPACA_LIVE_LOSS_USD"]
+    assert _logged_actions(caplog, "worker_binding_retired_environment_recovery_warning") == []
 
 
 @pytest.mark.usefixtures("reads_the_real_environment")
@@ -135,9 +234,12 @@ async def test_the_refusal_is_a_closed_gate_not_a_crash(
 
     ``resolve_worker_binding`` returning an ``UnboundWorker`` is exactly what
     ``app/main.py`` already handles — it logs the reason code and continues — so
-    the refusal reaches the operator as a 503 with words, not a restart loop.
+    the refusal reaches the operator as a 503 with words, not a restart loop. The
+    Apply is what makes this boot refusable at all; see the restart test above
+    for what the same environment does without one.
     """
     await _effective_paper_profile(service)
+    _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_MODE", "paper")
 
     resolved = await resolve_worker_binding(
@@ -218,20 +320,7 @@ async def test_a_refused_apply_is_consumed_so_a_later_tidy_up_cannot_re_arm_it(
     The change has to be re-authorised after the environment is fixed.
     """
     await _effective_paper_profile(service)
-    created = service.create_profile(
-        display_name="A change the operator applied",
-        credential_slot=PAPER_SLOT,
-        endpoint_mode="paper",
-        live_envelope=None,
-    )
-    service.stage_selection(
-        profile_id=created.profile.profile_id,
-        revision=1,
-        expected_selection_generation=service.selection().selection_generation,
-    )
-    service.request_apply(
-        expected_selection_generation=service.selection().selection_generation
-    )
+    staged_profile_id = _pending_apply_on_a_second_profile(service)
     monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "5000")
 
     resolved = await resolve_worker_binding(
@@ -246,13 +335,21 @@ async def test_a_refused_apply_is_consumed_so_a_later_tidy_up_cannot_re_arm_it(
     assert selection.last_apply_refusal_reason is not None
     # The previously-effective revision is untouched: the refusal blocked a
     # *change*, it did not rewrite what was already bound.
-    assert selection.effective_profile_id != created.profile.profile_id
+    assert selection.effective_profile_id != staged_profile_id
 
 
 async def test_the_operator_clis_refuse_the_same_way(
     service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An arming ceremony must not run against what the worker would not bind."""
+    """A ceremony is a deliberate act, so it refuses where a restart would not.
+
+    The worker's *recovery* path now binds through a stale line and complains in
+    the log; an operator command does not. Running one is a deliberate act in the
+    same family as Apply — somebody is at the keyboard, and an arming ceremony is
+    the last place two resolvers should disagree about which document is in
+    force. Refusing costs that operator one line-edit; binding would seal an
+    arming record against a configuration whose description is ambiguous.
+    """
     await _effective_paper_profile(service)
     monkeypatch.setenv("ALPACA_LIVE_SHADOW_SESSIONS", "3")
 

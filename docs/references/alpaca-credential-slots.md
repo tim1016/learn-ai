@@ -151,17 +151,36 @@ authority is
 `tests/broker_configuration/test_legacy_environment.py` asserts they stay
 disjoint.
 
-**Retired — seven names, refused if present after cutover.** `ALPACA_MODE`,
-`ALPACA_LIVE_LOSS_FRACTION`, `ALPACA_LIVE_LOSS_USD`,
+**Retired — seven names, refused on a deliberate change after cutover.**
+`ALPACA_MODE`, `ALPACA_LIVE_LOSS_FRACTION`, `ALPACA_LIVE_LOSS_USD`,
 `ALPACA_LIVE_SHADOW_SESSIONS`, `ALPACA_LIVE_ARMING_MAX_SESSIONS`,
 `ALPACA_LIVE_XH_ENTRY_BPS`, `ALPACA_LIVE_XH_EXIT_BPS`. Once an installation has
-a saved profile, `resolve_worker_binding` and `cli_binding.effective_broker`
-both refuse with `retired_environment_settings`, naming the variables to delete.
-The gate closes and the service still boots (#2014); it is never a crash loop.
-Detection reads them exactly as `AlpacaSettings` does — process environment and
-`.env`, case-insensitively — so a lower-case spelling that would really reach
+a saved profile, leaving one of these in the environment is refused with
+`retired_environment_settings`, naming the variables to delete. The gate closes
+and the service still boots (#2014); it is never a crash loop. Detection reads
+them exactly as `AlpacaSettings` does — process environment and `.env`,
+case-insensitively — so a lower-case spelling that would really reach
 `AlpacaSettings` is not missed, and a value that no longer parses is still
 detected as present rather than raising on the boot path.
+
+**Which boots refuse, and which only complain.** The refusal is scoped to a
+*deliberate* act, not to every start:
+
+| Start | Behaviour |
+|---|---|
+| The worker binds a staged revision an **Apply** named | Refuses. The one-shot Apply is consumed (ADR 0060 D4.3), so press Apply again after tidying `.env`. |
+| The worker **restarts** an already-effective configuration (crash, reboot, OOM, `restart: always`) | **Binds, and logs an error naming the variables, every boot** — `action=worker_binding_retired_environment_recovery_warning`. |
+| An operator CLI (`cli_binding.effective_broker`, and the arming/shadow ceremonies on it) | Refuses. Running one is a deliberate act in the same family as Apply. |
+
+The restart row is owner decision 4 (ADR 0060 D4.3) applied to this gate: a boot
+must never leave the worker with no broker while a position could be open,
+because nothing can then place an EXIT. One leftover line must not be able to do
+that on every restart from now until somebody reads the log. Binding anyway is
+safe because nothing in the binding comes from those variables — the effective
+revision supplies the mode and the envelope, and `resolved_alpaca_settings()`
+answers every downstream consumer from the installed binding. **The log line is
+the remedy's only prompt, so treat it as work to do**: it repeats on every boot
+until the lines are deleted.
 
 **Never retired.** `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY` **are** the
 `default` slot: refusing a boot because they are present would break every
@@ -207,12 +226,16 @@ The order after that is fixed:
 3. Delete the retired lines from `PythonDataService/.env`.
 4. Restart the service so the worker binds the profile.
 
-Steps 3 and 4 are in that order for a reason. Restarting with the lines still
-present meets the refusal above — and that refusal **consumes** the one-shot
+Steps 3 and 4 are in that order for a reason. Restarting between step 2 and
+step 3 meets the Apply refusal above — and that refusal **consumes** the one-shot
 Apply (ADR 0060 D4.3), so you must press Apply again after deleting them. That
 is deliberate: a pending Apply that survived a refusal would let a later,
 unrelated tidy-up of `.env` silently apply a live configuration change nobody
 re-authorised.
+
+Finishing the cutover without doing step 3 does not strand the worker — later
+restarts bind the profile and log the recovery warning — but it leaves the next
+Apply refused and an `.env` that contradicts the profile. Do step 3.
 
 Re-running the whole ceremony after step 3 is a no-op: the already-imported
 check precedes the environment-drift check for exactly this reason.
@@ -223,6 +246,11 @@ Stop the affected worker and reconcile its account obligations first; rollback
 is not a live operation. Then restore the prior reviewed deployment
 configuration — re-add the retired lines to `PythonDataService/.env` — and
 revert to the prior code, which does not consult the profiles database.
+
+**Re-adding the lines does not by itself revert anything.** If the code is not
+reverted too, the worker keeps binding the profile and logs the recovery warning
+on every restart; the environment is being ignored, not obeyed. Revert both, or
+neither.
 
 **Keep the profile records.** They are additive and cost nothing to leave in
 place, and deleting them would discard the audit of what was configured when.

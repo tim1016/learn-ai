@@ -9,16 +9,20 @@ every step in order:
     env-configured boot → import → Apply → restart with the lines still
     present (refused) → lines deleted → bound from the profile → rollback
 
-Two properties fall out of walking it in order rather than testing each step
+Three properties fall out of walking it in order rather than testing each step
 alone. The refusal at step 4 is *load-bearing to the documented sequence*, not
 an edge case — an operator who applies before editing ``.env`` meets it every
-time. And the envelope the worker finally binds is asserted equal, by ``sha``,
-to the one the environment described at step 1: the cutover moved the numbers
-without changing the document every arming record is sealed over.
+time. The envelope the worker finally binds is asserted equal, by ``sha``, to
+the one the environment described at step 1: the cutover moved the numbers
+without changing the document every arming record is sealed over. And step 6
+puts the retired lines *back* with no Apply pending, which is the shape of every
+unattended restart afterwards — it binds and complains rather than refusing,
+because a refusal there would strand a live account (ADR 0060 D4.3).
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -43,6 +47,7 @@ from app.broker_configuration.store import ProfilesStore
 from app.broker_configuration.worker_binding import (
     BoundWorker,
     UnboundWorker,
+    acknowledge_worker_binding,
     resolve_worker_binding,
 )
 from tests.broker.alpaca.profile.conftest import (
@@ -112,6 +117,7 @@ async def test_the_whole_cutover_and_its_rollback(
     service: BrokerConfigurationService,
     credential_environment: AlpacaCredentialEnvironment,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     legacy_sha = LiveEnvelopeValues.from_settings(AlpacaSettings(_env_file=None)).sha
 
@@ -185,16 +191,38 @@ async def test_the_whole_cutover_and_its_rollback(
     assert after.context.live_envelope is not None
     assert after.context.live_envelope.sha == legacy_sha
     assert after.context.settings.mode == "live"
+    #    The lifespan acknowledges once the Clerk holds the account's lease, which
+    #    is what consumes the one-shot Apply. Without that step every later
+    #    "restart" in this rehearsal would still look like a pending Apply, and
+    #    step 6 would be testing step 4 over again.
+    acknowledge_worker_binding(
+        bound=after, account_id=LIVE_ACCOUNT, service_factory=lambda: service
+    )
+    assert service.selection().apply_requested is False
 
-    # 6. Rollback. Restoring the lines without also reverting the code does not
-    #    silently revert the configuration -- it refuses, which is the honest
-    #    outcome: the profile is still what this code reads. A real rollback
-    #    reverts the code too, and the profile records are deliberately kept.
+    # 6. Rollback-by-half. Restoring the lines without also reverting the code
+    #    does not silently revert the configuration: the profile is still what
+    #    this code reads, and the restart binds it and says so. Nothing is
+    #    pending, so this is a recovery -- and a recovery that refused would
+    #    leave a live account with no broker and nothing able to EXIT it
+    #    (ADR 0060 D4.3). The lines are reported, loudly, and ignored. A real
+    #    rollback reverts the code too, and the profile records are deliberately
+    #    kept so it can.
     for name, value in LEGACY_LIVE_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
-    rolled_back = await resolve_worker_binding(
-        service_factory=lambda: service, environment=credential_environment
-    )
-    assert isinstance(rolled_back, UnboundWorker)
-    assert rolled_back.unbound.reason == RETIRED_ENVIRONMENT_SETTINGS
+    with caplog.at_level(logging.ERROR, logger="app.broker_configuration.worker_binding"):
+        rolled_back = await resolve_worker_binding(
+            service_factory=lambda: service, environment=credential_environment
+        )
+    assert isinstance(rolled_back, BoundWorker)
+    assert rolled_back.context.live_envelope is not None
+    assert rolled_back.context.live_envelope.sha == legacy_sha
+    complained = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None)
+        == "worker_binding_retired_environment_recovery_warning"
+    ]
+    assert len(complained) == 1
+    assert complained[0].__dict__["retired_variables"] == list(LEGACY_LIVE_ENVIRONMENT)
     assert service.read_revision(receipt.profile_id, receipt.revision).live_envelope is not None

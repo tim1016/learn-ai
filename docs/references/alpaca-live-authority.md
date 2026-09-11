@@ -181,13 +181,20 @@ rule). They are edited under `/api/brokers/alpaca/configuration`, staged, and
 made effective by pressing Apply and performing a controlled restart. There is
 no `ACTIVE_PROFILE` variable and no `ALPACA_MODE` on the runtime path.
 
-Once an installation has a saved profile, the worker **refuses to bind** while
-any of the seven retired variables — `ALPACA_MODE`, `ALPACA_LIVE_LOSS_FRACTION`,
+Once an installation has a saved profile, leaving any of the seven retired
+variables in place — `ALPACA_MODE`, `ALPACA_LIVE_LOSS_FRACTION`,
 `ALPACA_LIVE_LOSS_USD`, `ALPACA_LIVE_SHADOW_SESSIONS`,
 `ALPACA_LIVE_ARMING_MAX_SESSIONS`, `ALPACA_LIVE_XH_ENTRY_BPS`,
-`ALPACA_LIVE_XH_EXIT_BPS` — is still present, and names the ones to delete
-(`retired_environment_settings`). The gate closes; the service still boots.
-`scripts/manage_broker_configuration.py` moves an existing deployment across.
+`ALPACA_LIVE_XH_EXIT_BPS` — is answered by naming the ones to delete
+(`retired_environment_settings`). **A deliberate change refuses; an ordinary
+restart does not.** The worker binding a staged revision an Apply named refuses
+and the gate closes (the service still boots), as does any operator CLI. A
+restart of an already-effective configuration **binds and logs an error naming
+the variables on every boot** instead, because a worker left with no broker
+cannot place an EXIT (ADR 0060 D4.3) and the stale values are not read by
+anything it binds. `scripts/manage_broker_configuration.py` moves an existing
+deployment across; the per-boot table is in
+[`alpaca-credential-slots.md`](alpaca-credential-slots.md#retired-and-never-retired).
 
 What **remains** environment-injected, and always will: the credential pairs
 (`ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` are the `default` slot;
