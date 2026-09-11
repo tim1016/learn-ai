@@ -183,6 +183,8 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert restart_state.activation_state == "apply_requested_restart_required"
     assert restart_state.selection_generation == requested.selection_generation
     assert restart_state.action.kind == "view_restart_steps"
+    assert restart_state.choices[0].action_kind == "view_restart_steps"
+    assert restart_state.choices[0].action_label == "View restart steps"
     assert "controlled restart" in restart_state.detail
     assert "does not arm live trading" in restart_state.consequence
 

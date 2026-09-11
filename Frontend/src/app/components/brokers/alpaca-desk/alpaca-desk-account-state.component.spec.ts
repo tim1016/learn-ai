@@ -175,6 +175,34 @@ describe('AlpacaDeskAccountStateComponent', () => {
     expect(screen.getByRole('button', { name: current.action.label })).toBeTruthy();
   });
 
+  it('shows a pending first selection when connectivity succeeds before an effective selection exists', async () => {
+    const staged = choice({
+      is_staged: true,
+      is_effective: false,
+      action_kind: 'view_restart_steps',
+      action_label: 'View restart steps',
+    });
+    const current = state({
+      activation_state: 'apply_requested_restart_required',
+      headline: 'Strategy lab is ready for a controlled restart',
+      detail: 'Apply is recorded for this installation.',
+      consequence: 'The running worker has not changed.',
+      effective_choice: null,
+      staged_choice: staged,
+      choices: [staged],
+      action: { kind: 'view_restart_steps', label: 'View restart steps', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: { state: current, accountAvailable: true, accountFailed: false },
+      providers: [{ provide: BrokersService, useValue: brokersService() }],
+    });
+
+    expect(screen.getByText(current.headline)).toBeTruthy();
+    expect(screen.getByText(current.detail)).toBeTruthy();
+    expect(screen.getByText(current.consequence)).toBeTruthy();
+    expect(screen.getByRole('button', { name: current.action.label })).toBeTruthy();
+  });
+
   it('honors a backend-disabled pending action and emits nothing', async () => {
     const reviewRequested = vi.fn();
     const current = state({

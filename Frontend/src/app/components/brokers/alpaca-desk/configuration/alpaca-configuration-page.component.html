@@ -10,10 +10,9 @@
     </p>
   </header>
 
-  @if (reviewRevision(); as revision) {
+  @if (reviewContext(); as context) {
     <p class="configuration__review-context" role="status">
-      Revision {{ revision }} was selected from the Alpaca desk for review.
-      No configuration changes until you explicitly Stage and Apply.
+      {{ context }}
     </p>
   }
 

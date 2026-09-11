@@ -122,9 +122,16 @@ describe('AlpacaAccountActivationComponent', () => {
   });
 
   it('preselects the backend-staged choice for review without staging again', async () => {
+    const staged = {
+      ...deskState.choices[0],
+      is_staged: true,
+      action_kind: 'review_staged_configuration' as const,
+      action_label: 'Review staged account',
+    };
     const stagedState: AlpacaDeskState = {
       ...deskState,
-      staged_choice: deskState.choices[0],
+      staged_choice: staged,
+      choices: [staged, deskState.choices[1]],
       action: {
         kind: 'review_staged_configuration',
         label: 'Review staged account',
@@ -200,8 +207,8 @@ describe('AlpacaAccountActivationComponent', () => {
   it('keeps the restart action after Apply is recorded for the preselected staged choice', async () => {
     const staged = {
       ...deskState.choices[0],
-      action_kind: 'review_staged_configuration' as const,
-      action_label: 'Review & apply Alpaca Paper',
+      action_kind: 'view_restart_steps' as const,
+      action_label: 'View restart steps',
       is_staged: true,
     };
     const restartState: AlpacaDeskState = {

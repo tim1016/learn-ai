@@ -214,7 +214,11 @@ class DeskSelectionSummaryResponse(_Response):
 
 class DeskAccountChoiceResponse(DeskSelectionSummaryResponse):
     account_id: str
-    action_kind: Literal["review_configuration", "review_staged_configuration"]
+    action_kind: Literal[
+        "review_configuration",
+        "review_staged_configuration",
+        "view_restart_steps",
+    ]
     action_label: str
     is_staged: bool
     is_effective: bool

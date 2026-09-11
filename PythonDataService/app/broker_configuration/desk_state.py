@@ -76,9 +76,13 @@ def _choice(
     summary: DeskSelectionSummary,
     is_staged: bool,
     is_effective: bool,
+    apply_requested: bool,
 ) -> DeskAccountChoice:
     action_kind: DeskActionKind
-    if is_staged and not is_effective:
+    if is_staged and not is_effective and apply_requested:
+        action_kind = "view_restart_steps"
+        action_label = "View restart steps"
+    elif is_staged and not is_effective:
         action_kind = "review_staged_configuration"
         action_label = f"Review & apply {summary.profile_label}"
     else:
@@ -226,6 +230,7 @@ def project_desk_state(
                         selection.effective_profile_id,
                         selection.effective_revision,
                     ),
+                    apply_requested=selection.apply_requested,
                 )
             )
 

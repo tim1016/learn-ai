@@ -8,7 +8,6 @@ import {
 } from '@angular/core';
 
 import type {
-  AlpacaDeskAccountChoice,
   AlpacaDeskSelectionSummary,
   AlpacaDeskState,
 } from '../../../api/alpaca.types';
@@ -40,13 +39,9 @@ export class AlpacaAccountActivationComponent {
   private readonly actionDestination = computed(
     () => this.selectedChoice() ?? this.view().staged_choice,
   );
-  protected readonly actionLabel = computed(() => {
-    const selected = this.selectedChoice();
-    const staged = this.view().staged_choice;
-    return selected === null || selected.selection_id === staged?.selection_id
-      ? this.view().action.label
-      : selected.action_label;
-  });
+  protected readonly actionLabel = computed(
+    () => this.selectedChoice()?.action_label ?? this.view().action.label,
+  );
   protected readonly canRequestAction = computed(() => {
     const action = this.view().action;
     return !this.busy()
@@ -56,12 +51,6 @@ export class AlpacaAccountActivationComponent {
         || (this.view().choices.length === 0 && action.kind === 'review_configuration')
       );
   });
-
-  protected choiceActionLabel(choice: AlpacaDeskAccountChoice): string {
-    return choice.selection_id === this.view().staged_choice?.selection_id
-      ? this.view().action.label
-      : choice.action_label;
-  }
 
   protected selectChoice(selectionId: string): void {
     this.selectedSelectionId.set(selectionId);

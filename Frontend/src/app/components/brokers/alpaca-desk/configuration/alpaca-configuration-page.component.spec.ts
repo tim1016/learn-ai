@@ -205,6 +205,28 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(service.applied).toEqual([]);
   });
 
+  it('shows restart guidance when the selected revision already has Apply recorded', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile());
+    service.revisions.push(revision({ account_pin: 'PA000PAPER' }));
+    service.current = selection({
+      staged_profile_id: 'profile-paper',
+      staged_revision: 1,
+      apply_requested: true,
+      apply_requested_at_ms: 1_757_000_500_000,
+      apply_requested_generation: 2,
+      selection_generation: 2,
+    });
+
+    await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+
+    expect(await screen.findByText(/Revision 1 already has Apply recorded/)).toBeTruthy();
+    expect(screen.getByText(/The running worker has not changed/)).toBeTruthy();
+    expect(screen.queryByText(/until you explicitly Stage and Apply/)).toBeNull();
+    expect(service.staged).toEqual([]);
+    expect(service.applied).toEqual([]);
+  });
+
   it('follows a new exact revision when the desk changes the query on the same route', async () => {
     const service = new FakeConfigurationService();
     service.profiles.push(

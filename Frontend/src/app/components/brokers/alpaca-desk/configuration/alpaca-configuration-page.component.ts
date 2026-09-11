@@ -201,6 +201,23 @@ export class AlpacaConfigurationPageComponent {
   protected readonly currentSelection = computed(() =>
     this.selection.hasValue() ? this.selection.value() : null,
   );
+  protected readonly reviewContext = computed(() => {
+    const request = this.requestedReview();
+    const revisionNumber = this.reviewRevision();
+    if (request === null || revisionNumber === null) return null;
+    if (!this.selection.hasValue()) {
+      return `Revision ${revisionNumber} was selected from the Alpaca desk. Reading its installation state…`;
+    }
+    const current = this.selection.value();
+    if (
+      current.apply_requested
+      && current.staged_profile_id === request.profileId
+      && current.staged_revision === request.revision
+    ) {
+      return `Revision ${revisionNumber} already has Apply recorded for the next controlled restart. The running worker has not changed.`;
+    }
+    return `Revision ${revisionNumber} was selected from the Alpaca desk for review. No configuration changes until you explicitly Stage and Apply.`;
+  });
 
   /**
    * The profile this page has open, with its latest revision. Every write that

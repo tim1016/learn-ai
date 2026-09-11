@@ -12027,7 +12027,8 @@
           "action_kind": {
             "enum": [
               "review_configuration",
-              "review_staged_configuration"
+              "review_staged_configuration",
+              "view_restart_steps"
             ],
             "title": "Action Kind",
             "type": "string"

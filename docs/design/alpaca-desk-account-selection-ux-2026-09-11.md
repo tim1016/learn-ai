@@ -48,6 +48,23 @@ whether a restart is required, or whether Live is armed.
    create two workers. A future cross-installation view may observe both, but
    this selector must not imply that it reassigns bots across installations.
 
+## Future improvement: one desk, multiple clerks
+
+A later version may let one frontend operate Paper and Live at the same time by
+addressing multiple isolated clerks or execution contexts behind one desk. The
+frontend would show both account lanes concurrently and every bot/run command
+would carry an explicit target context so the backend can route it to the
+correct clerk, credential boundary, broker endpoint, and custody state.
+
+This is a presentation and orchestration unification, not a relaxation of the
+safety boundary. Each clerk must retain its own effective configuration,
+selection generation, idempotency and stale-write fences, Live arming policy,
+audit trail, and failure state. A Paper failure must not disable or retarget the
+Live clerk, and no action may infer its destination from whichever account is
+currently selected in the browser. The current single-clerk contract is kept
+deliberately explicit so it can become one lane in that future multi-clerk
+model without changing the meaning of “effective.”
+
 ## Backend interface
 
 Add a protected read beneath the existing broker-configuration router:
@@ -127,7 +144,8 @@ Exercise rendered behavior through the component and desk:
 - No worker restart button or process-control endpoint.
 - No Live arming/disarming controls.
 - No typed account-ID entry and no credential form.
-- No multi-worker or simultaneous multi-account custody.
+- No multi-clerk orchestration or simultaneous multi-account custody in this
+  change; the future direction is documented above.
 - No retargeting of existing strategy-instance bindings.
 - No attempt to infer current worker liveness from the historical effective
   acknowledgement.

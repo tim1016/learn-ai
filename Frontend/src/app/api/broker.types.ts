@@ -10406,7 +10406,7 @@ export interface components {
              * Action Kind
              * @enum {string}
              */
-            action_kind: "review_configuration" | "review_staged_configuration";
+            action_kind: "review_configuration" | "review_staged_configuration" | "view_restart_steps";
             /** Action Label */
             action_label: string;
             /** Badge Label */
