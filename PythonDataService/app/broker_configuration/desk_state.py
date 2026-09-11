@@ -79,7 +79,7 @@ def _choice(
     apply_requested: bool,
 ) -> DeskAccountChoice:
     action_kind: DeskActionKind
-    if is_staged and not is_effective and apply_requested:
+    if is_staged and apply_requested:
         action_kind = "view_restart_steps"
         action_label = "View restart steps"
     elif is_staged and not is_effective:

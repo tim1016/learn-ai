@@ -12,7 +12,13 @@
 
   @if (reviewContext(); as context) {
     <p class="configuration__review-context" role="status">
-      {{ context }}
+      <span>{{ context.introduction }}</span>
+      @if (context.detail; as detail) {
+        <span>{{ detail }}</span>
+      }
+      @if (context.consequence; as consequence) {
+        <span>{{ consequence }}</span>
+      }
     </p>
   }
 

@@ -205,6 +205,17 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert effective_state.choices[0].action_label == "Review Alpaca-Paper"
     assert "not a connectivity claim" in effective_state.consequence
 
+    service.request_apply(
+        expected_selection_generation=acknowledged.selection_generation,
+    )
+    repeat_restart_state = service.desk_state()
+
+    assert repeat_restart_state.activation_state == "apply_requested_restart_required"
+    assert repeat_restart_state.choices[0].is_staged is True
+    assert repeat_restart_state.choices[0].is_effective is True
+    assert repeat_restart_state.choices[0].action_kind == "view_restart_steps"
+    assert repeat_restart_state.choices[0].action_label == "View restart steps"
+
 
 async def test_desk_state_keeps_effective_and_staged_drift_visibly_separate(
     service: BrokerConfigurationService,

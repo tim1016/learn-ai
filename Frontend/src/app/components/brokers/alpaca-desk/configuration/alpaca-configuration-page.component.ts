@@ -143,6 +143,7 @@ export class AlpacaConfigurationPageComponent {
     loader: () => this.service.listNicknames(),
     defaultValue: [],
   });
+  private readonly deskState = resource({ loader: () => this.service.readDeskState() });
   protected readonly selection = resource({ loader: () => this.service.readSelection() });
   protected readonly detail = resource({
     params: () => this.selectedProfileId() ?? undefined,
@@ -190,7 +191,8 @@ export class AlpacaConfigurationPageComponent {
 
   protected readonly supplementalReadFailed = computed(() => Boolean(
     this.nicknames.error() || this.revisions.error()
-    || this.stagedRevision.error() || this.effectiveRevision.error(),
+    || this.stagedRevision.error() || this.effectiveRevision.error()
+    || this.deskState.error(),
   ));
   protected readonly requestedRevisionMissing = computed(() =>
     this.reviewRevision() !== null
@@ -205,18 +207,28 @@ export class AlpacaConfigurationPageComponent {
     const request = this.requestedReview();
     const revisionNumber = this.reviewRevision();
     if (request === null || revisionNumber === null) return null;
-    if (!this.selection.hasValue()) {
-      return `Revision ${revisionNumber} was selected from the Alpaca desk. Reading its installation state…`;
+    const introduction = `Revision ${revisionNumber} was selected from the Alpaca desk for review.`;
+    const selection = this.currentSelection();
+    if (!this.deskState.hasValue() || selection === null) {
+      return { introduction, detail: null, consequence: null };
     }
-    const current = this.selection.value();
+    const state = this.deskState.value();
+    if (state.selection_generation !== selection.selection_generation) {
+      return { introduction, detail: null, consequence: null };
+    }
+    const staged = state.staged_choice;
     if (
-      current.apply_requested
-      && current.staged_profile_id === request.profileId
-      && current.staged_revision === request.revision
+      state.action.kind !== 'review_configuration'
+      && staged?.profile_id === request.profileId
+      && staged.revision === request.revision
     ) {
-      return `Revision ${revisionNumber} already has Apply recorded for the next controlled restart. The running worker has not changed.`;
+      return { introduction, detail: state.detail, consequence: state.consequence };
     }
-    return `Revision ${revisionNumber} was selected from the Alpaca desk for review. No configuration changes until you explicitly Stage and Apply.`;
+    return {
+      introduction,
+      detail: 'No configuration changes until you explicitly Stage and Apply.',
+      consequence: null,
+    };
   });
 
   /**
@@ -265,6 +277,7 @@ export class AlpacaConfigurationPageComponent {
     this.slots.reload();
     this.profiles.reload();
     this.nicknames.reload();
+    this.deskState.reload();
     this.selection.reload();
     this.detail.reload();
     this.revisions.reload();
@@ -320,6 +333,7 @@ export class AlpacaConfigurationPageComponent {
         current.selection_generation,
       ),
     );
+    this.deskState.reload();
   }
 
   protected applySelection(): void {
@@ -327,6 +341,7 @@ export class AlpacaConfigurationPageComponent {
       const current = this.currentSelection();
       if (current === null) return;
       this.selection.set(await this.service.applySelection(current.selection_generation));
+      this.deskState.reload();
     });
   }
 
