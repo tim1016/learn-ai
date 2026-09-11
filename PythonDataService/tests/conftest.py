@@ -1,7 +1,7 @@
 """Shared test fixtures and helpers"""
 
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -159,6 +159,66 @@ def _isolate_canary_admission_ledger(
         canary_admission,
         "DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
         isolated_path,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_broker_configuration_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Keep every test's broker-configuration profiles database in tmp_path.
+
+    Same hazard as the fixtures above: unpinned, the profiles database resolves
+    under the real ``ALPACA_CLERK_DIR`` — a developer's actual Clerk volume,
+    holding the custody and arming records the profiles explain. A test must
+    never read or write that.
+
+    The resolver is patched rather than the environment variable, so nothing
+    else that reads ``ALPACA_CLERK_DIR`` (``AlpacaSettings`` included) changes
+    behaviour: this fixture's blast radius is exactly the profiles database.
+    A test that needs its own location patches ``resolve_clerk_dir`` again;
+    later patches win. Dropping the process-wide service on both sides keeps
+    one test's profiles out of the next test's reads.
+    """
+    import app.broker_configuration.runtime as broker_configuration_runtime
+
+    isolated_root = tmp_path / "alpaca-clerk-isolated"
+    monkeypatch.setattr(broker_configuration_runtime, "resolve_clerk_dir", lambda: isolated_root)
+    broker_configuration_runtime.reset_broker_configuration_service_for_testing()
+    yield
+    broker_configuration_runtime.reset_broker_configuration_service_for_testing()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_retired_alpaca_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin every test's view of the retired Alpaca settings to "absent".
+
+    Package F makes a cut-over installation refuse to bind while any of the
+    seven retired variables is still set, and the detector reads them exactly as
+    ``AlpacaSettings`` does -- process environment *and* ``PythonDataService/.env``,
+    case-insensitively. Unpinned, that makes the outcome of every binding test
+    depend on whether the developer running it happens to have a live rehearsal
+    ``.env`` on disk: green in CI and in a fresh worktree, red in the main
+    checkout. That is the "worktree verification false green" trap in reverse.
+
+    So the *file* source is dropped for the duration of a test, and only that.
+    A test that sets one of these variables still sees it -- the process
+    environment half of the reader is the real one, and the tests that are about
+    the detector rely on that. What no test inherits is a developer's ``.env``.
+
+    Patching the reader rather than deleting environment variables keeps the
+    blast radius to this one detector: ``AlpacaSettings`` and every other
+    ``ALPACA_``-prefixed reader still see whatever the test set up. The ``.env``
+    half that this drops is covered deliberately, in a tmp-path directory, by
+    ``tests/broker_configuration/test_legacy_environment.py``.
+    """
+    import app.broker_configuration.legacy_environment as legacy_environment
+
+    monkeypatch.setattr(
+        legacy_environment,
+        "current_retired_settings",
+        lambda: legacy_environment.LegacyEnvironmentPresence(_env_file=None),
     )
 
 

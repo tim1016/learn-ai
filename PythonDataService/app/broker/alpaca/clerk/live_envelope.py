@@ -15,8 +15,9 @@ admission seam asks the gate for one that is fresh at *its* ``now_ms``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
@@ -53,13 +54,45 @@ _CASH_EPSILON_USD = 1e-9
 
 EnvelopeAgreement = Literal["unsealed", "agreed", "disagreed"]
 
-_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
+# (envelope field name, ``AlpacaSettings`` field name). Public because the
+# profile resolver (``app/broker/alpaca/profile/runtime_context.py``) builds
+# settings from stored envelope values through this same pairing, so the two
+# directions cannot drift into separate rename layers (contract §2.4).
+ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("loss_fraction", "live_loss_fraction"),
     ("loss_usd", "live_loss_usd"),
     ("shadow_sessions", "live_shadow_sessions"),
     ("arming_max_sessions", "live_arming_max_sessions"),
     ("xh_entry_bps", "live_xh_entry_bps"),
     ("xh_exit_bps", "live_xh_exit_bps"),
+)
+
+# The domain of each envelope value, as one table.
+#
+# Canonical declaration: ``AlpacaSettings`` in ``app/broker/alpaca/config.py``,
+# whose pydantic ``Field`` constraints refuse to *boot* outside these. This is
+# the second copy, and it exists for a real reason: an envelope also arrives
+# from an arming record read off disk, which never passes through settings at
+# all, and those values bound real money just as hard -- a sealed ``inf`` loss
+# limit is never breached, a sealed 10 000 bps exit anchor floors to zero and
+# refuses the leg. ``LiveEnvelopeValues`` is a plain frozen dataclass, so the
+# check has to live somewhere it sees *both* producers.
+# Validated against: ``tests/broker/alpaca/test_config.py::
+# test_the_envelope_domains_agree_with_the_settings_that_declare_them`` -- the
+# parity test that fails if either copy moves.
+#
+# Predicates rather than bounds because the two ends differ per field
+# (``loss_fraction`` is exclusive at both, ``*_bps`` inclusive at zero), and
+# because a comparison against a NaN or a non-number is False or a TypeError
+# either way -- which is the answer both cases deserve.
+_ENVELOPE_DOMAINS: tuple[tuple[str, Callable[[Any], bool], str], ...] = (
+    ("loss_fraction", lambda value: 0 < value < 1, "in (0, 1)"),
+    # Excludes NaN and infinity as well as zero: ``inf > 0`` is True.
+    ("loss_usd", lambda value: 0 < value < float("inf"), "positive and finite"),
+    ("shadow_sessions", lambda value: value >= 1, "at least 1"),
+    ("arming_max_sessions", lambda value: value >= 1, "at least 1"),
+    ("xh_entry_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
+    ("xh_exit_bps", lambda value: 0 <= value < 10_000, "in [0, 10000)"),
 )
 
 
@@ -78,12 +111,12 @@ class LiveEnvelopeValues:
 
     @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> LiveEnvelopeValues:
-        missing = [name for _, name in _SETTINGS_FIELDS if getattr(settings, name) is None]
+        missing = [name for _, name in ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
         if missing:
             raise LiveEnvelopeIncomplete(
                 "the live envelope needs every ALPACA_LIVE_* value; missing: " + ", ".join(missing)
             )
-        return cls(**{field: getattr(settings, name) for field, name in _SETTINGS_FIELDS})
+        return cls(**{field: getattr(settings, name) for field, name in ENVELOPE_SETTINGS_FIELDS})
 
     def to_mapping(self) -> dict[str, float | int]:
         return asdict(self)
@@ -91,6 +124,19 @@ class LiveEnvelopeValues:
     @property
     def sha(self) -> str:
         return canonical_sha256(self.to_mapping())
+
+
+def envelope_domain_violation(values: LiveEnvelopeValues) -> str | None:
+    """The first value outside its domain, named with the domain it missed.
+
+    A string rather than an exception so each caller phrases its own refusal:
+    the settings path never reaches here (pydantic refuses the boot), and the
+    arming path has to say *which record* carries the bad value.
+    """
+    for name, admits, domain in _ENVELOPE_DOMAINS:
+        if not admits(getattr(values, name)):
+            return f"{name} is not {domain}"
+    return None
 
 
 def envelope_agreement(
@@ -168,6 +214,40 @@ class LiveEnvelopeGate:
     def agreement(self) -> EnvelopeAgreement:
         return envelope_agreement(self.values, self.sealed)
 
+    @property
+    def in_force(self) -> LiveEnvelopeValues:
+        """The values every judgement is made against: the sealed ones, else configured.
+
+        ADR 0059 D3 seals every value at arming, so an edit to the environment
+        is a re-arm and never a silent drift. The loss limit a hold is raised on
+        and cleared against, and the allowance an extended-session leg is priced
+        from, are therefore the newest arming record's -- not whatever the
+        process happened to boot with. ``values`` is the fallback for an account
+        no ceremony has ever armed, which has nothing sealed to prefer.
+
+        **The fallback is a relaxation when the seal is merely unreadable**, and
+        the caller owns that: ``sealed`` also returns to ``None`` when the
+        arming inputs cannot be read, so a caller who must not relax has to ask
+        whether they were. The loss judgement does
+        (``sqlite/live_envelope_sync.LiveEnvelopeSync._seal_unreadable`` makes
+        that account unjudgeable); extended-hours leg pricing deliberately does
+        not, because an EXIT must never be refused for want of a seal.
+
+        ``values`` remains the right input for the two questions that are
+        *about* the configured half: ``agreement`` (does the environment still
+        match what was armed?) and the arming snapshot's own disagreement check.
+        """
+        return self.values if self.sealed is None else self.sealed
+
+    @property
+    def in_force_is_sealed(self) -> bool:
+        """Whether :attr:`in_force` answered a seal rather than the environment.
+
+        The label half of the same question, so an operator surface naming
+        which envelope decided does not restate the predicate.
+        """
+        return self.sealed is not None
+
     def publish(self, observation: AccountObservation) -> None:
         self._observation = observation
 
@@ -199,6 +279,7 @@ class LiveEnvelopeGate:
 
 __all__ = [
     "ENVELOPE_ADMISSION_REASON_CODES",
+    "ENVELOPE_SETTINGS_FIELDS",
     "ENVELOPE_SYNC_INTERVAL_S",
     "LIVE_ENVELOPE_CASH_EXCEEDED",
     "LIVE_ENVELOPE_DISAGREEMENT",

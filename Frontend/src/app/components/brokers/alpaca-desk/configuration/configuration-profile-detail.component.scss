@@ -1,0 +1,125 @@
+@use './configuration-controls' as controls;
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.detail__header {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.detail__inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.detail__inline label {
+  @include controls.field-label;
+
+  flex: 1 1 12rem;
+}
+
+.detail__inline input {
+  @include controls.text-field;
+}
+
+.detail__heading {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.detail__facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.detail__facts dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.detail__facts dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.detail__opaque {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs);
+}
+
+.detail__empty,
+.detail__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.detail__revision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+
+.detail__revision h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.detail__save {
+  @include controls.primary-button;
+
+  align-self: flex-start;
+}
+
+.detail__inline button {
+  @include controls.secondary-button;
+}
+
+.detail__history {
+  font-size: var(--fs-xs);
+}
+
+.detail__history summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.detail__history ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.detail__history li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}
+
+.detail__history strong {
+  color: var(--text-primary);
+}

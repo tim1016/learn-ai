@@ -1,0 +1,43 @@
+@if (rows().length === 0) {
+  <p class="profiles__empty">
+    No configuration profiles are saved yet. Create one to name a credential slot and an
+    endpoint; nothing is staged or applied until you choose to.
+  </p>
+} @else {
+  <ul class="profiles" aria-label="Saved broker configuration profiles">
+    @for (row of rows(); track row.profile.profile_id) {
+      <li class="profile" [class.profile--open]="row.profile.profile_id === selectedProfileId()">
+        <button
+          type="button"
+          class="profile__open"
+          [attr.aria-pressed]="row.profile.profile_id === selectedProfileId()"
+          (click)="opened.emit(row.profile.profile_id)"
+        >
+          <span class="profile__name">{{ row.profile.display_name }}</span>
+          <span class="profile__stamp">
+            Updated <app-timestamp-display [value]="row.profile.updated_at_ms" mode="local" />
+          </span>
+        </button>
+
+        <p class="profile__badges">
+          @if (row.effective) { <span class="badge badge--effective">Effective</span> }
+          @if (row.staged) { <span class="badge badge--staged">Staged</span> }
+          @if (row.profile.archived) { <span class="badge">Archived</span> }
+        </p>
+
+        <div class="profile__actions">
+          <button
+            type="button"
+            [disabled]="busy() || row.profile.archived"
+            (click)="staged.emit(row.profile)"
+          >Stage</button>
+          <button
+            type="button"
+            [disabled]="busy()"
+            (click)="archiveToggled.emit({ profileId: row.profile.profile_id, archived: !row.profile.archived })"
+          >{{ row.profile.archived ? 'Restore' : 'Archive' }}</button>
+        </div>
+      </li>
+    }
+  </ul>
+}

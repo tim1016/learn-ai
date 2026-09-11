@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from scripts import hitl_alpaca_capture as capture
 
@@ -118,15 +119,16 @@ async def test_websocket_setup_failure_does_not_hang_or_submit_order(
             self.submitted = True
             return {}
 
-    monkeypatch.setattr(
-        capture,
-        "get_alpaca_settings",
-        lambda: SimpleNamespace(api_key_id="key", api_secret_key="secret"),
+    # Settings are a parameter now, not a module-level lookup: the script
+    # resolves the effective binding once in ``_main`` and threads it, so this
+    # test hands the gate the same thing rather than patching a resolver.
+    settings = SimpleNamespace(
+        api_key_id=SecretStr("key"), api_secret_key=SecretStr("secret")
     )
     monkeypatch.setattr(capture.websockets, "connect", lambda *args, **kwargs: FailingSocket())
     client = Client()
 
     with pytest.raises((OSError, RuntimeError), match="websocket"):
-        await asyncio.wait_for(capture._run_order_gate(client), timeout=0.5)
+        await asyncio.wait_for(capture._run_order_gate(client, settings), timeout=0.5)
 
     assert client.submitted is False

@@ -3,14 +3,24 @@
 Inside the regular session a program leg is a market DAY order, exactly as
 before this slice. Outside it — in the broker's declared PRE or POST window —
 the leg is a marketable DAY limit flagged for extended hours, anchored to the
-decision bar's close. Anything else (closed, no anchor, no window, no
-allowance) is a typed refusal the Clerk turns into a rejected receipt; a
-program leg is never guessed.
+decision bar's close and widened by the policy's allowance. Anything else
+(closed, no anchor, no window, no allowance) is a typed refusal the Clerk
+turns into a rejected receipt; a program leg is never guessed.
+
+Which allowance the policy carries is decided by the authority, not here: on
+the live world it is the one sealed at arming
+(``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``, ADR 0059
+D3). This module is a pure function of the policy it is handed.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
@@ -21,10 +31,161 @@ from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
 
+if TYPE_CHECKING:
+    from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
+
+logger = logging.getLogger(__name__)
+
+# How a policy learns its allowances. Injected as a callable -- the
+# ``roster_symbols`` / ``instance_seals`` pattern -- so a test can state the
+# resolved document directly instead of building a Clerk volume, and so the one
+# production resolver below is named in exactly one place.
+type AllowanceResolver = Callable[[], ExtendedHoursAllowances | None]
+
+# Why the two resolution steps below import inside their function bodies, and
+# why the context above is a ``TYPE_CHECKING`` name. ``active_binding``, the
+# arming ledger and ``AlpacaRuntimeContext`` all reach
+# ``clerk.live_envelope``, which reaches the ``clerk.sqlite`` package, whose
+# ``repository`` imports ``clerk.live_envelope`` straight back -- and
+# ``active_runtime`` imports *this* module before it imports anything under
+# ``clerk.sqlite``. A module-level import here therefore lands on a
+# half-initialised ``live_envelope``. The arming ledger separately drags
+# ``app.lean_sidecar.trading_calendar`` and the whole market calendar with it,
+# which ``profile/runtime_context.py`` already declined to put on a
+# configuration-resolution path. Both resolvers run at authority composition,
+# never at import, so the deferral costs one dict lookup.
+
+
+def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances | None:
+    """The newest **armed** record's allowances, or ``None`` when there are none to read.
+
+    Reuses the ledger's own reader and ``live_arming.latest_arming`` -- the
+    canonical "newest arming, ignoring revocations" (R10) the live authority's
+    arming refresh already reads every tick. A disarm row carries no envelope,
+    which is exactly why ``latest_arming`` skips it.
+
+    The account comes from the binding's ``account_pin``: the revision's own
+    observed account, never a value composed here. Absent (a paper or
+    unverified revision), there is no account whose seal to read.
+
+    Nothing raises out of here. A pin that is not a real account id, a ledger
+    that will not verify and a store that will not read are each "not this
+    source" -- logged at error level, as ``LiveArmingLedger.discover`` logs a
+    damaged sibling, because an EXIT must never be blocked by a
+    broker-configuration problem (plan §0 D3).
+    """
+    from app.broker.alpaca.clerk.live_arming import latest_arming
+    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+
+    account_id = context.account_pin
+    if account_id is None:
+        return None
+    try:
+        ledger = LiveArmingLedger(context.settings.clerk_dir, live_account_id=account_id)
+        armed = latest_arming(ledger.records())
+    except (ValueError, OSError):
+        # ``LiveArmingInvalid`` is a ``ValueError``, and so are the account-id
+        # and path-containment refusals the ledger's constructor raises.
+        logger.error(
+            "the arming ledger cannot seal an extended-hours allowance; "
+            "the effective revision decides instead",
+            extra={
+                "action": "extended_hours_allowances_seal_unreadable",
+                "live_account_id": account_id,
+            },
+            exc_info=True,
+        )
+        return None
+    return None if armed is None else ExtendedHoursAllowances.from_envelope(armed.envelope)
+
+
+def _settings_allowances() -> ExtendedHoursAllowances | None:
+    """The resolved binding's own settings -- what this read was before ADR 0060.
+
+    Three ways there are none, and none of them is an exception a caller must
+    handle: a synthetic (``sim:``) authority composed in a process with no
+    Alpaca credentials at all, a paper revision that declares no live envelope,
+    and a binding that was *attempted and refused*. The last is why
+    ``BrokerUnbound`` is caught rather than propagated -- an EXIT is never
+    blocked by a broker-configuration refusal (plan §0 D3). Both are logged so
+    an operator can see why an extended-hours leg was refused.
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
+
+    try:
+        settings = resolved_alpaca_settings()
+    except BrokerUnbound as exc:
+        logger.info(
+            "Extended-hours allowances are unavailable: this worker has no broker binding",
+            extra={"action": "extended_hours_allowances_unbound", "reason": exc.reason},
+        )
+        return None
+    except ValidationError as exc:
+        # ``str(exc)`` would echo a plaintext credential fragment: Pydantic
+        # renders ``input_value`` for a model-level error, and for a
+        # ``BaseSettings`` that input is the raw settings-source dict — before
+        # ``SecretStr`` wrapping. ``alpaca_configuration_error_detail`` keeps
+        # only Pydantic's ``msg`` text, which never echoes the input.
+        from app.broker.alpaca.config import alpaca_configuration_error_detail
+
+        logger.info(
+            "Extended-hours allowances are unavailable: Alpaca settings did not load",
+            extra={
+                "action": "extended_hours_allowances_unavailable",
+                "detail": alpaca_configuration_error_detail(exc),
+            },
+        )
+        return None
+    return ExtendedHoursAllowances.from_settings(settings)
+
+
+def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
+    """The allowances an extended-session leg prices from (ADR 0060; plan §0 D3).
+
+    One order, used for **both** the ENTER and the EXIT allowance, because the
+    two numbers live in one document and the question "which document?" has one
+    answer:
+
+    1. the newest **armed** record's sealed envelope -- the six numbers the
+       operator confirmed at the arming ceremony, which is the only act allowed
+       to make a new live limit binding (D3);
+    2. the effective revision's envelope, when no armed record is readable;
+    3. the resolved binding's settings, which is what a paper or ``sim:``
+       authority has and all any authority had before ADR 0060.
+
+    **Nothing raises.** A refused binding, an unpinned account, an unreadable
+    ledger and an absent envelope are each "not this source", so no exit
+    pricing can fail because of a configuration problem.
+
+    Genuinely no source at all still answers ``None``, and
+    :func:`shape_program_leg` refuses that as ``EXTENDED_HOURS_ALLOWANCE_UNSET``
+    -- for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
+    means falling back to the effective revision, not inventing a number: a
+    number nobody chose must never bound real money (ADR 0059 D4).
+    """
+    from app.broker.alpaca.active_binding import get_active_alpaca_binding
+
+    context = get_active_alpaca_binding()
+    if context is not None:
+        sealed = _sealed_allowances(context)
+        if sealed is not None:
+            return sealed
+        if context.live_envelope is not None:
+            return ExtendedHoursAllowances.from_envelope(context.live_envelope)
+    return _settings_allowances()
+
 
 @dataclass(frozen=True)
 class ProgramLegPolicy:
-    """What the active authority knows about shaping extended-session legs."""
+    """What the active authority knows about shaping extended-session legs.
+
+    ``allowances`` is the pair this policy prices from — a plain value, so
+    shaping a leg stays a pure function of its arguments. On the live world the
+    authority re-resolves it against the sealed envelope per decision
+    (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
+    pair built here from the environment is what a paper or never-armed
+    authority prices from.
+    """
 
     window: ExtendedHoursWindow | None
     allowances: ExtendedHoursAllowances | None
@@ -34,16 +195,27 @@ class ProgramLegPolicy:
         return cls(window=None, allowances=None)
 
     @classmethod
-    def from_read_port(cls, read: BrokerReadPort) -> ProgramLegPolicy:
+    def from_read_port(
+        cls,
+        read: BrokerReadPort,
+        *,
+        allowances: AllowanceResolver = resolve_extended_hours_allowances,
+    ) -> ProgramLegPolicy:
         """The policy an activated authority's own capability read implies.
 
         Both activation paths — the real paper Clerk and the ``sim:`` synthetic
         authority — build the policy this same way; stating it once means the
         two cannot answer the question differently.
+
+        Resolved once here, at composition, and not per decision: the sealed
+        envelope only changes when an arming ceremony runs, and the effective
+        revision only changes at a controlled restart (D5), so a per-tick read
+        of the Clerk volume would buy nothing and put file I/O on the decision
+        path.
         """
         return cls(
             window=read.capabilities().extended_hours_window,
-            allowances=ExtendedHoursAllowances.from_environment(),
+            allowances=allowances(),
         )
 
 
@@ -119,10 +291,14 @@ EXTENDED_HOURS_UNSUPPORTED = LegRefusal(
 EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
     reason_code="EXTENDED_HOURS_ALLOWANCE_UNSET",
     explanation=(
-        "ALPACA_LIVE_XH_ENTRY_BPS and ALPACA_LIVE_XH_EXIT_BPS are not both set, so no "
-        "extended-session program leg can be priced."
+        "No sealed arming and no applied broker configuration carry the extended-session "
+        "entry and exit allowances, so no extended-session program leg can be priced."
     ),
-    next_step="Set both allowances in the environment file and restart the data plane.",
+    # Under ADR 0060 the allowances come from the newest sealed arming, and
+    # otherwise from the applied profile revision — not from the environment
+    # file this used to name. Telling an operator to edit `.env` and restart
+    # would now send them somewhere that changes nothing.
+    next_step="Apply a broker configuration that carries both allowances, then re-arm.",
 )
 
 EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
@@ -138,8 +314,10 @@ EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
         "below zero, which is not a submittable limit."
     ),
     next_step=(
-        "Lower ALPACA_LIVE_XH_ENTRY_BPS / ALPACA_LIVE_XH_EXIT_BPS, or keep this "
-        "instrument out of extended-hours trading."
+        "Lower ALPACA_LIVE_XH_ENTRY_BPS / ALPACA_LIVE_XH_EXIT_BPS and re-arm — on "
+        "the live world the allowance in force is the one sealed at arming, so an "
+        "edit alone changes nothing — or keep this instrument out of "
+        "extended-hours trading."
     ),
 )
 
@@ -218,11 +396,13 @@ __all__ = [
     "EXTENDED_ANCHOR_UNPRICEABLE",
     "EXTENDED_HOURS_ALLOWANCE_UNSET",
     "EXTENDED_HOURS_UNSUPPORTED",
+    "AllowanceResolver",
     "LegRefusal",
     "LegShape",
     "ProgramLegPolicy",
     "ProgramLegRefused",
     "regular_session_shape",
+    "resolve_extended_hours_allowances",
     "session_closed_at_decision",
     "shape_program_leg",
 ]

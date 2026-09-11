@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
@@ -54,6 +55,33 @@ def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
     )
     assert ExtendedHoursAllowances.from_settings(neither) is None
     assert ExtendedHoursAllowances.from_settings(one) is None
+
+
+def test_the_envelope_and_settings_constructors_agree_on_the_same_six_numbers() -> None:
+    """A sealed envelope and an environment-configured one anchor identically.
+
+    The exit-pricing rule (ADR 0060; plan §0 D3) reads the allowance out of an
+    arming record's sealed envelope instead of out of settings, so the two
+    adapters must not be able to disagree about the same numbers. Both are
+    ``Decimal(str(...))`` conversions, deliberately: this is adapter-level
+    only, and nothing here re-derives ``LiveEnvelopeValues.sha``.
+    """
+    settings = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        mode="live",
+        live_loss_fraction=0.05,
+        live_loss_usd=5_000.0,
+        live_shadow_sessions=1,
+        live_arming_max_sessions=20,
+        live_xh_entry_bps=12.5,
+        live_xh_exit_bps=8.0,
+    )
+    envelope = LiveEnvelopeValues.from_settings(settings)
+
+    assert ExtendedHoursAllowances.from_envelope(envelope) == ExtendedHoursAllowances.from_settings(settings)
+    # The envelope this priced from is byte-identical to the one it arrived as.
+    assert LiveEnvelopeValues.from_settings(settings).sha == envelope.sha
 
 
 def test_an_anchor_that_quantises_to_zero_is_refused() -> None:

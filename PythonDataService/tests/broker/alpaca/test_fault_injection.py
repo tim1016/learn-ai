@@ -31,7 +31,7 @@ def _reset_registry() -> None:
 def permit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the seam permitted: flag on + paper posture."""
     monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
-    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
+    monkeypatch.setattr(fi, "resolved_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
 
 
 # ── Gating ────────────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ def test_seam_is_inert_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_flag_on_but_not_paper_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
-    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=False))
+    monkeypatch.setattr(fi, "resolved_alpaca_settings", lambda: SimpleNamespace(is_paper=False))
 
     assert fi.injection_permitted() is False
     with pytest.raises(fi.FaultInjectionRefused):
@@ -63,7 +63,7 @@ def test_flag_on_but_posture_unresolvable_fails_closed(monkeypatch: pytest.Monke
     def _raise() -> None:
         raise RuntimeError("no credentials")
 
-    monkeypatch.setattr(fi, "get_alpaca_settings", _raise)
+    monkeypatch.setattr(fi, "resolved_alpaca_settings", _raise)
 
     assert fi.injection_permitted() is False
 

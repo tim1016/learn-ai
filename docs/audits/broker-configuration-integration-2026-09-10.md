@@ -1,0 +1,84 @@
+# Broker configuration integration — Package G
+
+Integration baseline: `037ffe12`. Sources: PRs #2018–#2025, with Package F
+through `e11b8824`. The configuration stack, sealed-envelope prerequisite and
+Clerk-volume ceremony documentation are consolidated into one delivery.
+The main checkout's uncommitted Paper/Shadow rehearsal changes are excluded
+at the owner's request. No running account, credential file, container, active
+Clerk volume, execution lease or production configuration was changed.
+
+## Acceptance evidence
+
+All automated broker observations use fake ports and temporary Clerk/artifact
+roots. Paths below are relative to `PythonDataService/tests/` unless stated;
+bare `test_*.py` names are in `broker_configuration/`.
+
+| Acceptance scenario | Evidence |
+| --- | --- |
+| Save, rename, clone, reload, archive, multiple profiles | `broker_configuration/test_profiles_service.py`, `test_routes.py`; two-connection metadata races in `test_store_concurrency.py` |
+| Exact selected slot; missing/rotated/wrong credentials; forged owner/actor/slot | `broker/alpaca/profile/`, `broker_configuration/test_alpaca_seams.py`, `test_secret_absence.py`, `test_routes.py` |
+| Save/stage/Apply never grants trading authority | `test_selection_service.py`, `test_worker_binding.py`, `test_cutover_rehearsal.py`; authority remains separately activated and armed |
+| Rename preserves identity; effective policy change requires re-arm | `test_envelope_type_fidelity.py`; the A→B→A regression keeps invalidation durable while historical arming bytes remain unchanged |
+| Existing envelope hashes and stored numeric types | `test_envelope_type_fidelity.py`, `broker/alpaca/profile/test_runtime_context.py` |
+| Active obligations block a changed profile/revision, including same-account changes | `test_prior_obligations.py`, `test_worker_binding.py`, `test_binding_decision.py` |
+| Refused Apply or staged-only crash recovers last-effective | `test_worker_binding.py`, `test_retired_environment_gate.py`; retired settings refuse the change without removing the prior binding |
+| Concurrent selection/startup and interrupted startup | `test_store_concurrency.py`, `test_worker_lifecycle.py`; separate connections/contexts, real competing processes and crash lock release |
+| Authoritative account pin before custody; Shadow identity | `broker/alpaca/clerk/test_active_authority.py`, `test_worker_lifecycle.py` |
+| Empty/unreadable configuration boots unavailable; no post-cutover env fallback | `test_worker_binding.py`, `test_retired_environment_gate.py`, `contracts/test_alpaca_configuration_source.py` |
+| Paper, Shadow, Live, Dry Run isolation and existing recovery | `broker/alpaca/`, `broker/v2panel/`, `services/` targeted suites; the excluded shared-feed rehearsal is outside this integration |
+| Loss hold and exit pricing remain sealed until re-arm | `broker/alpaca/clerk/sqlite/test_live_envelope_sync_arming.py`, `test_runtime_program_leg.py`, `services/test_alpaca_live_envelope.py` |
+| CLI effective-only arming, before/after diff, atomic handover | `scripts/test_manage_alpaca_arming_effective_revision.py`, `scripts/test_manage_alpaca_arming.py`, `test_selection_service.py` |
+| Import twice, preview, cutover and rollback | `test_legacy_import.py`, `test_cutover_rehearsal.py`, `scripts/test_manage_broker_configuration.py` |
+| Profile/selection survival and cold reopen | `test_schema_migration.py`, `test_clerk_dir_parity.py`, `test_envelope_type_fidelity.py`; `compose.yaml` keeps the Clerk volume external |
+| UI persistence, staged/effective status, actionable read/write failures | Frontend configuration specs and parent account-card spec; rejected resource reads render Retry, not an Angular resource exception |
+| Generated contracts and documentation | OpenAPI `--check`, TypeScript `codegen:check`, ADR-status and documentation-contract checks |
+
+Volume destruction was not exercised against the operator's deployment.
+The persistence claim is a combination of the external-volume declaration and
+temporary-database reopen/cold-start tests, not a production reset receipt.
+
+## Validation receipt
+
+- Python combined consumer suites: **4,966 passed, 10 skipped**, 168 seconds.
+  Command from `PythonDataService/`: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker_configuration tests/broker/alpaca tests/broker/v2panel tests/contracts tests/routers tests/scripts tests/services -q`.
+  The integration worktree used the existing host virtual environment while
+  importing source and tests from the integration checkout.
+- Frontend: **127 tests passed** across the 11 changed specs and two consuming
+  account-card/desk specs. Each was selected by exact file path with `ng test --watch=false`.
+- Production Angular build and full Frontend ESLint: passed.
+- Project-scope Python ruff, OpenAPI `--check`, TypeScript `codegen:check`, ADR
+  status, documentation-contract and whitespace checks: passed.
+- New failure regressions were demonstrated before their fixes. The combined
+  suite also caught a simulated binding refusal leaking between tests; the
+  lifecycle fixture now resets that process state before and after each test.
+
+## Independent review outcomes
+
+The standards review found resource-error rendering and non-atomic metadata
+updates; both have failing-before regression tests and fixes. The spec review
+found rejected-Apply recovery, same-account preflight, startup/account-pin
+fencing and reversible arming disagreement gaps; each is covered by the tests
+above. Follow-up review checked the CLI handover race, unreadable arming cleanup
+and refusal precedence. No historical arming/custody/activation schema changed.
+
+## Release and cutover checklist
+
+1. Resolve ADR 0060's remaining owner choices before marking that ADR Accepted.
+2. Use the [credential-slot and cutover runbook](../references/alpaca-credential-slots.md).
+   Inject the permitted secret pairs and retain the external Clerk volume.
+3. Schedule the installation cutover with its worker stopped, no open account
+   obligations and no armed instance. Back up configuration securely outside Git.
+4. Run the import preview in the data-plane image against the Clerk volume;
+   inspect the exact values and confirmation token, then apply the import.
+5. Verify/approve the observed account in the configuration page, stage and
+   press Apply, remove the seven retired user-setting lines, then restart.
+6. Confirm effective profile, exact account and authority world. A profile
+   grants no activation or arming; perform those separate ceremonies only when
+   intentionally authorized. A refused Apply requires a fresh Apply request.
+7. For rollback, stop the worker and reconcile obligations first. Restore the
+   reviewed prior code/deployment settings; retain profile records and never
+   roll back custody databases, activation generations or arming ledgers.
+
+ADR 0060 remains Proposed pending its three recorded owner choices. The current
+implementation preserves profiles during account reset, uses installation-local nicknames,
+and updates display metadata without changing execution identity.

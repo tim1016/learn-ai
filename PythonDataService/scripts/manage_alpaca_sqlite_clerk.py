@@ -1,4 +1,17 @@
-"""Offline operator CLI for Alpaca SQLite Clerk recovery and cutover."""
+"""Offline operator CLI for Alpaca SQLite Clerk recovery and cutover.
+
+Two ceremonies here are bound to the account mode: ``dev-reset`` moves a
+*paper* authority aside and nothing else, and the cutover refuses live broker
+evidence unless the installation is live (ADR 0059 D1). Both now read that mode
+off the installation's **effective** profile revision (ADR 0060) through the one
+resolver the three ``manage_alpaca_*`` CLIs share, instead of ``ALPACA_MODE``
+directly. Neither check is relaxed by the change: an installation before
+package F's import still resolves to the environment, so isolated qualification
+tooling that sets ``ALPACA_MODE=paper`` proves exactly what it proved before.
+
+Both reads stay where they are -- inside the branch that needs them -- so paper
+evidence still touches no settings at all.
+"""
 
 from __future__ import annotations
 
@@ -41,7 +54,7 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     restore_verified_backup,
     verify_authority_head,
 )
-from app.broker.alpaca.config import get_alpaca_settings
+from app.broker_configuration.cli_binding import effective_alpaca_settings
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -196,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         result = developer_clean_slate_reset(
             **common,
             runner_artifacts_root=args.runner_artifacts_root,
-            account_mode=get_alpaca_settings().mode,
+            account_mode=effective_alpaca_settings().mode,
         )
     elif args.operation == "cutover-initialize":
         result = initialize_cutover_authority(
@@ -266,11 +279,17 @@ def _read_cutover_evidence(path: Path, account_id: str) -> BrokerCutoverEvidence
         raise ValueError("cutover broker evidence fields do not match schema version 1")
     if payload.get("account_id") != account_id:
         raise ValueError("broker evidence account_id does not match CLI account")
-    if payload.get("account_mode") == "live" and get_alpaca_settings().mode != "live":
-        raise ValueError(
-            "broker evidence names a live account but ALPACA_MODE is not live; the ceremony "
-            "runs only under the mode it activates (ADR 0059 D1)"
-        )
+    if payload.get("account_mode") == "live":
+        # Resolved inside the branch, not above it: paper evidence must reach no
+        # settings and open no profiles database, which is what proves this
+        # ceremony is usable on an isolated paper qualification rig.
+        configured_mode = effective_alpaca_settings().mode
+        if configured_mode != "live":
+            raise ValueError(
+                "broker evidence names a live account but the effective broker configuration's "
+                f"mode is {configured_mode!r}, not live; the ceremony runs only under the mode "
+                "it activates (ADR 0059 D1). Before cutover this mode is ALPACA_MODE."
+            )
     return BrokerCutoverEvidence(
         account_id=payload["account_id"],
         account_mode=payload["account_mode"],

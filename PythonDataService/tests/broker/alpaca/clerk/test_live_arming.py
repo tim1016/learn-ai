@@ -266,6 +266,52 @@ def test_a_resealed_envelope_integer_that_is_a_float_or_a_bool_is_refused(key: s
         LiveArmingRecord.from_payload(resealed)
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("loss_fraction", 0.0),
+        ("loss_fraction", 1.0),
+        ("loss_usd", 0.0),
+        # ``inf`` satisfies ``> 0`` and makes every loss comparison False, so a
+        # sealed infinity would be a loss limit nothing can ever breach.
+        ("loss_usd", float("inf")),
+        ("loss_usd", float("nan")),
+        ("shadow_sessions", 0),
+        ("xh_entry_bps", -1.0),
+        # 10 000 bps is 100 %: a sell anchored there floors to zero, and the
+        # leg is refused EXTENDED_ANCHOR_UNPRICEABLE -- an EXIT refused
+        # *because of* a seal, which the envelope rule forbids.
+        ("xh_exit_bps", 10_000.0),
+    ],
+)
+def test_a_resealed_envelope_float_outside_its_domain_is_refused(key: str, value: float) -> None:
+    """The sealed floats bound real money, so they carry the environment's domains.
+
+    ``AlpacaSettings`` enforces these on ``ALPACA_LIVE_*`` and refuses to boot
+    outside them. The sealed copy is what the loss hold is judged against and
+    what an extended-session leg is priced from, and it reaches
+    ``LiveEnvelopeValues`` -- a plain dataclass with no validation of its own --
+    straight off disk. A row re-sealed over the tampered value verifies both
+    digests, so only this check stands between it and the money.
+
+    The domains themselves are pinned to the settings that declare them by
+    ``tests/broker/alpaca/test_config.py::
+    test_the_envelope_domains_agree_with_the_settings_that_declare_them``.
+    """
+    record = _armed()
+    tampered_envelope = {**record.envelope_values, key: value}
+    unsigned = {name: field_value for name, field_value in asdict(record).items() if name != "record_sha256"}
+    widened = {
+        **unsigned,
+        "envelope_values": tampered_envelope,
+        "envelope_sha256": canonical_sha256(tampered_envelope),
+    }
+    resealed = {**widened, "record_sha256": canonical_sha256(widened)}
+
+    with pytest.raises(LiveArmingInvalid, match=f"sealed {key} is not"):
+        LiveArmingRecord.from_payload(resealed)
+
+
 def test_a_type_confused_row_leaves_by_this_modules_own_error() -> None:
     payload = {**asdict(_armed()), "armed_at_ms": str(FRIDAY_MS)}
     with pytest.raises(LiveArmingInvalid, match="invalid integer or identity facts"):

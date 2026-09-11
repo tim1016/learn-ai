@@ -108,6 +108,19 @@ describe('routes', () => {
     }
   });
 
+  it('lazily loads the broker configuration surface at its own path under the desk', async () => {
+    const route = routes.find((candidate) => candidate.path === 'brokers/alpaca/configuration');
+    if (route?.loadComponent === undefined) throw new Error('Broker configuration route is missing.');
+
+    const { AlpacaConfigurationPageComponent } = await import(
+      './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component'
+    );
+
+    expect(await route.loadComponent()).toBe(AlpacaConfigurationPageComponent);
+    // The desk consumes no trailing segments, so it must not swallow this path.
+    expect(routes.find((candidate) => candidate.path === 'brokers/alpaca')?.children).toBeUndefined();
+  });
+
   it('keeps unscoped broker bot surfaces behind account-resolving guards', () => {
     for (const path of ['brokers/:broker/bots', 'brokers/:broker/gallery']) {
       const route = routes.find((candidate) => candidate.path === path);

@@ -1,0 +1,91 @@
+@use './configuration-controls' as controls;
+
+:host {
+  display: block;
+  min-height: 100%;
+  background: var(--bg-canvas);
+}
+
+.configuration {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.configuration__back {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+}
+
+.configuration__back:hover,
+.configuration__back:focus-visible {
+  text-decoration: underline;
+}
+
+.configuration h1 {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-lg, 1.15rem);
+}
+
+.configuration__lede {
+  margin: var(--space-1) 0 0;
+  max-width: 46rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.configuration__profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.configuration__profiles-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.configuration__profiles h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.configuration__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.configuration__error,
+.configuration__loading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.configuration__error {
+  border-color: var(--bear);
+  color: var(--text-primary);
+}
+
+.configuration__error button {
+  @include controls.secondary-button;
+}

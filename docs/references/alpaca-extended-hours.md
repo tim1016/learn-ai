@@ -26,7 +26,7 @@
 
 ## The anchor
 
-`buy: ceil_tick(close × (1 + entry_bps/10⁴))`, `sell: floor_tick(close × (1 − exit_bps/10⁴))`; tick 0.01 at or above $1, 0.0001 below, chosen by the pre-quantisation value so a sub-dollar close crossing $1 rounds to $1.01 rather than to a sub-penny tick the vendor would reject. Rounding is in the marketable direction. The allowances are `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS`, required for any `use_rth=False` run; unset → Start and Resume refuse `EXTENDED_HOURS_ALLOWANCE_UNSET`. Each is bounded `0 <= bps < 10_000` — a 100 % allowance is not a price — and an anchor that still quantises to zero or below refuses the leg (`EXTENDED_ANCHOR_UNPRICEABLE`) rather than escaping as a contract-validation error.
+`buy: ceil_tick(close × (1 + entry_bps/10⁴))`, `sell: floor_tick(close × (1 − exit_bps/10⁴))`; tick 0.01 at or above $1, 0.0001 below, chosen by the pre-quantisation value so a sub-dollar close crossing $1 rounds to $1.01 rather than to a sub-penny tick the vendor would reject. Rounding is in the marketable direction. The allowances are the effective profile revision's `xh_entry_bps` / `xh_exit_bps` (ADR 0060; `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS` before cutover), required for any `use_rth=False` run; unset → Start and Resume refuse `EXTENDED_HOURS_ALLOWANCE_UNSET`. Each is bounded `0 <= bps < 10_000` — a 100 % allowance is not a price — and an anchor that still quantises to zero or below refuses the leg (`EXTENDED_ANCHOR_UNPRICEABLE`) rather than escaping as a contract-validation error.
 
 ## The clock
 
@@ -49,7 +49,7 @@ Manual tickets are regular-session only. `extended_hours=True` on a leg is refus
 Start and Resume each carry an `ExtendedHoursAdmissionFact` (`app/schemas/run_admission.py`) whose state is one of `NOT_REQUESTED | READY | UNSUPPORTED | ALLOWANCE_UNSET`. Both failing states refuse in **every** mode — trade, dry-run and log-only alike — and there is no mode carve-out:
 
 - `UNSUPPORTED` — the active broker authority declares no extended window — refuses with `EXTENDED_HOURS_UNSUPPORTED`.
-- `ALLOWANCE_UNSET` — `ALPACA_LIVE_XH_ENTRY_BPS` / `ALPACA_LIVE_XH_EXIT_BPS` are not both set — refuses with `EXTENDED_HOURS_ALLOWANCE_UNSET`. A Dry Run runs on the synthetic authority built with the same `ProgramLegPolicy` and routes every intent through `shape_program_leg`, which refuses the same condition per decision; admitting such a run would start a bot that then rejects every extended decision it makes.
+- `ALLOWANCE_UNSET` — the effective revision's `xh_entry_bps` / `xh_exit_bps` are not both set — refuses with `EXTENDED_HOURS_ALLOWANCE_UNSET`. A Dry Run runs on the synthetic authority built with the same `ProgramLegPolicy` and routes every intent through `shape_program_leg`, which refuses the same condition per decision; admitting such a run would start a bot that then rejects every extended decision it makes.
 
 `app/services/run_admission.py` maps `ExtendedHoursAdmissionFact.state` to the named `LegRefusal` values exported by `app/broker/alpaca/clerk/program_leg.py`, so the wording an operator reads at the gate is the wording on the receipt.
 
@@ -97,6 +97,6 @@ Every durable leg hash — the manual instruction hash, the manual command's `pa
 
 - **Mirror R12 for ENTER.** A terminal, proven-zero-fill ENTER should reach `failed` instead of leaving its effect operation reading `in_progress` forever — see "Unfilled orders" above.
 - **Shape the operator flatten from the current instant.** Today every emergency and operator reduce is a market DAY order the vendor queues to the next regular open, so nothing reduces an extended-hours position while it is held — see "Unfilled orders" above.
-- Paper exercise: `.env` currently sets neither `ALPACA_LIVE_XH_ENTRY_BPS` nor `ALPACA_LIVE_XH_EXIT_BPS` — no default exists by design, so a `use_rth=False` paper run refuses `EXTENDED_HOURS_ALLOWANCE_UNSET` in any mode until both are set. Deploy one sealed instance with `use_rth=False` on the paper account with both allowances set; record the first extended-session submission, its Alpaca acknowledgement (`extended_hours: true`), and the 20:00 cancel of an unfilled order. Until then the vendor's early-close after-hours end is unverified.
+- Paper exercise: no saved revision sets either `xh_entry_bps` or `xh_exit_bps` — no default exists by design, so a `use_rth=False` paper run refuses `EXTENDED_HOURS_ALLOWANCE_UNSET` in any mode until both are set. Deploy one sealed instance with `use_rth=False` on the paper account with both allowances set; record the first extended-session submission, its Alpaca acknowledgement (`extended_hours: true`), and the 20:00 cancel of an unfilled order. Until then the vendor's early-close after-hours end is unverified.
 - Overnight (20:00–04:00): a separate venue, separate data; needs an overnight bar source before it can be a decision phase.
 - Bar labels: the IBKR data feed labels extended bars `CLOSED` unless a session capability probe is fresh; the decision session is computed from the instant, so labels are informational. Re-labelling from the declared window is a feed concern, tracked separately.

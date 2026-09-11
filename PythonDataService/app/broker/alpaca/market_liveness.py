@@ -21,7 +21,8 @@ from contextlib import suppress
 from typing import Any
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
 from app.broker.contract.ports import BrokerReadPort
 from app.schemas.market_liveness import SymbolTradingStatusEvidence
@@ -320,8 +321,16 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
     ) -> AlpacaMarketLivenessConsumer:
-        """Build the production consumer with Alpaca's raw data websocket."""
-        resolved = settings or get_alpaca_settings()
+        """Build the production consumer with Alpaca's raw data websocket.
+
+        ``resolved`` is captured once and closed over by every reconnect, so
+        the socket keeps authenticating as the binding it was started for. That
+        is deliberate: a consumer that re-read the configuration on reconnect
+        would silently start authenticating as a *different* account after a
+        switch, without anything restarting the stream. Changing the binding
+        means restarting the consumer, which is what the controlled restart is.
+        """
+        resolved = settings or resolved_alpaca_settings()
 
         def frame_source() -> AsyncIterator[bytes | str]:
             return alpaca_market_status_frames(resolved)
@@ -353,8 +362,8 @@ async def alpaca_market_status_frames(settings: AlpacaSettings) -> AsyncIterator
             json.dumps(
                 {
                     "action": "auth",
-                    "key": settings.api_key_id,
-                    "secret": settings.api_secret_key,
+                    "key": settings.api_key_id.get_secret_value(),
+                    "secret": settings.api_secret_key.get_secret_value(),
                 }
             )
         )

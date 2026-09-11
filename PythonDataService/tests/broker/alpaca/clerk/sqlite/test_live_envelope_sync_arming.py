@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 import pytest
 
@@ -249,6 +250,111 @@ async def test_a_mid_session_mode_disagreement_invalidates_the_gate_until_a_read
     await sync.tick()
     assert gate.invalid_reason_code is None
     assert gate.fresh_snapshot(T0) is not None
+
+
+async def test_the_hold_is_raised_against_the_sealed_limit_not_a_loosened_configured_one(
+    envelope_repo: ClerkSqliteRepository, tmp_path
+) -> None:
+    """Raising the hold and clearing it are one judgement, so both read the seal.
+
+    ADR 0059 D3: an operator who loosens ``ALPACA_LIVE_LOSS_*`` without
+    re-arming has not widened anything. The account is judged by the armed
+    envelope until the next ceremony -- which is also what makes the guarded
+    clear safe, since it re-observes through this same reading.
+    """
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    # limit = min(0.05 × 100,000, 5,000) = 5,000, and the day is -5,000: a
+    # breach of the sealed limit and not of the loosened 9,000 below.
+    broker = _LiveBroker(now_ms=T0, unrealized=-5_000.0)
+    sync = _sync(envelope_repo, ledger, ArmingGate(), {SID: SEAL}, broker=broker)
+    sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
+
+    assert await sync.tick() == "hold_raised"
+
+    assert sync.envelope.in_force == TEST_ENVELOPE_VALUES
+    assert sync.envelope.agreement == "disagreed"
+
+
+async def test_an_unreadable_seal_makes_the_account_unjudgeable_rather_than_relaxing_the_limit(
+    envelope_repo: ClerkSqliteRepository, tmp_path
+) -> None:
+    """The fallback in ``in_force`` must not become a way to widen a limit.
+
+    ``sealed`` returns to ``None`` when the arming inputs cannot be read, so a
+    plain fallback would let an operator loosen ``ALPACA_LIVE_LOSS_*``, corrupt
+    the ledger, and have the account judged by the looser number. An unreadable
+    seal is unjudgeable: the observation is withdrawn and every ENTER refuses.
+    """
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    ledger.path.write_text(
+        ledger.path.read_text(encoding="utf-8").replace('"kind":"armed"', '"kind":"armed ', 1),
+        encoding="utf-8",
+    )
+    broker = _LiveBroker(now_ms=T0, unrealized=-5_000.0)
+    sync = _sync(envelope_repo, ledger, ArmingGate(), {SID: SEAL}, broker=broker)
+    sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
+
+    assert await sync.tick() == "unknown"
+
+    assert sync.envelope.fresh_observation(T0) is None
+    assert (await sync.observe()).loss_limit_usd is None
+
+
+async def test_bindings_that_cannot_be_read_are_the_same_fault_not_an_escaping_error(
+    envelope_repo: ClerkSqliteRepository, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The seals callable reaches disk, so it can fail the way the ledger can.
+
+    It must fail *closed* under this module's own fault: the guarded loss-hold
+    clear re-observes through ``observe``, and an escaping ``OSError`` would
+    answer HTTP 500 where the contract is "refused, the hold stands".
+    """
+
+    def _unreadable() -> Mapping[str, str]:
+        raise OSError("the binding store is unreadable")
+
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.append(_record())
+    gate = ArmingGate()
+    sync = LiveEnvelopeSync(
+        repo=envelope_repo,
+        read=_LiveBroker(now_ms=T0),
+        envelope=LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=False),
+        arming_ledger=ledger,
+        arming_gate=gate,
+        instance_seals=_unreadable,
+    )
+
+    with caplog.at_level("ERROR"):
+        assert await sync.tick() == "unknown"
+
+    assert gate.invalid_reason_code == "LIVE_ARMING_LEDGER_INVALID"
+    assert sync.envelope.sealed is None
+    invalid = [r for r in caplog.records if getattr(r, "action", None) == "live_arming_ledger_invalid"]
+    assert len(invalid) == 1
+    assert invalid[0].exc_info is not None, "the traceback names which input would not read"
+
+
+async def test_an_account_no_ceremony_has_armed_is_judged_by_the_configured_limit(
+    envelope_repo: ClerkSqliteRepository, tmp_path
+) -> None:
+    """The fallback, stated: an empty ledger seals nothing, so nothing overrides."""
+    broker = _LiveBroker(now_ms=T0, unrealized=-5_000.0)
+    sync = _sync(
+        envelope_repo,
+        LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT),
+        ArmingGate(),
+        {},
+        broker=broker,
+    )
+    sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=9_000.0, loss_fraction=0.09)
+
+    assert await sync.tick() == "observed"
+
+    assert sync.envelope.sealed is None
+    assert sync.envelope.in_force == sync.envelope.values
 
 
 async def test_without_a_gate_the_sync_only_seals_as_in_slice_6(

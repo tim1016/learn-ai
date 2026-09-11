@@ -4,6 +4,13 @@
 hold was raised on and refuses while the breach still stands. The hold
 never clears on a timer or at session rollover; this is the only release.
 
+The limit it re-reads against is the envelope **sealed at arming** wherever
+an arming record exists (ADR 0059 D3): ``sync.observe()`` re-reads the
+arming ledger before it re-reads the account, so raising
+``ALPACA_LIVE_LOSS_USD`` in the environment and restarting cannot release a
+standing hold. Only a re-arm moves that number. An account no ceremony has
+ever armed has nothing sealed, and falls back to the configured values.
+
 Re-reading is not free of side effects: ``sync.observe()`` is the same call
 the background tap makes, so after ruling R-A′ it re-publishes the gate's
 observation only when the reading is judgeable AND not breached, and
@@ -24,6 +31,11 @@ from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 
 LIVE_ENVELOPE_LOSS_HOLD_STANDS = "LIVE_ENVELOPE_LOSS_HOLD_STANDS"
 LIVE_ENVELOPE_LOSS_HOLD_CLEARED = "LIVE_ENVELOPE_LOSS_HOLD_CLEARED"
+# Which envelope decided, said in the operator's own sentence. An operator who
+# has just raised a limit in the environment and is watching the hold refuse
+# anyway needs to read that the number is the armed one, not the edited one.
+_SEALED_LIMIT = "sealed at arming"
+_CONFIGURED_LIMIT = "configured in the environment"
 
 _ClearOutcome = Literal["cleared", "no_hold", "refused"]
 
@@ -47,6 +59,27 @@ def _unobserved(
         loss_limit_usd=None,
         observed_at_ms=now_ms,
         detail=detail,
+    )
+
+
+def _unjudgeable_detail(reading: EnvelopeReading) -> str:
+    """Why the account cannot be judged, in the operator's own sentence.
+
+    One predicate, two sentences, so the prose cannot drift from the diagnosis
+    the sync logs beside it (``_unknown_detail``'s
+    ``sealed_envelope_readable``). An operator sent to debug the broker feed
+    over a corrupt ``live_arming.jsonl`` loses the incident.
+    """
+    if not reading.seal_readable:
+        return (
+            "This account's arming inputs could not be read, so there is no sealed "
+            "loss limit to judge against. Repair the arming ledger, then clear again. "
+            "The hold stands."
+        )
+    return (
+        "Day P&L is unknown (an external order was seen today, or the broker "
+        "reported no previous-close equity, or a risk figure the broker "
+        "reported was not a finite number). The hold stands."
     )
 
 
@@ -111,12 +144,9 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reading,
             outcome="refused",
             reason_code=LIVE_ENVELOPE_UNOBSERVED,
-            detail=(
-                "Day P&L is unknown (an external order was seen today, or the broker "
-                "reported no previous-close equity, or a risk figure the broker "
-                "reported was not a finite number). The hold stands."
-            ),
+            detail=_unjudgeable_detail(reading),
         )
+    limit_source = _SEALED_LIMIT if sync.envelope.in_force_is_sealed else _CONFIGURED_LIMIT
     if reading.breached:
         return _from_reading(
             reading,
@@ -124,7 +154,7 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
             reason_code=LIVE_ENVELOPE_LOSS_HOLD_STANDS,
             detail=(
                 f"Day P&L {day_pnl.total_usd:.2f} USD is still at or below the "
-                f"{loss_limit_usd:.2f} USD loss limit. The hold stands."
+                f"{loss_limit_usd:.2f} USD loss limit {limit_source}. The hold stands."
             ),
         )
     released = resolve_account_hold(
@@ -145,7 +175,8 @@ async def clear_loss_hold(runtime: ActiveClerkRuntime, *, now_ms: int) -> LossHo
         reason_code=None,
         detail=(
             f"Loss hold cleared: day P&L {day_pnl.total_usd:.2f} USD is above the "
-            f"{loss_limit_usd:.2f} USD loss limit. New entries are admitted again."
+            f"{loss_limit_usd:.2f} USD loss limit {limit_source}. New entries are "
+            "admitted again."
         ),
     )
 

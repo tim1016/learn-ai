@@ -119,6 +119,33 @@ async def test_no_activation_installs_no_custody_authority(tmp_path: Path) -> No
     assert not opened
 
 
+async def test_authoritative_account_read_must_match_the_profile_pin_before_custody(
+    tmp_path: Path,
+) -> None:
+    """An earlier unavailable verification cannot authorize the next account read."""
+    broker = _Broker()
+    opened = False
+
+    def _open(_account_id: str, _root: Path) -> ClerkSqliteRepository:
+        nonlocal opened
+        opened = True
+        raise AssertionError("a foreign account must never acquire an execution lease")
+
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        activation_store=_ActivationStore(_activation()),
+        repository_opener=_open,
+        expected_account_id="PA-APPROVED",
+    )
+
+    assert runtime.clerk is None
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "ACCOUNT_PIN_MISMATCH"
+    assert not opened
+
+
 async def test_invalid_activation_installs_no_mutating_clerk(tmp_path: Path) -> None:
     broker = _Broker()
 
