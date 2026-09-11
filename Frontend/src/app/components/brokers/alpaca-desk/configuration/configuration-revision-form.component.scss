@@ -1,0 +1,43 @@
+@use './configuration-controls' as controls;
+
+.revision-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.revision-form__row {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.revision-form__field {
+  @include controls.field-label;
+}
+
+.revision-form__field select {
+  @include controls.text-field;
+
+  background: var(--bg-surface);
+}
+
+.revision-form__notice {
+  margin: 0;
+  padding: var(--space-2);
+  border-left: 3px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.revision-form__notice--live {
+  border-left-color: var(--bear);
+}
+
+.revision-form__problems {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--bear);
+  font-size: var(--fs-xs);
+}

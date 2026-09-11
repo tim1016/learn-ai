@@ -1274,7 +1274,7 @@ def permit_frame_injection(monkeypatch: pytest.MonkeyPatch):
     from app.broker.alpaca import fault_injection as fi
 
     monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
-    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
+    monkeypatch.setattr(fi, "resolved_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
     fi.reset_fault_injection_for_testing()
     yield fi
     fi.reset_fault_injection_for_testing()

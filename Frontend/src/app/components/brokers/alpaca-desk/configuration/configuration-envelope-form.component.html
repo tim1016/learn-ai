@@ -1,0 +1,37 @@
+@let fields = draftForm();
+<fieldset class="envelope">
+  <legend>Live risk envelope</legend>
+  <p class="envelope__note">
+    These six values are saved with the revision. They govern nothing on their own:
+    a running instance is bound by the envelope sealed into its arming record, and
+    arming — or loosening an armed limit — happens only in the host CLI ceremony the
+    owner runs. This page cannot arm anything.
+  </p>
+
+  <div class="envelope__grid">
+    <label class="envelope__field">
+      <span>{{ labels.loss_fraction }}</span>
+      <input type="number" step="0.001" [formField]="fields.loss_fraction" />
+    </label>
+    <label class="envelope__field">
+      <span>{{ labels.loss_usd }}</span>
+      <input type="number" step="0.01" [formField]="fields.loss_usd" />
+    </label>
+    <label class="envelope__field">
+      <span>{{ labels.shadow_sessions }}</span>
+      <input type="number" step="1" [formField]="fields.shadow_sessions" />
+    </label>
+    <label class="envelope__field">
+      <span>{{ labels.arming_max_sessions }}</span>
+      <input type="number" step="1" [formField]="fields.arming_max_sessions" />
+    </label>
+    <label class="envelope__field">
+      <span>{{ labels.xh_entry_bps }}</span>
+      <input type="number" step="0.1" [formField]="fields.xh_entry_bps" />
+    </label>
+    <label class="envelope__field">
+      <span>{{ labels.xh_exit_bps }}</span>
+      <input type="number" step="0.1" [formField]="fields.xh_exit_bps" />
+    </label>
+  </div>
+</fieldset>

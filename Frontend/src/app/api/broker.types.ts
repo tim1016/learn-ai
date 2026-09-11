@@ -869,6 +869,273 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/configuration/account-nicknames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Nicknames */
+        get: operations["list_nicknames_api_brokers_alpaca_configuration_account_nicknames_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/account-nicknames/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Nickname */
+        put: operations["put_nickname_api_brokers_alpaca_configuration_account_nicknames__account_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/credential-slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Credential Slots
+         * @description Slot labels and availability. Never a value, a fragment, or a var name.
+         */
+        get: operations["list_credential_slots_api_brokers_alpaca_configuration_credential_slots_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Events */
+        get: operations["list_events_api_brokers_alpaca_configuration_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Owner */
+        get: operations["read_owner_api_brokers_alpaca_configuration_owner_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Owner */
+        patch: operations["patch_owner_api_brokers_alpaca_configuration_owner_patch"];
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Profiles */
+        get: operations["list_profiles_api_brokers_alpaca_configuration_profiles_get"];
+        put?: never;
+        /** Create Profile */
+        post: operations["create_profile_api_brokers_alpaca_configuration_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Profile */
+        get: operations["read_profile_api_brokers_alpaca_configuration_profiles__profile_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Profile
+         * @description Metadata only — ``display_name`` and ``archived``.
+         */
+        patch: operations["patch_profile_api_brokers_alpaca_configuration_profiles__profile_id__patch"];
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Profile
+         * @description New profile, copied content, no account pin carried over.
+         */
+        post: operations["clone_profile_api_brokers_alpaca_configuration_profiles__profile_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Revisions */
+        get: operations["list_revisions_api_brokers_alpaca_configuration_profiles__profile_id__revisions_get"];
+        put?: never;
+        /** Create Revision */
+        post: operations["create_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Revision */
+        get: operations["read_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}/account-pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin Account
+         * @description Pin one explicitly selected observed account to this revision.
+         */
+        post: operations["pin_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__account_pin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}/verify-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Account
+         * @description Read-only broker account discovery. Never submits or cancels anything.
+         */
+        post: operations["verify_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__verify_account_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Selection
+         * @description Staged and effective, always both, so neither can be rendered as the other.
+         */
+        get: operations["read_selection_api_brokers_alpaca_configuration_selection_get"];
+        /**
+         * Put Selection
+         * @description Stage an exact profile revision. Staging is not switching.
+         */
+        put: operations["put_selection_api_brokers_alpaca_configuration_selection_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/selection/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Selection
+         * @description Record the one-shot Apply. Changes no runtime; 202, never 200.
+         */
+        post: operations["apply_selection_api_brokers_alpaca_configuration_selection_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -5086,6 +5353,11 @@ export interface components {
             /** Status Headline */
             status_headline: string;
         };
+        /** AccountPinRequest */
+        AccountPinRequest: {
+            /** Account Id */
+            account_id: string;
+        };
         /**
          * AccountPnlAttributionResponse
          * @description C2 — inclusive-window FIFO attribution from active SQLite folds.
@@ -5160,6 +5432,11 @@ export interface components {
             rtol: number;
             /** Within Tolerance */
             within_tolerance: boolean;
+        };
+        /** AccountVerificationResponse */
+        AccountVerificationResponse: {
+            /** Observed Accounts */
+            observed_accounts: components["schemas"]["ObservedAccountResponse"][];
         };
         /**
          * ActionPlan
@@ -5708,6 +5985,11 @@ export interface components {
             step_days: number;
             /** Test Days */
             test_days: number;
+        };
+        /** ApplyRequest */
+        ApplyRequest: {
+            /** Expected Selection Generation */
+            expected_selection_generation: number;
         };
         /**
          * ArbitrageDetail
@@ -8774,6 +9056,32 @@ export interface components {
             /** Updated At Ms */
             updated_at_ms: number;
         };
+        /** ConfigurationEventListResponse */
+        ConfigurationEventListResponse: {
+            /** Events */
+            events: components["schemas"]["ConfigurationEventResponse"][];
+        };
+        /** ConfigurationEventResponse */
+        ConfigurationEventResponse: {
+            /** Action */
+            action: string;
+            /** Actor Owner Id */
+            actor_owner_id: string;
+            /** Event Id */
+            event_id: string;
+            /** Next Ref */
+            next_ref: string | null;
+            /** Previous Ref */
+            previous_ref: string | null;
+            /** Profile Id */
+            profile_id: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Result */
+            result: string;
+            /** Revision */
+            revision: number | null;
+        };
         /**
          * ConfiguredSignalProgramSeal
          * @description Inner seal: the exact semantic signal program selected by the user.
@@ -8952,6 +9260,27 @@ export interface components {
             resolution: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * CredentialSlotResponse
+         * @description Labels and availability only — never a value, fragment, or var name.
+         */
+        CredentialSlotResponse: {
+            /** Available */
+            available: boolean;
+            /** Label */
+            label: string;
+            /** Slot */
+            slot: string;
+            /** Verified Account Id */
+            verified_account_id?: string | null;
+            /** Verified At Ms */
+            verified_at_ms?: number | null;
+        };
+        /** CredentialSlotsResponse */
+        CredentialSlotsResponse: {
+            /** Slots */
+            slots: components["schemas"]["CredentialSlotResponse"][];
         };
         /** CrossAssetBars */
         CrossAssetBars: {
@@ -13779,6 +14108,38 @@ export interface components {
             vega?: number;
         };
         /**
+         * LiveEnvelopePayload
+         * @description The six values, named exactly as ``LiveEnvelopeValues`` names them.
+         *
+         *     The mapping to the dataclass is an identity, so no rename layer can drift
+         *     (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
+         *     field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
+         *     every path into storage, which is where the rule actually lives.
+         *
+         *     ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
+         *     mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
+         *     before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
+         *     by-name ``int`` check downstream would never see the boolean it exists to
+         *     refuse — a real-money session count silently minted from ``true``. Strict
+         *     ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
+         *     accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
+         *     ``float`` annotation does with ``5000``.
+         */
+        LiveEnvelopePayload: {
+            /** Arming Max Sessions */
+            arming_max_sessions: number;
+            /** Loss Fraction */
+            loss_fraction: number;
+            /** Loss Usd */
+            loss_usd: number;
+            /** Shadow Sessions */
+            shadow_sessions: number;
+            /** Xh Entry Bps */
+            xh_entry_bps: number;
+            /** Xh Exit Bps */
+            xh_exit_bps: number;
+        };
+        /**
          * LiveGreeksRequest
          * @description Convenience request for the common 'live Greeks at current state' case.
          *
@@ -14704,6 +15065,25 @@ export interface components {
              */
             vendor_endpoint?: "/v2/reference/news";
         };
+        /** NicknameListResponse */
+        NicknameListResponse: {
+            /** Nicknames */
+            nicknames: components["schemas"]["NicknameResponse"][];
+        };
+        /** NicknamePutRequest */
+        NicknamePutRequest: {
+            /** Nickname */
+            nickname: string;
+        };
+        /** NicknameResponse */
+        NicknameResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Nickname */
+            nickname: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /** NonSessionRecord */
         NonSessionRecord: {
             /** Market */
@@ -14811,6 +15191,18 @@ export interface components {
             timestamp: number;
             /** Volume */
             volume: number;
+        };
+        /** ObservedAccountResponse */
+        ObservedAccountResponse: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Account Mode
+             * @enum {string}
+             */
+            account_mode: "paper" | "live";
+            /** Account Status */
+            account_status?: string | null;
         };
         /**
          * OhlcvBar
@@ -15499,6 +15891,22 @@ export interface components {
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
+        /** OwnerPatchRequest */
+        OwnerPatchRequest: {
+            /** Display Label */
+            display_label: string;
+        };
+        /** OwnerResponse */
+        OwnerResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Display Label */
+            display_label: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /**
          * PanelAction
          * @description One backend-presented action (§11).
@@ -16025,6 +16433,64 @@ export interface components {
             operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
             /** Trader */
             trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
+        };
+        /** ProfileCloneRequest */
+        ProfileCloneRequest: {
+            /** Display Name */
+            display_name: string;
+        };
+        /** ProfileCreateRequest */
+        ProfileCreateRequest: {
+            /** Credential Slot */
+            credential_slot: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Endpoint Mode
+             * @enum {string}
+             */
+            endpoint_mode: "paper" | "live";
+            live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+        };
+        /** ProfileDetailResponse */
+        ProfileDetailResponse: {
+            latest_revision: components["schemas"]["RevisionResponse"] | null;
+            profile: components["schemas"]["ProfileResponse"];
+        };
+        /** ProfileListResponse */
+        ProfileListResponse: {
+            /** Profiles */
+            profiles: components["schemas"]["ProfileResponse"][];
+        };
+        /**
+         * ProfilePatchRequest
+         * @description Metadata only. A rename never invalidates an arming (ADR 0060 D4).
+         */
+        ProfilePatchRequest: {
+            /** Archived */
+            archived?: boolean | null;
+            /** Display Name */
+            display_name?: string | null;
+        };
+        /** ProfileResponse */
+        ProfileResponse: {
+            /** Archived */
+            archived: boolean;
+            /**
+             * Broker
+             * @constant
+             */
+            broker: "alpaca";
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Display Name */
+            display_name: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Profile Id */
+            profile_id: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * ProgramBuildAdmissionFact
@@ -17187,6 +17653,53 @@ export interface components {
              * @enum {string}
              */
             kind: "retire_replace";
+        };
+        /** RevisionCreateRequest */
+        RevisionCreateRequest: {
+            /** Credential Slot */
+            credential_slot: string;
+            /**
+             * Endpoint Mode
+             * @enum {string}
+             */
+            endpoint_mode: "paper" | "live";
+            /** Expected Revision */
+            expected_revision: number;
+            live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+        };
+        /** RevisionListResponse */
+        RevisionListResponse: {
+            /** Revisions */
+            revisions: components["schemas"]["RevisionResponse"][];
+        };
+        /** RevisionResponse */
+        RevisionResponse: {
+            /** Account Pin */
+            account_pin: string | null;
+            /** Account Pinned At Ms */
+            account_pinned_at_ms?: number | null;
+            /** Author Owner Id */
+            author_owner_id: string;
+            /** Complete */
+            complete: boolean;
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Credential Slot */
+            credential_slot: string;
+            /**
+             * Endpoint Mode
+             * @enum {string}
+             */
+            endpoint_mode: "paper" | "live";
+            live_envelope: components["schemas"]["LiveEnvelopePayload"] | null;
+            /** Profile Id */
+            profile_id: string;
+            /** Revision */
+            revision: number;
+            /** Schema Version */
+            schema_version: number;
         };
         /**
          * RobustnessResponse
@@ -18513,6 +19026,51 @@ export interface components {
             train_start_ms: number;
             /** Training Candidates */
             training_candidates?: components["schemas"]["TrainingCandidateResult"][];
+        };
+        /**
+         * SelectionPutRequest
+         * @description Staging, not switching. Navigating the UI is not staging.
+         */
+        SelectionPutRequest: {
+            /** Expected Selection Generation */
+            expected_selection_generation: number;
+            /** Profile Id */
+            profile_id: string;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * SelectionResponse
+         * @description Staged **and** effective, always both (contract §4).
+         *
+         *     ``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a
+         *     worker once bound this revision, never that one is running now.
+         */
+        SelectionResponse: {
+            /** Apply Requested */
+            apply_requested: boolean;
+            /** Apply Requested At Ms */
+            apply_requested_at_ms?: number | null;
+            /** Apply Requested Generation */
+            apply_requested_generation?: number | null;
+            /** Effective Account Id */
+            effective_account_id: string | null;
+            /** Effective Acknowledged At Ms */
+            effective_acknowledged_at_ms?: number | null;
+            /** Effective Profile Id */
+            effective_profile_id: string | null;
+            /** Effective Revision */
+            effective_revision: number | null;
+            /** Last Apply Outcome */
+            last_apply_outcome: ("applied" | "refused") | null;
+            /** Last Apply Refusal Reason */
+            last_apply_refusal_reason: string | null;
+            /** Selection Generation */
+            selection_generation: number;
+            /** Staged Profile Id */
+            staged_profile_id: string | null;
+            /** Staged Revision */
+            staged_revision: number | null;
         };
         /** SeriesResponse */
         SeriesResponse: {
@@ -24007,6 +24565,657 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManualOrderCancellationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_nicknames_api_brokers_alpaca_configuration_account_nicknames_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NicknameListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_nickname_api_brokers_alpaca_configuration_account_nicknames__account_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NicknamePutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NicknameResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_credential_slots_api_brokers_alpaca_configuration_credential_slots_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialSlotsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_events_api_brokers_alpaca_configuration_events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before_event_id?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationEventListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_owner_api_brokers_alpaca_configuration_owner_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_owner_api_brokers_alpaca_configuration_owner_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnerPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_profiles_api_brokers_alpaca_configuration_profiles_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_profile_api_brokers_alpaca_configuration_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_profile_api_brokers_alpaca_configuration_profiles__profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_profile_api_brokers_alpaca_configuration_profiles__profile_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfilePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_profile_api_brokers_alpaca_configuration_profiles__profile_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileCloneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_revisions_api_brokers_alpaca_configuration_profiles__profile_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pin_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__account_pin_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountPinRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__verify_account_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                profile_id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountVerificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_selection_api_brokers_alpaca_configuration_selection_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_selection_api_brokers_alpaca_configuration_selection_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectionPutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_selection_api_brokers_alpaca_configuration_selection_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelectionResponse"];
                 };
             };
             /** @description Validation Error */

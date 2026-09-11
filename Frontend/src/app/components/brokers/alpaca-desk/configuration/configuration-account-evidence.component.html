@@ -1,0 +1,66 @@
+@let current = revision();
+<section class="evidence" aria-label="Verified account evidence">
+  <div class="evidence__pin">
+    <h3>Approved account</h3>
+    @if (pinnedAccountId(); as accountId) {
+      <p class="evidence__account">
+        <strong>{{ accountId }}</strong>
+        @if (nickname(); as label) { <span class="evidence__nickname">· {{ label }}</span> }
+      </p>
+      @if (current.account_pinned_at_ms) {
+        <p class="evidence__stamp">
+          Approved <app-timestamp-display [value]="current.account_pinned_at_ms" mode="local" />
+        </p>
+      }
+    } @else {
+      <p class="evidence__stamp">
+        No account is approved for this revision yet. Verify to see which account its
+        credential slot and endpoint actually reach, then approve that one.
+      </p>
+    }
+    <p class="evidence__stamp">
+      Declared endpoint: <strong>{{ current.endpoint_mode | receiptLabel }}</strong>
+    </p>
+  </div>
+
+  <div class="evidence__verify">
+    <button type="button" [disabled]="busy()" (click)="verifyRequested.emit()">
+      Verify account (read-only)
+    </button>
+    @if (observed(); as accounts) {
+      @if (accounts.length === 0) {
+        <p class="evidence__stamp">The broker reported no account for this revision.</p>
+      } @else {
+        <ul class="evidence__observed">
+          @for (account of accounts; track account.account_id) {
+            <li>
+              <strong>{{ account.account_id }}</strong>
+              <span
+                class="evidence__mode"
+                [class.evidence__mode--disagrees]="account.account_mode !== current.endpoint_mode"
+              >observed {{ account.account_mode | receiptLabel }}</span>
+              @if (account.account_status; as status) {
+                <span>{{ status | receiptLabel }}</span>
+              }
+              @if (account.account_id !== pinnedAccountId()) {
+                <button type="button" [disabled]="busy()" (click)="pinRequested.emit(account.account_id)">
+                  Approve this account
+                </button>
+              }
+            </li>
+          }
+        </ul>
+      }
+    }
+  </div>
+
+  @if (pinnedAccountId()) {
+    <form class="evidence__nickname-form" (submit)="$event.preventDefault(); saveNickname()">
+      <label>
+        <span>Account nickname</span>
+        <input type="text" [formField]="nicknameForm" />
+      </label>
+      <button type="submit" [disabled]="!canSaveNickname()">Save nickname</button>
+    </form>
+  }
+</section>

@@ -1,0 +1,35 @@
+@use './configuration-controls' as controls;
+
+.refusal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--bear);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.refusal__reason {
+  margin: 0;
+  color: var(--bear);
+  font-weight: var(--fw-bold);
+}
+
+.refusal__message,
+.refusal__next-step {
+  margin: 0;
+}
+
+.refusal__next-step {
+  color: var(--text-secondary);
+}
+
+.refusal__reload {
+  @include controls.secondary-button;
+
+  align-self: flex-start;
+  margin-top: var(--space-1);
+}

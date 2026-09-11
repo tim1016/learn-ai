@@ -65,11 +65,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.clerk.stream_health import ExecutionEvidenceHealth
 from app.broker.alpaca.clerk.trade_evidence import (
     TradeUpdateEvidenceSink,
 )
-from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.alpaca.fault_injection import (
     FrameFaultKind,
     frame_for_fault,
@@ -687,7 +688,11 @@ class TradeUpdatesConsumer:
         frames are not captured here — only inbound frames flow through
         ``_handle_frame`` — so no key material is ever journaled).
         """
-        resolved = settings or get_alpaca_settings()
+        # Captured once and closed over by every reconnect, so the execution
+        # channel keeps authenticating as the binding it was started for.
+        # Re-reading on reconnect would let a switch move the stream to a
+        # different account with nothing restarting it.
+        resolved = settings or resolved_alpaca_settings()
 
         def _socket_source() -> AsyncIterator[bytes | str]:
             return alpaca_socket_frames(resolved)
@@ -889,8 +894,8 @@ async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes 
                 {
                     "action": "authenticate",
                     "data": {
-                        "key_id": settings.api_key_id,
-                        "secret_key": settings.api_secret_key,
+                        "key_id": settings.api_key_id.get_secret_value(),
+                        "secret_key": settings.api_secret_key.get_secret_value(),
                     },
                 }
             )

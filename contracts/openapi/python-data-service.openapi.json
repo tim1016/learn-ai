@@ -160,6 +160,22 @@
         "title": "AccountOperatorPosture",
         "type": "object"
       },
+      "AccountPinRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "AccountPinRequest",
+        "type": "object"
+      },
       "AccountPnlAttributionResponse": {
         "additionalProperties": false,
         "description": "C2 \u2014 inclusive-window FIFO attribution from active SQLite folds.",
@@ -358,6 +374,23 @@
           "divergences"
         ],
         "title": "AccountPnlReconciliationResponse",
+        "type": "object"
+      },
+      "AccountVerificationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "observed_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/ObservedAccountResponse"
+            },
+            "title": "Observed Accounts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observed_accounts"
+        ],
+        "title": "AccountVerificationResponse",
         "type": "object"
       },
       "ActionPlan": {
@@ -1460,6 +1493,21 @@
           "step_days"
         ],
         "title": "AnchoredSplitPolicySpec",
+        "type": "object"
+      },
+      "ApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_selection_generation"
+        ],
+        "title": "ApplyRequest",
         "type": "object"
       },
       "ArbitrageDetail": {
@@ -9644,6 +9692,107 @@
         "title": "CommandResponse",
         "type": "object"
       },
+      "ConfigurationEventListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigurationEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "ConfigurationEventListResponse",
+        "type": "object"
+      },
+      "ConfigurationEventResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_owner_id": {
+            "title": "Actor Owner Id",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "next_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Ref"
+          },
+          "previous_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Ref"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "recorded_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "event_id",
+          "actor_owner_id",
+          "action",
+          "profile_id",
+          "revision",
+          "previous_ref",
+          "next_ref",
+          "result",
+          "recorded_at_ms"
+        ],
+        "title": "ConfigurationEventResponse",
+        "type": "object"
+      },
       "ConfiguredSignalProgramSeal": {
         "additionalProperties": false,
         "description": "Inner seal: the exact semantic signal program selected by the user.",
@@ -9944,6 +10093,72 @@
           "price_adjustment_mode"
         ],
         "title": "CoverageResponse",
+        "type": "object"
+      },
+      "CredentialSlotResponse": {
+        "additionalProperties": false,
+        "description": "Labels and availability only \u2014 never a value, fragment, or var name.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "slot": {
+            "title": "Slot",
+            "type": "string"
+          },
+          "verified_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Account Id"
+          },
+          "verified_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At Ms"
+          }
+        },
+        "required": [
+          "slot",
+          "label",
+          "available"
+        ],
+        "title": "CredentialSlotResponse",
+        "type": "object"
+      },
+      "CredentialSlotsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialSlotResponse"
+            },
+            "title": "Slots",
+            "type": "array"
+          }
+        },
+        "required": [
+          "slots"
+        ],
+        "title": "CredentialSlotsResponse",
         "type": "object"
       },
       "CrossAssetBars": {
@@ -19633,6 +19848,55 @@
         "title": "LegGreeks",
         "type": "object"
       },
+      "LiveEnvelopePayload": {
+        "additionalProperties": false,
+        "description": "The six values, named exactly as ``LiveEnvelopeValues`` names them.\n\nThe mapping to the dataclass is an identity, so no rename layer can drift\n(contract \u00a72.4). The bounds restate ``AlpacaSettings``' domain for an early,\nfield-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on\nevery path into storage, which is where the rule actually lives.\n\n``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax\nmode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises\nbefore it: ``{\"shadow_sessions\": true}`` would arrive as ``1`` and the\nby-name ``int`` check downstream would never see the boolean it exists to\nrefuse \u2014 a real-money session count silently minted from ``true``. Strict\n``int`` refuses ``True``, ``1.0`` and ``\"3\"``; strict ``float`` still\naccepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'\n``float`` annotation does with ``5000``.",
+        "properties": {
+          "arming_max_sessions": {
+            "minimum": 1.0,
+            "title": "Arming Max Sessions",
+            "type": "integer"
+          },
+          "loss_fraction": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Fraction",
+            "type": "number"
+          },
+          "loss_usd": {
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Usd",
+            "type": "number"
+          },
+          "shadow_sessions": {
+            "minimum": 1.0,
+            "title": "Shadow Sessions",
+            "type": "integer"
+          },
+          "xh_entry_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Xh Entry Bps",
+            "type": "number"
+          },
+          "xh_exit_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Xh Exit Bps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "loss_fraction",
+          "loss_usd",
+          "shadow_sessions",
+          "arming_max_sessions",
+          "xh_entry_bps",
+          "xh_exit_bps"
+        ],
+        "title": "LiveEnvelopePayload",
+        "type": "object"
+      },
       "LiveGreeksRequest": {
         "description": "Convenience request for the common 'live Greeks at current state' case.\n\nEquivalent to ScenarioRequest with the default 1\u00d71\u00d71 grid.",
         "properties": {
@@ -21991,6 +22255,65 @@
         "title": "NewsResponse",
         "type": "object"
       },
+      "NicknameListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "nicknames": {
+            "items": {
+              "$ref": "#/components/schemas/NicknameResponse"
+            },
+            "title": "Nicknames",
+            "type": "array"
+          }
+        },
+        "required": [
+          "nicknames"
+        ],
+        "title": "NicknameListResponse",
+        "type": "object"
+      },
+      "NicknamePutRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "nickname": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Nickname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nickname"
+        ],
+        "title": "NicknamePutRequest",
+        "type": "object"
+      },
+      "NicknameResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "nickname": {
+            "title": "Nickname",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "nickname",
+          "updated_at_ms"
+        ],
+        "title": "NicknameResponse",
+        "type": "object"
+      },
       "NonSessionRecord": {
         "properties": {
           "market": {
@@ -22183,6 +22506,40 @@
           "volume"
         ],
         "title": "OHLCVBar",
+        "type": "object"
+      },
+      "ObservedAccountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Account Mode",
+            "type": "string"
+          },
+          "account_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Status"
+          }
+        },
+        "required": [
+          "account_id",
+          "account_mode"
+        ],
+        "title": "ObservedAccountResponse",
         "type": "object"
       },
       "OhlcvBar": {
@@ -23724,6 +24081,55 @@
         "title": "OrderSide",
         "type": "string"
       },
+      "OwnerPatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_label"
+        ],
+        "title": "OwnerPatchRequest",
+        "type": "object"
+      },
+      "OwnerResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "display_label": {
+            "title": "Display Label",
+            "type": "string"
+          },
+          "owner_id": {
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "owner_id",
+          "display_label",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "OwnerResponse",
+        "type": "object"
+      },
       "PanelAction": {
         "description": "One backend-presented action (\u00a711).\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
         "properties": {
@@ -24908,6 +25314,185 @@
           "operator"
         ],
         "title": "PrimaryActionByLens",
+        "type": "object"
+      },
+      "ProfileCloneRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "ProfileCloneRequest",
+        "type": "object"
+      },
+      "ProfileCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_slot": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Credential Slot",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Endpoint Mode",
+            "type": "string"
+          },
+          "live_envelope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveEnvelopePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "credential_slot",
+          "endpoint_mode",
+          "display_name"
+        ],
+        "title": "ProfileCreateRequest",
+        "type": "object"
+      },
+      "ProfileDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "latest_revision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RevisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ProfileResponse"
+          }
+        },
+        "required": [
+          "profile",
+          "latest_revision"
+        ],
+        "title": "ProfileDetailResponse",
+        "type": "object"
+      },
+      "ProfileListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileResponse"
+            },
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "ProfileListResponse",
+        "type": "object"
+      },
+      "ProfilePatchRequest": {
+        "additionalProperties": false,
+        "description": "Metadata only. A rename never invalidates an arming (ADR 0060 D4).",
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "title": "ProfilePatchRequest",
+        "type": "object"
+      },
+      "ProfileResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "broker": {
+            "const": "alpaca",
+            "title": "Broker"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "owner_id": {
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_id",
+          "owner_id",
+          "broker",
+          "display_name",
+          "archived",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "ProfileResponse",
         "type": "object"
       },
       "ProgramBuildAdmissionFact": {
@@ -27993,6 +28578,162 @@
         "title": "RetireReplaceAction",
         "type": "object"
       },
+      "RevisionCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_slot": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Credential Slot",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Endpoint Mode",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "live_envelope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveEnvelopePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "credential_slot",
+          "endpoint_mode",
+          "expected_revision"
+        ],
+        "title": "RevisionCreateRequest",
+        "type": "object"
+      },
+      "RevisionListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionResponse"
+            },
+            "title": "Revisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revisions"
+        ],
+        "title": "RevisionListResponse",
+        "type": "object"
+      },
+      "RevisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_pin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Pin"
+          },
+          "account_pinned_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Pinned At Ms"
+          },
+          "author_owner_id": {
+            "title": "Author Owner Id",
+            "type": "string"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "content_sha256": {
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "credential_slot": {
+            "title": "Credential Slot",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Endpoint Mode",
+            "type": "string"
+          },
+          "live_envelope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveEnvelopePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_id",
+          "revision",
+          "schema_version",
+          "credential_slot",
+          "endpoint_mode",
+          "account_pin",
+          "live_envelope",
+          "content_sha256",
+          "complete",
+          "author_owner_id",
+          "created_at_ms"
+        ],
+        "title": "RevisionResponse",
+        "type": "object"
+      },
       "RobustnessResponse": {
         "description": "Complete robustness analysis.",
         "properties": {
@@ -30931,6 +31672,181 @@
           "failure_reason"
         ],
         "title": "SelectionFailureResult",
+        "type": "object"
+      },
+      "SelectionPutRequest": {
+        "additionalProperties": false,
+        "description": "Staging, not switching. Navigating the UI is not staging.",
+        "properties": {
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          },
+          "profile_id": {
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_id",
+          "revision",
+          "expected_selection_generation"
+        ],
+        "title": "SelectionPutRequest",
+        "type": "object"
+      },
+      "SelectionResponse": {
+        "additionalProperties": false,
+        "description": "Staged **and** effective, always both (contract \u00a74).\n\n``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a\nworker once bound this revision, never that one is running now.",
+        "properties": {
+          "apply_requested": {
+            "title": "Apply Requested",
+            "type": "boolean"
+          },
+          "apply_requested_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Requested At Ms"
+          },
+          "apply_requested_generation": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Requested Generation"
+          },
+          "effective_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Account Id"
+          },
+          "effective_acknowledged_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Acknowledged At Ms"
+          },
+          "effective_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Profile Id"
+          },
+          "effective_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Revision"
+          },
+          "last_apply_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "applied",
+                  "refused"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Apply Outcome"
+          },
+          "last_apply_refusal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Apply Refusal Reason"
+          },
+          "selection_generation": {
+            "minimum": 0.0,
+            "title": "Selection Generation",
+            "type": "integer"
+          },
+          "staged_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staged Profile Id"
+          },
+          "staged_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staged Revision"
+          }
+        },
+        "required": [
+          "staged_profile_id",
+          "staged_revision",
+          "apply_requested",
+          "selection_generation",
+          "effective_profile_id",
+          "effective_revision",
+          "effective_account_id",
+          "last_apply_outcome",
+          "last_apply_refusal_reason"
+        ],
+        "title": "SelectionResponse",
         "type": "object"
       },
       "SeriesResponse": {
@@ -43071,6 +43987,1194 @@
         "summary": "Cancel Sqlite Manual Order",
         "tags": [
           "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/account-nicknames": {
+      "get": {
+        "operationId": "list_nicknames_api_brokers_alpaca_configuration_account_nicknames_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NicknameListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Nicknames",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/account-nicknames/{account_id}": {
+      "put": {
+        "operationId": "put_nickname_api_brokers_alpaca_configuration_account_nicknames__account_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NicknamePutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NicknameResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Nickname",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/credential-slots": {
+      "get": {
+        "description": "Slot labels and availability. Never a value, a fragment, or a var name.",
+        "operationId": "list_credential_slots_api_brokers_alpaca_configuration_credential_slots_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialSlotsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Credential Slots",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/events": {
+      "get": {
+        "operationId": "list_events_api_brokers_alpaca_configuration_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Event Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationEventListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/owner": {
+      "get": {
+        "operationId": "read_owner_api_brokers_alpaca_configuration_owner_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Owner",
+        "tags": [
+          "broker-configuration"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_owner_api_brokers_alpaca_configuration_owner_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Owner",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles": {
+      "get": {
+        "operationId": "list_profiles_api_brokers_alpaca_configuration_profiles_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Profiles",
+        "tags": [
+          "broker-configuration"
+        ]
+      },
+      "post": {
+        "operationId": "create_profile_api_brokers_alpaca_configuration_profiles_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Profile",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}": {
+      "get": {
+        "operationId": "read_profile_api_brokers_alpaca_configuration_profiles__profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Profile",
+        "tags": [
+          "broker-configuration"
+        ]
+      },
+      "patch": {
+        "description": "Metadata only \u2014 ``display_name`` and ``archived``.",
+        "operationId": "patch_profile_api_brokers_alpaca_configuration_profiles__profile_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Profile",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/clone": {
+      "post": {
+        "description": "New profile, copied content, no account pin carried over.",
+        "operationId": "clone_profile_api_brokers_alpaca_configuration_profiles__profile_id__clone_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCloneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clone Profile",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions": {
+      "get": {
+        "operationId": "list_revisions_api_brokers_alpaca_configuration_profiles__profile_id__revisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Revisions",
+        "tags": [
+          "broker-configuration"
+        ]
+      },
+      "post": {
+        "operationId": "create_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Revision",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}": {
+      "get": {
+        "operationId": "read_revision_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Revision",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}/account-pin": {
+      "post": {
+        "description": "Pin one explicitly selected observed account to this revision.",
+        "operationId": "pin_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__account_pin_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin Account",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/profiles/{profile_id}/revisions/{revision}/verify-account": {
+      "post": {
+        "description": "Read-only broker account discovery. Never submits or cancels anything.",
+        "operationId": "verify_account_api_brokers_alpaca_configuration_profiles__profile_id__revisions__revision__verify_account_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountVerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Account",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/selection": {
+      "get": {
+        "description": "Staged and effective, always both, so neither can be rendered as the other.",
+        "operationId": "read_selection_api_brokers_alpaca_configuration_selection_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Selection",
+        "tags": [
+          "broker-configuration"
+        ]
+      },
+      "put": {
+        "description": "Stage an exact profile revision. Staging is not switching.",
+        "operationId": "put_selection_api_brokers_alpaca_configuration_selection_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectionPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Selection",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/selection/apply": {
+      "post": {
+        "description": "Record the one-shot Apply. Changes no runtime; 202, never 200.",
+        "operationId": "apply_selection_api_brokers_alpaca_configuration_selection_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Selection",
+        "tags": [
+          "broker-configuration"
         ]
       }
     },

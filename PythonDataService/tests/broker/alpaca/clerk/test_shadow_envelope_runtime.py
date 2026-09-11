@@ -468,11 +468,16 @@ async def test_an_unreadable_arming_ledger_unseals_the_gate_and_is_logged_once(
     )
     caplog.clear()
     with caplog.at_level(logging.ERROR):
-        assert await runtime.envelope_sync.tick() == "observed"
-        assert await runtime.envelope_sync.tick() == "observed"
+        # ``unknown``, not ``observed``: an account whose seal cannot be read
+        # cannot be judged either, because the loss limit comes from the seal.
+        # Falling back to the configured values here would let a corrupted
+        # ledger *relax* a limit an operator had loosened in the environment.
+        assert await runtime.envelope_sync.tick() == "unknown"
+        assert await runtime.envelope_sync.tick() == "unknown"
 
     assert runtime.envelope_sync.envelope.sealed is None
     assert runtime.envelope_sync.envelope.agreement == "unsealed"
+    assert runtime.envelope_sync.envelope.latest_observation() is None
     invalid = [
         record for record in caplog.records if getattr(record, "action", None) == "live_arming_ledger_invalid"
     ]
@@ -521,8 +526,9 @@ async def test_a_repaired_ledger_reseals_and_the_two_dedup_flags_are_independent
     caplog.clear()
     with caplog.at_level(logging.INFO):
         ledger.path.write_text(readable.replace('"max_sessions":20', '"max_sessions":90'), encoding="utf-8")
-        assert await runtime.envelope_sync.tick() == "observed"
-        assert await runtime.envelope_sync.tick() == "observed"
+        # Unjudgeable while the seal cannot be read; judgeable again once it can.
+        assert await runtime.envelope_sync.tick() == "unknown"
+        assert await runtime.envelope_sync.tick() == "unknown"
         assert runtime.envelope_sync.envelope.sealed is None
         ledger.path.write_text(readable, encoding="utf-8")
         assert await runtime.envelope_sync.tick() == "observed"

@@ -18,7 +18,7 @@ repository clock; admission derives the instance's state at *its own*
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_LEDGER_INVALID,
@@ -42,6 +42,7 @@ class ArmingSnapshot:
     # which ``arming_status`` reads as a change from whatever was armed.
     seals: Mapping[str, str]
     configured_envelope: LiveEnvelopeValues
+    invalidated_record_shas: frozenset[str] = frozenset()
 
     def status_for(self, strategy_instance_id: str, *, now_ms: int) -> ArmingStatus:
         return arming_status(
@@ -51,6 +52,7 @@ class ArmingSnapshot:
             seal_hash=self.seals.get(strategy_instance_id),
             configured_envelope=self.configured_envelope,
             now_ms=now_ms,
+            invalidated_record_shas=self.invalidated_record_shas,
         )
 
     def armed_instance_ids(self, now_ms: int) -> frozenset[str]:
@@ -84,13 +86,24 @@ class ArmingGate:
     def __init__(self, *, observation_max_age_ms: int = OBSERVATION_MAX_AGE_MS) -> None:
         self._max_age_ms = observation_max_age_ms
         self._snapshot: ArmingSnapshot | None = None
+        self._configuration_invalidations: frozenset[str] = frozenset()
         self._invalid: tuple[str, str] | None = None
         self._fault: tuple[str, str] | None = None
 
     def publish(self, snapshot: ArmingSnapshot) -> None:
         """Cache one verified read. A standing ``hold`` is deliberately untouched."""
-        self._snapshot = snapshot
+        invalidations = self._configuration_invalidations | snapshot.invalidated_record_shas
+        self._snapshot = (
+            snapshot if invalidations == snapshot.invalidated_record_shas
+            else replace(snapshot, invalidated_record_shas=invalidations)
+        )
         self._invalid = None
+
+    def set_configuration_invalidations(self, records: frozenset[str]) -> None:
+        """Load once at startup; a cadence refresh cannot revive an invalidated permission."""
+        self._configuration_invalidations = records
+        if self._snapshot is not None:
+            self._snapshot = replace(self._snapshot, invalidated_record_shas=records)
 
     def invalidate(self, why: str, *, reason_code: str = LIVE_ARMING_LEDGER_INVALID) -> None:
         self._snapshot = None

@@ -1,0 +1,84 @@
+<section class="detail" aria-label="Open configuration profile">
+  <h2 class="detail__heading">Open profile</h2>
+  <header class="detail__header">
+    <form class="detail__inline" (submit)="$event.preventDefault(); submitRename()">
+      <label>
+        <span>Profile name</span>
+        <input type="text" [formField]="renameForm" />
+      </label>
+      <button type="submit" [disabled]="!canRename()">Rename</button>
+    </form>
+
+    <form class="detail__inline" (submit)="$event.preventDefault(); submitClone()">
+      <label>
+        <span>Clone as</span>
+        <input type="text" [formField]="cloneForm" placeholder="Copy of this profile" />
+      </label>
+      <button type="submit" [disabled]="!canClone()">Clone</button>
+    </form>
+  </header>
+
+  @if (latest(); as revision) {
+    <dl class="detail__facts">
+      <div><dt>Latest revision</dt><dd>{{ revision.revision }}</dd></div>
+      <div><dt>Endpoint</dt><dd>{{ revision.endpoint_mode | receiptLabel }}</dd></div>
+      <div><dt>Credential slot</dt><dd>{{ slotLabel(revision.credential_slot) }}</dd></div>
+      <div><dt>Complete</dt><dd>{{ revision.complete ? 'Yes' : 'Draft' }}</dd></div>
+      <div>
+        <dt>Content hash</dt>
+        <dd class="detail__opaque">{{ revision.content_sha256 }}</dd>
+      </div>
+    </dl>
+
+    <app-configuration-account-evidence
+      [revision]="revision"
+      [observed]="observed()"
+      [nickname]="nickname()"
+      [busy]="busy()"
+      (verifyRequested)="verifyRequested.emit()"
+      (pinRequested)="pinRequested.emit($event)"
+      (nicknameSubmitted)="nicknameSubmitted.emit($event)"
+    />
+  } @else {
+    <p class="detail__empty">This profile has no revision yet.</p>
+  }
+
+  <form class="detail__revision" (submit)="$event.preventDefault(); submitRevision()">
+    <h3>Save the next revision</h3>
+    <p class="detail__hint">
+      Revisions are immutable, so an edit writes the next one. Saving stages nothing and
+      applies nothing; the approved account is not carried across a content change.
+    </p>
+    <app-configuration-revision-form
+      [draftForm]="revisionForm"
+      [slots]="slots()"
+      [problems]="revisionProblems()"
+    />
+    <button type="submit" class="detail__save" [disabled]="!canSaveRevision()">
+      Save next revision
+    </button>
+  </form>
+
+  <details class="detail__history">
+    @let history = revisions();
+    <summary>
+      Revision history {{ history === null ? '(not read)' : '(' + history.length + ')' }}
+    </summary>
+    <ul>
+      @for (revision of history ?? []; track revision.revision) {
+        <li>
+          <strong>{{ revision.revision }}</strong>
+          <span>{{ revision.endpoint_mode | receiptLabel }}</span>
+          <span>{{ slotLabel(revision.credential_slot) }}</span>
+          <span>{{ revision.account_pin ?? 'no approved account' }}</span>
+          <app-timestamp-display [value]="revision.created_at_ms" mode="local" />
+          <button
+            type="button"
+            [disabled]="busy() || detail().profile.archived || !revision.complete"
+            (click)="revisionStaged.emit(revision)"
+          >Stage revision {{ revision.revision }}</button>
+        </li>
+      }
+    </ul>
+  </details>
+</section>

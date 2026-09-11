@@ -6,30 +6,17 @@ migration path for throwaway paper authority data: it carries stale custody,
 catalog, and idempotency history into a run that should instead be generated
 again from its current bot configuration.
 
-Run the management command from a one-shot `python-service` container. The
-SQLite authority uses WAL, so management tooling must share the same
-host-filesystem boundary as the service volume; running it from the host can
-produce an unsafe WAL view.
+Use the [Paper developer reset procedure](alpaca-sqlite-clerk-recovery-and-cutover.md#disposable-paper-developer-reset)
+for the command, stop boundary, retained evidence and retry behavior. Run it in a
+one-shot service container on the same local filesystem as the Clerk volume.
 
-```bash
-python scripts/manage_alpaca_sqlite_clerk.py \
-  --artifacts-root /var/lib/alpaca-clerk \
-  --account-id PA123456 \
-  dev-reset \
-  --runner-artifacts-root /var/lib/learn-ai-artifacts
-```
-
-`dev-reset` is deliberately paper-only: it obtains the configured Alpaca mode
-from the service environment and rejects a non-paper configuration. It requires
-a cleanly stopped authority, then moves the SQLite or legacy JSONL authority
-artifacts and the account's disposable runner catalogs into an account-local
-`dev-reset-quarantine/` directory on each artifact filesystem. The Clerk-side
-quarantine contains the manifest and receipt, which also names the separate
-runner-side quarantine when runner artifacts were moved. It never contacts the
-broker, imports legacy data, or deletes authority data. If the account had
-already been activated, regenerate it and complete a new paper cutover to
-publish the successor activation generation. Repeated runs after a clean reset
-report that there is nothing left to reset.
+The reset quarantines the target Paper account's SQLite authority and canonical
+Alpaca bot directories, and removes its associated saved Paper configuration and
+nickname. Live profiles, other accounts, local owner, immutable audit history and
+legacy IBKR catalogs survive. Target-local activation evidence establishes the
+account mode; Live or Shadow targets and unreadable evidence refuse before moves.
+Recreating Paper requires fresh configuration verification, Apply and authority
+activation. Repeating a completed reset resumes the same receipt idempotently.
 
 This developer shortcut is not the supervised live-account cutover or reset
 ceremony. That production workflow remains evidence-gated. The corresponding

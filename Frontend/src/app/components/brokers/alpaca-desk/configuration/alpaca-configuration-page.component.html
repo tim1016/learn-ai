@@ -1,0 +1,111 @@
+<main class="configuration">
+  <header class="configuration__titlebar">
+    <a class="configuration__back" routerLink="/brokers/alpaca">
+      <span aria-hidden="true">←</span> Alpaca desk
+    </a>
+    <h1>Broker configuration</h1>
+    <p class="configuration__lede">
+      Named profiles this installation owns. A profile is inert until it is staged,
+      applied, and the worker is restarted — and no credential is ever entered here.
+    </p>
+  </header>
+
+  @if (refusal(); as detail) {
+    <app-configuration-refusal [refusal]="detail" (reloadRequested)="reloadAll()" />
+  }
+
+  @if (supplementalReadFailed()) {
+    <p class="configuration__error" role="alert">
+      Some configuration details could not be read. Their values remain unavailable.
+      <button type="button" (click)="reloadAll()">Retry</button>
+    </p>
+  }
+
+  @if (selection.error()) {
+    <p class="configuration__error" role="alert">
+      The configuration service did not answer, so staged and effective state are unknown.
+      <button type="button" (click)="reloadAll()">Retry</button>
+    </p>
+  } @else if (currentSelection(); as current) {
+    <app-configuration-status-panel
+      [selection]="current"
+      [profiles]="profiles.hasValue() ? profiles.value() : []"
+      [effectiveNickname]="effectiveNickname()"
+      [stagedEndpointMode]="stagedEndpointMode()"
+      [effectiveEndpointMode]="effectiveEndpointMode()"
+      [busy]="busy()"
+      (applyRequested)="applySelection()"
+    />
+  } @else {
+    <p class="configuration__loading" role="status">Reading the installation's selection…</p>
+  }
+
+  <section class="configuration__profiles" aria-label="Configuration profiles">
+    <div class="configuration__profiles-head">
+      <h2>Profiles</h2>
+      <label class="configuration__filter">
+        <input
+          type="checkbox"
+          [checked]="includeArchived()"
+          (change)="includeArchived.set(!includeArchived())"
+        />
+        <span>Show archived</span>
+      </label>
+    </div>
+
+    @if (profiles.error()) {
+      <p class="configuration__error" role="alert">
+        The profile list could not be read.
+        <button type="button" (click)="reloadAll()">Retry</button>
+      </p>
+    } @else if (profiles.isLoading()) {
+      <p class="configuration__loading" role="status">Reading saved profiles…</p>
+    } @else {
+      <app-configuration-profile-list
+        [profiles]="profiles.value()"
+        [selection]="currentSelection()"
+        [selectedProfileId]="selectedProfileId()"
+        [busy]="busy()"
+        (opened)="openProfile($event)"
+        (staged)="stageProfile($event)"
+        (archiveToggled)="setArchived($event)"
+      />
+    }
+
+    @if (slots.error()) {
+      <p class="configuration__error" role="alert">
+        The credential slots could not be read, so a profile cannot be created here.
+        <button type="button" (click)="reloadAll()">Retry</button>
+      </p>
+    } @else if (slots.hasValue() && !slots.isLoading()) {
+      <app-configuration-profile-create
+        [slots]="slots.value()"
+        [busy]="busy()"
+        (created)="createProfile($event)"
+      />
+    }
+  </section>
+
+  @if (detail.error()) {
+    <p class="configuration__error" role="alert">
+      This profile could not be read, so nothing about it is shown.
+      <button type="button" (click)="reloadAll()">Retry</button>
+    </p>
+  } @else if (detail.value(); as openProfileDetail) {
+    <app-configuration-profile-detail
+      [detail]="openProfileDetail"
+      [revisions]="revisions.hasValue() ? revisions.value() : null"
+      [slots]="slots.hasValue() ? slots.value() : []"
+      [observed]="observedAccounts()"
+      [nickname]="detailNickname()"
+      [busy]="busy()"
+      (renamed)="renameProfile($event)"
+      (cloned)="cloneProfile($event)"
+      (revisionSaved)="saveRevision($event)"
+      (revisionStaged)="stageRevision($event)"
+      (verifyRequested)="verifyAccount()"
+      (pinRequested)="pinAccount($event)"
+      (nicknameSubmitted)="saveNickname($event)"
+    />
+  }
+</main>

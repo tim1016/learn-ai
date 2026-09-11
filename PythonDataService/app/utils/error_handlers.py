@@ -124,3 +124,61 @@ async def catalog_schema_not_ready_exception_handler(request: Request, exc: Exce
             },
         },
     )
+
+
+async def broker_unbound_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer a worker with no broker binding in the configuration's vocabulary.
+
+    ``BrokerUnbound`` means this process resolved no effective broker profile —
+    nothing applied, an unreadable profiles database, a revision that will not
+    load, or credentials reaching an account the revision is not approved for.
+    Every one of those is a *state the contract has words for* (§6), and the
+    whole point of the refusal vocabulary is that an operator sees which one.
+
+    Without this it fell through to the catch-all 500, so precisely when the
+    Broker Desk should have said "the gate is closed, here is what to do", it
+    showed a generic fault instead — and worse than before the migration, where
+    a missing credential produced a typed contract error.
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound
+
+    if not isinstance(exc, BrokerUnbound):  # pragma: no cover - registration is exact
+        raise exc
+    logger.warning(
+        "Broker request refused: no broker binding is installed",
+        extra={"action": "broker_unbound_request", "reason_code": exc.reason},
+    )
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})
+
+
+async def broker_profile_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer a credential/verification refusal in the configuration's vocabulary.
+
+    ``BrokerProfileError`` is the second refusal family on the configuration
+    surface: same contract §6 ``reason`` strings as ``BrokerConfigurationError``
+    but a separate base class, raised by the account ceremonies behind
+    ``/profiles/{id}/revisions/{n}/verify-account`` and ``/account-pin`` when a
+    slot is unavailable, a revision will not resolve, or the observed account
+    contradicts the revision's mode.
+
+    Without this it reached the catch-all ``Exception`` handler, so the two
+    routes that exist to say *which* credential is missing answered with a
+    generic 500 — the same gap ``broker_unbound_exception_handler`` above
+    closed for its own family.
+    """
+    from app.broker.alpaca.profile import BrokerProfileError
+
+    if not isinstance(exc, BrokerProfileError):  # pragma: no cover - registration is exact
+        raise exc
+    # ``reason`` and ``http_status`` are ``ClassVar``s with no default, so the
+    # base class is constructible without them. A bare ``BrokerProfileError`` --
+    # or a future subclass that forgets its contract row -- would make this
+    # handler itself raise ``AttributeError`` and answer with a broken response
+    # instead of the refusal it exists to give. Let the catch-all take it.
+    if not hasattr(type(exc), "reason") or not hasattr(type(exc), "http_status"):
+        raise exc
+    logger.warning(
+        "Broker configuration ceremony refused",
+        extra={"action": "broker_profile_refusal", "reason_code": exc.reason},
+    )
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})

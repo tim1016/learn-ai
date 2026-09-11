@@ -68,7 +68,7 @@ def test_capabilities_select_by_settings_mode(
         "live_arming_max_sessions": 20, "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
     }
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode=mode, **(live_values if mode == "live" else {}))
-    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", lambda: settings)
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", lambda: settings)
 
     assert AlpacaBroker(client=MagicMock()).capabilities() is expected
 

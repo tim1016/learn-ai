@@ -14,6 +14,18 @@ verified cutover activation. Read-only ``status`` may recover a graduated
 account from its activation or a previously armed instance from its unique
 ledger row. ``disarm`` may also read the ledger that already names the instance.
 
+The envelope this ceremony seals comes from the installation's **effective**
+profile revision (ADR 0060), never from the process environment and never from
+a merely staged revision: ``plan`` and ``apply`` refuse while a *different*
+revision is staged, naming both, because sealing what the running worker is not
+enforcing would put the seal in disagreement the moment the Apply lands (owner
+decisions D3 and D5). ``plan`` prints the before→after difference between the
+envelope it would seal and the one currently sealed on the account, which is the
+operator's last look before a real-money limit changes. This module also owns
+:func:`effective_broker` -- the one resolver the three ``manage_alpaca_*``
+operator CLIs share, because each runs in its own process where no worker has
+installed a binding.
+
 Exit codes: ``0`` the command answered; ``1`` the command cannot be run as asked
 -- a plan file that is not one, a ledger row that will not verify, or a usage
 refusal (an absent flag, an unknown subcommand, a flag outside its bound); ``2``
@@ -35,12 +47,16 @@ import json
 import logging
 import sys
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.active_binding import (
+    BrokerUnbound,
+)
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.ceremony import DEFAULT_CONFIRMATION_TTL_MS, MAX_CONFIRMATION_TTL_MS
 from app.broker.alpaca.clerk.live_arming import (
@@ -48,6 +64,7 @@ from app.broker.alpaca.clerk.live_arming import (
     ArmingStatus,
     LiveArmingInvalid,
     LiveArmingRefused,
+    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
@@ -59,6 +76,8 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     live_account_id_for_status,
     plan_arming,
 )
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+from app.broker.alpaca.clerk.live_envelope import ENVELOPE_SETTINGS_FIELDS
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
@@ -66,9 +85,16 @@ from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.config import (
     AlpacaSettings,
     alpaca_configuration_error_detail,
-    get_alpaca_settings,
 )
 from app.broker.ibkr.config import live_artifacts_root
+from app.broker_configuration.cli_binding import (
+    EffectiveBroker,
+    arming_configuration_handover,
+    effective_broker,
+)
+from app.broker_configuration.errors import BrokerConfigurationError
+from app.broker_configuration.records import InstallationSelection
+from app.broker_configuration.selection import reference as revision_reference
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
@@ -89,6 +115,26 @@ _SUBMISSION_UNVERIFIED_NOTE = (
     "the live activation evidence or Clerk database for this account does not verify; nothing "
     "submits until an operator repairs it (ADR 0059 D1)"
 )
+
+# This ceremony arms the effective revision only (ADR 0060 owner decisions D3
+# and D5). The code lives here rather than beside the ``LIVE_ARMING_*`` codes in
+# ``clerk/live_arming.py`` because the rule is this command's, not the seal's:
+# the ceremony knows about envelopes and instances and nothing at all about
+# profile revisions, and a code it can never raise does not belong in its
+# vocabulary. It is still a *typed* refusal in this module's own contract --
+# ``LiveArmingRefused`` carrying a reason code, printed as one JSON object and
+# exiting 2, exactly like every other refused ceremony.
+LIVE_ARMING_REVISION_STAGED = "LIVE_ARMING_REVISION_STAGED"
+
+# The six envelope fields, in the canonical order ``LiveEnvelopeValues``
+# declares them -- taken from the same pairing the sha is built over rather
+# than hand-listed, so a seventh value cannot go unreported in a diff.
+_ENVELOPE_FIELD_ORDER: tuple[str, ...] = tuple(field for field, _ in ENVELOPE_SETTINGS_FIELDS)
+
+# Keys ``_write`` adds to a printed payload that are *reports about* the plan
+# rather than part of it. ``_read_plan`` strips them so a plan an operator
+# saved from stdout still reads back as a plan.
+_PLAN_REPORT_KEYS: tuple[str, ...] = ("submission_admitted", "note", "envelope_change")
 
 
 class ArmingOperatorRefusal(ValueError):
@@ -221,33 +267,160 @@ def _clock(now_ms: int | None) -> Clock:
     return now_ms_utc if now_ms is None else (lambda: now_ms)
 
 
-def _resolved_settings(supplied: AlpacaSettings | None) -> AlpacaSettings:
-    """The environment's Alpaca settings, refused by the ceremony's own code.
+def _resolved_broker(supplied: AlpacaSettings | None) -> EffectiveBroker:
+    """The effective revision's Alpaca settings, refused by the ceremony's own code.
 
-    ``AlpacaSettings`` refuses to construct at all when ``ALPACA_MODE=live`` and
-    any ``ALPACA_LIVE_*`` value is absent -- the single most likely real
-    misconfiguration on a live account. Letting that ``ValidationError`` escape
-    would break this module's contract (one JSON object per invocation) exactly
-    where its named refusal was supposed to fire, so it is translated here into
-    the ceremony's own ``LIVE_ENVELOPE_MISSING``.
+    Two failures have to become one named refusal here rather than escape as an
+    exception, because both land exactly where this module's contract (one JSON
+    object per invocation) says a named refusal fires.
+
+    The first is the pre-cutover bootstrap's: ``AlpacaSettings`` refuses to
+    construct at all when ``ALPACA_MODE=live`` and any ``ALPACA_LIVE_*`` value is
+    absent -- the single most likely real misconfiguration on a live account.
+    The second is a refused binding: a configured installation that has applied
+    nothing, an unreadable profiles database, or an effective revision that will
+    not resolve. Both are "the configuration this ceremony needs is not there",
+    which is what ``LIVE_ENVELOPE_MISSING`` already says; the detail names the
+    contract's own reason code so the operator sees which of the two it was.
     """
     if supplied is not None:
-        return supplied
+        return EffectiveBroker(settings=supplied, selection=None)
     try:
-        return get_alpaca_settings()
+        return effective_broker()
     except ValidationError as exc:
         raise LiveArmingRefused(
             LIVE_ENVELOPE_MISSING,
             f"{alpaca_configuration_error_detail(exc)} Pass --artifacts-root to run "
             "disarm without a loadable environment.",
         ) from exc
+    except BrokerUnbound as exc:
+        raise LiveArmingRefused(
+            LIVE_ENVELOPE_MISSING,
+            f"{exc.reason}: {exc.unbound.message} {exc.unbound.next_step} "
+            "Pass --artifacts-root to run disarm without a resolvable binding.",
+        ) from exc
+
+
+def _require_arming_the_effective_revision(selection: InstallationSelection | None) -> None:
+    """Arm the effective revision only, never a merely staged one (D3, D5).
+
+    A staged revision governs nothing until the operator presses Apply and the
+    worker binds it. Sealing one anyway would put the arming record in
+    ``LIVE_ENVELOPE_DISAGREEMENT`` against the envelope the running worker is
+    actually enforcing -- and would look armed until it did. The refusal names
+    both revisions, because the operator's next question is always which of the
+    two they were looking at.
+
+    ``status`` and ``disarm`` are deliberately not gated: reading the state and
+    revoking a permission are exactly what an operator needs while a change is
+    pending, and neither seals anything.
+    """
+    if selection is None:
+        return
+    # Both halves, the same guard ``binding_decision.decide`` applies: a row
+    # naming no exact revision is not a staged revision to disagree with.
+    if selection.staged_profile_id is None or selection.staged_revision is None:
+        return
+    staged = (selection.staged_profile_id, selection.staged_revision)
+    effective = (selection.effective_profile_id, selection.effective_revision)
+    if staged == effective:
+        return
+    raise LiveArmingRefused(
+        LIVE_ARMING_REVISION_STAGED,
+        f"broker configuration {revision_reference(*staged)} is staged but "
+        f"{revision_reference(*effective)} is effective; this ceremony arms the effective "
+        "revision only. Apply the staged revision and restart the service, or stage the "
+        "effective one again, then plan.",
+    )
+
+
+def _envelope_change(plan: LiveArmingPlan, *, artifacts_root: Path) -> dict[str, Any]:
+    """What applying this plan does to the envelope sealed on this account.
+
+    The operator's last look before a real-money limit changes, so the answer is
+    stated twice: one ``summary`` sentence naming every value that moves, and a
+    machine-readable ``changes`` list of before→after pairs. Values are rendered
+    with ``repr`` on purpose -- ``5000`` and ``5000.0`` are different documents
+    to the envelope sha, so a diff that hid the difference would hide a real
+    change.
+
+    "The currently sealed envelope" is an *account-level* fact: the newest
+    arming record on the account, which is the same record ``status`` reports as
+    ``envelope_state`` (R11), not this instance's own last arming. ``sealed_by``
+    names it so there is no ambiguity about what the comparison was against.
+    """
+    sealed = latest_arming(
+        LiveArmingLedger(artifacts_root, live_account_id=plan.live_account_id).records()
+    )
+    after = plan.envelope_values
+    if sealed is None:
+        return {
+            "changed": True,
+            "sealed_by": None,
+            "changes": [
+                {"field": field, "before": None, "after": after[field]}
+                for field in _ENVELOPE_FIELD_ORDER
+            ],
+            "summary": (
+                "FIRST SEAL: no arming record has sealed this account's envelope yet, so this "
+                "plan seals all six live envelope values: "
+                + "; ".join(f"{field} = {after[field]!r}" for field in _ENVELOPE_FIELD_ORDER)
+                + "."
+            ),
+        }
+
+    before = sealed.envelope.to_mapping()
+    # Compared by (type, value), not by ``!=``. ``5000 == 5000.0`` and
+    # ``0.0 == -0.0`` in Python, but each pair is a *different* envelope
+    # document to the sha every arming record is sealed over — so a plain
+    # inequality would print "NO CHANGE" on the operator's last look before a
+    # real-money limit changes, and then the seal would produce a
+    # LIVE_ENVELOPE_DISAGREEMENT at runtime. Reachable because a sealed record
+    # whose JSON carries ``"loss_usd": 5000`` verifies against its own sha and
+    # round-trips as an ``int``: only the two count fields are type-checked.
+    changes = [
+        {"field": field, "before": before[field], "after": after[field]}
+        for field in _ENVELOPE_FIELD_ORDER
+        if (type(before[field]), before[field]) != (type(after[field]), after[field])
+    ]
+    sealed_by = {
+        "strategy_instance_id": sealed.strategy_instance_id,
+        "armed_at_ms": sealed.armed_at_ms,
+        "envelope_sha256": sealed.envelope_sha256,
+    }
+    if not changes:
+        return {
+            "changed": False,
+            "sealed_by": sealed_by,
+            "changes": [],
+            "summary": (
+                "NO CHANGE: all six live envelope values are exactly the ones already sealed on "
+                f"this account by {sealed.strategy_instance_id} (envelope {sealed.envelope_sha256})."
+            ),
+        }
+    return {
+        "changed": True,
+        "sealed_by": sealed_by,
+        "changes": changes,
+        "summary": (
+            f"CHANGED: {len(changes)} of the 6 live envelope values differ from the envelope "
+            f"sealed on this account by {sealed.strategy_instance_id}: "
+            + "; ".join(
+                f"{change['field']} {change['before']!r} -> {change['after']!r}"
+                for change in changes
+            )
+            + "."
+        ),
+    }
 
 
 def _read_plan(path: Path) -> LiveArmingPlan:
     """The plan file, or a sentence naming what is wrong with it.
 
-    ``submission_admitted`` and ``note`` are stripped so a plan an operator
-    saved from stdout reads back exactly like one written by ``--plan-out``.
+    Every key ``_write`` adds *about* a plan -- ``submission_admitted``,
+    ``note`` and the ``envelope_change`` report -- is stripped so a plan an
+    operator saved from stdout reads back exactly like one written by
+    ``--plan-out``.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -255,8 +428,8 @@ def _read_plan(path: Path) -> LiveArmingPlan:
         raise ArmingOperatorRefusal(f"arming plan file is unreadable: {exc}") from exc
     if not isinstance(payload, dict):
         raise ArmingOperatorRefusal("arming plan file must contain a JSON object")
-    payload.pop("submission_admitted", None)
-    payload.pop("note", None)
+    for key in _PLAN_REPORT_KEYS:
+        payload.pop(key, None)
     try:
         return LiveArmingPlan.from_payload(payload)
     except (TypeError, ValueError) as exc:
@@ -339,7 +512,14 @@ def _plan(
             atomic_write_json(args.plan_out, asdict(plan))
         except OSError as exc:
             raise ArmingOperatorRefusal(f"cannot write the plan file: {exc}") from exc
-    _write(asdict(plan), artifacts_root=artifacts_root, live_account_id=plan.live_account_id)
+    # The diff is a report *about* the plan, so it is printed beside it and
+    # never written into ``--plan-out``: the plan's confirmation token is its
+    # own content hash, and a plan file carrying an extra key would not be one.
+    _write(
+        {**asdict(plan), "envelope_change": _envelope_change(plan, artifacts_root=artifacts_root)},
+        artifacts_root=artifacts_root,
+        live_account_id=plan.live_account_id,
+    )
     return 0
 
 
@@ -380,22 +560,43 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
         if args.operation == "disarm":
             return _disarm(
                 args,
-                artifacts_root=args.artifacts_root or _resolved_settings(settings).clerk_dir,
+                artifacts_root=args.artifacts_root or _resolved_broker(settings).settings.clerk_dir,
             )
-        resolved = _resolved_settings(settings)
-        artifacts_root = args.artifacts_root or resolved.clerk_dir
-        live_state_root = args.live_state_root or live_artifacts_root()
-        if args.operation == "status":
-            return _status(
-                args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
-            )
-        if args.operation == "plan":
-            return _plan(
-                args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
-            )
-        return _apply(
-            args, artifacts_root=artifacts_root, live_state_root=live_state_root, settings=resolved
+        handover = (
+            arming_configuration_handover()
+            if settings is None and args.operation in ("plan", "apply")
+            else nullcontext()
         )
+        with handover:
+            resolved = _resolved_broker(settings)
+            artifacts_root = args.artifacts_root or resolved.settings.clerk_dir
+            live_state_root = args.live_state_root or live_artifacts_root()
+            if args.operation == "status":
+                return _status(
+                    args,
+                    artifacts_root=artifacts_root,
+                    live_state_root=live_state_root,
+                    settings=resolved.settings,
+                )
+            # Only the two writing directions are gated: sealing an envelope the
+            # running worker is not enforcing is the outcome D3 and D5 forbid.
+            _require_arming_the_effective_revision(resolved.selection)
+            if args.operation == "plan":
+                return _plan(
+                    args,
+                    artifacts_root=artifacts_root,
+                    live_state_root=live_state_root,
+                    settings=resolved.settings,
+                )
+            return _apply(
+                args,
+                artifacts_root=artifacts_root,
+                live_state_root=live_state_root,
+                settings=resolved.settings,
+            )
+    except BrokerConfigurationError as exc:
+        _write({"error": exc.reason, "detail": exc.message, "next_step": exc.next_step})
+        return 2
     except LiveArmingRefused as exc:
         _write({"error": exc.reason_code, "detail": str(exc)})
         return 2

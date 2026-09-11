@@ -39,12 +39,12 @@ from pydantic import ValidationError
 from requests.exceptions import RequestException
 from requests.sessions import Session
 
+from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.capture_hook import install_capture_hook
 from app.broker.alpaca.config import (
     BROKER_ID,
     AlpacaSettings,
     alpaca_configuration_error_detail,
-    get_alpaca_settings,
 )
 from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.alpaca.fault_injection import (
@@ -122,6 +122,15 @@ class AlpacaTradingClient:
         self._uncertain_submission_lock = Lock()
         self._uncertain_submissions: dict[str, float] = {}
 
+    @property
+    def bound_settings(self) -> AlpacaSettings | None:
+        """The settings this client is bound to, or ``None`` when it defers.
+
+        Read-only, so a caller composing a broker around this client can check
+        that the two describe one binding rather than two.
+        """
+        return self._settings
+
     def _mark_submission_uncertain(self, client_order_id: str) -> None:
         """Keep lookup absence non-terminal during Alpaca's visibility window."""
         if not client_order_id:
@@ -146,10 +155,16 @@ class AlpacaTradingClient:
             return False
 
     def _build_default_client(self) -> Any:
-        settings = self._settings or get_alpaca_settings()
+        # Injected settings are the whole binding; otherwise the one this
+        # worker resolved (ADR 0060). Deferred to first use, so the client can
+        # still be constructed before a binding exists — but once one does,
+        # the endpoint and the credential pair come from it and never from the
+        # process environment, which is what stops a client built after a
+        # switch from talking to the previous configuration's account.
+        settings = self._settings or resolved_alpaca_settings()
         client = TradingClient(
-            api_key=settings.api_key_id,
-            secret_key=settings.api_secret_key,
+            api_key=settings.api_key_id.get_secret_value(),
+            secret_key=settings.api_secret_key.get_secret_value(),
             paper=settings.is_paper,
             raw_data=True,
         )

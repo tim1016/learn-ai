@@ -12,9 +12,9 @@ window (120 s default, 300 s maximum). What `apply` writes is one sha256-sealed
 `LiveArmingRecord` on an append-only, account-rooted ledger.
 
 An arming is bound to what it named. A change to the instance's sealed program,
-to any `ALPACA_LIVE_*` value, or to the account disarms it; re-arming is the
-same ceremony run again. An arming also **lapses** after
-`ALPACA_LIVE_ARMING_MAX_SESSIONS` calendar NYSE trading sessions — a deliberate
+to any envelope value in the effective profile revision, or to the account
+disarms it; re-arming is the same ceremony run again. An arming also **lapses**
+after the revision's `arming_max_sessions` calendar NYSE trading sessions — a deliberate
 "come back and look" fence, because an armed bot nobody has looked at in a
 month is the configuration accident this ADR was written to prevent.
 
@@ -67,10 +67,10 @@ sync's read).
 
 | Input | Where it comes from | Refusal if absent |
 |---|---|---|
-| Settings | `ALPACA_MODE=live` and a complete `LiveEnvelopeValues.from_settings` | `LIVE_ENVELOPE_MISSING` |
+| Settings | the effective profile revision's `endpoint_mode=live` and a complete live envelope, resolved into `AlpacaSettings` by `resolve_runtime_context` (ADR 0060) | `LIVE_ENVELOPE_MISSING` |
 | The live account id | the shadow activation fence under the artifacts root — **observed, never supplied**, so an arming cannot name an account no shadow gate was run against | `LIVE_ARMING_INSTANCE_UNSEALED` |
 | The instance's sealed binding on that account | `BotBindingRepository.list_for_broker("alpaca")`, filtered to `sealed_account_id` in `{<live_account_id>, shadow:<live_account_id>}` | `LIVE_ARMING_INSTANCE_UNSEALED` |
-| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=ALPACA_LIVE_SHADOW_SESSIONS)` | *(none — recorded when present, null otherwise; owner decision 2026-09-09)* |
+| A current shadow receipt | `ShadowReceiptStore.current(sid, configured_signal_hash=…, required_sessions=<the effective revision's `shadow_sessions`>)` | *(none — recorded when present, null otherwise; owner decision 2026-09-09)* |
 
 Both custody ids are admissible for the same account because shadow custody
 seals `shadow:<live_account_id>` while the live authority seals
@@ -192,8 +192,8 @@ unreachable. Slice 6 supplies the missing half: on every 15 s tick
 instance's permission). Each transition is logged once, `live_envelope_sealed`
 or `live_envelope_unsealed`, with the resulting agreement.
 
-The effect: once any instance on the account has been armed, editing an
-`ALPACA_LIVE_*` value makes every rehearsal ENTER refuse
+The effect: once any instance on the account has been armed, applying an
+envelope change makes every rehearsal ENTER refuse
 `LIVE_ENVELOPE_DISAGREEMENT` through the existing `require_envelope_admission`,
 until a re-arm seals the new numbers. Changing a bound is a re-arm, never a
 silent drift.
@@ -212,30 +212,62 @@ and rehearsal ENTERs are not gated on arming.
 Every command writes exactly one JSON object to stdout. Exit `0` answered,
 `1` the command cannot be run as asked, `2` the ceremony refused.
 
-```bash
-cd PythonDataService
+The Clerk authority this ceremony reads and writes lives on the VM-local
+`alpaca-clerk-data` named volume the running worker mounts at
+`/app/artifacts/alpaca_clerk` (see `compose.yaml`), not on the host tree at
+`PythonDataService/artifacts/alpaca_clerk` — that host tree is mounted
+read-only at `/app/alpaca_clerk_legacy` and normal runtime never reads
+authority from it. Run every command from the repo root (where
+`compose.yaml` lives) inside a one-shot `python-service` container against
+that same volume, the same pattern the
+[SQLite Clerk recovery/cutover runbook](../runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md)
+uses. A host-side `python -m scripts.manage_alpaca_arming` invocation writes
+into the unmounted legacy tree instead: the worker never sees it, `status`
+keeps reporting `unarmed`, and every live ENTER keeps refusing
+`LIVE_ARMING_REQUIRED` no matter what `apply` just wrote.
 
+```bash
 # What is armed on the shadowed live account, and how much of each grant is left.
-python -m scripts.manage_alpaca_arming status
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  status
 
 # Propose an arming. Read-only: it writes nothing but the optional plan file.
-python -m scripts.manage_alpaca_arming plan \
-    --strategy-instance-id ema-shadow-1 --plan-out /tmp/arming-plan.json
+# --plan-out must land under the host-bind-mounted /app/artifacts (not /tmp,
+# which is private to the --rm container and gone once it exits) so the
+# apply step below, run in its own container, can read the plan back.
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  plan --strategy-instance-id ema-shadow-1 --plan-out /app/artifacts/arming-plan.json
 
 # Confirm it, within 120 s, quoting the token the plan printed.
-python -m scripts.manage_alpaca_arming apply \
-    --plan-file /tmp/arming-plan.json --confirmation-token <confirmation_token>
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --live-state-root /app/artifacts/live_runs \
+  apply --plan-file /app/artifacts/arming-plan.json --confirmation-token <confirmation_token>
 
 # Revoke before the lapse. One append, no confirmation: the closed direction.
-python -m scripts.manage_alpaca_arming disarm --strategy-instance-id ema-shadow-1
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_arming \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  disarm --strategy-instance-id ema-shadow-1
 ```
 
 `--artifacts-root` and `--now-ms` exist for tests and for an operator pointing
-at a non-default tree. `--live-state-root` defaults to the runner's own
-`live_artifacts_root()` — where sealed bot bindings live, a different tree
-from the Clerk artifacts root the rest of arming's evidence sits under — and
-only needs overriding for the same reason. There is no force mode and no HTTP
-route: an arming is a supervised, out-of-process act.
+at a non-default tree; the invocations above pass `--artifacts-root`
+explicitly so the command is correct regardless of what the container
+image's own default resolves to. `--live-state-root` (accepted by `status`,
+`plan` and `apply`, not by `disarm` — the closed direction reads no binding)
+defaults to the runner's own `live_artifacts_root()` — where sealed bot
+bindings live, a different tree from the Clerk artifacts root the rest of
+arming's evidence sits under — and is passed explicitly above for the same
+reason. There is no force mode and no HTTP route: an arming is a supervised,
+out-of-process act.
 
 ## In the live verdict
 
@@ -275,7 +307,7 @@ values was already declared in slice 1.
   naming the instance is `LIVE_ARMING_NOT_ARMED`; two accounts having armed the
   same instance id is `LIVE_ARMING_INSTANCE_UNSEALED` naming both, because
   nothing in the tree can choose between them either.
-- **`ALPACA_LIVE_ARMING_MAX_SESSIONS` has no upper bound in code** — the owner
+- **`arming_max_sessions` has no upper bound in code** — the owner
   rejected numbers in code. The plan output shows exactly how many sessions the
   arming buys, so an implausible grant is visible at the moment it is confirmed.
 - **Resolved: `observe_arming` reads on every live-custodying facade authority
