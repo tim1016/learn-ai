@@ -182,8 +182,11 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert staged_state.effective_choice is None
     assert staged_state.action.kind == "review_staged_configuration"
     assert staged_state.action.label == "Review & apply Alpaca-Paper"
-    assert staged_state.choices[0].action_kind == "review_staged_configuration"
-    assert staged_state.choices[0].action_consequence == staged_state.consequence
+    staged_choice = next(
+        choice for choice in staged_state.choices if choice.profile_id == profile_id
+    )
+    assert staged_choice.action_kind == "review_staged_configuration"
+    assert staged_choice.action_consequence == staged_state.consequence
 
     requested = service.request_apply(
         expected_selection_generation=staged.selection_generation,
@@ -193,9 +196,12 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert restart_state.activation_state == "apply_requested_restart_required"
     assert restart_state.selection_generation == requested.selection_generation
     assert restart_state.action.kind == "view_restart_steps"
-    assert restart_state.choices[0].action_kind == "view_restart_steps"
-    assert restart_state.choices[0].action_label == "View restart steps"
-    assert restart_state.choices[0].action_consequence == restart_state.consequence
+    restart_choice = next(
+        choice for choice in restart_state.choices if choice.profile_id == profile_id
+    )
+    assert restart_choice.action_kind == "view_restart_steps"
+    assert restart_choice.action_label == "View restart steps"
+    assert restart_choice.action_consequence == restart_state.consequence
     alternate_choice = next(
         choice for choice in restart_state.choices if choice.profile_id == alternate_profile_id
     )
@@ -220,8 +226,11 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert effective_state.effective_choice is not None
     assert effective_state.effective_choice.account_id == "PA000PAPER"
     assert effective_state.staged_choice == effective_state.effective_choice
-    assert effective_state.choices[0].action_kind == "review_configuration"
-    assert effective_state.choices[0].action_label == "Review Alpaca-Paper"
+    effective_choice = next(
+        choice for choice in effective_state.choices if choice.profile_id == profile_id
+    )
+    assert effective_choice.action_kind == "review_configuration"
+    assert effective_choice.action_label == "Review Alpaca-Paper"
     assert "not a connectivity claim" in effective_state.consequence
 
     service.request_apply(
@@ -230,10 +239,13 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     repeat_restart_state = service.desk_state()
 
     assert repeat_restart_state.activation_state == "apply_requested_restart_required"
-    assert repeat_restart_state.choices[0].is_staged is True
-    assert repeat_restart_state.choices[0].is_effective is True
-    assert repeat_restart_state.choices[0].action_kind == "view_restart_steps"
-    assert repeat_restart_state.choices[0].action_label == "View restart steps"
+    repeat_restart_choice = next(
+        choice for choice in repeat_restart_state.choices if choice.profile_id == profile_id
+    )
+    assert repeat_restart_choice.is_staged is True
+    assert repeat_restart_choice.is_effective is True
+    assert repeat_restart_choice.action_kind == "view_restart_steps"
+    assert repeat_restart_choice.action_label == "View restart steps"
 
 
 def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
