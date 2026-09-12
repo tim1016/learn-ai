@@ -19,7 +19,10 @@ import asyncio
 import inspect
 from typing import Any
 
+import pytest
+
 from app.routers import jobs as jobs_router
+from app.routers.engine import EngineBacktestResponse
 from app.routers.jobs import EngineBacktestJobRequest
 
 
@@ -100,3 +103,32 @@ def test_the_engine_entry_point_offers_a_wait_hook() -> None:
     from app.routers.engine import execute_engine_backtest
 
     assert "while_waiting" in inspect.signature(execute_engine_backtest).parameters
+
+
+def test_a_reported_engine_failure_fails_the_background_job(monkeypatch: Any) -> None:
+    captured = _dispatch(monkeypatch)
+    failure = EngineBacktestResponse(
+        success=False,
+        strategy_name="sma_crossover",
+        fill_mode="signal_bar_close",
+        initial_cash=0.0,
+        final_equity=0.0,
+        net_profit=0.0,
+        total_fees=0.0,
+        total_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+        error="missing data: backtest evaluated zero bars for the requested window",
+    )
+    monkeypatch.setattr(jobs_router, "execute_engine_backtest", lambda **kwargs: failure)
+
+    class FakeCancel:
+        def raise_if_cancelled(self) -> None: ...
+
+    class FakeEmit:
+        def phase(self, name: str) -> None: ...
+        def log(self, message: str) -> None: ...
+
+    with pytest.raises(ValueError, match="missing data: backtest evaluated zero bars"):
+        captured["work"](FakeEmit(), FakeCancel())

@@ -1614,6 +1614,11 @@ def _aggregate_backtest_response(
         f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics"
     )
 
+    if not result.bars:
+        error = "missing data: backtest evaluated zero bars for the requested window"
+        on_log(error)
+        return _failed_backtest_response(request, error)
+
     trades = getattr(strategy, "trade_log", []) or []
     formatted = [_format_trade(i + 1, t) for i, t in enumerate(trades)]
     wins = sum(1 for t in trades if t.result == "WIN")

@@ -505,6 +505,8 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
             while_waiting=cancel.raise_if_cancelled,
         )
         cancel.raise_if_cancelled()
+        if not response.success:
+            raise ValueError(response.error or "Backtest returned no result")
 
         # Pydantic v2: dict serialization preserves snake_case to match
         # what the frontend already deserializes from the synchronous
