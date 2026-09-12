@@ -24,6 +24,26 @@ const QQQ_VIEW: DeployBotView = {
   strategies: [...DEPLOY_VIEW.strategies, QQQ_STRATEGY],
 };
 
+const TSLA_GOLDEN_STRATEGY: DeployBotView['strategies'][number] = {
+  ...DEPLOY_VIEW.strategies[1],
+  validation_case_symbol: 'TSLA',
+  validation_case_parameters: { gap: 0.75 },
+  golden_validation_scope: true,
+};
+
+const SPY_GOLDEN_STRATEGY: DeployBotView['strategies'][number] = {
+  ...TSLA_GOLDEN_STRATEGY,
+  validation_case_symbol: 'SPY',
+  validation_case_parameters: { gap: 0.55 },
+};
+
+const LEGACY_EMA_STRATEGY: DeployBotView['strategies'][number] = {
+  ...TSLA_GOLDEN_STRATEGY,
+  validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
+};
+
 /** A view whose admission headline names it, so the DOM says which one landed. */
 function labelledView(headline: string): DeployBotView {
   return {
@@ -151,6 +171,61 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
 
       expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('QQQ');
       expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reseeds the reviewed parameters when a scoped refresh selects another Golden run', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const tslaView: DeployBotView = { ...DEPLOY_VIEW, strategies: [TSLA_GOLDEN_STRATEGY] };
+      const spyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [SPY_GOLDEN_STRATEGY] };
+      const service = mockService(tslaView);
+      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+        Promise.resolve(symbol === 'SPY' ? spyView : tslaView),
+      );
+      await renderWorkflow(service);
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect((screen.getByPlaceholderText<HTMLInputElement>('SPY')).value).toBe('TSLA');
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+
+      await typeSymbol('SPY');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.55');
+      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'SPY');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('seeds a Golden scope after legacy validation and again after returning through legacy', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const legacyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [LEGACY_EMA_STRATEGY] };
+      const goldenView: DeployBotView = { ...DEPLOY_VIEW, strategies: [TSLA_GOLDEN_STRATEGY] };
+      const service = mockService(legacyView);
+      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+        Promise.resolve(symbol === 'TSLA' ? goldenView : legacyView),
+      );
+      await renderWorkflow(service);
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+
+      await typeSymbol('TSLA');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+
+      await typeSymbol('SPY');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+
+      await typeSymbol('TSLA');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
     } finally {
       vi.useRealTimers();
     }

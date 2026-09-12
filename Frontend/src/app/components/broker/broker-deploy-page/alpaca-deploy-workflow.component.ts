@@ -57,6 +57,15 @@ const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
  */
 const SYMBOL_SCOPE_DEBOUNCE_MS = 400;
 
+function sameParameterValues(
+  left: Readonly<Record<string, unknown>>,
+  right: Readonly<Record<string, unknown>>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  return leftKeys.length === Object.keys(right).length
+    && leftKeys.every((key) => Object.hasOwn(right, key) && Object.is(left[key], right[key]));
+}
+
 interface AlpacaDeployTicket {
   instanceId: string;
   strategyKey: DeployBotStrategy['strategy_key'] | '';
@@ -72,6 +81,30 @@ interface AlpacaDeployTicket {
   parameters: Record<string, unknown>;
   overrideAcknowledged: boolean;
   overrideReason: string;
+}
+
+interface ValidationScopeSeed {
+  strategyKey: DeployBotStrategy['strategy_key'];
+  symbol: string;
+  parameters: Readonly<Record<string, unknown>>;
+  golden: boolean;
+}
+
+function validationScopeSeed(strategy: DeployBotStrategy): ValidationScopeSeed {
+  return {
+    strategyKey: strategy.strategy_key,
+    symbol: strategy.validation_case_symbol,
+    parameters: strategy.validation_case_parameters,
+    golden: strategy.golden_validation_scope,
+  };
+}
+
+function sameValidationScope(left: ValidationScopeSeed | null, right: ValidationScopeSeed): boolean {
+  return left !== null
+    && left.strategyKey === right.strategyKey
+    && left.symbol === right.symbol
+    && left.golden === right.golden
+    && sameParameterValues(left.parameters, right.parameters);
 }
 
 const OVERRIDE_REASON_MIN_LENGTH = 10;
@@ -223,6 +256,7 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   private readonly overrideReasonTouched = signal(false);
+  private lastValidationScope: ValidationScopeSeed | null = null;
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
     required(ticket.instanceId, { message: 'Enter a deployment name.' });
@@ -284,6 +318,15 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly brokerModeSelected = computed(
     () => this.ticket().executionMode !== 'dry_run',
   );
+
+  /** A Golden review authorizes one exact broker configuration, not a strategy family. */
+  protected readonly goldenScopeMatchesTicket = computed(() => {
+    const strategy = this.selectedStrategy();
+    if (strategy === null || !strategy.golden_validation_scope) return true;
+    const ticket = this.ticket();
+    return ticket.symbol.trim().toUpperCase() === strategy.validation_case_symbol
+      && sameParameterValues(ticket.parameters, strategy.validation_case_parameters);
+  });
 
   // A broker deploy of an evidence-only strategy carries the durable human
   // override (acknowledgement + reason) on the request itself — restored by
@@ -419,6 +462,12 @@ export class AlpacaDeployWorkflowComponent {
     if (this.ticketForm.symbol().invalid()) {
       return { canSubmit: false, guidance: 'Fix the trading symbol before deployment.' };
     }
+    if (this.brokerModeSelected() && !this.goldenScopeMatchesTicket()) {
+      return {
+        canSubmit: false,
+        guidance: 'Broker deployment is limited to the selected Golden Validation symbol and parameters.',
+      };
+    }
     if (this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) {
       return { canSubmit: false, guidance: 'Fix the position size before deployment.' };
     }
@@ -467,16 +516,26 @@ export class AlpacaDeployWorkflowComponent {
           ticket.executionMode === 'paper' ? { ...ticket, executionMode: mode } : ticket,
         );
       }
+      const current = untracked(this.ticket);
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
-      const strategy = view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
+      const strategy = view?.strategies.find((candidate) => candidate.strategy_key === current.strategyKey)
+        ?? view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
         ?? view?.strategies.find((candidate) => candidate.selectable)
         ?? view?.strategies[0];
       if (!strategy) return;
-      const current = untracked(this.ticket);
       const strategyKey = current.strategyKey || strategy.strategy_key;
-      if (strategyKey !== current.strategyKey) {
-        this.ticket.update((ticket) => ({ ...ticket, strategyKey }));
+      const nextValidationScope = validationScopeSeed(strategy);
+      const scopeChanged = !sameValidationScope(this.lastValidationScope, nextValidationScope);
+      const priorParametersRemainIntact = this.lastValidationScope !== null
+        && sameParameterValues(current.parameters, this.lastValidationScope.parameters);
+      if (strategyKey !== current.strategyKey || (scopeChanged && priorParametersRemainIntact)) {
+        this.ticket.update((ticket) => ({
+          ...ticket,
+          strategyKey,
+          parameters: { ...strategy.validation_case_parameters },
+        }));
       }
+      this.lastValidationScope = nextValidationScope;
       const symbol = current.symbol || strategy.validation_case_symbol;
       if (symbol !== current.symbol) this.applySymbol(symbol);
     });
@@ -504,10 +563,11 @@ export class AlpacaDeployWorkflowComponent {
     this.ticket.update((ticket) => ({
       ...ticket,
       strategyKey: strategy.strategy_key,
-      parameters: {},
+      parameters: { ...strategy.validation_case_parameters },
       overrideAcknowledged: false,
       overrideReason: '',
     }));
+    this.lastValidationScope = validationScopeSeed(strategy);
     this.applySymbol(symbol);
     this.overrideReasonTouched.set(false);
   }

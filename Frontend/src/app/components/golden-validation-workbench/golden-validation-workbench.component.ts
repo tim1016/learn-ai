@@ -43,6 +43,11 @@ interface ScopeFact {
   symbol: string | null;
 }
 
+interface ParameterScopeView {
+  symbol: string | null;
+  values: Record<string, unknown>;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -72,6 +77,14 @@ function flattenScope(value: unknown, path: string[] = []): ScopeFact[] {
     opaque: isOpaqueReceiptValueLabel(key),
     symbol: key === "symbol" && typeof value === "string" ? value : null,
   }];
+}
+
+function separateParameterSymbol(value: Record<string, unknown>): ParameterScopeView {
+  const { symbol, ...values } = value;
+  return {
+    symbol: stringValue(symbol),
+    values: typeof symbol === "string" ? values : value,
+  };
 }
 
 /**
@@ -145,6 +158,7 @@ export class GoldenValidationWorkbenchComponent {
   });
   protected readonly dataPolicyFacts = computed(() => flattenScope(this.selected()?.validation_case.data_policy));
   protected readonly executionFacts = computed(() => flattenScope(this.selected()?.validation_case.execution));
+  protected readonly parameterScope = computed(() => separateParameterSymbol(this.selected()?.validation_case.parameters ?? {}));
   protected readonly parityChecks = computed<ParityCheckView[]>(() => {
     const payload = this.parityPayload();
     if (payload === null) return [];
@@ -237,6 +251,9 @@ export class GoldenValidationWorkbenchComponent {
     if (!(event.target instanceof HTMLInputElement)) return;
     if (event.target.value === "accept" || event.target.value === "reject") {
       this.reviewDecision.set(event.target.value);
+      if (event.target.value === "reject") {
+        this.authorizedProgramVersion.set("");
+      }
       this.reviewCommandId.set(this.commandId("review"));
     }
   }
@@ -301,7 +318,9 @@ export class GoldenValidationWorkbenchComponent {
         ...(this.quantConnectBacktestId().trim()
           ? { quantconnect_backtest_id: this.quantConnectBacktestId().trim() }
           : {}),
-        ...(authorizedProgramVersion ? { authorized_program_version: authorizedProgramVersion } : {}),
+        ...(this.reviewDecision() === "accept" && authorizedProgramVersion
+          ? { authorized_program_version: authorizedProgramVersion }
+          : {}),
       }));
       this.latestResponse.set(result);
       this.changed.emit(result);

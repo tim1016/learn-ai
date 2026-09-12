@@ -105,6 +105,49 @@ def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path:
     }
 
 
+def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: Path) -> None:
+    """A paired run must not diverge just because it crossed the LEAN seam."""
+    from app.routers.engine import EngineBacktestRequest, _persisted_execution_config
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    request = EngineBacktestRequest.model_validate(
+        {
+            "strategy_name": "ema_crossover_signal",
+            "requested_engine": "both",
+            "params": {"symbol": "SPY"},
+            "from_date": "2026-01-05",
+            "to_date": "2026-01-06",
+            "resolution": "minute",
+            "compatibility_profile": "us-equity-raw-ibkr-v1",
+            "data_policy": {
+                "source": "polygon",
+                "symbol": "SPY",
+                "adjusted": False,
+                "session": "regular",
+                "input_bars": {"timespan": "minute", "multiplier": 1},
+                "strategy_bars": {"timespan": "minute", "multiplier": 15},
+            },
+        }
+    )
+    python_receipt = _persisted_execution_config(request, evaluation_start=date(2026, 1, 5))
+    lean_payload = build_persist_payload(
+        workspace_path=tmp_path,
+        run_id="paired-execution-receipt",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover_signal",
+        start_date=date(2026, 1, 5),
+        end_date=date(2026, 1, 6),
+        start_date_ms=1_767_623_400_000,
+        end_date_ms=1_767_796_200_000,
+        parity_group_id="pg-execution-receipt",
+        requested_engine="both",
+    )
+
+    assert json.loads(lean_payload["execution_config_json"]) == python_receipt
+    assert set(python_receipt).isdisjoint({"session_entry_cutoff", "force_flat_at"})
+
+
 def test_pair_skips_non_filled_events() -> None:
     events = [
         {**_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10), "status": "submitted"},

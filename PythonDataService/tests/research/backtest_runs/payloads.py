@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
+
+from app.utils.session_anchors import et_midnight_ms
 
 ENTRY_MS = 1_736_173_800_000  # 2025-01-06 09:30 ET
 EXIT_MS = 1_736_179_200_000  # 2025-01-06 11:00 ET
@@ -133,8 +136,10 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "session_entry_cutoff": None,
-                "force_flat_at": None,
+                "session_time_reference_ms": et_midnight_ms(date(2025, 1, 6)),
+                "session_time_zone": "America/New_York",
+                "session_entry_cutoff_ms": None,
+                "force_flat_at_ms": None,
                 "limit_penetration": 0.0,
             }
         ),
@@ -212,8 +217,10 @@ def lean_payload(lean_run_id: str, symbol: str = "SPY", **overrides: Any) -> dic
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "session_entry_cutoff": None,
-                "force_flat_at": None,
+                "session_time_reference_ms": et_midnight_ms(date(2025, 1, 6)),
+                "session_time_zone": "America/New_York",
+                "session_entry_cutoff_ms": None,
+                "force_flat_at_ms": None,
                 "limit_penetration": 0.0,
             }
         ),

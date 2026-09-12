@@ -500,9 +500,35 @@ async def list_latest_accepted_dossiers(
     *,
     symbol: str | None,
 ) -> list[GoldenValidationDossier]:
-    """Load reviewed catalog candidates without applying a history-page cap."""
-    rows = await repo.list_latest_accepted_golden_runs(conn, symbol=symbol)
-    return [await _load_dossier(conn, row) for row in rows]
+    """Load accepted catalog candidates without per-case query fan-out.
+
+    A deploy view only needs each candidate's current review, not its whole
+    review history.  The repository projects that review with each Golden
+    case, then this service retrieves all parity verdicts in one set query.
+    The resulting evidence is identical to ``_load_dossier`` for the retained
+    latest review while the round-trip count stays constant as the corpus
+    grows.
+    """
+    catalog_rows = await repo.list_latest_accepted_golden_catalog_rows(conn, symbol=symbol)
+    parsed_cases = [(row, json.loads(row.golden_run.validation_case_json)) for row in catalog_rows]
+    parity_group_ids = [
+        parity_group_id
+        for _, validation_case in parsed_cases
+        if isinstance((parity_group_id := validation_case.get("parity_group_id")), str) and parity_group_id
+    ]
+    verdicts = await repo.parity_verdicts_for_cases(conn, parity_group_ids)
+    return [
+        GoldenValidationDossier(
+            golden_run=row.golden_run,
+            validation_case=validation_case,
+            evidence=_evidence_for(
+                row.golden_run,
+                verdicts.get(validation_case.get("parity_group_id")),
+            ),
+            reviews=(row.latest_review,),
+        )
+        for row, validation_case in parsed_cases
+    ]
 
 
 async def review(

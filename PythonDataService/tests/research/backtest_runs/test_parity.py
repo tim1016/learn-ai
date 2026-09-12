@@ -86,8 +86,10 @@ def _run(run_id: int, source: str, **overrides) -> RunDetail:
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "session_entry_cutoff": None,
-                "force_flat_at": None,
+                "session_time_reference_ms": et_midnight_ms(date(2026, 1, 5)),
+                "session_time_zone": "America/New_York",
+                "session_entry_cutoff_ms": None,
+                "force_flat_at_ms": None,
                 "limit_penetration": 0.0,
             }
         ),

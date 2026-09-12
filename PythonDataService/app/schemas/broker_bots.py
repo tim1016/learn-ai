@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
@@ -237,6 +237,12 @@ class AlpacaPaperDeployStrategy(BaseModel):
     label: str
     explanation: str
     validation_case_symbol: str
+    # When true, these are the exact non-symbol values accepted by the
+    # Golden Validation review. They seed the deploy ticket and are enforced
+    # for every broker-contacting execution mode. An empty map means this is
+    # a legacy validation row rather than a Golden-scoped authorization.
+    validation_case_parameters: dict[str, JsonValue]
+    golden_validation_scope: bool
     evidence_status: Literal["accepted", "evidence_only", "blocked"]
     # Account-scoped approval state for sealed Signal Programs. This is
     # explicit wire data so the UI never has to infer an available action by

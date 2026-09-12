@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import asyncpg
 import pytest
 
 from app.research.backtest_runs import repository as backtest_repo
@@ -29,6 +30,28 @@ async def _designate(conn, run_id: int, unique: str) -> service.GoldenValidation
         rationale="Parameters selected after research review.",
         actor="local:reviewer",
     )
+
+
+class _QueryCountingConnection:
+    """Record real asyncpg round trips while delegating all database work."""
+
+    def __init__(self, connection: asyncpg.Connection) -> None:
+        self._connection = connection
+        self.fetch_queries: list[str] = []
+        self.fetchrow_queries: list[str] = []
+
+    async def fetch(self, query: str, *args: object, **kwargs: object) -> list[asyncpg.Record]:
+        self.fetch_queries.append(query)
+        return await self._connection.fetch(query, *args, **kwargs)
+
+    async def fetchrow(
+        self,
+        query: str,
+        *args: object,
+        **kwargs: object,
+    ) -> asyncpg.Record | None:
+        self.fetchrow_queries.append(query)
+        return await self._connection.fetchrow(query, *args, **kwargs)
 
 
 def _certificate_payload(*, group: str, left: int, right: int, status: str) -> dict:
@@ -135,6 +158,126 @@ async def test_deployment_scope_lookup_is_exact_and_not_a_history_page(conn, uni
     assert candidates.strategy_has_golden_runs is True
     assert absent_scope.dossiers == ()
     assert absent_scope.strategy_has_golden_runs is True
+
+
+async def test_deployment_scope_prefers_the_newest_latest_review_not_designation(conn, unique: str) -> None:
+    """A later acceptance must supersede an earlier designation's priority."""
+    first = await _designate(conn, await _run(conn, engine_payload(symbol=unique)), f"first-{unique}")
+    second = await _designate(conn, await _run(conn, engine_payload(symbol=unique)), f"second-{unique}")
+    assert first.golden_run.designated_at_ms <= second.golden_run.designated_at_ms
+
+    for dossier, reviewed_at_ms in ((second, 100), (first, 200)):
+        inserted = await golden_repo.insert_review(
+            conn,
+            golden_run_id=dossier.golden_run.id,
+            command_id=f"review-order-{dossier.golden_run.id}-{unique}",
+            command_sha256="a" * 64,
+            expected_evidence_revision=dossier.evidence.revision,
+            decision="accept",
+            classification="manual_override",
+            evidence_state=dossier.evidence.state,
+            parity_verdict_id=None,
+            evidence_json=json.dumps(dossier.evidence.payload),
+            evidence_sha256="b" * 64,
+            reason="Reviewed for ordering.",
+            quantconnect_backtest_id=None,
+            authorized_program_version=None,
+            reviewed_by="local:reviewer",
+            reviewed_at_ms=reviewed_at_ms,
+        )
+        assert inserted is not None
+
+    candidates = await service.find_deployment_scope_dossiers(
+        conn,
+        strategy_name="ema_crossover_signal",
+        symbol=unique.upper(),
+        parameters={"symbol": unique.upper(), "gap_bps": 0.0},
+    )
+
+    assert [item.golden_run.id for item in candidates.dossiers] == [
+        first.golden_run.id,
+        second.golden_run.id,
+    ]
+
+
+async def test_catalog_dossiers_batch_reviews_and_parity_evidence(conn, unique: str) -> None:
+    """Catalog data remains equivalent to normal loading with constant DB round trips.
+
+    The query count is measured at the actual asyncpg connection boundary, not
+    by replacing repository functions.  Four accepted paired cases must still
+    produce the same two fetches as three: the catalog projection plus its
+    single parity-verdict batch.
+    """
+
+    async def create_accepted_paired_case(index: int) -> service.GoldenValidationDossier:
+        group = f"catalog-batch-{unique}-{index}"
+        left = await _run(
+            conn,
+            engine_payload(
+                symbol=unique,
+                parameters={"symbol": unique.upper(), "gap_bps": float(index)},
+                parity_group_id=group,
+                requested_engine="both",
+                program_version="ema-signal-v1",
+            ),
+        )
+        right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
+        await backtest_repo.freeze_parity_verdict(
+            conn,
+            parity_group_id=group,
+            left_run_id=left,
+            right_run_id=right,
+            status="agree",
+            verdict_json=json.dumps(_certificate_payload(group=group, left=left, right=right, status="agree")),
+        )
+        designated = await _designate(conn, left, f"catalog-batch-{unique}-{index}")
+        return await service.review(
+            conn,
+            golden_run_id=designated.golden_run.id,
+            command_id=f"catalog-review-{unique}-{index}",
+            expected_evidence_revision=designated.evidence.revision,
+            decision="accept",
+            reason="Approved for the catalog projection.",
+            quantconnect_backtest_id=None,
+            authorized_program_version=None,
+            actor="local:reviewer",
+        )
+
+    async def assert_batched_catalog(expected_case_count: int) -> None:
+        counting_conn = _QueryCountingConnection(conn)
+        catalog_dossiers = await service.list_latest_accepted_dossiers(
+            counting_conn,  # type: ignore[arg-type]
+            symbol=unique.upper(),
+        )
+        normal_dossiers = await service.list_dossiers(
+            conn,
+            strategy_name="ema_crossover_signal",
+            symbol=unique.upper(),
+            limit=expected_case_count,
+        )
+
+        assert len(catalog_dossiers) == expected_case_count
+        normal_by_id = {dossier.golden_run.id: dossier for dossier in normal_dossiers}
+        assert {dossier.golden_run.id for dossier in catalog_dossiers} == set(normal_by_id)
+        for dossier in catalog_dossiers:
+            normally_loaded = normal_by_id[dossier.golden_run.id]
+            assert dossier.validation_case == normally_loaded.validation_case
+            assert dossier.evidence == normally_loaded.evidence
+            assert dossier.latest_review == normally_loaded.latest_review
+            assert dossier.review_is_current == normally_loaded.review_is_current
+            assert dossier.state == normally_loaded.state
+
+        assert len(counting_conn.fetch_queries) == 2
+        assert counting_conn.fetchrow_queries == []
+        assert "research_validation_golden_runs" in counting_conn.fetch_queries[0]
+        assert "research_parity_verdicts" in counting_conn.fetch_queries[1]
+
+    for index in range(3):
+        await create_accepted_paired_case(index)
+    await assert_batched_catalog(expected_case_count=3)
+
+    await create_accepted_paired_case(3)
+    await assert_batched_catalog(expected_case_count=4)
 
 
 async def test_human_can_accept_missing_evidence_only_as_a_visible_manual_override(conn, unique: str) -> None:

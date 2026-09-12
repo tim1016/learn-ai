@@ -78,7 +78,15 @@
             <div class="golden-card__scope">
               <section>
                 <h4>Parameters</h4>
-                <pre>{{ json(golden.validation_case.parameters) }}</pre>
+                @if (parameterScope().symbol; as symbol) {
+                  <dl class="golden-card__scope-facts">
+                    <div>
+                      <dt>Symbol</dt>
+                      <dd><app-asset-identity [symbol]="symbol" size="xs" /></dd>
+                    </div>
+                  </dl>
+                }
+                <pre>{{ json(parameterScope().values) }}</pre>
               </section>
               <section>
                 <h4>Data policy</h4>
@@ -193,11 +201,13 @@
             <span>QuantConnect Cloud backtest ID <em>optional</em></span>
             <input [value]="quantConnectBacktestId()" (input)="setQuantConnectBacktestId($event)" placeholder="Optional external reference" />
           </label>
-          @if (golden.validation_case.strategy.program_version === null) {
+          @if (golden.validation_case.strategy.program_version === null && reviewDecision() === "accept") {
             <label>
               <span>Authorized Signal Program version <em>required to accept this historical run</em></span>
               <input [value]="authorizedProgramVersion()" (input)="setAuthorizedProgramVersion($event)" placeholder="Exact version, for example ema-crossover-signal/v1" />
             </label>
+          } @else if (golden.validation_case.strategy.program_version === null) {
+            <p class="golden-workbench__notice" role="status">A rejection does not authorize a Signal Program version.</p>
           }
           <button type="submit" [disabled]="busy()">Save review</button>
         </form>

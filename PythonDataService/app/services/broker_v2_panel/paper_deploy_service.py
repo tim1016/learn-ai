@@ -34,7 +34,7 @@ from app.services.broker_v2_panel.channel_health import (
     evaluate_channel_health,
     evaluate_channels_at_account_scope,
 )
-from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
+from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope, compose_strategy_catalog
 from app.utils.timestamps import now_ms_utc
 
 
@@ -399,7 +399,7 @@ def _strategy_views(
     *,
     account_id: str,
     custody_world: CustodyWorld,
-    golden_validation_symbols: Mapping[str, str] | None = None,
+    golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -416,6 +416,8 @@ def _strategy_views(
             label=entry.label,
             explanation=entry.explanation,
             validation_case_symbol=entry.validation_case_symbol,
+            validation_case_parameters=dict(entry.validation_case_parameters),
+            golden_validation_scope=entry.golden_validation_scope,
             evidence_status=entry.evidence_status,
             paper_access_state=entry.paper_access_state,
             selectable=entry.selectable,
@@ -431,7 +433,7 @@ def _strategy_views(
         for entry in compose_strategy_catalog(
             entries,
             account_id=account_id,
-            golden_validation_symbols=golden_validation_symbols,
+            golden_validation_scopes=golden_validation_scopes,
         )
     )
 
@@ -762,7 +764,7 @@ def build_alpaca_paper_deploy_view(
     *,
     symbol: str | None = None,
     custody_world: CustodyWorld,
-    golden_validation_symbols: Mapping[str, str] | None = None,
+    golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict.
 
@@ -778,7 +780,7 @@ def build_alpaca_paper_deploy_view(
         validation_entries,
         account_id=account.account_id,
         custody_world=custody_world,
-        golden_validation_symbols=golden_validation_symbols,
+        golden_validation_scopes=golden_validation_scopes,
     )
     copy = _deploy_view_copy(account, custody_world)
     readiness_checks = _readiness_checks(

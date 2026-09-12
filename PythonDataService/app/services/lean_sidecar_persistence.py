@@ -54,6 +54,7 @@ from app.services.lean_statistics_adapter import (
     _parse_ratio,
 )
 from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
+from app.utils.session_anchors import persisted_execution_configuration
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -580,14 +581,15 @@ def build_persist_payload(
     program_version = lean_twin_program_version(algorithm_name)
     execution_config_json = (
         json.dumps(
-            {
-                "compatibility_profile": COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
-                "warmup_from_date": None,
-                "slippage_per_share": 0.0,
-                "session_entry_cutoff": None,
-                "force_flat_at": None,
-                "limit_penetration": 0.0,
-            },
+            persisted_execution_configuration(
+                evaluation_start=start_date,
+                compatibility_profile=COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
+                warmup_from_date=None,
+                slippage_per_share=0.0,
+                session_entry_cutoff=None,
+                force_flat_at=None,
+                limit_penetration=0.0,
+            ),
             sort_keys=True,
         )
         if parity_group_id is not None

@@ -46,6 +46,7 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     resolve_deploy_strategy_params,
     strategy_gate_recovery,
 )
+from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
     load_strategy_validation_entries,
@@ -55,8 +56,10 @@ from app.services.strategy_validation_manifest import (
 logger = logging.getLogger(__name__)
 
 
-async def _current_golden_validation_symbols(symbol: str | None) -> dict[str, str]:
-    """Return reviewed Golden scopes whose program version is still runnable."""
+async def _current_golden_validation_scopes(
+    symbol: str | None,
+) -> dict[str, tuple[GoldenValidationScope, ...]]:
+    """Return current, exact Golden scopes whose program version is runnable."""
     normalized_symbol = symbol.strip().upper() if symbol is not None else None
     try:
         dossiers = await with_connection(
@@ -75,7 +78,7 @@ async def _current_golden_validation_symbols(symbol: str | None) -> dict[str, st
         logger.warning("Golden Validation catalog projection unavailable: %s", type(exc).__name__)
         return {}
 
-    current: dict[str, str] = {}
+    current: dict[str, list[GoldenValidationScope]] = {}
     for dossier in dossiers:
         review = dossier.latest_review
         strategy = dossier.validation_case.get("strategy")
@@ -89,6 +92,7 @@ async def _current_golden_validation_symbols(symbol: str | None) -> dict[str, st
         registration = _STRATEGY_REGISTRY.get(strategy_name) if isinstance(strategy_name, str) else None
         contract = registration.signal_program_contract if registration is not None else None
         case_symbol = dossier.validation_case.get("symbol")
+        case_parameters = dossier.validation_case.get("parameters")
         if (
             review is None
             or review.decision != "accept"
@@ -97,10 +101,13 @@ async def _current_golden_validation_symbols(symbol: str | None) -> dict[str, st
             or contract is None
             or contract.program_version != (recorded_version or authorized_version)
             or not isinstance(case_symbol, str)
+            or not isinstance(case_parameters, dict)
         ):
             continue
-        current.setdefault(strategy_name, case_symbol.upper())
-    return current
+        current.setdefault(strategy_name, []).append(
+            GoldenValidationScope(symbol=case_symbol.upper(), parameters=case_parameters)
+        )
+    return {strategy_key: tuple(scopes) for strategy_key, scopes in current.items()}
 
 
 async def get_alpaca_paper_deploy_view(
@@ -161,7 +168,7 @@ async def get_alpaca_paper_deploy_view(
         validation_entries,
         symbol=symbol,
         custody_world=custody_world,
-        golden_validation_symbols=await _current_golden_validation_symbols(symbol),
+        golden_validation_scopes=await _current_golden_validation_scopes(symbol),
     )
 
 
@@ -294,7 +301,7 @@ def _require_alpaca_deploy_request(
     else:
         _require_broker_deploy_request(view, strategy, request)
     try:
-        return resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
+        resolved = resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
     except ValueError as exc:
         raise PanelRunnerError(
             "The submitted strategy parameters are invalid.",
@@ -302,6 +309,20 @@ def _require_alpaca_deploy_request(
             next_action="Correct the highlighted parameter(s) and resubmit.",
             http_status=400,
         ) from exc
+    if request.execution_mode != "dry_run" and strategy.golden_validation_scope and (
+        request.symbol != strategy.validation_case_symbol
+        or resolved.effective != strategy.validation_case_parameters
+    ):
+        raise PanelRunnerError(
+            "Broker deployment must use the reviewed Golden Validation configuration.",
+            detail=(
+                "The selected Golden Validation authorizes only "
+                f"{strategy.validation_case_symbol} with its recorded parameter values."
+            ),
+            next_action="Restore the reviewed symbol and parameters, or complete a new Golden Validation.",
+            http_status=409,
+        )
+    return resolved
 
 
 def _require_dry_run_deploy_request(

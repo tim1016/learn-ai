@@ -32,7 +32,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from pydantic import JsonValue, ValidationError
+
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
 from app.services import canary_admission
 from app.services.bot_trade_strategy import (
@@ -87,12 +89,28 @@ class CatalogEntry:
     label: str
     explanation: str
     validation_case_symbol: str
+    # An accepted Golden Validation is an exact deploy contract, not a
+    # strategy-wide approval.  The Frontend seeds these values into the
+    # ticket and the broker-mode preflight compares the resolved request
+    # against them.  Legacy validation rows deliberately carry an empty map:
+    # they remain governed by their existing policy rather than pretending to
+    # represent a Golden configuration.
+    validation_case_parameters: Mapping[str, JsonValue]
+    golden_validation_scope: bool
     has_runtime: bool
     evidence_status: EvidenceStatus
     paper_access_state: PaperAccessState
     selectable: bool
     override_explanation: str | None
     blocked_explanation: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GoldenValidationScope:
+    """One exact reviewed Golden configuration available to the deploy catalog."""
+
+    symbol: str
+    parameters: Mapping[str, object]
 
 
 def _is_catalog_visible(strategy_key: str) -> bool:
@@ -298,6 +316,57 @@ def _golden_disposition(
     )
 
 
+def _unrepresentable_golden_scope_disposition(*, has_runtime: bool) -> _Disposition:
+    """Fail closed when accepted Golden evidence cannot be rendered as a deploy ticket."""
+    return _Disposition(
+        has_runtime=has_runtime,
+        evidence_status="blocked",
+        paper_access_state="blocked",
+        selectable=False,
+        override_explanation=None,
+        blocked_explanation=(
+            "The reviewed Golden Validation cannot be represented by this strategy's current deployment "
+            "parameter contract. Revalidate it against the current program before broker deployment."
+        ),
+    )
+
+
+def _representable_golden_scope(
+    strategy_key: str,
+    scopes: tuple[GoldenValidationScope, ...],
+) -> GoldenValidationScope | None:
+    """Return the newest exact Golden scope the current deploy form can represent.
+
+    The repository orders scopes by latest accepted review, so the first
+    representable one is the current catalog choice.  A Golden record must
+    contain a complete schema-valid parameter set; silently filling missing
+    values from today's defaults would turn historic evidence into approval
+    for a different configuration.
+    """
+    registration = _STRATEGY_REGISTRY[strategy_key]
+    for scope in scopes:
+        try:
+            normalized_symbol = scope.symbol.strip().upper()
+            if not normalized_symbol:
+                continue
+            raw = dict(scope.parameters)
+            recorded_symbol = raw.get("symbol")
+            if not isinstance(recorded_symbol, str) or recorded_symbol != normalized_symbol:
+                continue
+            expected = registration.param_schema.model_validate(raw).model_dump(mode="json")
+        except (TypeError, ValidationError, ValueError):
+            continue
+        if expected != raw:
+            continue
+        public_parameters = {name: value for name, value in expected.items() if name != "symbol"}
+        if hidden_params_present(registration, public_parameters, extra_hidden=frozenset({"symbol"})):
+            continue
+        if not all(isinstance(value, str | int | float | bool) for value in public_parameters.values()):
+            continue
+        return GoldenValidationScope(symbol=normalized_symbol, parameters=expected)
+    return None
+
+
 def _active_canary_pairings_snapshot() -> frozenset[tuple[str, str]]:
     """Resolve one immutable pairing view for the complete catalog response."""
     source_pairings = canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS
@@ -312,7 +381,7 @@ def compose_strategy_catalog(
     entries: list[StrategyValidationEntry],
     *,
     account_id: str,
-    golden_validation_symbols: Mapping[str, str] | None = None,
+    golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
 ) -> tuple[CatalogEntry, ...]:
     """Compose the strategy catalog from the definition and validation facets.
 
@@ -321,10 +390,10 @@ def compose_strategy_catalog(
     An entry that is missing, invalidated, rejected, or not catalog-visible
     at all produces no row, unchanged from before this slice.
     """
-    golden_symbols = golden_validation_symbols or {}
+    golden_scopes = golden_validation_scopes or {}
     entries_by_key = {entry.strategy_key: entry for entry in entries}
     strategy_keys = list(entries_by_key)
-    strategy_keys.extend(key for key in golden_symbols if key not in entries_by_key)
+    strategy_keys.extend(key for key in golden_scopes if key not in entries_by_key)
     runtime_keys = supported_alpaca_paper_strategy_keys()
     active_pairings = _active_canary_pairings_snapshot()
     catalog: list[CatalogEntry] = []
@@ -333,7 +402,9 @@ def compose_strategy_catalog(
             continue
         entry = entries_by_key.get(strategy_key)
         event = entry.current_flag_event if entry is not None else None
-        has_golden_validation = strategy_key in golden_symbols
+        reviewed_scopes = golden_scopes.get(strategy_key, ())
+        has_golden_validation = bool(reviewed_scopes)
+        golden_scope = _representable_golden_scope(strategy_key, reviewed_scopes)
         has_current_event = (
             entry is not None
             and entry.validation_state == "validated"
@@ -350,10 +421,14 @@ def compose_strategy_catalog(
             paper_access_state = "enabled"
         else:
             paper_access_state = "available"
-        if has_golden_validation:
+        if golden_scope is not None:
             disposition = _golden_disposition(
                 has_runtime=strategy_key in runtime_keys,
                 paper_access_state=paper_access_state,
+            )
+        elif has_golden_validation:
+            disposition = _unrepresentable_golden_scope_disposition(
+                has_runtime=strategy_key in runtime_keys,
             )
         else:
             assert entry is not None and event is not None
@@ -363,10 +438,15 @@ def compose_strategy_catalog(
                 has_runtime=strategy_key in runtime_keys,
                 paper_access_state=paper_access_state,
             )
-        validation_case_symbol = golden_symbols.get(strategy_key) or (
-            event.evidence_snapshot.validation_case_symbol
-            if event is not None
-            else None
+        catalog_scope = golden_scope
+        validation_case_symbol = (
+            catalog_scope.symbol
+            if catalog_scope is not None
+            else (
+                event.evidence_snapshot.validation_case_symbol
+                if event is not None
+                else None
+            )
         ) or alpaca_paper_strategy_default_symbol(strategy_key)
         catalog.append(
             CatalogEntry(
@@ -374,6 +454,12 @@ def compose_strategy_catalog(
                 label=entry.display_name if entry is not None else registration.display_name,
                 explanation=entry.description if entry is not None else registration.description,
                 validation_case_symbol=validation_case_symbol,
+                validation_case_parameters=(
+                    {name: value for name, value in catalog_scope.parameters.items() if name != "symbol"}
+                    if catalog_scope is not None
+                    else {}
+                ),
+                golden_validation_scope=catalog_scope is not None,
                 has_runtime=disposition.has_runtime,
                 evidence_status=disposition.evidence_status,
                 paper_access_state=disposition.paper_access_state,

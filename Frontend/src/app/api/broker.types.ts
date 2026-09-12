@@ -5933,6 +5933,8 @@ export interface components {
             evidence_status: "accepted" | "evidence_only" | "blocked";
             /** Explanation */
             explanation: string;
+            /** Golden Validation Scope */
+            golden_validation_scope: boolean;
             /** Label */
             label: string;
             /** Override Explanation */
@@ -5947,6 +5949,10 @@ export interface components {
             selectable: boolean;
             /** Strategy Key */
             strategy_key: string;
+            /** Validation Case Parameters */
+            validation_case_parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
             /** Validation Case Symbol */
             validation_case_symbol: string;
         };

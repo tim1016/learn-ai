@@ -27,6 +27,8 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'RSI Mean Reversion',
   explanation: 'Validated RSI mean-reversion entries with ADX confirmation.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'blocked',
   paper_access_state: 'enabled',
   selectable: false,
@@ -49,12 +51,21 @@ const NO_RUNTIME_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'Strategy B',
   explanation: 'Validated RSI-range strategy with no registered runtime yet.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'blocked',
   paper_access_state: 'enabled',
   selectable: false,
   admissible_modes: [],
   override_explanation: null,
   blocked_explanation: 'This strategy has no registered live-decision runtime yet.',
+};
+
+const GOLDEN_TSLA_STRATEGY: DeployBotView['strategies'][number] = {
+  ...EMA_STRATEGY,
+  validation_case_symbol: 'TSLA',
+  validation_case_parameters: { gap: 0.75 },
+  golden_validation_scope: true,
 };
 
 const NO_RUNTIME_EXPLANATION = NO_RUNTIME_STRATEGY.blocked_explanation;
@@ -276,6 +287,45 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).parameters).toEqual({ gap: 5 });
+  });
+
+  it('seeds an accepted non-default Golden scope and submits its exact configuration', async () => {
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [GOLDEN_TSLA_STRATEGY],
+    });
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'golden-tsla-01' },
+    });
+
+    expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('TSLA');
+    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.symbol).toBe('TSLA');
+    expect(body.parameters).toEqual({ gap: 0.75 });
+  });
+
+  it('does not offer broker deployment after an operator changes a Golden parameter', async () => {
+    await renderWorkflow(mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [GOLDEN_TSLA_STRATEGY],
+    }));
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'golden-tsla-edited' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Crossover gap' }), { target: { value: '0.2' } });
+
+    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Broker deployment is limited to the selected Golden Validation symbol and parameters.'))
+      .toBeTruthy();
   });
 
   it('blocks deployment while a strategy parameter is showing unparseable text', async () => {

@@ -24,7 +24,7 @@ const CASE: GoldenValidation = {
     source_run_id: 44,
     strategy: { name: "ema_crossover", program_version: "ema-v1" },
     symbol: "SPY",
-    parameters: { crossover_gap: 0.2, rsi_min: 50, rsi_max: 70 },
+    parameters: { symbol: "SPY", crossover_gap: 0.2, rsi_min: 50, rsi_max: 70 },
     window: { start_ms: 1767589200000, end_ms: 1767675600000, timespan: "minute" },
     data_policy: {
       source: "polygon",
@@ -136,6 +136,10 @@ describe("GoldenValidationWorkbenchComponent", () => {
     expect(screen.getByText("Deviations")).toBeTruthy();
     expect(screen.getByText(/minute/i)).toBeTruthy();
     await user.click(screen.getByText("Exact parameters, data, and execution scope"));
+    expect(screen.getAllByText("SPY").length).toBeGreaterThan(1);
+    const remainingParameters = screen.getByText(/crossover_gap/);
+    expect(remainingParameters.textContent).toContain('"crossover_gap": 0.2');
+    expect(remainingParameters.textContent).not.toContain('"symbol": "SPY"');
     expect(screen.getByText(/Compatibility Profile/)).toBeTruthy();
     expect(screen.getByText("Us Equity Raw IBKR V1")).toBeTruthy();
     expect(screen.getByText("spy-fixture")).toBeTruthy();
@@ -255,5 +259,42 @@ describe("GoldenValidationWorkbenchComponent", () => {
 
     const warning = await screen.findByText(/decision reviewed an earlier evidence revision/i);
     expect(warning.getAttribute("role")).toBe("alert");
+  });
+
+  it("clears a historical-run authorization when the reviewer rejects it", async () => {
+    const historicalCase = {
+      ...CASE,
+      validation_case: {
+        ...CASE.validation_case,
+        strategy: { ...CASE.validation_case.strategy, program_version: null },
+      },
+    } satisfies GoldenValidation;
+    const review = vi.fn((_id: number, _request: ReviewGoldenValidationRequest) => of({
+      ...historicalCase,
+      state: "rejected",
+      latest_review: { ...REVIEW, decision: "reject" as const },
+    }));
+    const service = fakeService({ list: vi.fn(() => of([historicalCase])), review });
+    await render(GoldenValidationWorkbenchComponent, {
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: GoldenValidationService, useValue: service },
+      ],
+    });
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByRole("textbox", { name: /Authorized Signal Program version/i }), "ema-v1");
+    await user.click(screen.getByRole("radio", { name: "Reject" }));
+
+    expect(screen.getByRole("status").textContent).toContain("A rejection does not authorize a Signal Program version.");
+    expect(screen.queryByRole("textbox", { name: /Authorized Signal Program version/i })).toBeNull();
+
+    await user.type(screen.getByRole("textbox", { name: "Review note" }), "The evidence is not suitable for promotion.");
+    await user.click(screen.getByRole("button", { name: "Save review" }));
+
+    await waitFor(() => expect(review).toHaveBeenCalledWith(7, expect.objectContaining({
+      decision: "reject",
+    })));
+    expect(review.mock.calls[0]?.[1]).not.toHaveProperty("authorized_program_version");
   });
 });
