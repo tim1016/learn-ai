@@ -15,12 +15,14 @@ if (shardIndex > shardCount) {
   throw new Error("TEST_SHARD_INDEX must not exceed TEST_SHARD_COUNT");
 }
 
+// `shard` is honored from a config file at runtime, but vitest 4's
+// `InlineConfig` type declares it only on the CLI-options surface, so the
+// test block is built in a variable to keep the excess-property check away.
+const testConfig = {
+  maxWorkers: 2,
+  shard: `${shardIndex}/${shardCount}`,
+};
+
 export default defineConfig({
-  test: {
-    maxWorkers: 2,
-    shard: {
-      index: shardIndex,
-      count: shardCount,
-    },
-  },
+  test: testConfig,
 });
