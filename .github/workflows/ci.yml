@@ -260,12 +260,12 @@ jobs:
           fi
 
   python-test-shard:
-    name: Python Test Shard ${{ matrix.shard }}/4
+    name: Python Test Shard ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       # Match the runner's 4 vCPUs so each shard stays well inside the
       # 120-second budget (pytest-xdist reads this variable when `-n auto`
@@ -389,7 +389,7 @@ jobs:
           if [ -n "$extra" ]; then
             read -r -a extra_paths <<< "$extra"
           fi
-          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/4" "${extra_paths[@]}"
+          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/8" "${extra_paths[@]}"
 
       - name: Run scientific proof tests
         run: |
