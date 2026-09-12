@@ -97,6 +97,10 @@ def _corpus_path(key: str) -> Path:
     return matches[0]
 
 
+# Replaying all ten cells for every sealed program takes roughly 30 seconds.
+# The daily suite owns this full-corpus proof; the cheap contract checks below
+# remain in the pull-request gate.
+@pytest.mark.slow
 @pytest.mark.parametrize("key", _SEALED_PROGRAMS)
 def test_validated_settings_corpus_has_a_pinned_trace_root(key: str) -> None:
     """The runtime admission gate (PRD S11.4): a program edit that changes

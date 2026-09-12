@@ -20,9 +20,9 @@
 ## Running Tests
 
 ```bash
-podman exec my-frontend npx ng test                                          # Frontend (Vitest, independent)
-cd Backend.Tests && dotnet test                                              # Backend (needs DB + Python running)
-podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"   # Python (independent)
+podman exec my-frontend npm test                                             # Frontend (120 s hard limit)
+cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"    # Backend PR gate
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests  # Python (120 s hard limit)
 ```
 
 ## Linting

@@ -2,17 +2,17 @@ Run all three test suites and report results.
 
 1. **Frontend** (Vitest — runs in container):
    ```bash
-   podman exec my-frontend npx ng test
+   podman exec my-frontend npm test
    ```
 
-2. **Backend** (.NET xUnit — runs locally, needs DB + Python containers):
+2. **Backend** (.NET xUnit — fast suite):
    ```bash
-   cd Backend.Tests && dotnet test
+   cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"
    ```
 
-3. **Python** (pytest — runs in container):
+3. **Python** (pytest — host venv, 120-second hard limit):
    ```bash
-   podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"
+   cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests
    ```
 
 Run all three. Report a summary table: suite name, pass/fail count, any failures.

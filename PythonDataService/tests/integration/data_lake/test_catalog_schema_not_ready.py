@@ -23,7 +23,7 @@ raised -- both are schema-not-ready symptoms translated by the same
 CatalogSchemaNotReadyError; see its docstring.
 
 This deliberately does NOT reuse the shared POSTGRES_URL instance the rest
-of the suite runs against -- CI's "Python Tests" job migrates that instance
+of the suite runs against -- the daily Python job migrates that instance
 to head (`dotnet ef database update` with no target) before pytest even
 starts, which is exactly the state this test must NOT be in. Instead it
 provisions its own disposable Postgres, pinned one migration behind, and
@@ -32,11 +32,11 @@ container.
 
 Skips cleanly (same convention as test_schema_drift.py /
 test_catalog_write_ops.py) when POSTGRES_URL is unset, or when podman/dotnet
-aren't on PATH -- both true on a plain local checkout. CI's "Python Tests"
-job sets POSTGRES_URL and installs the .NET SDK + dotnet-ef before running
-pytest (see .github/workflows/ci.yml), and GitHub-hosted ubuntu-latest
-runners ship podman preinstalled, so this test actually executes in CI
-rather than skipping silently.
+aren't on PATH -- both true on a plain local checkout. The daily workflow sets
+POSTGRES_URL and installs the .NET SDK + dotnet-ef before running pytest (see
+.github/workflows/daily-tests.yml), and GitHub-hosted ubuntu-latest runners
+ship podman preinstalled, so this test executes daily rather than skipping
+silently.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def _dotnet_subprocess_env() -> dict[str, str]:
 
     CI's "Migrate the data-lake schema" step installs the dotnet-ef global
     tool and exports PATH inline within its own `run:` step -- that export
-    does not persist to the later Python Tests step this pytest process runs
+    does not persist to the later Python test step this pytest process runs
     in, but the tool binary it installed is still on disk. Prepending its
     known install location here makes `dotnet ef` resolve regardless of
     which step (or which local shell) is invoking this test.

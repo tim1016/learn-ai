@@ -2,14 +2,15 @@
 
 ## Commands
 
-| Action     | Command                                              |
-|------------|------------------------------------------------------|
-| Run        | `podman compose up backend` (localhost:5000)         |
-| Test       | `cd Backend.Tests && dotnet test`                    |
-| Build      | `podman exec my-backend dotnet build`                |
-| Lint       | `dotnet format podman.sln --verify-no-changes`       |
-| Logs       | `podman logs -f my-backend`                          |
-| DB shell   | `podman exec -it my-postgres psql -U postgres`       |
+| Action       | Command                                                                        |
+|--------------|--------------------------------------------------------------------------------|
+| Run          | `podman compose up backend` (localhost:5000)                               |
+| Test (PR)    | `cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"` |
+| Test (daily) | `cd Backend.Tests && dotnet test`                                         |
+| Build        | `podman exec my-backend dotnet build`                                      |
+| Lint         | `dotnet format podman.sln --verify-no-changes`                             |
+| Logs         | `podman logs -f my-backend`                                                |
+| DB shell     | `podman exec -it my-postgres psql -U postgres`                             |
 
 Backend depends on **db** and **python-service** containers (health-checked).
 Tests run locally using InMemory EF Core — no containers needed.

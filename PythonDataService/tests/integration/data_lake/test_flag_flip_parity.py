@@ -30,15 +30,15 @@ all the same level. Stating which claim is which is the point:
   This file owns the strong claim, and shows the row-level agreement on the
   imported day for continuity.
 
-**No Postgres.** The CI "Python Tests" job sets no ``POSTGRES_URL``, so every
-live-catalog test skips there (carry-forward A8). A parity proof that only ran
-on a developer's scratch database would be a parity proof that never ran. So
-this file exercises the byte path -- the importer's own verification and
-promote primitives, the readers, the fingerprint function -- and leaves the
-catalog bookkeeping to the gated import tests. What the catalog contributes to
-the fingerprint is the artifact's identity and its ``file_sha256``; both are
-reconstructed here from the bytes actually on disk, which is where the catalog
-gets them from too.
+**Daily infrastructure.** The two-minute pull-request job deliberately has no
+Postgres and defers this directory. The daily suite supplies a disposable,
+migrated catalog, so all eight tests execute there. Seven tests still exercise
+the byte path without consulting the catalog -- the importer's own verification
+and promote primitives, the readers, and the fingerprint function -- which
+keeps those claims independently runnable on a plain developer checkout. What
+the catalog contributes to the fingerprint is the artifact's identity and its
+``file_sha256``; both are reconstructed here from the bytes actually on disk,
+which is where the catalog gets them from too.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPa
     anything malformed, then ``atomic_write_and_promote`` of ``raw_bytes``.
     What is deliberately absent is the catalog -- the claim/lease bookkeeping,
     which decides *whether* to write and records *that* it was written, and
-    which needs a live Postgres this test must run without (see the module
+    which is outside this fixture's byte-equivalence claim (see the module
     docstring). Nothing it does changes a byte.
     """
     # Same location the autouse ``_isolate_data_lake_write_root`` guard in

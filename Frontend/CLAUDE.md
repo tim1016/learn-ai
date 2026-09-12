@@ -5,7 +5,7 @@
 | Action     | Command                                        |
 |------------|------------------------------------------------|
 | Run        | `podman compose up frontend` (localhost:4200)  |
-| Test       | `podman exec my-frontend npx ng test`          |
+| Test       | `podman exec my-frontend npm test`             |
 | Build      | `podman exec my-frontend npx ng build`         |
 | Type-check | `podman exec my-frontend npx tsc --noEmit`     |
 | Lint       | `npx eslint Frontend/src/ --max-warnings 0`    |

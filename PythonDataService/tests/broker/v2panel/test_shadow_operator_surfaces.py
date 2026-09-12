@@ -401,6 +401,9 @@ async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
     assert calls == ["revived"]
 
 
+# The deploy projection consults PostgreSQL-backed validation scope. The daily
+# workflow supplies its disposable migrated database.
+@pytest.mark.slow
 async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
 ) -> None:

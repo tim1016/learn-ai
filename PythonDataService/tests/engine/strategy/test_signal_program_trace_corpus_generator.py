@@ -14,9 +14,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.generate_signal_program_trace_corpus import format_corpus_text, generate_corpus
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/golden"
+
+# Regenerating every sealed program corpus takes roughly 50 seconds by itself.
+# The daily suite retains this numerical-fidelity proof without consuming most
+# of the two-minute pull-request budget.
+pytestmark = pytest.mark.slow
 
 
 def _committed(relative: str) -> dict[str, object]:
