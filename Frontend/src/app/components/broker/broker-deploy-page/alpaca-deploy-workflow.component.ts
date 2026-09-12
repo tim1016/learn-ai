@@ -257,6 +257,7 @@ export class AlpacaDeployWorkflowComponent {
 
   private readonly overrideReasonTouched = signal(false);
   private lastValidationScope: ValidationScopeSeed | null = null;
+  private lastRequestedStrategyKey: string | null = null;
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
     required(ticket.instanceId, { message: 'Enter a deployment name.' });
@@ -518,11 +519,20 @@ export class AlpacaDeployWorkflowComponent {
       }
       const current = untracked(this.ticket);
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
-      const strategy = view?.strategies.find((candidate) => candidate.strategy_key === current.strategyKey)
+      // Route reuse keeps this component alive while its query parameters
+      // change. A newly supplied strategy deep link is explicit operator
+      // intent and must outrank the ticket's prior selection once; later
+      // symbol-scoped catalog refreshes keep the current ticket strategy
+      // ahead of the unchanged link.
+      const requestedSelectionChanged = requestedKey !== null && requestedKey !== this.lastRequestedStrategyKey;
+      const strategy = (requestedSelectionChanged
+        ? view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
+        : view?.strategies.find((candidate) => candidate.strategy_key === current.strategyKey))
         ?? view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
         ?? view?.strategies.find((candidate) => candidate.selectable)
         ?? view?.strategies[0];
       if (!strategy) return;
+      this.lastRequestedStrategyKey = requestedKey;
       // A scoped catalog can legitimately omit the ticket's prior strategy
       // (for example, its Golden evidence only applies to another symbol).
       // Once selection falls through to the request/default candidate, carry

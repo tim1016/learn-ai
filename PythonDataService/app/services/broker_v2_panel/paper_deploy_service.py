@@ -400,6 +400,7 @@ def _strategy_views(
     account_id: str,
     custody_world: CustodyWorld,
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
+    requested_symbol: str | None = None,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -434,6 +435,7 @@ def _strategy_views(
             entries,
             account_id=account_id,
             golden_validation_scopes=golden_validation_scopes,
+            requested_symbol=requested_symbol,
         )
     )
 
@@ -781,6 +783,7 @@ def build_alpaca_paper_deploy_view(
         account_id=account.account_id,
         custody_world=custody_world,
         golden_validation_scopes=golden_validation_scopes,
+        requested_symbol=symbol,
     )
     copy = _deploy_view_copy(account, custody_world)
     readiness_checks = _readiness_checks(

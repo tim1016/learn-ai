@@ -160,6 +160,41 @@ async def test_panel_golden_catalog_uses_uncapped_accepted_lookup(
     }
 
 
+@pytest.mark.asyncio
+async def test_panel_golden_catalog_keeps_other_symbol_scopes_for_fail_closed_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TSLA Golden record must not disappear when the form is scoped to MSFT."""
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    tsla_dossier = SimpleNamespace(
+        latest_review=SimpleNamespace(
+            decision="accept",
+            authorized_program_version=None,
+        ),
+        review_is_current=True,
+        validation_case={
+            "strategy": {
+                "name": "ema_crossover_signal",
+                "program_version": registration.signal_program_contract.program_version,
+            },
+            "symbol": "TSLA",
+            "parameters": _golden_scope("TSLA").parameters,
+        },
+    )
+
+    async def accepted_lookup(operation, **kwargs):
+        assert operation is golden_validation_service.list_latest_accepted_dossiers
+        assert kwargs == {"symbol": None}
+        return [tsla_dossier]
+
+    monkeypatch.setattr(panel_deploy, "with_connection", accepted_lookup)
+
+    assert await panel_deploy._current_golden_validation_scopes("MSFT") == {
+        "ema_crossover_signal": (_golden_scope("TSLA"),)
+    }
+
+
 def test_golden_validation_never_bypasses_program_account_access() -> None:
     rows = _strategy_views(
         [],
@@ -190,6 +225,7 @@ def test_nondefault_golden_scope_is_selectable_with_its_reviewed_configuration(
         account_id=ACCT,
         custody_world="real_paper",
         golden_validation_scopes={"ema_crossover_signal": (_golden_scope(gap=0.75),)},
+        requested_symbol="TSLA",
     )
 
     assert len(rows) == 1
@@ -200,6 +236,24 @@ def test_nondefault_golden_scope_is_selectable_with_its_reviewed_configuration(
     assert row.validation_case_symbol == "TSLA"
     assert row.validation_case_parameters["gap"] == 0.75
     assert row.golden_validation_scope is True
+
+
+def test_other_symbol_golden_scope_blocks_legacy_strategy_wide_fallback() -> None:
+    """Broker deployment cannot reuse a legacy approval outside its Golden ticker."""
+    rows = _strategy_views(
+        [_accepted_deploy_entry()],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope("TSLA"),)},
+        requested_symbol="MSFT",
+    )
+
+    assert rows[0].evidence_status == "blocked"
+    assert rows[0].selectable is False
+    assert rows[0].golden_validation_scope is False
+    assert rows[0].admissible_modes == ("dry_run",)
+    assert rows[0].blocked_explanation is not None
+    assert "Golden Validation" in rows[0].blocked_explanation
 
 
 def test_incomplete_golden_scope_fails_closed_instead_of_using_current_defaults(

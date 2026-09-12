@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -452,6 +452,36 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('ema_crossover_signal');
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
+  });
+
+  it('honors a changed strategy-key query parameter while the deploy route is reused', async () => {
+    const initialQuery = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
+    const queryParamMap = new BehaviorSubject(initialQuery);
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap, snapshot: { queryParamMap: initialQuery } },
+        },
+        { provide: BrokerV2PanelService, useValue: mockService() },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByRole('heading', { name: 'Bot binding' });
+
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+      .toBe('ema_crossover_signal');
+
+    queryParamMap.next(convertToParamMap({ strategy_key: 'sma_crossover' }));
+
+    await vi.waitFor(() => {
+      expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+        .toBe('sma_crossover');
+    });
+    expect(screen.getByRole('button', {
+      name: `About ${SMA_OVERRIDE_STRATEGY.label}: ${SMA_OVERRIDE_STRATEGY.explanation}`,
+    })).toBeTruthy();
   });
 
   it('renders a blocked strategy selectable for Dry Run while Paper stays disabled with the backend reason', async () => {

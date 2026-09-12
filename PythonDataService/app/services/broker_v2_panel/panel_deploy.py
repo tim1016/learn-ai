@@ -59,12 +59,18 @@ logger = logging.getLogger(__name__)
 async def _current_golden_validation_scopes(
     symbol: str | None,
 ) -> dict[str, tuple[GoldenValidationScope, ...]]:
-    """Return current, exact Golden scopes whose program version is runnable."""
-    normalized_symbol = symbol.strip().upper() if symbol is not None else None
+    """Return every current, exact Golden scope whose program version is runnable.
+
+    The catalog applies its requested-symbol filter only after it knows which
+    strategies have Golden evidence. Querying a symbol-filtered subset here
+    would erase that fact and let a legacy strategy-wide validation fall back
+    to broker deployment for a different ticker.
+    """
+    del symbol
     try:
         dossiers = await with_connection(
             golden_validation_service.list_latest_accepted_dossiers,
-            symbol=normalized_symbol,
+            symbol=None,
         )
     except (
         asyncpg.PostgresError,

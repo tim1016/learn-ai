@@ -386,6 +386,17 @@ def _representable_golden_scope(
     return None
 
 
+def _golden_scopes_for_requested_symbol(
+    scopes: tuple[GoldenValidationScope, ...],
+    requested_symbol: str | None,
+) -> tuple[GoldenValidationScope, ...]:
+    """Keep only exact Golden scopes for the deploy form's requested ticker."""
+    if requested_symbol is None:
+        return scopes
+    normalized_symbol = requested_symbol.strip().upper()
+    return tuple(scope for scope in scopes if scope.symbol.strip().upper() == normalized_symbol)
+
+
 def _active_canary_pairings_snapshot() -> frozenset[tuple[str, str]]:
     """Resolve one immutable pairing view for the complete catalog response."""
     source_pairings = canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS
@@ -401,6 +412,7 @@ def compose_strategy_catalog(
     *,
     account_id: str,
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
+    requested_symbol: str | None = None,
 ) -> tuple[CatalogEntry, ...]:
     """Compose the strategy catalog from the definition and validation facets.
 
@@ -423,7 +435,10 @@ def compose_strategy_catalog(
         event = entry.current_flag_event if entry is not None else None
         reviewed_scopes = golden_scopes.get(strategy_key, ())
         has_golden_validation = bool(reviewed_scopes)
-        golden_scope = _representable_golden_scope(strategy_key, reviewed_scopes)
+        golden_scope = _representable_golden_scope(
+            strategy_key,
+            _golden_scopes_for_requested_symbol(reviewed_scopes, requested_symbol),
+        )
         has_current_event = (
             entry is not None
             and entry.validation_state == "validated"
