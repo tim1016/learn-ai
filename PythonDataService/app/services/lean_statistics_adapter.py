@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.engine.results.lean_statistics import (
+    LEAN_STATISTICS_REPRODUCTION_VERSION,
     LEAN_STATISTICS_SOURCE_COMMIT,
     format_lean_statistics_summary,
     reproduce_lean_total_performance,
@@ -158,7 +159,10 @@ def _lean_native_parity_envelope(
         / "interest-rate.csv"
     )
     base: dict[str, Any] = {
-        "contract_id": f"lean-native-statistics-{LEAN_STATISTICS_SOURCE_COMMIT}",
+        "contract_id": (
+            f"lean-native-statistics-v{LEAN_STATISTICS_REPRODUCTION_VERSION}-"
+            f"{LEAN_STATISTICS_SOURCE_COMMIT}"
+        ),
         "source_commit": LEAN_STATISTICS_SOURCE_COMMIT,
         "absolute_tolerance": 0.0000500001,
         "native_metric_count": 0,

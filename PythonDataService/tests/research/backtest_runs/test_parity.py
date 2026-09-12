@@ -9,7 +9,11 @@ from datetime import date
 import pytest
 
 from app.research.backtest_runs import repository as repo
-from app.research.backtest_runs.parity import compute_parity_verdict, settle_parity_for_lean_run
+from app.research.backtest_runs.parity import (
+    compute_parity_verdict,
+    read_native_metric_parity,
+    settle_parity_for_lean_run,
+)
 from app.research.backtest_runs.records import record_from_payload
 from app.research.backtest_runs.repository import RunDetail, TradeRow
 from app.utils.session_anchors import et_midnight_ms
@@ -209,6 +213,14 @@ def test_no_divergences_agree_with_every_receipt_matching() -> None:
         "fill_price_atol": "0.01"
     }
     assert verdict["divergences"] == [] and verdict["counts_by_category"] == {} and verdict["computed_at_ms"] > 0
+
+
+def test_saved_unversioned_native_receipt_keeps_its_original_provenance() -> None:
+    receipt = read_native_metric_parity(json.dumps(MATCHING_NATIVE_STATISTICS))
+
+    assert receipt.status == "match"
+    assert receipt.contract_id == "lean-native-statistics-commit"
+    assert receipt.source_commit == "commit"
 
 
 def test_a_trade_divergence_freezes_diverged_with_category_counts() -> None:

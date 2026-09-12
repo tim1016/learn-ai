@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.results.lean_statistics import (
+    _reproduce_lean_trade_statistics,
     format_lean_statistics_summary,
     reproduce_lean_total_performance,
 )
@@ -43,6 +44,51 @@ def _reproduced(normalized: dict) -> dict:
         normalized,
         interest_rate_csv=FIXTURE / "workspace" / "data" / "alternative" / "interest-rate" / "usa" / "interest-rate.csv",
     )
+
+
+def _closed_trade(*, duration_minutes: int, profit_loss: str, index: int) -> dict:
+    entry_ms = 1_700_000_000_000 + index * 10_000_000
+    return {
+        "profitLoss": profit_loss,
+        "mae": "-1",
+        "mfe": "1",
+        "entryTime": entry_ms,
+        "exitTime": entry_ms + duration_minutes * 60_000,
+        "duration": f"00:{duration_minutes:02d}:00",
+        "endTradeDrawdown": "0",
+        "totalFees": "0",
+    }
+
+
+def test_even_duration_medians_use_leans_upper_middle_value() -> None:
+    trades = [
+        _closed_trade(duration_minutes=1, profit_loss="1", index=0),
+        _closed_trade(duration_minutes=2, profit_loss="-1", index=1),
+        _closed_trade(duration_minutes=3, profit_loss="1", index=2),
+        _closed_trade(duration_minutes=4, profit_loss="-1", index=3),
+    ]
+
+    statistics = _reproduce_lean_trade_statistics(trades)
+
+    assert statistics["medianTradeDuration"] == "00:03:00"
+    assert statistics["medianWinningTradeDuration"] == "00:03:00"
+    assert statistics["medianLosingTradeDuration"] == "00:04:00"
+
+
+def test_odd_duration_medians_keep_the_single_middle_value() -> None:
+    trades = [
+        _closed_trade(duration_minutes=1, profit_loss="1", index=0),
+        _closed_trade(duration_minutes=2, profit_loss="-1", index=1),
+        _closed_trade(duration_minutes=3, profit_loss="1", index=2),
+        _closed_trade(duration_minutes=4, profit_loss="-1", index=3),
+        _closed_trade(duration_minutes=5, profit_loss="1", index=4),
+    ]
+
+    statistics = _reproduce_lean_trade_statistics(trades)
+
+    assert statistics["medianTradeDuration"] == "00:03:00"
+    assert statistics["medianWinningTradeDuration"] == "00:03:00"
+    assert statistics["medianLosingTradeDuration"] == "00:04:00"
 
 
 def test_oracle_artifact_hashes_match_manifest() -> None:
@@ -128,4 +174,7 @@ def test_persisted_native_parity_receipt_is_a_complete_match(tmp_path: Path) -> 
     assert receipt["native_metric_count"] == 66
     assert receipt["formatted_metric_count"] == 25
     assert receipt["divergences"] == []
+    assert receipt["contract_id"] == (
+        "lean-native-statistics-v2-261366a7e26ae942df858ab20df4fef8fa07de67"
+    )
     assert receipt["source_commit"] == "261366a7e26ae942df858ab20df4fef8fa07de67"

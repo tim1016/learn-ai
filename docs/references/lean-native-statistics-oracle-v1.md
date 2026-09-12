@@ -144,7 +144,9 @@ LEAN sentinel behavior is retained: a positive numerator with no denominator
 can produce `10`, as defined in the pinned source. Average durations reproduce
 the C# online `TimeSpan` update, including the intermediate double conversion
 and tick truncation; a simple arithmetic mean differs by microseconds and is
-not accepted.
+not accepted. Duration medians use LEAN's QuickSelect index `n / 2`: odd-sized
+subsets select their sole middle value, while even-sized subsets select the
+upper-middle value without interpolation.
 
 ## Rounding and tolerance
 
@@ -219,7 +221,9 @@ npx ng test --watch=false \
 The paired verdict is `agree` only when the input fixture, trades, readiness
 signature, and LEAN-native calculation receipt all match. Historical rows are
 not silently backfilled; create a new Compatibility pair to obtain these
-receipts.
+receipts. Reproduction contract v2 identifies the corrected duration-median
+semantics as `lean-native-statistics-v2-<source-commit>`; saved v1-era rows keep
+their original unversioned contract IDs and values.
 
 Local acceptance pair 95/96 exercised the complete live path on 2026-08-08:
 same bar-store fixture, five trades with no execution divergence, 66 native

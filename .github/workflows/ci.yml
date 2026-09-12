@@ -262,10 +262,53 @@ jobs:
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      # `tests/broker` is in the baseline deliberately. It was omitted until
+      # #1728, and the diff-driven "extra" step below could not compensate: it
+      # matches a test file only by an app-file *stem*, so a change to the Clerk
+      # custody seam never pulled in `test_exit.py` / `test_folds_execution.py` /
+      # `test_projections.py` / `test_reconcile.py`, and nothing can ever pull in
+      # `test_panel_router.py` because no `app/**/panel_router.py` exists (that
+      # router is `app/routers/broker_v2_panel.py`). 13 tests were consequently
+      # red on master's tip while CI reported green.
+      PYTHON_FAST_BASELINE_TEST_DIRS: >-
+        tests/unit tests/indicators tests/edge tests/utils
+        tests/engine tests/routers tests/schemas tests/services tests/operator
+        tests/contracts tests/broker
+      # Numerical evidence is a baseline obligation, not a change-detection
+      # heuristic. The fixture path exercises the committed reference outputs
+      # (the metadata-only manifest test has its own job below); the reconciler
+      # and fast cross-engine cells prove the core comparison paths.
+      PYTHON_SCIENTIFIC_PROOF_TEST_PATHS: >-
+        tests/fixtures
+        tests/research/parity/test_qc_reconciler.py
+        tests/research/parity/test_cross_engine_study.py
+      # asyncpg DSN — see `POSTGRES_URL` in `PythonDataService/app/config.py`
+      # and `catalog_client.init_pool`. Same postgres:16 service as
+      # `backend-test`, same credentials, so both jobs' migrated schemas agree.
+      POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # #1887: tests/conftest.py's `_guard_data_lake_catalog_truncation`
+      # refuses to let a `clean_artifacts`-style fixture TRUNCATE
+      # DataLakeArtifacts/DataLakeRuns unless the target is attested
+      # ephemeral out of band — POSTGRES_URL alone can't prove it, since this
+      # job's disposable `postgres` service above resolves to the exact same
+      # `postgres://postgres:...@localhost:5432/postgres` a developer's real
+      # `my-postgres` dev container would. This service container is created
+      # fresh for this job and destroyed after, so it genuinely is safe to
+      # wipe — the attestation below just says so explicitly.
+      POSTGRES_URL_IS_EPHEMERAL: "1"
     defaults:
       run:
         working-directory: PythonDataService
@@ -309,22 +352,24 @@ jobs:
           # Deleted sources cannot own tests in the current checkout and must not
           # contribute paths that pytest can no longer collect.
           changed=$(git diff --name-only --diff-filter=ACMRT "$range" || true)
-          # Baseline dirs are always run; skip them here to avoid duplicate paths.
-          mapfile -t baseline_dirs < <(cd PythonDataService && python -m scripts.run_fast_tests --list-baseline)
-          baseline_pattern=$(
-            printf '%s\n' "${baseline_dirs[@]}" \
+          # Baseline and scientific-proof paths are always run; skip them here
+          # to avoid duplicate collection through the change-driven extras.
+          read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
+          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
+          always_run_pattern=$(
+            printf '%s\n' "${baseline_dirs[@]}" "${scientific_proof_paths[@]}" \
               | sed 's#^#PythonDataService/#' \
               | sed 's#[][(){}.^$*+?|\\]#\\&#g' \
               | paste -sd'|' -
           )
-          baseline_pattern="^(${baseline_pattern})(/|$)"
+          always_run_pattern="^(${always_run_pattern})(/|$)"
           extra=""
-          # (1) Directly-changed test files outside the baseline dirs.
+          # (1) Directly-changed test files outside the always-run paths.
           while IFS= read -r p; do
             [ -z "$p" ] && continue
             case "$p" in
               PythonDataService/tests/*test_*.py)
-                if [[ ! "$p" =~ $baseline_pattern ]]; then
+                if [[ ! "$p" =~ $always_run_pattern ]]; then
                   rel="${p#PythonDataService/}"
                   [ -f "PythonDataService/$rel" ] && extra="$extra $rel"
                 fi
@@ -344,7 +389,7 @@ jobs:
                 stem=$(basename "$p" .py)
                 [ "$stem" = "__init__" ] && continue
                 while IFS= read -r t; do
-                  if [[ ! "PythonDataService/$t" =~ $baseline_pattern ]]; then
+                  if [[ ! "PythonDataService/$t" =~ $always_run_pattern ]]; then
                     extra="$extra $t"
                   fi
                 done < <(cd PythonDataService && find tests -type f \( -name "test_${stem}.py" -o -name "test_${stem}_*.py" \) 2>/dev/null || true)
@@ -377,15 +422,21 @@ jobs:
           fi
           python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/4" "${extra_paths[@]}"
 
-  python-test:
-    name: Python Tests
-    if: ${{ always() }}
-    needs: python-test-shard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every Python shard to pass
-        if: ${{ needs.python-test-shard.result != 'success' }}
-        run: exit 1
+      - name: Run scientific proof tests
+        run: |
+          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
+          python -m pytest "${scientific_proof_paths[@]}" --ignore=tests/fixtures/test_golden_manifest.py -n auto -v -m "not slow" --tb=short
+
+      # Postgres-gated lake tests (catalog write ops, cache import, ensure_data,
+      # schema drift) — see #1862. These skipped in CI for lack of POSTGRES_URL
+      # until this job gained a database above. Run serially (no -n auto): the
+      # shared TRUNCATE-based cleanup fixture is not safe under concurrent
+      # xdist workers hitting one Postgres instance. Both directories run
+      # unconditionally, not diff-driven, so this step's coverage doesn't
+      # depend on the change-detection heuristic above matching correctly.
+      - name: Run Postgres-gated data-lake tests (serial)
+        run: |
+          python -m pytest tests/unit/data_lake tests/integration/data_lake -v -m "not slow" --tb=short
 
   alpaca-sqlite-qualification-smoke:
     name: Alpaca SQLite Qualification Smoke
