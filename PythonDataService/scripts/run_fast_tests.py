@@ -40,8 +40,16 @@ DAILY_ONLY_PATHS = (
 )
 
 
-def pytest_command(extra_paths: Sequence[str]) -> list[str]:
+def pytest_command(
+    extra_paths: Sequence[str],
+    *,
+    shard_index: int | None = None,
+    shard_count: int | None = None,
+) -> list[str]:
     """Build the bounded PR-suite command."""
+    if (shard_index is None) != (shard_count is None):
+        raise ValueError("shard_index and shard_count must be provided together")
+
     command = [
         sys.executable,
         "-m",
@@ -52,6 +60,17 @@ def pytest_command(extra_paths: Sequence[str]) -> list[str]:
     for path in DAILY_ONLY_PATHS:
         command.append(f"--ignore={path}")
     command.extend(("-n", "auto", "-q", "-m", "not slow", "--tb=short"))
+    if shard_index is not None and shard_count is not None:
+        command.extend(
+            (
+                "-p",
+                "scripts.pytest_shard",
+                "--pr-shard-index",
+                str(shard_index),
+                "--pr-shard-count",
+                str(shard_count),
+            )
+        )
     return command
 
 
@@ -67,10 +86,19 @@ def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def run_fast_tests(extra_paths: Sequence[str]) -> int:
+def run_fast_tests(
+    extra_paths: Sequence[str],
+    *,
+    shard_index: int | None = None,
+    shard_count: int | None = None,
+) -> int:
     """Run pytest and return 124 when the suite exceeds two minutes."""
     process = subprocess.Popen(
-        pytest_command(extra_paths),
+        pytest_command(
+            extra_paths,
+            shard_index=shard_index,
+            shard_count=shard_count,
+        ),
         start_new_session=os.name == "posix",
     )
     try:
@@ -89,6 +117,11 @@ def run_fast_tests(extra_paths: Sequence[str]) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--shard",
+        metavar="INDEX/COUNT",
+        help="run one deterministic, one-based CI shard",
+    )
+    parser.add_argument(
         "--list-baseline",
         action="store_true",
         help="write the baseline paths, one per line, for CI change detection",
@@ -100,8 +133,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write("\n".join(FAST_TEST_PATHS) + "\n")
         return 0
 
+    shard_index: int | None = None
+    shard_count: int | None = None
+    if args.shard is not None:
+        try:
+            index_text, count_text = args.shard.split("/", maxsplit=1)
+            shard_index = int(index_text)
+            shard_count = int(count_text)
+        except ValueError:
+            parser.error("--shard must use INDEX/COUNT with integer values")
+        if shard_count < 1 or not 1 <= shard_index <= shard_count:
+            parser.error("--shard INDEX must be between 1 and COUNT")
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    return run_fast_tests(args.test_paths)
+    return run_fast_tests(
+        args.test_paths,
+        shard_index=shard_index,
+        shard_count=shard_count,
+    )
 
 
 if __name__ == "__main__":

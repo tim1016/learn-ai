@@ -88,12 +88,20 @@ jobs:
       - run: npm run codegen:check
       - run: npx tsc --noEmit
 
-  frontend-test:
-    name: Frontend Tests
+  frontend-test-shard:
+    name: Frontend Test Shard ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     defaults:
       run:
         working-directory: Frontend
+    env:
+      NG_BUILD_MAX_WORKERS: "2"
+      TEST_SHARD_COUNT: "3"
+      TEST_SHARD_INDEX: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -102,7 +110,17 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm test -- --runner-config=vitest.ci.config.ts
+
+  frontend-test:
+    name: Frontend Tests
+    if: ${{ always() }}
+    needs: frontend-test-shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every frontend shard to pass
+        if: ${{ needs.frontend-test-shard.result != 'success' }}
+        run: exit 1
 
   backend-lint:
     name: Backend Lint
@@ -241,12 +259,18 @@ jobs:
             exit 1
           fi
 
-  python-test:
-    name: Python Tests
+  python-test-shard:
+    name: Python Test Shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: PythonDataService
+    env:
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -351,7 +375,17 @@ jobs:
           if [ -n "$extra" ]; then
             read -r -a extra_paths <<< "$extra"
           fi
-          python -m scripts.run_fast_tests "${extra_paths[@]}"
+          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/4" "${extra_paths[@]}"
+
+  python-test:
+    name: Python Tests
+    if: ${{ always() }}
+    needs: python-test-shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Python shard to pass
+        if: ${{ needs.python-test-shard.result != 'success' }}
+        run: exit 1
 
   alpaca-sqlite-qualification-smoke:
     name: Alpaca SQLite Qualification Smoke

@@ -10,6 +10,7 @@ CI_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/ci.yml"
 DAILY_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/daily-tests.yml"
 E2E_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/frontend-e2e.yml"
 FRONTEND_BUDGET_RUNNER = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
+FRONTEND_CI_CONFIG = REPOSITORY_ROOT / "Frontend/vitest.ci.config.ts"
 FAST_TEST_COMMAND_SOURCES = (
     CI_WORKFLOW,
     REPOSITORY_ROOT / ".claude/CLAUDE.md",
@@ -58,7 +59,7 @@ def test_fast_test_commands_filter_by_marker_not_name() -> None:
 def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
     from scripts.run_fast_tests import DAILY_ONLY_PATHS, TEST_BUDGET_SECONDS, pytest_command
 
-    command = pytest_command(())
+    command = pytest_command((), shard_index=1, shard_count=4)
 
     assert TEST_BUDGET_SECONDS == 120
     assert command[0:3] == [sys.executable, "-m", "pytest"]
@@ -66,7 +67,45 @@ def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
     assert command[marker_index + 1] == "not slow"
     for path in DAILY_ONLY_PATHS:
         assert f"--ignore={path}" in command
+    assert command[-4:] == ["--pr-shard-index", "1", "--pr-shard-count", "4"]
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_python_pr_shards_are_stable_complete_and_disjoint() -> None:
+    from scripts.pytest_shard import belongs_to_shard
+
+    nodeids = [f"tests/test_example.py::test_case[{index}]" for index in range(100)]
+    allocations = {
+        nodeid: [
+            shard_index
+            for shard_index in range(1, 5)
+            if belongs_to_shard(nodeid, shard_index=shard_index, shard_count=4)
+        ]
+        for nodeid in nodeids
+    }
+
+    assert all(shards and len(shards) == 1 for shards in allocations.values())
+    assert allocations == {
+        nodeid: [
+            shard_index
+            for shard_index in range(1, 5)
+            if belongs_to_shard(nodeid, shard_index=shard_index, shard_count=4)
+        ]
+        for nodeid in reversed(nodeids)
+    }
+
+
+def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
+    ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
+    frontend_config = FRONTEND_CI_CONFIG.read_text(encoding="utf-8")
+
+    assert "python-test-shard:" in ci_contents
+    assert "shard: [1, 2, 3, 4]" in ci_contents
+    assert 'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/4"' in ci_contents
+    assert "frontend-test-shard:" in ci_contents
+    assert "shard: [1, 2, 3]" in ci_contents
+    assert "--runner-config=vitest.ci.config.ts" in ci_contents
+    assert "shard:" in frontend_config
 
 
 def test_daily_workflow_owns_deferred_python_coverage() -> None:
