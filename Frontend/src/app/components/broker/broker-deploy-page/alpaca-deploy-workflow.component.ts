@@ -543,10 +543,23 @@ export class AlpacaDeployWorkflowComponent {
       const scopeChanged = !sameValidationScope(this.lastValidationScope, nextValidationScope);
       const priorParametersRemainIntact = this.lastValidationScope !== null
         && sameParameterValues(current.parameters, this.lastValidationScope.parameters);
-      if (strategyKey !== current.strategyKey || (scopeChanged && priorParametersRemainIntact)) {
+      const strategyChanged = strategyKey !== current.strategyKey;
+      if (strategyChanged) {
+        // Route-driven selection is semantically the same strategy switch as
+        // the binding-strip control: a prior strategy's admission result and
+        // evidence-only acknowledgement must never carry into the new one.
+        this.clearAdmission();
+        this.overrideReasonTouched.set(false);
         this.ticket.update((ticket) => ({
           ...ticket,
           strategyKey,
+          parameters: { ...strategy.validation_case_parameters },
+          overrideAcknowledged: false,
+          overrideReason: '',
+        }));
+      } else if (scopeChanged && priorParametersRemainIntact) {
+        this.ticket.update((ticket) => ({
+          ...ticket,
           parameters: { ...strategy.validation_case_parameters },
         }));
       }
