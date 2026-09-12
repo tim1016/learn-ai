@@ -1,5 +1,11 @@
 import { defineConfig } from "vitest/config";
 
+// The Angular test builder executes this config under Node, but @types/node is
+// not a dependency, so declare the one Node global this file touches.
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 function positiveInteger(name: string): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   if (!Number.isInteger(value) || value < 1) {

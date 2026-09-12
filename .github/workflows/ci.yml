@@ -267,10 +267,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     env:
-      # Cap the shards' `-n auto` fan-out: GitHub runners expose few cores and
-      # four shard jobs already parallelize the suite (pytest-xdist reads this
-      # variable when `-n auto` is used).
-      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      # Match the runner's 4 vCPUs so each shard stays well inside the
+      # 120-second budget (pytest-xdist reads this variable when `-n auto`
+      # is used; at 2 workers shards measured 95-120s on CI).
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
       # Numerical evidence is a baseline obligation, not a change-detection
       # heuristic. The fixture path exercises the committed reference outputs
       # (the metadata-only manifest test has its own job below); the reconciler

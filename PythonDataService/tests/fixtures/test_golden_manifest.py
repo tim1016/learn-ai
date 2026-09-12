@@ -342,6 +342,13 @@ def test_canonical_callables_importable() -> None:
 
     Supports both top-level callables (``compute_information_coefficient``)
     and class methods (``OptionsFeatures.compute_iv_rank``).
+
+    The PR manifest job installs only the manifest tooling (pydantic,
+    jsonschema, pyarrow, pytest), so a canonical module whose *third-party*
+    dependency is missing is skipped here rather than failed — that says
+    nothing about manifest staleness, and the daily full suite runs this
+    same check with every dependency installed. A missing or renamed repo
+    module, or a missing callable attribute, is always a failure.
     """
     import importlib
     import sys
@@ -354,6 +361,7 @@ def test_canonical_callables_importable() -> None:
     svc_root = GOLDEN_DIR.parent.parent.parent  # PythonDataService/
     sys.path.insert(0, str(svc_root))
 
+    repo_top_level = {"app", "scripts", "tests"}
     failures: list[str] = []
     for fixture in data.get("fixtures", []):
         if fixture.get("status") == "planned":
@@ -374,6 +382,15 @@ def test_canonical_callables_importable() -> None:
 
             try:
                 mod_obj = importlib.import_module(module_dotted)
+            except ModuleNotFoundError as e:
+                if e.name and e.name.split(".")[0] not in repo_top_level:
+                    # Third-party dependency absent from this minimal
+                    # environment — defer importability to the daily suite.
+                    continue
+                failures.append(
+                    f"{fid}: cannot import module {module_dotted!r}: {e}"
+                )
+                continue
             except Exception as e:
                 failures.append(
                     f"{fid}: cannot import module {module_dotted!r}: {e}"
