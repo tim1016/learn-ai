@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import logging
 
+import asyncpg
+
 from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
 )
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.golden_validation import service as golden_validation_service
+from app.research.persistence.db import with_connection
 from app.schemas.account_authority import world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
@@ -48,6 +53,54 @@ from app.services.strategy_validation_manifest import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _current_golden_validation_symbols(symbol: str | None) -> dict[str, str]:
+    """Return reviewed Golden scopes whose program version is still runnable."""
+    normalized_symbol = symbol.strip().upper() if symbol is not None else None
+    try:
+        dossiers = await with_connection(
+            golden_validation_service.list_latest_accepted_dossiers,
+            symbol=normalized_symbol,
+        )
+    except (
+        asyncpg.PostgresError,
+        golden_validation_service.GoldenValidationError,
+        KeyError,
+        OSError,
+        TimeoutError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        logger.warning("Golden Validation catalog projection unavailable: %s", type(exc).__name__)
+        return {}
+
+    current: dict[str, str] = {}
+    for dossier in dossiers:
+        review = dossier.latest_review
+        strategy = dossier.validation_case.get("strategy")
+        strategy_name = strategy.get("name") if isinstance(strategy, dict) else None
+        recorded_version = strategy.get("program_version") if isinstance(strategy, dict) else None
+        authorized_version = (
+            review.authorized_program_version
+            if review is not None and review.decision == "accept"
+            else None
+        )
+        registration = _STRATEGY_REGISTRY.get(strategy_name) if isinstance(strategy_name, str) else None
+        contract = registration.signal_program_contract if registration is not None else None
+        case_symbol = dossier.validation_case.get("symbol")
+        if (
+            review is None
+            or review.decision != "accept"
+            or dossier.review_is_current is not True
+            or not isinstance(strategy_name, str)
+            or contract is None
+            or contract.program_version != (recorded_version or authorized_version)
+            or not isinstance(case_symbol, str)
+        ):
+            continue
+        current.setdefault(strategy_name, case_symbol.upper())
+    return current
 
 
 async def get_alpaca_paper_deploy_view(
@@ -108,6 +161,7 @@ async def get_alpaca_paper_deploy_view(
         validation_entries,
         symbol=symbol,
         custody_world=custody_world,
+        golden_validation_symbols=await _current_golden_validation_symbols(symbol),
     )
 
 

@@ -12013,6 +12013,46 @@
         "title": "DeployBotRequest",
         "type": "object"
       },
+      "DesignateGoldenRunRequest": {
+        "properties": {
+          "command_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Command Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "rationale": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "source_run_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Source Run Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_run_id",
+          "command_id",
+          "rationale"
+        ],
+        "title": "DesignateGoldenRunRequest",
+        "type": "object"
+      },
       "DeskAccountChoiceResponse": {
         "additionalProperties": false,
         "properties": {
@@ -12626,6 +12666,41 @@
           }
         },
         "title": "EmaCrossover2BpsStrategyParametersModel",
+        "type": "object"
+      },
+      "EmaCrossoverSignalStrategyParametersModel": {
+        "additionalProperties": false,
+        "description": "All four resolved entry gates accepted by the canonical EMA twin.",
+        "properties": {
+          "gap": {
+            "default": 0.2,
+            "minimum": 0.0,
+            "title": "Gap",
+            "type": "number"
+          },
+          "gap_bps": {
+            "default": 0.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Gap Bps",
+            "type": "number"
+          },
+          "rsi_max": {
+            "default": 70.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Max",
+            "type": "number"
+          },
+          "rsi_min": {
+            "default": 50.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Min",
+            "type": "number"
+          }
+        },
+        "title": "EmaCrossoverSignalStrategyParametersModel",
         "type": "object"
       },
       "EngineBacktestJobRequest": {
@@ -15641,6 +15716,314 @@
           "fixtures"
         ],
         "title": "GoldenFixturesCatalog",
+        "type": "object"
+      },
+      "GoldenReviewResponse": {
+        "properties": {
+          "authorized_program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized Program Version"
+          },
+          "classification": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine_agreement",
+                  "reviewed_deviations",
+                  "manual_override"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification"
+          },
+          "decision": {
+            "enum": [
+              "accept",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "evidence_state": {
+            "title": "Evidence State",
+            "type": "string"
+          },
+          "expected_evidence_revision": {
+            "title": "Expected Evidence Revision",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "quantconnect_backtest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantconnect Backtest Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reviewed_at_ms": {
+            "title": "Reviewed At Ms",
+            "type": "integer"
+          },
+          "reviewed_by": {
+            "title": "Reviewed By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "decision",
+          "classification",
+          "evidence_state",
+          "reason",
+          "quantconnect_backtest_id",
+          "authorized_program_version",
+          "reviewed_by",
+          "reviewed_at_ms",
+          "expected_evidence_revision"
+        ],
+        "title": "GoldenReviewResponse",
+        "type": "object"
+      },
+      "GoldenValidationApplicabilityRequest": {
+        "properties": {
+          "data_policy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Policy"
+          },
+          "execution": {
+            "title": "Execution",
+            "type": "object"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "object"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "strategy_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "window": {
+            "title": "Window",
+            "type": "object"
+          }
+        },
+        "required": [
+          "strategy_name",
+          "symbol",
+          "parameters",
+          "window",
+          "data_policy",
+          "execution"
+        ],
+        "title": "GoldenValidationApplicabilityRequest",
+        "type": "object"
+      },
+      "GoldenValidationApplicabilityResponse": {
+        "properties": {
+          "applicable": {
+            "title": "Applicable",
+            "type": "boolean"
+          },
+          "classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "golden_validation_id": {
+            "title": "Golden Validation Id",
+            "type": "integer"
+          },
+          "mismatched_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mismatched Fields",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "golden_validation_id",
+          "applicable",
+          "state",
+          "classification",
+          "mismatched_fields",
+          "explanation"
+        ],
+        "title": "GoldenValidationApplicabilityResponse",
+        "type": "object"
+      },
+      "GoldenValidationResponse": {
+        "properties": {
+          "designated_at_ms": {
+            "title": "Designated At Ms",
+            "type": "integer"
+          },
+          "designated_by": {
+            "title": "Designated By",
+            "type": "string"
+          },
+          "evidence_revision": {
+            "title": "Evidence Revision",
+            "type": "string"
+          },
+          "evidence_state": {
+            "title": "Evidence State",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "latest_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenReviewResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parity_evidence": {
+            "title": "Parity Evidence",
+            "type": "object"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "review_is_current": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Is Current"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenReviewResponse"
+            },
+            "title": "Reviews",
+            "type": "array"
+          },
+          "source_run_id": {
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_name": {
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "validation_case": {
+            "title": "Validation Case",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "source_run_id",
+          "label",
+          "strategy_name",
+          "symbol",
+          "rationale",
+          "designated_by",
+          "designated_at_ms",
+          "state",
+          "validation_case",
+          "evidence_state",
+          "evidence_revision",
+          "parity_evidence",
+          "latest_review",
+          "review_is_current",
+          "reviews"
+        ],
+        "title": "GoldenValidationResponse",
         "type": "object"
       },
       "GraduationCriterionResponse": {
@@ -28985,6 +29368,68 @@
         "title": "RetireReplaceAction",
         "type": "object"
       },
+      "ReviewGoldenRunRequest": {
+        "properties": {
+          "authorized_program_version": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized Program Version"
+          },
+          "command_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Command Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "accept",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "expected_evidence_revision": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Evidence Revision",
+            "type": "string"
+          },
+          "quantconnect_backtest_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantconnect Backtest Id"
+          },
+          "reason": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "expected_evidence_revision",
+          "decision",
+          "reason"
+        ],
+        "title": "ReviewGoldenRunRequest",
+        "type": "object"
+      },
       "RevisionCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -38249,10 +38694,14 @@
                 "$ref": "#/components/schemas/EmaCrossover2BpsStrategyParametersModel"
               },
               {
+                "$ref": "#/components/schemas/EmaCrossoverSignalStrategyParametersModel"
+              },
+              {
                 "type": "null"
               }
             ],
-            "description": "Validated strategy-logic parameters for a bundled trusted template. Currently accepted only by ema_crossover_2_bps; omitted values use that template's canonical 2/50/70 defaults."
+            "description": "Validated strategy-logic parameters for a bundled trusted template. Accepted by the parameterized EMA twins; omitted values use that template's declared defaults.",
+            "title": "Strategy Parameters"
           },
           "symbol": {
             "anyOf": [
@@ -53786,6 +54235,358 @@
         "summary": "List Features",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/golden-validations": {
+      "get": {
+        "operationId": "list_golden_runs_api_research_golden_validations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "strategy_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenValidationResponse"
+                  },
+                  "title": "Response List Golden Runs Api Research Golden Validations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Golden Runs",
+        "tags": [
+          "research-golden-validation"
+        ]
+      },
+      "post": {
+        "operationId": "designate_golden_run_api_research_golden_validations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignateGoldenRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Designate Golden Run",
+        "tags": [
+          "research-golden-validation"
+        ]
+      }
+    },
+    "/api/research/golden-validations/{golden_run_id}": {
+      "get": {
+        "operationId": "get_golden_run_api_research_golden_validations__golden_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "golden_run_id",
+            "required": true,
+            "schema": {
+              "title": "Golden Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Golden Run",
+        "tags": [
+          "research-golden-validation"
+        ]
+      }
+    },
+    "/api/research/golden-validations/{golden_run_id}/applicability": {
+      "post": {
+        "operationId": "assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "golden_run_id",
+            "required": true,
+            "schema": {
+              "title": "Golden Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoldenValidationApplicabilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenValidationApplicabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assess Golden Run",
+        "tags": [
+          "research-golden-validation"
+        ]
+      }
+    },
+    "/api/research/golden-validations/{golden_run_id}/reviews": {
+      "post": {
+        "operationId": "review_golden_run_api_research_golden_validations__golden_run_id__reviews_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "golden_run_id",
+            "required": true,
+            "schema": {
+              "title": "Golden Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewGoldenRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Golden Run",
+        "tags": [
+          "research-golden-validation"
         ]
       }
     },

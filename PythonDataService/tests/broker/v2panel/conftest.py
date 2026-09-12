@@ -189,6 +189,15 @@ def deploy_app(
         "load_strategy_validation_entries",
         lambda _registry: validation_entries,
     )
+
+    async def no_golden_validations(_symbol: str | None) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(
+        panel_deploy,
+        "_current_golden_validation_symbols",
+        no_golden_validations,
+    )
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]

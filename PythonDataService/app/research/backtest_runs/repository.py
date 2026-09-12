@@ -52,9 +52,9 @@ PARITY_FAILURE_STATUSES: frozenset[str] = frozenset({"run_failed", "persist_fail
 # "these statuses are provisional" but "a verdict with no companion behind it
 # is" (ADR 0058, amended by #1977).
 PARITY_SUPERSEDABLE_STATUSES: frozenset[str] = frozenset({"pending"}) | PARITY_FAILURE_STATUSES
-PARITY_VERDICT_VERSION = 2
+PARITY_VERDICT_VERSION = 3
 
-DeleteOutcome = Literal["deleted", "not_found", "recency_member"]
+DeleteOutcome = Literal["deleted", "not_found", "recency_member", "golden_validation_evidence"]
 
 
 def _may_be_superseded(existing: Mapping[str, Any]) -> bool:
@@ -79,6 +79,8 @@ class RunRow:
     id: int
     source: str
     strategy_name: str
+    program_version: str | None
+    execution_config_json: str | None
     symbol: str
     lean_run_id: str | None
     parameters_json: str
@@ -187,7 +189,8 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
             run_id = await conn.fetchval(
                 """
                 INSERT INTO research_backtest_runs (
-                    source, requested_engine, lean_run_id, parity_group_id, strategy_name, symbol, parameters_json,
+                    source, requested_engine, lean_run_id, parity_group_id, strategy_name, program_version,
+                    execution_config_json, symbol, parameters_json,
                     start_ms, end_ms, timespan, fill_mode, executed_at_ms, duration_ms,
                     total_trades, winning_trades, losing_trades, win_rate, total_pnl, initial_cash, final_equity, total_fees,
                     max_drawdown, sharpe_ratio, sortino_ratio, profit_factor, commission_per_order, brokerage_policy,
@@ -195,13 +198,13 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                     verdict_version, verdict_grade, verdict_signal, equity_curve_json, validation_analytics_json,
                     insight_summary_json, metric_documentation_json
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7::jsonb,
-                    $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17, $18, $19, $20, $21,
-                    $22, $23, $24, $25, $26, $27,
-                    $28::jsonb, $29::jsonb, $30::jsonb, $31::jsonb,
-                    $32, $33, $34, $35::jsonb, $36::jsonb,
-                    $37::jsonb, $38::jsonb
+                    $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb,
+                    $10, $11, $12, $13, $14, $15,
+                    $16, $17, $18, $19, $20, $21, $22, $23,
+                    $24, $25, $26, $27, $28, $29,
+                    $30::jsonb, $31::jsonb, $32::jsonb, $33::jsonb,
+                    $34, $35, $36, $37::jsonb, $38::jsonb,
+                    $39::jsonb, $40::jsonb
                 )
                 RETURNING id
                 """,
@@ -210,6 +213,8 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                 record.lean_run_id,
                 record.parity_group_id,
                 record.strategy_name,
+                record.program_version,
+                record.execution_config_json,
                 record.symbol,
                 json.dumps(record.parameters, sort_keys=True),
                 record.start_ms,
@@ -302,7 +307,7 @@ async def update_notes(conn: asyncpg.Connection, run_id: int, notes: str | None)
 
 
 async def delete_run(conn: asyncpg.Connection, run_id: int) -> DeleteOutcome:
-    """Hard-delete a run unless a live Recency Chart run still points at it.
+    """Hard-delete a run unless durable research evidence still points at it.
 
     A study backing a live Recency run must go through Recency soft-delete
     (design spec D22, P0-4): deleting it here would break "forever until you
@@ -315,6 +320,12 @@ async def delete_run(conn: asyncpg.Connection, run_id: int) -> DeleteOutcome:
             return "not_found"
         if await is_recency_member(conn, run_id):
             return "recency_member"
+        # Import here to keep the general backtest repository independent at
+        # module load time while still sharing one transaction and row lock.
+        from app.research.golden_validation.repository import is_run_protected
+
+        if await is_run_protected(conn, run_id):
+            return "golden_validation_evidence"
         await conn.execute("DELETE FROM research_backtest_runs WHERE id = $1", run_id)
     return "deleted"
 
@@ -331,7 +342,9 @@ async def is_recency_member(conn: asyncpg.Connection, run_id: int) -> bool:
 
 # Column lists name exactly the dataclass fields, so a row builds its dataclass directly.
 _RUN_ROW_COLUMNS = """
-    r.id, r.source, r.strategy_name, r.symbol, r.lean_run_id, r.parameters_json::text AS parameters_json,
+    r.id, r.source, r.strategy_name, r.program_version,
+    r.execution_config_json::text AS execution_config_json,
+    r.symbol, r.lean_run_id, r.parameters_json::text AS parameters_json,
     r.start_ms, r.end_ms, r.executed_at_ms, r.total_trades, r.total_pnl, r.commission_per_order,
     r.brokerage_policy, r.notes, r.data_policy_json::text AS data_policy_json, r.verdict_grade,
     r.verdict_signal, r.parity_group_id

@@ -210,7 +210,7 @@ async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate
     against the synthetic Dry Run authority, which is a paper environment.
     """
     prior = _prior(strategy_params=None)
-    admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
+    admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4])
 
     decision = await admission.preview(prior, _status())
 
@@ -224,7 +224,9 @@ async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account() -> 
     is refused on the coverage gate, through the real orchestration."""
     prior = _prior(strategy_params=None)
     admission = _admission(
-        repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3], account_mode="live"
+        repository=None,
+        now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4],
+        account_mode="live",
     )
 
     decision = await admission.preview(prior, _status())
@@ -245,13 +247,16 @@ async def test_resume_refuses_and_clones_lineage_exactly_once_across_two_attempt
     prior = _prior(strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0})
     clone_id = legacy_migration_clone_instance_id(prior.strategy_instance_id)
 
-    admission_first = _admission(repository=repository, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
+    admission_first = _admission(
+        repository=repository,
+        now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4],
+    )
     with pytest.raises(StartAdmissionDenied) as first_exc:
         await admission_first.resume(prior, _status())
 
     admission_second = _admission(
         repository=repository,
-        now_values=[_NOW + 100, _NOW + 101, _NOW + 102, _NOW + 103],
+        now_values=[_NOW + 100, _NOW + 101, _NOW + 102, _NOW + 103, _NOW + 104],
     )
     with pytest.raises(StartAdmissionDenied) as second_exc:
         await admission_second.resume(prior, _status())
@@ -266,11 +271,14 @@ async def test_resume_refuses_and_clones_lineage_exactly_once_across_two_attempt
     assert lineage.migrated_from_strategy_instance_id == prior.strategy_instance_id
     # The second (later, different-timestamp) attempt did not mint a second
     # clone or overwrite the first one's evidence.
-    assert lineage.created_at_ms == _NOW + 2
+    assert lineage.created_at_ms == _NOW + 3
 
     # preview() never persists — a poll before either resume() call would
     # have left nothing on disk.
-    admission_preview = _admission(repository=repository, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
+    admission_preview = _admission(
+        repository=repository,
+        now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4],
+    )
     other_prior = _prior(strategy_params={"gap": -2.0, "rsi_min": 50.0, "rsi_max": 70.0}).model_copy(
         update={"strategy_instance_id": "legacy-orchestration-preview-only"}
     )
@@ -291,7 +299,10 @@ async def test_resume_fails_closed_when_no_lineage_writer_is_configured() -> Non
     ``preview()`` is unaffected: it never persists lineage by design.
     """
     prior = _prior(strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0})
-    admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
+    admission = _admission(
+        repository=None,
+        now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4],
+    )
 
     with pytest.raises(LegacyMigrationLineageUnavailableError):
         await admission.resume(prior, _status())

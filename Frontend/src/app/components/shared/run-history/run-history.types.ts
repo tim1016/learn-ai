@@ -41,4 +41,6 @@ export interface RunHistoryRow {
   verdictGrade: string | null;
   verdictSignal: string | null;
   parityGroupId: string | null;
+  /** Current human-review projection for a designated Validation Golden Run. */
+  goldenValidationState?: string | null;
 }

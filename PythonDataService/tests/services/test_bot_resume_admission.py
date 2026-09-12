@@ -108,7 +108,7 @@ def _minimal_admission(**overrides: object) -> BotResumeAdmission:
             observed_at_ms=observed_at_ms,
         )
 
-    def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+    async def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
         return StrategyValidationAdmissionFact(
             state="VERIFIED",
             strategy_key="deployment_validation",
@@ -203,7 +203,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
     ``compose_market_liveness`` sees ``now_ms < observed_at_ms`` and refuses
     Resume outright. The timestamp passed to ``market_data_admission_fact``
     and ``market_liveness`` must be captured *after* the await, not before."""
-    clock_values = iter([1_000, 5_000, 9_000, 13_000])
+    clock_values = iter([1_000, 5_000, 9_000, 13_000, 17_000])
 
     def now_ms() -> int:
         return next(clock_values)
@@ -281,7 +281,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
 
     await admission.preview(_prior(), _status())
 
-    # 1_000 minted the proposed run binding; 5_000 was the pre-await
-    # snapshot; market_liveness must see 9_000 (the post-await recapture),
-    # never 5_000.
-    assert seen_observed_at_ms == [9_000]
+    # 1_000 minted the proposed run binding; 5_000 was the pre-runtime
+    # snapshot and 9_000 preceded the async validation lookup. Market
+    # liveness must use the 13_000 post-validation instant.
+    assert seen_observed_at_ms == [13_000]

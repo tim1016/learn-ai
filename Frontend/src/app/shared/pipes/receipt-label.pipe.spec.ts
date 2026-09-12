@@ -76,6 +76,7 @@ describe('formatReceiptLabel', () => {
     expect(formatReceiptValue('content_digest', 'sha256:3dd003372f1ef1981b4e')).toBe(
       'sha256:3dd003372f1ef1981b4e',
     );
+    expect(formatReceiptValue('fixture_sha256', 'a4f729d1e8c0')).toBe('a4f729d1e8c0');
   });
 
   it('formats code-like receipt values when the label is not opaque', () => {

@@ -1288,20 +1288,13 @@ redesign. Draws the line between what the *validated strategy* carries and what
 the *deployment* binds. A strategy is validated against a reference engine, not
 against a broker, so this vocabulary survives a broker change.
 
-- **Validated strategy** — a binary, **strategy-level** property (not per-symbol):
-  our LEAN-engine port is proven numerically equivalent to a QuantConnect backtest.
-  Validation is a **one-step** act performed against a single **validation-case
-  symbol** (e.g. SPY) that serves as the strategy's **golden fixture**. Once the
-  strategy is validated, it is validated *as a whole* — we do **not** re-validate
-  per symbol. The validation carries: the strategy's settings file, its QC backtest
-  ID, its saved QC algorithm source (the exact QuantConnect-equivalent code, under
-  `references/qc-shadow/`), and the port-vs-QC reconciliation verdict. Selecting a
-  strategy **auto-populates** all of these — the trader never types a settings-file
-  path or a backtest ID.
-- **Validation-case symbol (golden fixture)** — the single symbol the strategy was
-  validated against (SPY). It is **provenance only**: it does not default,
-  constrain, or warn the deployed signal stream, and the UI may or may not surface
-  it. Its job was to prove the port; that job is done once.
+- **Validated strategy** — the v1, **strategy-level** human-validation projection
+  defined by ADR 0023: its flag and behavioral-equivalence evidence retain their
+  original semantics. It is distinct from, and does not establish, an applicable
+  **Golden Validation record** for an exact deployment configuration.
+- **Validation-case symbol** — the symbol used by v1 strategy-level reference
+  evidence. It is provenance for that evidence, not a **Validation Golden Run**, a
+  general signal-stream constraint, or a synonym for a golden fixture.
 - **Signal stream** — the symbol a deployed bot reads to compute buy/sell signals,
   bound via `live_config.symbol`. It is **completely independent of the strategy
   and of the validation-case symbol** — a free deploy-time choice. Distinct again
@@ -1407,6 +1400,66 @@ A `grill-me` session revised several points above. Where they conflict, **ADR 00
 - **Deploy signal stream now defaults to the validated signal, overridable** to any
   symbol — relaxing the "does not default, constrain, or warn" rule above to
   "defaults, does not constrain." (Amends ADR 0020 §2.)
+
+## Golden Validation (resolved 2026-09-11)
+
+**Lineage: neutral.**
+
+Decision record: ADR 0061. This vocabulary is about a human's promotion of one
+research configuration; it is distinct from a mathematical **golden fixture**, a
+Signal Program's golden-qualification corpus, v1 strategy-validation events, and
+parity verdicts of any version.
+
+- **Validation Golden Run** — a completed Strategy Lab history run selected by a
+  user as the baseline for a proposed Golden Validation decision. “Golden” means
+  user-selected baseline, not profitable, optimal, or universally validated.
+- **Golden Validation configuration** — the exact strategy or Signal Program
+  version, signal ticker, resolved parameters, data identity/window, and execution
+  assumptions named by a Validation Golden Run. A different value in any of these
+  makes another configuration. A run history's persisted **program version** names
+  the version member; a historical null version can be used only through Manual
+  override, never inferred from a strategy name or later registry state. An
+  applicable historical override explicitly records the exact program version
+  the reviewer authorizes on that immutable review.
+- **Engine evidence result** — the immutable computed condition of the selected
+  history evidence: **agreement**, **divergence**, **unavailable**, **incomplete**,
+  or **corrupt**. It describes what the evidence showed; a human decision never
+  changes it.
+- **Golden Validation record** — the immutable human promotion decision for one
+  Golden Validation configuration, preserving its selected history evidence,
+  engine evidence result, reviewer and explanatory note. Its accepted
+  classification is **Engine agreement**, **Reviewed deviations**, or **Manual
+  override**.
+- **Engine agreement** — a Golden Validation classification accepting a computed
+  agreement.
+- **Reviewed deviations** — a Golden Validation classification accepting a
+  computed divergence with the reviewer's explanation.
+- **Manual override** — a Golden Validation classification explicitly accepting
+  unavailable, incomplete, corrupt, or Python-only evidence. It does not call that
+  evidence valid or comparable.
+- **Paired history run** — Python and LEAN history runs for the same Golden
+  Validation configuration, available for a computed engine comparison. It is the
+  normal Golden Validation input.
+- **Parity verdict** — immutable computed evidence for a persisted Python/LEAN
+  pair. Historical **v2** verdicts retain their original payload and semantics.
+  Newer **v3** verdicts additionally check exact resolved parameters, data/window,
+  entry/exit timestamps, and synthetic-exit treatment. Neither version is a human
+  promotion decision or a Golden Validation record.
+- **Python-only designation** — selection of a completed Python history run with
+  parity absent or unavailable. It can advance only as a Manual override until a
+  paired attempt exists; a later paired attempt is new evidence, not a rewrite of
+  the earlier decision.
+- **Applicable Golden Validation** — a Golden Validation record whose exact
+  configuration matches the proposed Paper or Live run and whose independent
+  validity conditions remain satisfied. It satisfies only the strategy-validation
+  gate; broker, account, custody, arming, risk, corpus, and other safety gates
+  remain separate.
+- **Stale or inapplicable Golden Validation** — immutable historical record that
+  no longer applies to a proposed configuration or is outside a declared freshness
+  policy. Staleness does not alter its evidence result or promotion decision.
+- **QuantConnect Cloud backtest ID** — optional supplementary reference evidence
+  for Golden Validation. It is neither required nor a substitute for selected
+  Python/LEAN history evidence.
 
 ## Deploy binding and launch posture (sharpened 2026-07-05)
 

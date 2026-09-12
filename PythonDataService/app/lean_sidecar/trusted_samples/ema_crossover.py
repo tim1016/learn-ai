@@ -1,10 +1,10 @@
 """EMA(5)/EMA(10) crossover trusted template — LEAN parity oracle for spec strategy.
 
 Mirrors PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json
-exactly. Strategy parameters (period, gap, RSI band, time stop) are class
-constants — not GetParameter values — so this template is a deterministic
-oracle: any change to the parameters is a deliberate code change, not a
-runtime config drift.
+exactly. The four exposed entry gates (absolute gap, normalized gap, and RSI
+band) are read from validated runtime parameters so a companion can execute
+the same resolved Strategy Lab configuration as Python. Periods and the time
+stop remain fixed strategy logic.
 
 Runtime parameters (symbol, bar_minutes, session, adjustment) ARE read via
 GetParameter because they describe the data contract, not the strategy logic.
@@ -32,6 +32,7 @@ from __future__ import annotations
 EMA_CROSSOVER_SOURCE = '''\
 from AlgorithmImports import *
 from datetime import datetime
+import math
 from zoneinfo import ZoneInfo
 
 
@@ -61,9 +62,10 @@ class MyAlgorithm(QCAlgorithm):
     SLOW_PERIOD = 10
     RSI_PERIOD = 14
     EXIT_BARS = 5
-    GAP_MIN = 0.20
-    RSI_LO = 50
-    RSI_HI = 70
+    GAP_DEFAULT = 0.20
+    GAP_BPS_DEFAULT = 0.0
+    RSI_LO_DEFAULT = 50.0
+    RSI_HI_DEFAULT = 70.0
 
     def Initialize(self):
         start = self.GetParameter("start_date") or "2025-01-06"
@@ -73,6 +75,10 @@ class MyAlgorithm(QCAlgorithm):
         bar_minutes_str = self.GetParameter("bar_minutes") or "15"
         session = self.GetParameter("session") or "regular"
         adjustment = self.GetParameter("adjustment") or "raw"
+        gap_min = float(self.GetParameter("gap") or str(self.GAP_DEFAULT))
+        gap_bps_min = float(self.GetParameter("gap_bps") or str(self.GAP_BPS_DEFAULT))
+        rsi_lo = float(self.GetParameter("rsi_min") or str(self.RSI_LO_DEFAULT))
+        rsi_hi = float(self.GetParameter("rsi_max") or str(self.RSI_HI_DEFAULT))
 
         bar_minutes = int(bar_minutes_str)
         if bar_minutes != 15:
@@ -83,6 +89,17 @@ class MyAlgorithm(QCAlgorithm):
 
         if adjustment != "raw":
             raise ValueError("adjustment=" + str(adjustment) + " not supported; only 'raw' in Phase 1")
+
+        if not math.isfinite(gap_min) or gap_min < 0.0:
+            raise ValueError("gap must be finite and at least 0")
+        if not math.isfinite(gap_bps_min) or not 0.0 <= gap_bps_min <= 100.0:
+            raise ValueError("gap_bps must be finite and between 0 and 100")
+        if not math.isfinite(rsi_lo) or not math.isfinite(rsi_hi) or not 0.0 <= rsi_lo < rsi_hi <= 100.0:
+            raise ValueError("rsi_min must be less than rsi_max, within 0 to 100")
+        self.gap_min = gap_min
+        self.gap_bps_min = gap_bps_min
+        self.rsi_lo = rsi_lo
+        self.rsi_hi = rsi_hi
 
         sy, sm, sd = (int(x) for x in start.split("-"))
         ey, em, ed = (int(x) for x in end.split("-"))
@@ -176,9 +193,11 @@ class MyAlgorithm(QCAlgorithm):
                 and fast > slow
                 and self.prev_fast <= self.prev_slow
             )
-            gap_ok = (fast - slow) >= self.GAP_MIN
-            rsi_ok = self.RSI_LO <= rsi <= self.RSI_HI
-            if fresh_cross and gap_ok and rsi_ok:
+            absolute_gap_ok = (fast - slow) >= self.gap_min
+            gap_bps = 10000.0 * (fast - slow) / slow
+            normalized_gap_ok = gap_bps >= self.gap_bps_min
+            rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi
+            if fresh_cross and absolute_gap_ok and normalized_gap_ok and rsi_ok:
                 self.SetHoldings(self.symbol, 1.0)
                 self.in_trade = True
                 self.bars_held = 0
@@ -214,46 +233,14 @@ def derive_two_bps_source() -> str:
     """Derive the configurable-bps LEAN twin with fail-closed source deltas."""
     replacements = (
         (
-            "    Validation oracle for the Engine Lab spec at\n"
-            "    PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json.",
-            "    Validation twin whose 2/50/70 defaults are receipted at\n"
-            "    PythonDataService/app/engine/strategy/spec/fixtures/ema_crossover_2_bps.spec.json.\n"
-            "    Strategy Lab may supply validated gap and RSI gate parameters at runtime.",
-        ),
-        (
-            "    GAP_MIN = 0.20\n"
-            "    RSI_LO = 50\n"
-            "    RSI_HI = 70",
+            "    GAP_DEFAULT = 0.20\n"
+            "    GAP_BPS_DEFAULT = 0.0\n"
+            "    RSI_LO_DEFAULT = 50.0\n"
+            "    RSI_HI_DEFAULT = 70.0",
+            "    GAP_DEFAULT = 0.0\n"
             "    GAP_BPS_DEFAULT = 2.0\n"
             "    RSI_LO_DEFAULT = 50.0\n"
             "    RSI_HI_DEFAULT = 70.0",
-        ),
-        (
-            '        adjustment = self.GetParameter("adjustment") or "raw"',
-            '        adjustment = self.GetParameter("adjustment") or "raw"\n'
-            '        gap_bps_min = float(self.GetParameter("gap_bps") or str(self.GAP_BPS_DEFAULT))\n'
-            '        rsi_lo = float(self.GetParameter("rsi_min") or str(self.RSI_LO_DEFAULT))\n'
-            '        rsi_hi = float(self.GetParameter("rsi_max") or str(self.RSI_HI_DEFAULT))',
-        ),
-        (
-            '        if adjustment != "raw":\n'
-            '            raise ValueError("adjustment=" + str(adjustment) + " not supported; only \'raw\' in Phase 1")',
-            '        if adjustment != "raw":\n'
-            '            raise ValueError("adjustment=" + str(adjustment) + " not supported; only \'raw\' in Phase 1")\n\n'
-            '        if not 0.0 <= gap_bps_min <= 100.0:\n'
-            '            raise ValueError("gap_bps must be between 0 and 100")\n'
-            '        if not 0.0 <= rsi_lo < rsi_hi <= 100.0:\n'
-            '            raise ValueError("rsi_min must be less than rsi_max, within 0 to 100")\n'
-            '        self.gap_bps_min = gap_bps_min\n'
-            '        self.rsi_lo = rsi_lo\n'
-            '        self.rsi_hi = rsi_hi',
-        ),
-        (
-            "            gap_ok = (fast - slow) >= self.GAP_MIN\n"
-            "            rsi_ok = self.RSI_LO <= rsi <= self.RSI_HI",
-            "            gap_bps = 10000.0 * (fast - slow) / slow\n"
-            "            gap_ok = gap_bps >= self.gap_bps_min\n"
-            "            rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi",
         ),
     )
     source = EMA_CROSSOVER_SOURCE

@@ -80,4 +80,14 @@ async def delete_backtest_run(run_id: int) -> Response:
                 ),
             },
         )
+    if outcome == "golden_validation_evidence":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "GOLDEN_VALIDATION_EVIDENCE",
+                "message": (
+                    f"Backtest run {run_id} is retained by Golden Validation evidence and cannot be deleted."
+                ),
+            },
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TestBed } from '@angular/core/testing';
 
 import type {
   StrategyProofDossier,
@@ -12,6 +13,7 @@ import type {
 } from '../../services/strategy-validation.types';
 import { LeanSourceService } from '../../services/lean-source.service';
 import { StrategyValidationService } from '../../services/strategy-validation.service';
+import { GoldenValidationService } from '../../services/golden-validation.service';
 import { StrategyValidationComponent } from './strategy-validation.component';
 
 function proofStage(
@@ -253,6 +255,12 @@ const LEAN_TWIN_SOURCE_STUB_PROVIDER = {
       }),
   },
 };
+
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    providers: [{ provide: GoldenValidationService, useValue: { list: () => of([]) } }],
+  });
+});
 
 describe('StrategyValidationComponent', () => {
   it('renders validated and unvalidated strategies in the catalog', async () => {

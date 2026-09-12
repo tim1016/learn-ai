@@ -7,6 +7,14 @@ from types import SimpleNamespace
 import pytest
 
 import app.services.strategy_validation_admission as validation_admission
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.golden_validation.repository import GoldenReviewRow, GoldenRunRow
+from app.research.golden_validation.service import (
+    EvidenceView,
+    GoldenDeploymentCandidates,
+    GoldenValidationDossier,
+)
+from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.schemas.strategy_validation import (
     StrategyBehavioralEquivalence,
     StrategyEvidenceSnapshot,
@@ -198,3 +206,248 @@ def test_current_validation_fact_fails_closed_when_the_event_receipt_is_unreadab
 
     assert fact.state == "UNREADABLE"
     assert fact.evidence_status == "unknown"
+
+
+def _legacy_fact() -> StrategyValidationAdmissionFact:
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="ema_crossover_signal",
+        evidence_status="accepted",
+        event_id="legacy-event",
+        evidence_snapshot_sha256=_SHA,
+        verified_at_ms=_NOW,
+        explanation="Legacy proof.",
+    )
+
+
+def _golden_dossier(
+    *,
+    golden_id: int = 41,
+    decision: str = "accept",
+    current: bool = True,
+) -> GoldenValidationDossier:
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    revision = "b" * 64
+    reviewed_revision = revision if current else "c" * 64
+    run = GoldenRunRow(
+        id=golden_id,
+        source_run_id=17,
+        command_id=f"designate-{golden_id}",
+        command_sha256="d" * 64,
+        label="SPY research choice",
+        strategy_name="ema_crossover_signal",
+        symbol="SPY",
+        validation_case_json="{}",
+        case_sha256="e" * 64,
+        rationale="Chosen after parameter research.",
+        designated_by="local:researcher",
+        designated_at_ms=_NOW - 10,
+    )
+    review = GoldenReviewRow(
+        id=golden_id + 100,
+        golden_run_id=golden_id,
+        command_id=f"review-{golden_id}",
+        command_sha256="f" * 64,
+        expected_evidence_revision=reviewed_revision,
+        decision=decision,
+        classification="engine_agreement" if decision == "accept" else None,
+        evidence_state="agreement",
+        parity_verdict_id=9,
+        evidence_json="{}",
+        evidence_sha256="1" * 64,
+        reason="Reviewed evidence.",
+        quantconnect_backtest_id=None,
+        authorized_program_version=None,
+        reviewed_by="local:reviewer",
+        reviewed_at_ms=_NOW - 5,
+    )
+    validation_case = {
+        "strategy": {
+            "name": "ema_crossover_signal",
+            "program_version": registration.signal_program_contract.program_version,
+        },
+        "symbol": "SPY",
+        "parameters": registration.param_schema(symbol="SPY").model_dump(mode="json"),
+    }
+    return GoldenValidationDossier(
+        golden_run=run,
+        validation_case=validation_case,
+        evidence=EvidenceView(
+            state="agreement",
+            revision=revision,
+            parity_verdict_id=9,
+            payload={},
+        ),
+        reviews=(review,),
+    )
+
+
+def _fresh_binding(**updates: object) -> SimpleNamespace:
+    values = {
+        "strategy_key": "ema_crossover_signal",
+        "symbol": "SPY",
+        "strategy_params": {},
+        "sealed_program": None,
+        "evidence_override": None,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
+@pytest.mark.asyncio
+async def test_deployment_fact_accepts_exact_golden_scope_and_resolves_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+
+    async def load(
+        strategy_key: str,
+        symbol: str,
+        parameters: dict[str, object],
+    ) -> GoldenDeploymentCandidates:
+        registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+        assert strategy_key == "ema_crossover_signal"
+        assert symbol == "SPY"
+        assert parameters == registration.param_schema(symbol="SPY").model_dump(mode="json")
+        # The repository lookup is exact and unpaginated, so this deliberately
+        # old record remains visible regardless of newer research history.
+        return GoldenDeploymentCandidates((_golden_dossier(golden_id=1),), True)
+
+    fact = await validation_admission.current_deployment_strategy_validation_fact(
+        _fresh_binding(),
+        _NOW,
+        golden_loader=load,
+    )
+
+    assert fact.state == "VERIFIED"
+    assert fact.event_id == "golden-validation:1:review:101"
+    assert "golden-validation:classification:engine_agreement" in fact.evidence_refs
+
+
+@pytest.mark.asyncio
+async def test_deployment_fact_refuses_parameter_drift_once_strategy_has_golden_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+
+    async def load(
+        _strategy_key: str,
+        _symbol: str,
+        _parameters: dict[str, object],
+    ) -> GoldenDeploymentCandidates:
+        return GoldenDeploymentCandidates((), True)
+
+    fact = await validation_admission.current_deployment_strategy_validation_fact(
+        _fresh_binding(strategy_params={"gap": 0.75}),
+        _NOW,
+        golden_loader=load,
+    )
+
+    assert fact.state == "UNVERIFIED"
+    assert "resolved parameter set" in fact.explanation
+
+
+@pytest.mark.asyncio
+async def test_deployment_fact_preserves_v1_until_strategy_has_a_golden_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+
+    async def load(
+        _strategy_key: str,
+        _symbol: str,
+        _parameters: dict[str, object],
+    ) -> GoldenDeploymentCandidates:
+        return GoldenDeploymentCandidates((), False)
+
+    fact = await validation_admission.current_deployment_strategy_validation_fact(
+        _fresh_binding(),
+        _NOW,
+        golden_loader=load,
+    )
+
+    assert fact.event_id == "legacy-event"
+
+
+@pytest.mark.asyncio
+async def test_resume_pinned_to_rejected_golden_record_never_falls_back_to_newer_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    parameters = registration.param_schema(symbol="SPY").model_dump(mode="json")
+    sealed = SimpleNamespace(
+        validation_event_id="golden-validation:40:review:140",
+        configured_signal=SimpleNamespace(
+            program_key="ema_crossover_signal",
+            program_version=registration.signal_program_contract.program_version,
+            data=SimpleNamespace(symbol="SPY"),
+            parameters={name: SimpleNamespace(value=value) for name, value in parameters.items()},
+        ),
+    )
+
+    async def load(
+        _strategy_key: str,
+        _symbol: str,
+        _parameters: dict[str, object],
+    ) -> GoldenDeploymentCandidates:
+        return GoldenDeploymentCandidates(
+            (_golden_dossier(golden_id=41), _golden_dossier(golden_id=40, decision="reject")),
+            True,
+        )
+
+    async def load_one(golden_validation_id: int) -> GoldenValidationDossier | None:
+        assert golden_validation_id == 40
+        return _golden_dossier(golden_id=40, decision="reject")
+
+    fact = await validation_admission.current_deployment_strategy_validation_fact(
+        _fresh_binding(sealed_program=sealed),
+        _NOW,
+        golden_loader=load,
+        golden_by_id_loader=load_one,
+    )
+
+    assert fact.state == "UNVERIFIED"
+    assert "rejected" in fact.explanation
+
+
+@pytest.mark.asyncio
+async def test_resume_loads_its_pinned_golden_record_without_catalog_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    parameters = registration.param_schema(symbol="SPY").model_dump(mode="json")
+    sealed = SimpleNamespace(
+        validation_event_id="golden-validation:1:review:101",
+        configured_signal=SimpleNamespace(
+            program_key="ema_crossover_signal",
+            program_version=registration.signal_program_contract.program_version,
+            data=SimpleNamespace(symbol="SPY"),
+            parameters={name: SimpleNamespace(value=value) for name, value in parameters.items()},
+        ),
+    )
+
+    async def paged_loader(
+        _strategy_key: str,
+        _symbol: str,
+        _parameters: dict[str, object],
+    ) -> GoldenDeploymentCandidates:
+        raise AssertionError("Pinned Resume must not search a paginated catalog")
+
+    async def load_one(golden_validation_id: int) -> GoldenValidationDossier | None:
+        assert golden_validation_id == 1
+        return _golden_dossier(golden_id=1)
+
+    fact = await validation_admission.current_deployment_strategy_validation_fact(
+        _fresh_binding(sealed_program=sealed),
+        _NOW,
+        golden_loader=paged_loader,
+        golden_by_id_loader=load_one,
+    )
+
+    assert fact.state == "VERIFIED"
+    assert fact.event_id == "golden-validation:1:review:101"

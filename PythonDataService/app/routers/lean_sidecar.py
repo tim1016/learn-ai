@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT, MAX_ALGORITHM_SOURCE_BYTES
 from app.lean_sidecar.cross_reconciler import (
@@ -216,6 +216,23 @@ class EmaCrossover2BpsStrategyParametersModel(BaseModel):
         return self
 
 
+class EmaCrossoverSignalStrategyParametersModel(BaseModel):
+    """All four resolved entry gates accepted by the canonical EMA twin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gap: float = Field(0.20, ge=0.0, allow_inf_nan=False)
+    gap_bps: float = Field(0.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_min: float = Field(50.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_max: float = Field(70.0, ge=0.0, le=100.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _validate_rsi_band(self) -> EmaCrossoverSignalStrategyParametersModel:
+        if self.rsi_min >= self.rsi_max:
+            raise ValueError("rsi_min must be less than rsi_max")
+        return self
+
+
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
 
@@ -296,14 +313,33 @@ class TrustedRunRequestModel(BaseModel):
             "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
-    strategy_parameters: EmaCrossover2BpsStrategyParametersModel | None = Field(
+    strategy_parameters: EmaCrossover2BpsStrategyParametersModel | EmaCrossoverSignalStrategyParametersModel | None = Field(
         default=None,
         description=(
             "Validated strategy-logic parameters for a bundled trusted template. "
-            "Currently accepted only by ema_crossover_2_bps; omitted values use "
-            "that template's canonical 2/50/70 defaults."
+            "Accepted by the parameterized EMA twins; omitted values use that "
+            "template's declared defaults."
         ),
     )
+
+    @field_validator("strategy_parameters", mode="before")
+    @classmethod
+    def _select_strategy_parameter_schema(cls, value: object, info: ValidationInfo) -> object:
+        """Apply defaults only after the template has selected its schema.
+
+        Both EMA models accept a partial object. Letting the union choose first
+        would therefore inject the two-bps defaults before the signal template
+        could select its own zero-bps default.
+        """
+        if value is None:
+            return None
+        raw = value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value
+        template = info.data.get("template")
+        if template == TrustedTemplate.EMA_CROSSOVER_2_BPS:
+            return EmaCrossover2BpsStrategyParametersModel.model_validate(raw)
+        if template == TrustedTemplate.EMA_CROSSOVER_SIGNAL:
+            return EmaCrossoverSignalStrategyParametersModel.model_validate(raw)
+        return raw
 
     # PR B canonical shape.
     data_policy: _DataPolicyModel | None = Field(
@@ -407,12 +443,15 @@ class TrustedRunRequestModel(BaseModel):
             if self.strategy_parameters is not None:
                 raise ValueError("algorithm_source runs do not accept strategy_parameters")
         elif self.template == TrustedTemplate.EMA_CROSSOVER_2_BPS:
-            if self.strategy_parameters is None:
-                object.__setattr__(
-                    self,
-                    "strategy_parameters",
-                    EmaCrossover2BpsStrategyParametersModel(),
-                )
+            parameters = EmaCrossover2BpsStrategyParametersModel.model_validate(
+                {} if self.strategy_parameters is None else self.strategy_parameters.model_dump()
+            )
+            object.__setattr__(self, "strategy_parameters", parameters)
+        elif self.template == TrustedTemplate.EMA_CROSSOVER_SIGNAL:
+            parameters = EmaCrossoverSignalStrategyParametersModel.model_validate(
+                {} if self.strategy_parameters is None else self.strategy_parameters.model_dump()
+            )
+            object.__setattr__(self, "strategy_parameters", parameters)
         elif self.strategy_parameters is not None:
             raise ValueError(f"template {self.template.value} does not accept strategy_parameters")
         self._validate_window_normalized()

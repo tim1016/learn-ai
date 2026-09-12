@@ -21,9 +21,8 @@ the event loop for every other in-flight request. ``ProfilesStore`` is built
 for this — ``check_same_thread=False`` with its own lock.
 
 Auth is the existing control-plane posture, not a new mechanism: the
-``X-Data-Plane-Control-Secret`` header, checked always on reads
-(``require_data_plane_control_secret_always``) and on mutations
-(``require_data_plane_control_secret``), with
+``X-Data-Plane-Control-Secret`` header, checked on every route with
+``require_data_plane_control_secret_always``, with
 ``DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL`` unchanged.
 
 Nothing here restarts a container, changes a runtime, or grants broker
@@ -76,7 +75,6 @@ from app.schemas.broker_configuration import (
     SelectionResponse,
 )
 from app.security.data_plane_control import (
-    require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
 
@@ -131,7 +129,7 @@ async def refuse_server_resolved_fields(request: Request) -> None:
 
 READ_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
 WRITE_DEPENDENCIES = [
-    Depends(require_data_plane_control_secret),
+    Depends(require_data_plane_control_secret_always),
     Depends(refuse_server_resolved_fields),
 ]
 

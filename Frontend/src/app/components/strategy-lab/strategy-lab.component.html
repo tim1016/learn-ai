@@ -90,7 +90,17 @@
         </p-tabpanel>
 
         <p-tabpanel value="history">
-          <app-engine-lab-run-history (runSelected)="selectHistoryRun($event)" />
+          <app-engine-lab-run-history
+            (runSelected)="selectHistoryRun($event)"
+            (goldenRunRequested)="selectGoldenCandidate($event)"
+            [goldenRefreshToken]="goldenRefreshToken()"
+          />
+          @if (goldenCandidateRunId(); as runId) {
+            <app-golden-validation-workbench
+              [sourceRunId]="runId"
+              (changed)="refreshGoldenHistory()"
+            />
+          }
         </p-tabpanel>
       </p-tabpanels>
   </p-tabs>

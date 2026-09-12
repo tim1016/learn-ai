@@ -27,7 +27,7 @@ def test_two_bps_template_reads_configurable_gap_and_rsi_gates() -> None:
     assert 'GetParameter("rsi_min")' in EMA_CROSSOVER_2_BPS_SOURCE
     assert 'GetParameter("rsi_max")' in EMA_CROSSOVER_2_BPS_SOURCE
     assert "gap_bps = 10000.0 * (fast - slow) / slow" in EMA_CROSSOVER_2_BPS_SOURCE
-    assert "gap_ok = gap_bps >= self.gap_bps_min" in EMA_CROSSOVER_2_BPS_SOURCE
+    assert "normalized_gap_ok = gap_bps >= self.gap_bps_min" in EMA_CROSSOVER_2_BPS_SOURCE
     assert "rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi" in EMA_CROSSOVER_2_BPS_SOURCE
 
 
@@ -62,9 +62,10 @@ def test_class_constants_match_spec() -> None:
     # EXIT_BARS remains a class constant because its value (5 bars) is
     # strategy logic, not a data-contract parameter.
     assert constants["EXIT_BARS"] == 5
-    assert constants["GAP_MIN"] == pytest.approx(0.20)
-    assert constants["RSI_LO"] == 50
-    assert constants["RSI_HI"] == 70
+    assert constants["GAP_DEFAULT"] == pytest.approx(0.20)
+    assert constants["GAP_BPS_DEFAULT"] == pytest.approx(0.0)
+    assert constants["RSI_LO_DEFAULT"] == pytest.approx(50.0)
+    assert constants["RSI_HI_DEFAULT"] == pytest.approx(70.0)
 
 
 def test_source_contains_required_handlers() -> None:
@@ -111,6 +112,19 @@ def test_template_reads_new_parameters() -> None:
     assert 'GetParameter("bar_minutes")' in src
     assert 'GetParameter("session")' in src
     assert 'GetParameter("adjustment")' in src
+    for name in ("gap", "gap_bps", "rsi_min", "rsi_max"):
+        assert f'GetParameter("{name}")' in src
+    assert "absolute_gap_ok" in src
+    assert "normalized_gap_ok" in src
+    assert "math.isfinite" in src
+
+
+def test_signal_template_emits_the_parameterized_base_source() -> None:
+    """The named twin's source identity must include its imported implementation."""
+    from app.lean_sidecar.trusted_samples.ema_crossover_signal import EMA_CROSSOVER_SIGNAL_SOURCE
+
+    assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
+    assert 'GetParameter("gap_bps")' in EMA_CROSSOVER_SIGNAL_SOURCE
 
 
 def test_template_no_longer_sets_wall_clock_warmup() -> None:

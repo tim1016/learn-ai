@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -398,6 +399,7 @@ def _strategy_views(
     *,
     account_id: str,
     custody_world: CustodyWorld,
+    golden_validation_symbols: Mapping[str, str] | None = None,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -426,7 +428,11 @@ def _strategy_views(
             blocked_explanation=entry.blocked_explanation,
             params_schema=_deploy_params_schema(entry.strategy_key),
         )
-        for entry in compose_strategy_catalog(entries, account_id=account_id)
+        for entry in compose_strategy_catalog(
+            entries,
+            account_id=account_id,
+            golden_validation_symbols=golden_validation_symbols,
+        )
     )
 
 
@@ -511,7 +517,8 @@ def _readiness_checks(
             ),
             explanation=(
                 (
-                    "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
+                    "Accepted strategies use either a current strategy event or an exact, reviewed Golden "
+                    "Validation. Evidence-only "
                     "strategies are selectable on the human-validated flag alone; their behavioral "
                     "verdict remains displayed but does not gate deployment. Blocked strategies are shown but "
                     "not selectable — either their proof no longer verifies, or they have no registered "
@@ -755,6 +762,7 @@ def build_alpaca_paper_deploy_view(
     *,
     symbol: str | None = None,
     custody_world: CustodyWorld,
+    golden_validation_symbols: Mapping[str, str] | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict.
 
@@ -767,7 +775,10 @@ def build_alpaca_paper_deploy_view(
     """
     evaluated_at_ms = now_ms_utc()
     strategies = _strategy_views(
-        validation_entries, account_id=account.account_id, custody_world=custody_world
+        validation_entries,
+        account_id=account.account_id,
+        custody_world=custody_world,
+        golden_validation_symbols=golden_validation_symbols,
     )
     copy = _deploy_view_copy(account, custody_world)
     readiness_checks = _readiness_checks(

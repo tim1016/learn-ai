@@ -28,6 +28,7 @@ from app.engine.results.equity_downsample import (
 )
 from app.engine.results.statistics import summarize
 from app.engine.strategy.base import LoggedTrade
+from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -574,6 +575,24 @@ def build_persist_payload(
     ``algorithm_default`` — which would mislabel Interactive Brokers
     reconciliation runs.
     """
+    from app.engine.strategy.registry import lean_twin_program_version
+
+    program_version = lean_twin_program_version(algorithm_name)
+    execution_config_json = (
+        json.dumps(
+            {
+                "compatibility_profile": COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
+                "warmup_from_date": None,
+                "slippage_per_share": 0.0,
+                "session_entry_cutoff": None,
+                "force_flat_at": None,
+                "limit_penetration": 0.0,
+            },
+            sort_keys=True,
+        )
+        if parity_group_id is not None
+        else None
+    )
     result_path = workspace_path / "normalized" / "result.json"
 
     if not result_path.exists():
@@ -595,7 +614,7 @@ def build_persist_payload(
             requested_engine=requested_engine,
             parameters=parameters,
             parity_group_id=parity_group_id,
-        )
+        ) | {"program_version": program_version, "execution_config_json": execution_config_json}
 
     try:
         normalized = NormalizedResult.from_path(result_path)
@@ -634,7 +653,7 @@ def build_persist_payload(
             requested_engine=requested_engine,
             parameters=parameters,
             parity_group_id=parity_group_id,
-        )
+        ) | {"program_version": program_version, "execution_config_json": execution_config_json}
 
     lean_statistics = _normalized_to_lean_statistics_response(
         normalized_statistics=normalized.statistics,
@@ -700,6 +719,8 @@ def build_persist_payload(
         # legacy sidecar label because they do not claim a common fill contract.
         "fill_mode": "signal_bar_close" if parity_group_id is not None else "lean-sidecar",
         "strategy_name": algorithm_name,
+        "program_version": program_version,
+        "execution_config_json": execution_config_json,
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,

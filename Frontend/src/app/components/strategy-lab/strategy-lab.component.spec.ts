@@ -17,6 +17,7 @@ import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { BacktestRunsService } from "../../services/backtest-runs.service";
 import { JobsService, type JobState } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import { GoldenValidationService } from "../../services/golden-validation.service";
 import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
@@ -214,6 +215,7 @@ async function createLab(
         },
       },
       { provide: BacktestRunsService, useValue: backtestRuns },
+      { provide: GoldenValidationService, useValue: { list: () => of([]) } },
       provideFakeTickerCatalog(catalog),
     ],
   }).compileComponents();

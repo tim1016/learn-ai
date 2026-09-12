@@ -656,7 +656,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     ``compose_market_liveness`` sees ``now_ms < observed_at_ms`` and refuses
     Start outright. The timestamp passed to ``market_data_admission_fact``
     and ``market_liveness`` must be captured *after* the await, not before."""
-    clock_values = iter([1_000, 5_000, 9_000, 13_000])
+    clock_values = iter([1_000, 5_000, 9_000, 13_000, 17_000])
 
     def now_ms() -> int:
         return next(clock_values)
@@ -683,6 +683,20 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")
 
+    async def validation_fact(
+        _binding: object,
+        observed_at_ms: int,
+    ) -> StrategyValidationAdmissionFact:
+        return StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="deployment_validation",
+            evidence_status="accepted",
+            event_id="validation-event-async",
+            evidence_snapshot_sha256="c" * 64,
+            verified_at_ms=observed_at_ms,
+            explanation="The async validation proof is current.",
+        )
+
     seen_observed_at_ms: list[int] = []
 
     def market_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
@@ -707,6 +721,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         custody_guard=custody_guard,
         process_fact=process_fact,
         runtime_fact=runtime_fact,
+        validation_fact=validation_fact,
         activate=activate,
         session_capability=lambda symbol, account_id: None,
         market_liveness=market_liveness,
@@ -726,9 +741,10 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
 
     await admission.preview(request)
 
-    # 1_000 minted the run binding; 5_000 was the pre-await snapshot;
-    # market_liveness must see 9_000 (the post-await recapture), never 5_000.
-    assert seen_observed_at_ms == [9_000]
+    # 1_000 minted the run binding; 5_000 was the pre-runtime snapshot;
+    # 9_000 was captured before the async validation lookup. Market liveness
+    # must see 13_000 after both awaits, never either stale instant.
+    assert seen_observed_at_ms == [13_000]
 
 
 # ── #1808: "sweep still evaluating" vs "recovery probe broken" ──────────────

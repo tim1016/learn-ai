@@ -1,13 +1,14 @@
 """Freeze the cross-engine parity verdict when the LEAN companion lands (PRD #1929).
 
 A port of the retired .NET ``ParityVerdictService``: the verdict compares
-the Python engine run (left) with its LEAN companion (right) on four axes —
+the Python engine run (left) with its LEAN companion (right) on five axes —
 trade reconciliation (``lean_sidecar_compare_service.reconcile_trade_lists``,
 the same classifier the .NET service reached over HTTP), the LEAN-native
 metric-reproduction receipt persisted with the companion, the two runs'
 production-readiness envelopes, and the compatibility inputs (data policy,
-cash, window, fill mode). Nothing numerical is recomputed here; the
-receipts are verified, not re-derived.
+cash, window, fill mode), and the stored normalized resolved strategy
+parameters. Nothing numerical is recomputed here; the receipts are verified,
+not re-derived.
 
 State machine: the **dispatch** path writes ``pending``, ``unavailable``, and
 the provisional ``run_failed`` / ``persist_failed`` (the last two claim that no
@@ -41,7 +42,10 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-VERDICT_VERSION = repo.PARITY_VERDICT_VERSION
+# Version 3 adds the certificate-grade configuration receipt.  The JSON
+# readers intentionally remain shape-tolerant below so verdicts frozen under
+# earlier versions continue to render as their original historical evidence.
+VERDICT_VERSION = 3
 FILL_PRICE_ATOL = "0.01"
 READINESS_FIELDS: tuple[str, ...] = (
     "verdict_version",
@@ -115,6 +119,26 @@ class InputParityReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterParityReceipt:
+    status: str
+    reason: str | None
+    compared_field_count: int
+    mismatched_fields: tuple[str, ...]
+
+    @classmethod
+    def unavailable(cls, reason: str) -> ParameterParityReceipt:
+        return cls("unavailable", reason, 0, ())
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramVersionParityReceipt:
+    status: str
+    reason: str | None
+    left_program_version: str | None
+    right_program_version: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ParityVerdict:
     status: str
     verdict_json: str
@@ -130,13 +154,29 @@ def compute_parity_verdict(*, parity_group_id: str, left: RunDetail, right: RunD
     native = read_native_metric_parity(right.lean_statistics_json)
     readiness = compare_readiness(left.run_verdict_json, right.run_verdict_json)
     inputs = compare_inputs(left, right)
-    status = _resolve_status(len(comparison.divergences), native.status, readiness.status, inputs.status)
-    reason = _resolve_reason(status, native.status, readiness.status, inputs.status)
+    parameters = compare_parameters(left, right)
+    program_version = compare_program_versions(left, right)
+    status = _resolve_status(
+        len(comparison.divergences),
+        native.status,
+        readiness.status,
+        inputs.status,
+        parameters.status,
+        program_version.status,
+    )
+    reason = _resolve_reason(
+        status,
+        native.status,
+        readiness.status,
+        inputs.status,
+        parameters.status,
+        program_version.status,
+    )
     counts: dict[str, int] = {}
     for divergence in comparison.divergences:
         counts[divergence.category] = counts.get(divergence.category, 0) + 1
     verdict = {
-        "schema_version": 2,
+        "schema_version": VERDICT_VERSION,
         "parity_group_id": parity_group_id,
         "left_execution_id": left.id,
         "right_execution_id": right.id,
@@ -147,6 +187,8 @@ def compute_parity_verdict(*, parity_group_id: str, left: RunDetail, right: RunD
         "native_metric_parity": asdict(native),
         "readiness_parity": asdict(readiness),
         "input_parity": asdict(inputs),
+        "parameter_parity": asdict(parameters),
+        "program_version_parity": asdict(program_version),
         "divergences": [
             {
                 "category": d.category,
@@ -162,29 +204,58 @@ def compute_parity_verdict(*, parity_group_id: str, left: RunDetail, right: RunD
     return ParityVerdict(status=status, verdict_json=json.dumps(verdict))
 
 
-def _resolve_status(trade_divergences: int, native: str, readiness: str, inputs: str) -> str:
-    if trade_divergences > 0 or "mismatch" in (native, readiness, inputs):
-        return "diverged"
-    if native != "match" or readiness != "match" or inputs != "match":
+def _resolve_status(
+    trade_divergences: int,
+    native: str,
+    readiness: str,
+    inputs: str,
+    parameters: str,
+    program_version: str,
+) -> str:
+    comparable_inputs = (inputs, parameters, program_version)
+    # An observed trade difference is not a comparable deviation when a
+    # required input/configuration receipt is absent. Keep that as unavailable
+    # so only a conspicuous Manual override can promote it.
+    if any(receipt != "match" for receipt in comparable_inputs):
         return "unavailable"
+    result_receipts = (native, readiness)
+    if any(receipt not in {"match", "mismatch"} for receipt in result_receipts):
+        return "unavailable"
+    if trade_divergences > 0 or "mismatch" in result_receipts:
+        return "diverged"
     return "agree"
 
 
-def _resolve_reason(status: str, native: str, readiness: str, inputs: str) -> str | None:
+def _resolve_reason(
+    status: str,
+    native: str,
+    readiness: str,
+    inputs: str,
+    parameters: str,
+    program_version: str,
+) -> str | None:
     if status == "agree":
         return None
+    if inputs == "mismatch":
+        return "compatibility_input_mismatch"
+    if parameters == "mismatch":
+        return "strategy_parameter_mismatch"
+    if program_version == "mismatch":
+        return "program_version_mismatch"
+    if native not in {"match", "mismatch"}:
+        return "lean_native_metric_parity_unavailable"
+    if readiness not in {"match", "mismatch"}:
+        return "production_readiness_parity_unavailable"
+    if inputs not in {"match", "mismatch"}:
+        return "compatibility_input_parity_unavailable"
+    if parameters not in {"match", "mismatch"}:
+        return "strategy_parameter_parity_unavailable"
+    if program_version not in {"match", "mismatch"}:
+        return "program_version_parity_unavailable"
     if native == "mismatch":
         return "lean_native_metric_mismatch"
     if readiness == "mismatch":
         return "production_readiness_mismatch"
-    if inputs == "mismatch":
-        return "compatibility_input_mismatch"
-    if native != "match":
-        return "lean_native_metric_parity_unavailable"
-    if readiness != "match":
-        return "production_readiness_parity_unavailable"
-    if inputs != "match":
-        return "compatibility_input_parity_unavailable"
     return "trade_reconciliation_diverged"
 
 
@@ -200,15 +271,37 @@ def read_native_metric_parity(lean_statistics_json: str | None) -> NativeMetricP
     if not isinstance(receipt, Mapping):
         return NativeMetricParityReceipt.unavailable("lean_native_metric_receipt_missing")
     divergences = receipt.get("divergences")
+    receipt_status = _string(receipt, "status")
+    if receipt_status not in {"match", "mismatch"}:
+        return NativeMetricParityReceipt.unavailable(
+            _string(receipt, "reason") or "lean_native_metric_receipt_status_invalid"
+        )
+    contract_id = _nonblank_string(receipt, "contract_id")
+    source_commit = _nonblank_string(receipt, "source_commit")
+    absolute_tolerance = _number(receipt, "absolute_tolerance")
+    native_metric_count = _integer(receipt, "native_metric_count")
+    formatted_metric_count = _integer(receipt, "formatted_metric_count")
+    if (
+        contract_id is None
+        or source_commit is None
+        or absolute_tolerance is None
+        or absolute_tolerance < 0
+        or native_metric_count <= 0
+        or formatted_metric_count <= 0
+        or not isinstance(divergences, list)
+        or (receipt_status == "match" and divergences)
+        or (receipt_status == "mismatch" and not divergences)
+    ):
+        return NativeMetricParityReceipt.unavailable("lean_native_metric_receipt_incomplete")
     return NativeMetricParityReceipt(
-        status=_string(receipt, "status") or "unavailable",
+        status=receipt_status,
         reason=_string(receipt, "reason"),
-        contract_id=_string(receipt, "contract_id"),
-        source_commit=_string(receipt, "source_commit"),
-        absolute_tolerance=_number(receipt, "absolute_tolerance"),
-        native_metric_count=_integer(receipt, "native_metric_count"),
-        formatted_metric_count=_integer(receipt, "formatted_metric_count"),
-        divergence_count=len(divergences) if isinstance(divergences, list) else 0,
+        contract_id=contract_id,
+        source_commit=source_commit,
+        absolute_tolerance=absolute_tolerance,
+        native_metric_count=native_metric_count,
+        formatted_metric_count=formatted_metric_count,
+        divergence_count=len(divergences),
     )
 
 
@@ -224,10 +317,15 @@ def compare_readiness(left_json: str | None, right_json: str | None) -> Readines
         return ReadinessParityReceipt.unavailable("run_verdict_unreadable")
     left_signature = left.get("parity_signature") if isinstance(left.get("parity_signature"), Mapping) else None
     right_signature = right.get("parity_signature") if isinstance(right.get("parity_signature"), Mapping) else None
-    if (
-        left_signature is not None
-        and right_signature is not None
-        and _string(left_signature, "contract_id") != _string(right_signature, "contract_id")
+    if (left_signature is None) != (right_signature is None):
+        return ReadinessParityReceipt.unavailable("readiness_signature_missing")
+    if left_signature is not None and right_signature is not None and (
+        not _readiness_signature_complete(left_signature)
+        or not _readiness_signature_complete(right_signature)
+    ):
+        return ReadinessParityReceipt.unavailable("readiness_signature_incomplete")
+    if left_signature is not None and right_signature is not None and (
+        _string(left_signature, "contract_id") != _string(right_signature, "contract_id")
     ):
         # Both sides carry a signature, but from different contract versions. A raw
         # equality would report "mismatch" for a shape difference that says nothing
@@ -244,12 +342,43 @@ def compare_readiness(left_json: str | None, right_json: str | None) -> Readines
             mismatched_fields=() if matches else ("parity_signature",),
         )
     # Legacy verdicts predate the Python-authored, tolerance-pinned receipt.
+    if any(field not in left or field not in right for field in READINESS_FIELDS):
+        return ReadinessParityReceipt.unavailable("readiness_fields_missing")
     mismatches = tuple(field for field in READINESS_FIELDS if not _properties_equal(left, right, field))
     return ReadinessParityReceipt(
         status="match" if not mismatches else "mismatch",
         reason=None if not mismatches else "readiness_fields_differ",
         compared_field_count=len(READINESS_FIELDS),
         mismatched_fields=mismatches,
+    )
+
+
+def _readiness_signature_complete(signature: Mapping[str, Any]) -> bool:
+    required_fields = (
+        "contract_id",
+        "absolute_tolerance",
+        "status",
+        "available_required_metrics",
+        "required_metrics",
+        "missing_required_metrics",
+        "required_inputs",
+    )
+    if any(field not in signature for field in required_fields):
+        return False
+    available = signature.get("available_required_metrics")
+    required = signature.get("required_metrics")
+    return (
+        _nonblank_string(signature, "contract_id") is not None
+        and _nonblank_string(signature, "absolute_tolerance") is not None
+        and _nonblank_string(signature, "status") is not None
+        and isinstance(available, int)
+        and not isinstance(available, bool)
+        and isinstance(required, int)
+        and not isinstance(required, bool)
+        and required > 0
+        and 0 <= available <= required
+        and isinstance(signature.get("missing_required_metrics"), list)
+        and isinstance(signature.get("required_inputs"), list)
     )
 
 
@@ -263,6 +392,20 @@ def compare_inputs(left: RunDetail, right: RunDetail) -> InputParityReceipt:
         return InputParityReceipt.unavailable("data_policy_unreadable")
     if not isinstance(left_policy, Mapping) or not isinstance(right_policy, Mapping):
         return InputParityReceipt.unavailable("data_policy_unreadable")
+    try:
+        left_execution = json.loads(left.execution_config_json or "")
+        right_execution = json.loads(right.execution_config_json or "")
+    except json.JSONDecodeError:
+        return InputParityReceipt.unavailable("execution_configuration_unreadable")
+    if not isinstance(left_execution, Mapping) or not isinstance(right_execution, Mapping):
+        return InputParityReceipt.unavailable("execution_configuration_missing")
+    left_fixture_id = _nonblank_string(left_policy, "fixture_id")
+    right_fixture_id = _nonblank_string(right_policy, "fixture_id")
+    left_fixture_sha256 = _nonblank_string(left_policy, "fixture_sha256")
+    right_fixture_sha256 = _nonblank_string(right_policy, "fixture_sha256")
+    if None in (left_fixture_id, right_fixture_id, left_fixture_sha256, right_fixture_sha256):
+        return InputParityReceipt.unavailable("fixture_identity_missing")
+
     mismatches = [field for field in DATA_POLICY_FIELDS if not _properties_equal(left_policy, right_policy, field)]
     if left.initial_cash != right.initial_cash:
         mismatches.append("initial_cash")
@@ -272,14 +415,172 @@ def compare_inputs(left: RunDetail, right: RunDetail) -> InputParityReceipt:
         mismatches.append("end_date")
     if left.fill_mode != right.fill_mode:
         mismatches.append("fill_mode")
+    if left_execution != right_execution:
+        mismatches.append("execution_configuration")
     return InputParityReceipt(
         status="match" if not mismatches else "mismatch",
         reason=None if not mismatches else "compatibility_inputs_differ",
-        compared_field_count=len(DATA_POLICY_FIELDS) + 4,
-        fixture_id=_string(right_policy, "fixture_id"),
-        fixture_sha256=_string(right_policy, "fixture_sha256"),
+        compared_field_count=len(DATA_POLICY_FIELDS) + 5,
+        fixture_id=right_fixture_id,
+        fixture_sha256=right_fixture_sha256,
         mismatched_fields=tuple(mismatches),
     )
+
+
+def compare_parameters(left: RunDetail, right: RunDetail) -> ParameterParityReceipt:
+    """Compare the normalized, resolved parameters actually persisted for each run.
+
+    ``record_from_payload`` writes the authoritative row symbol back into the
+    parameter object after trimming and upper-casing it.  Normalize that one
+    field in the same way for historical rows.  A bundled hard-coded LEAN
+    twin is the one narrow exception to "do not invent defaults": its
+    persistence payload contains only its runtime symbol because strategy
+    values are constants in the checked-in template.  Materialize those
+    constants from the registered parameter schema, and materialize a
+    policy-backed cadence from the run's persisted data policy, before
+    comparing the full resolved Python configuration.  This keeps a default
+    hard-coded twin comparable while still exposing a non-default Python
+    value as a mismatch rather than pretending the twin received it.
+
+    All other absent or differently typed values remain evidence that the
+    resolved configurations are not comparable.  In particular, this does
+    not infer defaults for historical or parameterized LEAN rows.
+    """
+    left_parameters = _read_parameters(left.parameters_json)
+    right_parameters = _read_parameters(right.parameters_json)
+    if left_parameters is None or right_parameters is None:
+        return ParameterParityReceipt.unavailable("strategy_parameters_unreadable")
+
+    left_normalized = _normalize_parameters(left_parameters)
+    right_normalized = _normalize_parameters(right_parameters)
+    if left_normalized is None or right_normalized is None:
+        return ParameterParityReceipt.unavailable("strategy_parameters_invalid")
+
+    right_normalized = _materialize_hard_coded_twin_parameters(
+        left=left,
+        right=right,
+        right_parameters=right_normalized,
+    ) or right_normalized
+
+    fields = tuple(sorted(set(left_normalized) | set(right_normalized)))
+    mismatches = tuple(
+        field
+        for field in fields
+        if field not in left_normalized
+        or field not in right_normalized
+        or left_normalized[field] != right_normalized[field]
+    )
+    return ParameterParityReceipt(
+        status="match" if not mismatches else "mismatch",
+        reason=None if not mismatches else "strategy_parameters_differ",
+        compared_field_count=len(fields),
+        mismatched_fields=mismatches,
+    )
+
+
+def _materialize_hard_coded_twin_parameters(
+    *,
+    left: RunDetail,
+    right: RunDetail,
+    right_parameters: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a hard-coded LEAN twin's effective resolved configuration.
+
+    The companion launcher deliberately sends no ``strategy_parameters`` to
+    a template whose strategy values are compile-time constants.  Its history
+    row therefore has only ``symbol`` even though the Python row correctly
+    retains its full resolved configuration.  The registry is the authority
+    for which twins are hard-coded and for their schema defaults; only that
+    closed shape may be completed here.
+
+    ``resolution_minutes`` is different from a strategy constant for the
+    current RSI twin: the template receives it via the persisted data policy
+    as ``strategy_bars.multiplier``.  Read it from that right-side evidence so
+    the comparison remains about what LEAN actually executed, not what Python
+    claims it requested.
+    """
+    if (
+        right.source != "lean-sidecar"
+        or left.strategy_name != right.strategy_name
+        or set(right_parameters) != {"symbol"}
+    ):
+        return None
+
+    # Import locally: the parity module is used by persistence code, while
+    # the registry imports strategy implementations and their program wiring.
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    registration = _STRATEGY_REGISTRY.get(left.strategy_name)
+    if (
+        registration is None
+        or registration.lean_twin != right.strategy_name
+        or registration.lean_parameter_names
+    ):
+        return None
+
+    try:
+        resolved = registration.param_schema.model_validate(
+            {"symbol": right_parameters["symbol"]}
+        ).model_dump()
+    except (TypeError, ValueError):
+        return None
+
+    policy_parameter_names = registration.lean_data_policy_parameter_names
+    if not policy_parameter_names:
+        return resolved
+    try:
+        policy = json.loads(right.data_policy_json or "")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(policy, Mapping):
+        return None
+
+    for name in policy_parameter_names:
+        # The registry declares this only for templates whose runtime input is
+        # the strategy-bar cadence.  Keep the mapping closed: a new kind of
+        # policy-backed parameter must add its own explicit evidence mapping.
+        if name != "resolution_minutes":
+            return None
+        strategy_bars = policy.get("strategy_bars")
+        multiplier = strategy_bars.get("multiplier") if isinstance(strategy_bars, Mapping) else None
+        if not isinstance(multiplier, int) or isinstance(multiplier, bool) or multiplier <= 0:
+            return None
+        resolved[name] = multiplier
+    return resolved
+
+
+def compare_program_versions(left: RunDetail, right: RunDetail) -> ProgramVersionParityReceipt:
+    """Require both engines to name the same persisted Signal Program version."""
+    left_version = left.program_version.strip() if left.program_version else None
+    right_version = right.program_version.strip() if right.program_version else None
+    if left_version is None or right_version is None:
+        return ProgramVersionParityReceipt("unavailable", "program_version_missing", left_version, right_version)
+    matches = left_version == right_version
+    return ProgramVersionParityReceipt(
+        "match" if matches else "mismatch",
+        None if matches else "program_versions_differ",
+        left_version,
+        right_version,
+    )
+
+
+def _read_parameters(parameters_json: str | None) -> Mapping[str, Any] | None:
+    if not parameters_json or not parameters_json.strip():
+        return None
+    try:
+        parameters = json.loads(parameters_json)
+    except json.JSONDecodeError:
+        return None
+    return parameters if isinstance(parameters, Mapping) else None
+
+
+def _normalize_parameters(parameters: Mapping[str, Any]) -> dict[str, Any] | None:
+    normalized = dict(parameters)
+    symbol = normalized.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        return None
+    normalized["symbol"] = symbol.strip().upper()
+    return normalized
 
 
 def _properties_equal(left: Mapping[str, Any], right: Mapping[str, Any], name: str) -> bool:
@@ -290,6 +591,11 @@ def _properties_equal(left: Mapping[str, Any], right: Mapping[str, Any], name: s
 def _string(parent: Mapping[str, Any], name: str) -> str | None:
     value = parent.get(name)
     return value if isinstance(value, str) else None
+
+
+def _nonblank_string(parent: Mapping[str, Any], name: str) -> str | None:
+    value = _string(parent, name)
+    return value if value is not None and value.strip() else None
 
 
 def _number(parent: Mapping[str, Any], name: str) -> float | None:

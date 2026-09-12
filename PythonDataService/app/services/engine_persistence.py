@@ -113,10 +113,14 @@ def build_engine_persist_payload(
     """
     aggregates = compute_aggregates(trades, starting_cash, total_fees=total_fees)
 
+    from app.engine.strategy.registry import strategy_program_version
+
     return {
         "lean_run_id": None,
         "source": "engine",
         "strategy_name": strategy_name,
+        "program_version": strategy_program_version(strategy_name),
+        "execution_config_json": None,
         "symbol": symbol,
         "starting_cash": float(starting_cash),
         "start_date": start_date.isoformat(),

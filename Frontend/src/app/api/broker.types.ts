@@ -4026,6 +4026,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-validations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Golden Runs */
+        get: operations["list_golden_runs_api_research_golden_validations_get"];
+        put?: never;
+        /** Designate Golden Run */
+        post: operations["designate_golden_run_api_research_golden_validations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-validations/{golden_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Golden Run */
+        get: operations["get_golden_run_api_research_golden_validations__golden_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-validations/{golden_run_id}/applicability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assess Golden Run */
+        post: operations["assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-validations/{golden_run_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Golden Run */
+        post: operations["review_golden_run_api_research_golden_validations__golden_run_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/grid-search": {
         parameters: {
             query?: never;
@@ -10396,6 +10465,17 @@ export interface components {
              */
             use_rth?: boolean;
         };
+        /** DesignateGoldenRunRequest */
+        DesignateGoldenRunRequest: {
+            /** Command Id */
+            command_id: string;
+            /** Label */
+            label?: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Source Run Id */
+            source_run_id: number;
+        };
         /** DeskAccountChoiceResponse */
         DeskAccountChoiceResponse: {
             /** Account Id */
@@ -10666,6 +10746,32 @@ export interface components {
             /**
              * Gap Bps
              * @default 2
+             */
+            gap_bps?: number;
+            /**
+             * Rsi Max
+             * @default 70
+             */
+            rsi_max?: number;
+            /**
+             * Rsi Min
+             * @default 50
+             */
+            rsi_min?: number;
+        };
+        /**
+         * EmaCrossoverSignalStrategyParametersModel
+         * @description All four resolved entry gates accepted by the canonical EMA twin.
+         */
+        EmaCrossoverSignalStrategyParametersModel: {
+            /**
+             * Gap
+             * @default 0.2
+             */
+            gap?: number;
+            /**
+             * Gap Bps
+             * @default 0
              */
             gap_bps?: number;
             /**
@@ -11919,6 +12025,98 @@ export interface components {
             /** Fixtures */
             fixtures: components["schemas"]["FixtureSummary"][];
             validation?: components["schemas"]["ValidationSummary"] | null;
+        };
+        /** GoldenReviewResponse */
+        GoldenReviewResponse: {
+            /** Authorized Program Version */
+            authorized_program_version: string | null;
+            /** Classification */
+            classification: ("engine_agreement" | "reviewed_deviations" | "manual_override") | null;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "reject";
+            /** Evidence State */
+            evidence_state: string;
+            /** Expected Evidence Revision */
+            expected_evidence_revision: string;
+            /** Id */
+            id: number;
+            /** Quantconnect Backtest Id */
+            quantconnect_backtest_id: string | null;
+            /** Reason */
+            reason: string;
+            /** Reviewed At Ms */
+            reviewed_at_ms: number;
+            /** Reviewed By */
+            reviewed_by: string;
+        };
+        /** GoldenValidationApplicabilityRequest */
+        GoldenValidationApplicabilityRequest: {
+            /** Data Policy */
+            data_policy: Record<string, never> | null;
+            /** Execution */
+            execution: Record<string, never>;
+            /** Parameters */
+            parameters: Record<string, never>;
+            /** Program Version */
+            program_version?: string | null;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Symbol */
+            symbol: string;
+            /** Window */
+            window: Record<string, never>;
+        };
+        /** GoldenValidationApplicabilityResponse */
+        GoldenValidationApplicabilityResponse: {
+            /** Applicable */
+            applicable: boolean;
+            /** Classification */
+            classification: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Golden Validation Id */
+            golden_validation_id: number;
+            /** Mismatched Fields */
+            mismatched_fields: string[];
+            /** State */
+            state: string;
+        };
+        /** GoldenValidationResponse */
+        GoldenValidationResponse: {
+            /** Designated At Ms */
+            designated_at_ms: number;
+            /** Designated By */
+            designated_by: string;
+            /** Evidence Revision */
+            evidence_revision: string;
+            /** Evidence State */
+            evidence_state: string;
+            /** Id */
+            id: number;
+            /** Label */
+            label: string | null;
+            latest_review: components["schemas"]["GoldenReviewResponse"] | null;
+            /** Parity Evidence */
+            parity_evidence: Record<string, never>;
+            /** Rationale */
+            rationale: string;
+            /** Review Is Current */
+            review_is_current: boolean | null;
+            /** Reviews */
+            reviews: components["schemas"]["GoldenReviewResponse"][];
+            /** Source Run Id */
+            source_run_id: number;
+            /** State */
+            state: string;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Symbol */
+            symbol: string;
+            /** Validation Case */
+            validation_case: Record<string, never>;
         };
         /**
          * GraduationCriterionResponse
@@ -17842,6 +18040,24 @@ export interface components {
              */
             kind: "retire_replace";
         };
+        /** ReviewGoldenRunRequest */
+        ReviewGoldenRunRequest: {
+            /** Authorized Program Version */
+            authorized_program_version?: string | null;
+            /** Command Id */
+            command_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "reject";
+            /** Expected Evidence Revision */
+            expected_evidence_revision: string;
+            /** Quantconnect Backtest Id */
+            quantconnect_backtest_id?: string | null;
+            /** Reason */
+            reason: string;
+        };
         /** RevisionCreateRequest */
         RevisionCreateRequest: {
             /** Credential Slot */
@@ -21995,8 +22211,11 @@ export interface components {
              * @default 100000
              */
             starting_cash?: number;
-            /** @description Validated strategy-logic parameters for a bundled trusted template. Currently accepted only by ema_crossover_2_bps; omitted values use that template's canonical 2/50/70 defaults. */
-            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | null;
+            /**
+             * Strategy Parameters
+             * @description Validated strategy-logic parameters for a bundled trusted template. Accepted by the parameterized EMA twins; omitted values use that template's declared defaults.
+             */
+            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | components["schemas"]["EmaCrossoverSignalStrategyParametersModel"] | null;
             /**
              * Symbol
              * @description DEPRECATED (PR B): use ``data_policy.symbol``.
@@ -30064,6 +30283,183 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureInfoResponse"][];
+                };
+            };
+        };
+    };
+    list_golden_runs_api_research_golden_validations_get: {
+        parameters: {
+            query?: {
+                strategy_name?: string | null;
+                symbol?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenValidationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    designate_golden_run_api_research_golden_validations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesignateGoldenRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_golden_run_api_research_golden_validations__golden_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                golden_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                golden_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoldenValidationApplicabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenValidationApplicabilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_golden_run_api_research_golden_validations__golden_run_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                golden_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewGoldenRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

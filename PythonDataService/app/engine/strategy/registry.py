@@ -618,6 +618,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
         lean_twin="ema_crossover_signal",
+        lean_parameter_names=("gap", "gap_bps", "rsi_min", "rsi_max"),
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
@@ -1923,6 +1924,23 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
 }
 
+
+def strategy_program_version(strategy_name: str) -> str | None:
+    """Return the declared Signal Program version for a registered strategy."""
+    registration = _STRATEGY_REGISTRY.get(strategy_name)
+    contract = registration.signal_program_contract if registration is not None else None
+    return contract.program_version if contract is not None else None
+
+
+def lean_twin_program_version(template: str) -> str | None:
+    """Return the one Signal Program version represented by a registered LEAN twin."""
+    versions = {
+        registration.signal_program_contract.program_version
+        for registration in _STRATEGY_REGISTRY.values()
+        if registration.lean_twin == template and registration.signal_program_contract is not None
+    }
+    return next(iter(versions)) if len(versions) == 1 else None
+
 __all__ = [
     "_STRATEGY_REGISTRY",
     "ChartParamRef",
@@ -1930,4 +1948,6 @@ __all__ = [
     "StrategyChartIndicator",
     "StrategyParamsBase",
     "StrategyRegistration",
+    "lean_twin_program_version",
+    "strategy_program_version",
 ]

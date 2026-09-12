@@ -10,6 +10,8 @@ import { CurrencyPipe } from "@angular/common";
 import { EngineSourceLiteral, RunHistoryRow } from "./run-history.types";
 import type { DataPolicy } from "../../../models/data-policy";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
+import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
+import { AssetIdentityComponent } from "../../../shared/asset-identity/asset-identity.component";
 
 const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
   engine: "Python",
@@ -20,13 +22,15 @@ const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
 @Component({
   selector: "app-run-history",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, TimestampDisplayPipe],
+  imports: [AssetIdentityComponent, CurrencyPipe, ReceiptLabelPipe, TimestampDisplayPipe],
   templateUrl: "./run-history.component.html",
   styleUrl: "./run-history.component.scss",
 })
 export class RunHistoryComponent {
   readonly rows = input.required<RunHistoryRow[]>();
   readonly runSelected = output<string>();
+  /** Requests designation of a completed Python run as a Validation Golden Run. */
+  readonly goldenRequested = output<string>();
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.
    *  The host component owns the persistence side (GraphQL mutation). */
   readonly notesEdited = output<{ id: string; notes: string }>();
@@ -74,6 +78,11 @@ export class RunHistoryComponent {
 
   onRowClick(id: string): void {
     this.runSelected.emit(id);
+  }
+
+  requestGolden(row: RunHistoryRow, event: MouseEvent): void {
+    event.stopPropagation();
+    this.goldenRequested.emit(row.id);
   }
 
   // ------------------------------------------------------------------

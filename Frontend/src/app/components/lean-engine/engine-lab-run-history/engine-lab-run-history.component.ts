@@ -4,6 +4,7 @@ import {
   computed,
   effect,
   inject,
+  input,
   output,
   resource,
   signal,
@@ -14,6 +15,7 @@ import { RunHistoryComponent } from "../../shared/run-history/run-history.compon
 import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
 import { toRunHistoryRow, type BacktestRunSummary, type Engine, runWindowDate } from "../../../services/backtest-runs.types";
 import { JobsService } from "../../../services/jobs.service";
+import { GoldenValidationService } from "../../../services/golden-validation.service";
 
 /** Persisted filter selection. ``ALL`` asks for every engine. */
 type EngineFilter = "ALL" | Engine;
@@ -44,6 +46,7 @@ const ENGINE_JOB_TYPES = new Set<string>(["engine_backtest", "lean_engine_run"])
 export class EngineLabRunHistoryComponent {
   private readonly runs = inject(BacktestRunsService);
   private readonly jobsService = inject(JobsService);
+  private readonly goldenValidation = inject(GoldenValidationService);
   /** Job ids we've already refreshed for. Without this, every signal tick
    *  while a completed engine job sits in `JobsService.jobs` would refire
    *  the reload — the user would see a refresh storm on subsequent filter
@@ -56,6 +59,9 @@ export class EngineLabRunHistoryComponent {
   /** Emitted when a row is clicked — the parent component routes this to
    *  the Results tab. The id is the run's numeric id as a string. */
   readonly runSelected = output<string>();
+  readonly goldenRunRequested = output<number>();
+  /** Monotonic host-owned refresh token after a Golden designation or review. */
+  readonly goldenRefreshToken = input(0);
 
   /** Column-visibility set, persisted to localStorage so a researcher's
    *  layout survives reloads. Defaults to "core columns only" so the
@@ -70,7 +76,19 @@ export class EngineLabRunHistoryComponent {
     loader: ({ params }) => firstValueFrom(this.runs.list(params.engine, HISTORY_PAGE_SIZE)),
   });
 
-  readonly rows = computed(() => (this.history.hasValue() ? this.history.value() : []).map(toRunHistoryRow));
+  private readonly goldenCatalog = resource({
+    loader: () => firstValueFrom(this.goldenValidation.list()),
+  });
+
+  readonly rows = computed(() => {
+    const goldenByRunId = new Map(
+      (this.goldenCatalog.hasValue() ? this.goldenCatalog.value() : []).map((entry) => [entry.source_run_id, entry.state]),
+    );
+    return (this.history.hasValue() ? this.history.value() : []).map((run) => ({
+      ...toRunHistoryRow(run),
+      goldenValidationState: goldenByRunId.get(run.id) ?? null,
+    }));
+  });
 
   /** All known toggleable columns. Order is the rendering order. */
   readonly allColumns: readonly ColumnDef[] = [
@@ -103,6 +121,9 @@ export class EngineLabRunHistoryComponent {
       newlyCompleted.forEach((j) => this.seenCompletedIds.add(j.id));
       this.history.reload();
     });
+    effect(() => {
+      if (this.goldenRefreshToken() > 0) this.goldenCatalog.reload();
+    });
   }
 
   setEngineFilter(value: string): void {
@@ -113,6 +134,11 @@ export class EngineLabRunHistoryComponent {
 
   onRowSelected(id: string): void {
     this.runSelected.emit(id);
+  }
+
+  onGoldenRequested(id: string): void {
+    const runId = Number(id);
+    if (Number.isInteger(runId) && runId > 0) this.goldenRunRequested.emit(runId);
   }
 
   // ------------------------------------------------------------------

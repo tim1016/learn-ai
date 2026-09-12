@@ -21,12 +21,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.golden_validation import service as golden_validation_service
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
-from app.services.broker_v2_panel import strategy_catalog
+from app.services.broker_v2_panel import panel_deploy, strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.strategy_validation_manifest import (
@@ -82,6 +84,80 @@ def test_catalog_reads_a_confirmed_durable_pairing(
     assert admitted.paper_access_state == "enabled"
     assert admitted.selectable is True
     assert "paper" in admitted.admissible_modes
+
+
+def test_current_golden_validation_can_supply_the_validation_facet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reviewed Golden case reaches Paper without requiring a duplicate v1 event."""
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
+
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_symbols={"ema_crossover_signal": "TSLA"},
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.strategy_key == "ema_crossover_signal"
+    assert row.validation_case_symbol == "TSLA"
+    assert row.evidence_status == "accepted"
+    assert row.selectable is True
+    assert row.admissible_modes == ("dry_run", "paper")
+
+
+@pytest.mark.asyncio
+async def test_panel_golden_catalog_uses_uncapped_accepted_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    old_but_current = SimpleNamespace(
+        latest_review=SimpleNamespace(
+            decision="accept",
+            authorized_program_version=None,
+        ),
+        review_is_current=True,
+        validation_case={
+            "strategy": {
+                "name": "ema_crossover_signal",
+                "program_version": registration.signal_program_contract.program_version,
+            },
+            "symbol": "SPY",
+        },
+    )
+
+    async def accepted_lookup(operation, **kwargs):
+        assert operation is golden_validation_service.list_latest_accepted_dossiers
+        assert kwargs == {"symbol": None}
+        return [old_but_current]
+
+    monkeypatch.setattr(panel_deploy, "with_connection", accepted_lookup)
+
+    assert await panel_deploy._current_golden_validation_symbols(None) == {
+        "ema_crossover_signal": "SPY"
+    }
+
+
+def test_golden_validation_never_bypasses_program_account_access() -> None:
+    rows = _strategy_views(
+        [],
+        account_id="not-allowlisted",
+        custody_world="real_paper",
+        golden_validation_symbols={"ema_crossover_signal": "TSLA"},
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.evidence_status == "accepted"
+    assert row.paper_access_state == "available"
+    assert row.selectable is False
+    assert row.admissible_modes == ("dry_run",)
 
 
 def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(

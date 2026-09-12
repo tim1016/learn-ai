@@ -27,6 +27,7 @@ import { StrategyLabRunReport } from "./strategy-lab-run-report.service";
 import { StrategyLabRunStatsComponent } from "./run-stats/strategy-lab-run-stats.component";
 import { StrategyLabStageComponent } from "./strategy-lab-stage/strategy-lab-stage.component";
 import { inputsFromBacktestJob, inputsFromSavedRun, type StrategyLabRunInputs } from "./strategy-lab.models";
+import { GoldenValidationWorkbenchComponent } from "../golden-validation-workbench/golden-validation-workbench.component";
 
 /**
  * Strategy Lab's focused product shell. Configuration and run orchestration
@@ -48,6 +49,7 @@ import { inputsFromBacktestJob, inputsFromSavedRun, type StrategyLabRunInputs } 
     RunDockComponent,
     StrategyLabRunStatsComponent,
     StrategyLabStageComponent,
+    GoldenValidationWorkbenchComponent,
   ],
   templateUrl: "./strategy-lab.component.html",
   styleUrl: "./strategy-lab.component.scss",
@@ -69,6 +71,8 @@ export class StrategyLabComponent {
   readonly report = inject(StrategyLabRunReport);
 
   protected readonly leanSourceOpen = signal(false);
+  protected readonly goldenCandidateRunId = signal<number | null>(null);
+  protected readonly goldenRefreshToken = signal(0);
 
   /**
    * The report resource re-emits a new run object on every 5s poll. Collapsing
@@ -130,6 +134,14 @@ export class StrategyLabComponent {
       queryParams: { run: numericId },
       queryParamsHandling: "merge",
     });
+  }
+
+  selectGoldenCandidate(runId: number): void {
+    this.goldenCandidateRunId.set(runId);
+  }
+
+  refreshGoldenHistory(): void {
+    this.goldenRefreshToken.update((token) => token + 1);
   }
 
   /**

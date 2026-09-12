@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 
 def _trade(
     n: int,
@@ -57,6 +59,30 @@ def test_decision_mismatch_when_one_side_has_extra_trade() -> None:
     assert len(result.divergences) >= 1
     assert any(d.category == "DECISION_MISMATCH" for d in result.divergences)
     assert result.first_divergence_ms_utc is not None
+
+
+@pytest.mark.parametrize("field", ("entry_ms_utc", "exit_ms_utc"))
+def test_one_millisecond_timestamp_shift_is_a_decision_mismatch(field: str) -> None:
+    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
+
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
+    right = [dict(left[0])]
+    right[0][field] += 1
+
+    result = reconcile_trade_lists(left_trades=left, right_trades=right)
+
+    assert [divergence.category for divergence in result.divergences] == ["DECISION_MISMATCH"]
+
+
+def test_synthetic_exit_difference_is_a_decision_mismatch() -> None:
+    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
+
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
+    right = [dict(left[0], is_synthetic_exit=True)]
+
+    result = reconcile_trade_lists(left_trades=left, right_trades=right)
+
+    assert [divergence.category for divergence in result.divergences] == ["DECISION_MISMATCH"]
 
 
 def test_fill_price_drift_classified() -> None:

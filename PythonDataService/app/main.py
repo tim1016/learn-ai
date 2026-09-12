@@ -52,6 +52,7 @@ from app.routers import (
     edge,
     engine,
     golden_fixtures,
+    golden_validation,
     grid_search,
     indicator_reliability,
     indicators,
@@ -516,11 +517,13 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     # list stays readable. No host daemon anywhere in this path (L1/P10).
     from app.marketdata.ibkr_feed import get_market_data_feed
     from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+    from app.services.strategy_validation_admission import current_deployment_strategy_validation_fact
 
     bot_task_registry = BotTaskRegistry(
         artifacts_root=Path(ibkr_settings.live_runs_root).parent,
         feed_resolver=get_market_data_feed,
         supported_broker_ids=frozenset({"alpaca"}),
+        validation_fact=current_deployment_strategy_validation_fact,
     )
     set_bot_task_registry(bot_task_registry)
     logger.info("In-container bot runner installed (task registry, daemon-free).")
@@ -700,6 +703,12 @@ app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spe
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
 app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+app.include_router(
+    golden_validation.router,
+    prefix="/api/research/golden-validations",
+    tags=["research-golden-validation"],
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
 # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
 app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
 app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
