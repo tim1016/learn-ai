@@ -244,7 +244,8 @@ carries the F1–F19 adjudication table; the ops study
 (`docs/audits/bot-launch-ops-study-2026-08-24.md`) carries the detail and the
 timings (the session scratchpad logs were ephemeral — the study doc is the
 primary record). F1 and F9 were fixed in-session (`238821c7`, `ff5ed49f`);
-F18/F19 were closed by ADR 0045 (see §1). The items below entered this backlog on
+F18/F19 were closed by ADR 0045 (see §1); F6 was closed 2026-09-11 by #2034
+(`6f174718` — empty-input runs now fail closed). The items below entered this backlog on
 static code verification plus live observation during the session; severities
 were assigned at lift time from that evidence. The handoff's independent
 adjudication (confirm/refute, one issue per confirmed finding) may still
@@ -303,16 +304,6 @@ a defect.
   full-ladder preview (`POST …/bots/admission`) exists and is unused for
   refusal shaping (gate order `app/services/run_admission.py:105-435`; study
   §3).
-- **F6 — zero-bar engine run reports `success=True` (high).** Still open; the
-  strategy originally cited (`daily_sma_crossover`) was removed on 2026-08-28,
-  but **the defect is not strategy-specific and was reproduced without it**: an
-  `ema_crossover_signal` run over a window the resolved data root does not
-  cover returned `success=True` with zero bars, zero trades, an empty equity
-  curve, and only `run_verdict.status="incomplete"` to show for it
-  (`execute_engine_backtest`, `app/routers/engine.py`). An engine that cannot
-  fail on empty input is an honesty defect, and the reproduction is now easier
-  to hit than before: with `auto_fetch` off, the lake root is legitimately
-  empty for any window nobody has materialized yet.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule
@@ -438,23 +429,13 @@ The day-two 50-bot campaign is recorded in
 for the ten fixes out of the 2026-08-25 run: **all ten passed (A1–A13)**, and
 the four §10 items they closed were pruned above. T6 was found, fixed,
 regression-tested and live-verified inside the same session (#1791) and is
-therefore not listed here. Every item below is filed as an issue — this section
+therefore not listed here. T7 was likewise closed — #1794's surface-honesty
+slice shipped 2026-08-26, and ADR 0050 answers both #1800 design questions
+(supervised revival fenced at the store, #1906; the panel-action revival
+path, #1959) — and its bullet is deleted per the status convention. Every
+item below is filed as an issue — this section
 is the durable index, the issue is the working brief.
 
-- **T7 — a process freeze past the execution-lease TTL bricks the account
-  handle (critical).** `podman pause` (SIGSTOP) for ~50 s let the lease expire
-  while the process was frozen; on SIGCONT the ~24 still-running bots crashed,
-  **their terminal STOP evidence could not commit**, and every subsequent panel
-  action returned a raw 500 until a container restart. Fail-closed is correct —
-  a holder that lost its lease must not write. Three gaps, split by tractability:
-  the surface honesty fix (**#1794 — FIXED 2026-08-26**: the panel router now
-  translates the condition to a typed `EXECUTION_LEASE_LOST` refusal with
-  authored copy, instead of leaking the internal handle message as a raw 500;
-  the clerk router had translated it since the SQLite cutover, the panel router
-  simply had no handler) and the two design questions (**#1800**, open —
-  supervised re-acquisition; where terminal evidence commits when its authority
-  cannot be written). Real-world triggers are ordinary: laptop sleep, VM
-  migration, CPU starvation.
 - **T2/O4 — read and deploy latency degrade with running-fleet size (high).**
   At 144 rows with 50 trading bots: catalog p50 16.8 s / p95 20.6 s (idle
   baseline 3.3 s / 8.7 s); deploys 0.4 s median for the first ~30 and ~15 s
