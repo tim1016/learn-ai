@@ -16,10 +16,10 @@ The lake is currently reachable in-process (`app/routers/data_lake.py` exposes `
 
 ### The original design authority
 
-The lake's design is `docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md`, pruned from the tree but recovered from git history with:
+The lake's design is `docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md`, pruned from the tree but recovered from git history with:
 
 ```shell
-git show 8441f4f6^:docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md
+git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 ```
 
 The lake's live source cites that spec by section number throughout (e.g. `catalog_schema.py`'s docstring points at "§ 3", `sweep.py`'s at "§ 4.4"); this ADR does the same, and any successor reading a `§ N` citation in the code should recover the spec with the command above before assuming the section renumbered.
@@ -114,7 +114,7 @@ Building a durable archive of vendor market data raises a question this decision
 The pruned design spec is recovered with:
 
 ```shell
-git show 8441f4f6^:docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md
+git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 ```
 
 Sections cited above: §2.1 (service roles), §2.2 (volume layout / mount table), §2.3 (control flow, the flow Decision 3 departs from), §3 (catalog schema, mirrored by `catalog_schema.py`), §4.4 (concurrency primitives, used by `sweep.py`).

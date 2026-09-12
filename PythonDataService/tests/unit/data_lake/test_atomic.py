@@ -1,6 +1,6 @@
 """Unit tests for app.data_lake.atomic.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.2
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.2
 """
 
 from __future__ import annotations

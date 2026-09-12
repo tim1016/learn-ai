@@ -34,7 +34,7 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   selectable: false,
   admissible_modes: ['dry_run'],
   override_explanation: null,
-  blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion.md' no longer matches its recorded hash.",
+  blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion-signal.md' no longer matches its recorded hash.",
 };
 
 const BLOCKED_EXPLANATION = BLOCKED_STRATEGY.blocked_explanation;

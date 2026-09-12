@@ -166,9 +166,10 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
   imported by nothing, and have no direct test coverage
   (`docs/math-sources-of-truth.md` records `NONE — pending` for the pricer).
   They were **not** deleted with the strategy because the package is described
-  as live in five architecture documents (`options-math-authorities.md`,
-  `options-research.md`, `options-routes-research.md`,
-  `engine-authority-map.md`, `math-sources-of-truth.md`), and retiring a
+  as live in four architecture documents (`options-math-authorities.md`,
+  `options-research.md`, `engine-authority-map.md`,
+  `math-sources-of-truth.md`; the routes cleanup record
+  `options-routes-research.md` was pruned to git history 2026-09-12), and retiring a
   documented canonical math row is a decision with its own doc surface, not a
   side effect of a strategy deletion. Disposition — delete the package and its
   rows, or re-point it at a decoupled options Action Plan — is deliberately

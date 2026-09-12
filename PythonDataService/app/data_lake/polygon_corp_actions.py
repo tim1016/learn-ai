@@ -1,6 +1,6 @@
 """Polygon corp-action fetchers: splits + dividends.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.6
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.6
 
 Both endpoints follow the same paginated `next_url` pattern as the aggregate
 fetcher (see polygon_fetcher.py). Results are sorted ascending by event date

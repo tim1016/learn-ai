@@ -7,7 +7,7 @@ namespace Backend.Models.MarketData;
 /// Catalog row for a single physical artifact in the Polygon → LEAN data lake.
 /// Written by Python <c>app/data_lake/catalog_client.py</c> via asyncpg; read
 /// by both Backend (for coverage queries) and Python.
-/// Schema authority: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 3.1
+/// Schema authority: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 3.1
 /// </summary>
 public class DataLakeArtifact
 {

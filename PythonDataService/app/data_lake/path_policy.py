@@ -12,7 +12,7 @@ writes the artifacts, ``cache_import``, which imports them, the chart
 split-read, and the sidecar mount — resolves the identical directory instead
 of each re-deriving it from ``settings``.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.3
 """
 
 from __future__ import annotations

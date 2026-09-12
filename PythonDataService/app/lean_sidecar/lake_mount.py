@@ -16,7 +16,7 @@ Authority: the 2026-05-20 data-lake design spec, § 2.2 "Volume layout
 (host-bind)" + its container mount table, and § 5.3 (LEAN path policy).
 The spec was pruned from the tree; recover it with::
 
-    git show 8441f4f6^:docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md
+    git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 
 Deliberate deviation from the spec's mount table
 ------------------------------------------------

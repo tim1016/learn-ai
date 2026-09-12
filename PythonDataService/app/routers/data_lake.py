@@ -20,7 +20,7 @@ spec instead of asking an operator to hand-type a container digest.
 Behind the DATA_LAKE_ENABLED feature flag; routes return 404 when the flag is off
 (via main.py wiring, not this module).
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.3
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.3
 """
 
 from __future__ import annotations

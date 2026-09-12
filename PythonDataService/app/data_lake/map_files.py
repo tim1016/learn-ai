@@ -1,6 +1,6 @@
 """LEAN map-file CSV builder.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.1
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.1
 
 LEAN map-file format (one CSV per symbol; see path_policy.LeanMapFilePath for
 the canonical path):

@@ -1,6 +1,6 @@
 """Validation tests for app.data_lake.types Pydantic models.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.1, § 4.2
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.1, § 4.2
 Issue: #1877 (PR D of #1861) — start_trading_date_ms/end_trading_date_ms.
 """
 

@@ -1,6 +1,6 @@
 """Polygon /v2/aggs minute-trade fetcher.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.6
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.6
 
 Defaults to `adjusted=false` (raw bars; LEAN normalization mode='Raw').
 Callers that materialize a non-raw lake root pass `adjusted=True` -- the lake

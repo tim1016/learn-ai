@@ -592,7 +592,7 @@ class TestSingleStrikeDominanceGate:
     ``max_single_strike_share`` exceeds threshold; it hard-fails after
     ``max_iterations`` attempts or below the strike-count floor.
 
-    See ``docs/architecture/iv-research-chat-notes.md`` §5.8.
+    See ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.8.
     """
 
     @staticmethod

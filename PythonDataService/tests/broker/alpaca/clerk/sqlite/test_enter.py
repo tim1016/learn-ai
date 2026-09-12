@@ -974,7 +974,7 @@ def test_partial_fill_delta_price_is_the_weighted_average_not_the_cumulative_one
     average over the *whole* order, not a per-delta price. 2 shares @ $10
     then a cumulative 5 @ $20 average means the second delta (3 shares) must
     be priced at $26.666... (``(5*20 - 2*10) / 3``), not copied as $20 —
-    ``docs/references/clerk-fill-quantity-tolerance.md`` pins this."""
+    ``docs/references/clerk-invariants.md §2`` pins this."""
     accepted = accept_enter(
         repo,
         account_id=ACCOUNT_ID,

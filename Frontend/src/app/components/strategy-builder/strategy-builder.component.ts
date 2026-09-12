@@ -62,7 +62,7 @@ interface BuilderChainRow {
 }
 
 /**
- * Chain-density mode per UX-Q2 in `docs/architecture/options-ux-design-prompt.md`.
+ * Chain-density mode per UX-Q2 in `docs/architecture/options-ux-design-prompt.md (pruned 2026-09-12, git history)`.
  * 'quick' shows L · S · Δ · Price · OI · Vol per side (default).
  * 'greeks' adds V · Θ · Γ between L/S and Δ — preserves the full-Greek
  * display from the deleted /options-chain page (D9a).

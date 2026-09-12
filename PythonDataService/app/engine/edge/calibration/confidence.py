@@ -118,7 +118,7 @@ def evaluate_confidence_shape(
             "Confidence-shape calibration requires labelled signal "
             "history. Trigger this after ~30 forward sessions of "
             "recorder data with realized forward returns. See "
-            "docs/architecture/iv-research-chat-notes.md §4.5."
+            "docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history) §4.5."
         )
     raise NotImplementedError(
         "Calibration body is intentionally unimplemented until labelled "

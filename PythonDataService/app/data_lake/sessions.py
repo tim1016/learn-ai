@@ -27,7 +27,7 @@ which made the lake's session set disagree with the two consumers that
 already used the canonical calendar: the sidecar's coverage demand
 (``lake_mount.resolve_lake_artifacts``) and the backfill job's iteration.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.5
 """
 
 from __future__ import annotations

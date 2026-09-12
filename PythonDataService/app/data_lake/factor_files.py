@@ -1,6 +1,6 @@
 """LEAN factor-file CSV builder.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.1
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.1
 
 LEAN factor-file format (factor_files/<sym>.csv under the equity/usa subtree):
   date,price_factor,split_factor,reference_price

@@ -3,7 +3,7 @@
 Slice 1b lands the primitive only. Slice 4 wires it onto a scheduler (cron
 or asyncio background task).
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.4
 """
 
 from __future__ import annotations

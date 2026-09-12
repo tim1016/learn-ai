@@ -5,7 +5,7 @@ cannot subprocess-spawn `podman cp` against the LEAN image directly. The
 LEAN-sidecar launcher (a host process that DOES have podman) exposes
 POST /extract-metadata; this module is the data-lake-side caller.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.5
 Existing reference implementation:
   app/lean_sidecar/launcher_client.py — original caller for the lean-sidecar flow
   app/lean_sidecar/staging.py::_stage_lean_metadata_via_launcher — how that

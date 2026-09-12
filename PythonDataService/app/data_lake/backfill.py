@@ -6,7 +6,7 @@ lives here: run_backfill() only slices a DataRunSpec's date range into one
 sub-range per canonical trading session, calls ensure_data() for each, and
 folds the typed results into a running total the caller can stream.
 
-Issue: #1836. Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md
+Issue: #1836. Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 """
 
 from __future__ import annotations

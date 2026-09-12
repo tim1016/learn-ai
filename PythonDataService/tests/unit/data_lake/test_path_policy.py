@@ -1,6 +1,6 @@
 """Unit tests for app.data_lake.path_policy.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.3
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ Asserts:
   - All 15 artifact files exist on disk under tmp_lake/lake/
   - Second call: identical data_availability_hash + fetched_artifact_count == 0
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5, 4.6
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.5, 4.6
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Atomic-write helpers for the data lake writer.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.2
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.2
 
 Contract:
   1. Stage the content under a request/worker/attempt-scoped path (so retries

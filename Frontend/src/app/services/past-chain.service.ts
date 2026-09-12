@@ -3,7 +3,7 @@
  *
  * Lifted from `options-history.component.ts:analyze()` during R1 of
  * the options-routes cleanup
- * (`docs/architecture/options-routes-research.md` § 5.1 R1).
+ * (`docs/architecture/options-research.md` § 5.3; decision R1 recorded in the pruned routes-research doc, git history).
  *
  * The Polygon Starter snapshot endpoint is live-only, so historical
  * chains can't be fetched as a single call. Instead, we construct OCC

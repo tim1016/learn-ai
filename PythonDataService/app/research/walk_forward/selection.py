@@ -64,7 +64,7 @@ def select_candidate_index(results: list[TrainingCandidateResult]) -> int:
 
     Formula: argmax eligible candidate by
       (train Sharpe, train total return, -declaration index).
-    Reference: docs/references/spy-ema-normalized-gap-walk-forward.md.
+    Reference: docs/math-sources-of-truth.md ("Relative operand difference in basis points" / walk-forward rows; the retired SPY protocol note is in git history).
     Canonical implementation: this file.
     Validated against: tests/research/walk_forward/test_selection.py.
 

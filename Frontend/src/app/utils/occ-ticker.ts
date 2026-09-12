@@ -4,7 +4,7 @@
  * The OCC ticker format is a single string that fully identifies an
  * option contract. Every options-related caller in this project must
  * round-trip through this module rather than parsing inline — see
- * `docs/architecture/options-routes-research.md` § R5.
+ * `docs/architecture/options-research.md` (decision R5 recorded in the pruned routes-research doc, git history).
  *
  * Format:
  *   O:{UNDERLYING}{YYMMDD}{C|P}{STRIKE_x1000_zero_padded_to_8}
