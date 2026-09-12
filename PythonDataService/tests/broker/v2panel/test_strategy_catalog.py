@@ -30,6 +30,7 @@ from app.research.golden_validation import service as golden_validation_service
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.broker_v2_panel import panel_deploy, strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
+from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
@@ -37,6 +38,13 @@ from app.services.strategy_validation_manifest import (
 )
 from tests.broker.v2panel.conftest import _accepted_deploy_entry
 from tests.broker.v2panel.fixtures import ACCT
+
+
+def _golden_scope(symbol: str = "TSLA", **parameters: object) -> GoldenValidationScope:
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    resolved = registration.param_schema(symbol=symbol).model_dump(mode="json")
+    resolved.update(parameters)
+    return GoldenValidationScope(symbol=symbol, parameters=resolved)
 
 
 def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
@@ -99,13 +107,20 @@ def test_current_golden_validation_can_supply_the_validation_facet(
         [],
         account_id=ACCT,
         custody_world="real_paper",
-        golden_validation_symbols={"ema_crossover_signal": "TSLA"},
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope(),)},
     )
 
     assert len(rows) == 1
     row = rows[0]
     assert row.strategy_key == "ema_crossover_signal"
     assert row.validation_case_symbol == "TSLA"
+    assert row.validation_case_parameters == {
+        "gap": 0.2,
+        "gap_bps": 0.0,
+        "rsi_min": 50.0,
+        "rsi_max": 70.0,
+    }
+    assert row.golden_validation_scope is True
     assert row.evidence_status == "accepted"
     assert row.selectable is True
     assert row.admissible_modes == ("dry_run", "paper")
@@ -129,6 +144,7 @@ async def test_panel_golden_catalog_uses_uncapped_accepted_lookup(
                 "program_version": registration.signal_program_contract.program_version,
             },
             "symbol": "SPY",
+            "parameters": _golden_scope("SPY").parameters,
         },
     )
 
@@ -139,8 +155,43 @@ async def test_panel_golden_catalog_uses_uncapped_accepted_lookup(
 
     monkeypatch.setattr(panel_deploy, "with_connection", accepted_lookup)
 
-    assert await panel_deploy._current_golden_validation_symbols(None) == {
-        "ema_crossover_signal": "SPY"
+    assert await panel_deploy._current_golden_validation_scopes(None) == {
+        "ema_crossover_signal": (_golden_scope("SPY"),)
+    }
+
+
+@pytest.mark.asyncio
+async def test_panel_golden_catalog_keeps_other_symbol_scopes_for_fail_closed_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TSLA Golden record must not disappear when the form is scoped to MSFT."""
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_contract is not None
+    tsla_dossier = SimpleNamespace(
+        latest_review=SimpleNamespace(
+            decision="accept",
+            authorized_program_version=None,
+        ),
+        review_is_current=True,
+        validation_case={
+            "strategy": {
+                "name": "ema_crossover_signal",
+                "program_version": registration.signal_program_contract.program_version,
+            },
+            "symbol": "TSLA",
+            "parameters": _golden_scope("TSLA").parameters,
+        },
+    )
+
+    async def accepted_lookup(operation, **kwargs):
+        assert operation is golden_validation_service.list_latest_accepted_dossiers
+        assert kwargs == {"symbol": None}
+        return [tsla_dossier]
+
+    monkeypatch.setattr(panel_deploy, "with_connection", accepted_lookup)
+
+    assert await panel_deploy._current_golden_validation_scopes("MSFT") == {
+        "ema_crossover_signal": (_golden_scope("TSLA"),)
     }
 
 
@@ -149,7 +200,7 @@ def test_golden_validation_never_bypasses_program_account_access() -> None:
         [],
         account_id="not-allowlisted",
         custody_world="real_paper",
-        golden_validation_symbols={"ema_crossover_signal": "TSLA"},
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope(),)},
     )
 
     assert len(rows) == 1
@@ -158,6 +209,163 @@ def test_golden_validation_never_bypasses_program_account_access() -> None:
     assert row.paper_access_state == "available"
     assert row.selectable is False
     assert row.admissible_modes == ("dry_run",)
+
+
+def test_nondefault_golden_scope_is_selectable_with_its_reviewed_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Golden row carries the exact reviewed controls instead of falling back to defaults."""
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
+
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope(gap=0.75),)},
+        requested_symbol="TSLA",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.evidence_status == "accepted"
+    assert row.selectable is True
+    assert row.admissible_modes == ("dry_run", "paper")
+    assert row.validation_case_symbol == "TSLA"
+    assert row.validation_case_parameters["gap"] == 0.75
+    assert row.golden_validation_scope is True
+
+
+def test_other_symbol_golden_scope_blocks_legacy_strategy_wide_fallback() -> None:
+    """Broker deployment cannot reuse a legacy approval outside its Golden ticker."""
+    rows = _strategy_views(
+        [_accepted_deploy_entry()],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={"ema_crossover_signal": (_golden_scope("TSLA"),)},
+        requested_symbol="MSFT",
+    )
+
+    assert rows[0].evidence_status == "blocked"
+    assert rows[0].selectable is False
+    assert rows[0].golden_validation_scope is False
+    assert rows[0].admissible_modes == ("dry_run",)
+    assert rows[0].blocked_explanation is not None
+    assert "Golden Validation" in rows[0].blocked_explanation
+
+
+def test_incomplete_golden_scope_fails_closed_instead_of_using_current_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A historic case missing fields cannot be silently upgraded by today's registry defaults."""
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
+
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={
+            "ema_crossover_signal": (GoldenValidationScope(symbol="TSLA", parameters={"gap": 0.75}),)
+        },
+    )
+
+    assert rows[0].evidence_status == "blocked"
+    assert rows[0].selectable is False
+    assert rows[0].golden_validation_scope is False
+    assert rows[0].validation_case_parameters == {}
+    assert rows[0].blocked_explanation is not None
+    assert "cannot be represented" in rows[0].blocked_explanation
+
+
+@pytest.mark.parametrize(
+    ("parameter", "recorded_value"),
+    (
+        ("gap_bps", 0),
+        ("gap_bps", False),
+        ("rsi_min", True),
+    ),
+)
+def test_golden_scope_rejects_pydantic_coercible_parameter_types(
+    parameter: str,
+    recorded_value: object,
+) -> None:
+    """A Golden scope is an exact serialized receipt, not a coerced request."""
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={
+            "ema_crossover_signal": (_golden_scope(**{parameter: recorded_value}),)
+        },
+    )
+
+    assert rows[0].evidence_status == "blocked"
+    assert rows[0].selectable is False
+    assert rows[0].golden_validation_scope is False
+
+
+@pytest.mark.parametrize("recorded_symbol", ["missing", None, "tsla"])
+def test_golden_scope_requires_a_canonical_symbol_in_its_exact_parameter_map(
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_symbol: str | None,
+) -> None:
+    """The database scope and the deploy ticket must name the same canonical ticker."""
+    strategy_key = "ema_crossover_signal"
+    parameters = dict(_golden_scope().parameters)
+    if recorded_symbol == "missing":
+        parameters.pop("symbol")
+    else:
+        parameters["symbol"] = recorded_symbol
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({(strategy_key, ACCT)}),
+    )
+
+    row = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={
+            strategy_key: (GoldenValidationScope(symbol="TSLA", parameters=parameters),)
+        },
+    )[0]
+
+    assert row.evidence_status == "blocked"
+    assert row.selectable is False
+    assert row.golden_validation_scope is False
+
+
+def test_golden_scope_with_a_hidden_parameter_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalog cannot advertise a scope that deploy-time validation will reject."""
+    strategy_key = "ema_crossover_signal"
+    registration = _STRATEGY_REGISTRY[strategy_key]
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY,
+        strategy_key,
+        replace(registration, hidden_params=registration.hidden_params | {"gap"}),
+    )
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({(strategy_key, ACCT)}),
+    )
+
+    row = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={strategy_key: (_golden_scope(gap=0.75),)},
+    )[0]
+
+    assert row.evidence_status == "blocked"
+    assert row.selectable is False
+    assert row.golden_validation_scope is False
 
 
 def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(

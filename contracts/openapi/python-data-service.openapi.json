@@ -1240,6 +1240,10 @@
             "title": "Explanation",
             "type": "string"
           },
+          "golden_validation_scope": {
+            "title": "Golden Validation Scope",
+            "type": "boolean"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -1276,6 +1280,13 @@
             "title": "Strategy Key",
             "type": "string"
           },
+          "validation_case_parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Validation Case Parameters",
+            "type": "object"
+          },
           "validation_case_symbol": {
             "title": "Validation Case Symbol",
             "type": "string"
@@ -1286,6 +1297,8 @@
           "label",
           "explanation",
           "validation_case_symbol",
+          "validation_case_parameters",
+          "golden_validation_scope",
           "evidence_status",
           "paper_access_state",
           "selectable",

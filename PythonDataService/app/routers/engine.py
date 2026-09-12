@@ -88,7 +88,7 @@ from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
-from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms, persisted_execution_configuration
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1795,16 +1795,7 @@ def _persist_and_dispatch_companion(
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
-        execution_config={
-            "compatibility_profile": request.compatibility_profile,
-            "warmup_from_date": request.warmup_from_date,
-            "slippage_per_share": request.slippage_per_share,
-            "session_entry_cutoff": (
-                request.session_entry_cutoff.isoformat() if request.session_entry_cutoff is not None else None
-            ),
-            "force_flat_at": request.force_flat_at.isoformat() if request.force_flat_at is not None else None,
-            "limit_penetration": request.limit_penetration,
-        },
+        execution_config=_persisted_execution_config(request, evaluation_start=date.fromisoformat(resolved_configuration.start_date)),
     )
 
     on_log(f"Saved study {response.study_id}")
@@ -1820,6 +1811,19 @@ def _persist_and_dispatch_companion(
     )
 
     return response
+
+
+def _persisted_execution_config(request: EngineBacktestRequest, *, evaluation_start: date) -> dict[str, Any]:
+    """Freeze execution settings through the shared Python/LEAN receipt seam."""
+    return persisted_execution_configuration(
+        evaluation_start=evaluation_start,
+        compatibility_profile=request.compatibility_profile,
+        warmup_from_date=request.warmup_from_date,
+        slippage_per_share=request.slippage_per_share,
+        session_entry_cutoff=request.session_entry_cutoff,
+        force_flat_at=request.force_flat_at,
+        limit_penetration=request.limit_penetration,
+    )
 
 
 # ---------------------------------------------------------------------------

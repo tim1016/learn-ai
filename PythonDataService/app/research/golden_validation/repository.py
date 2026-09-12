@@ -7,6 +7,7 @@ classification, and stale-review protection live in ``service.py``.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import asyncpg
@@ -52,10 +53,29 @@ class GoldenReviewRow:
     reviewed_at_ms: int
 
 
+@dataclass(frozen=True, slots=True)
+class GoldenCatalogRow:
+    """One accepted Golden case with the review that made it eligible.
+
+    The deploy catalog only needs the newest review, rather than a complete
+    review history for every case.  Keeping that projection explicit avoids
+    an unbounded per-case review lookup as the Golden corpus grows.
+    """
+
+    golden_run: GoldenRunRow
+    latest_review: GoldenReviewRow
+
+
 _GOLDEN_COLUMNS = """
     id, source_run_id, command_id, command_sha256, label, strategy_name, symbol,
     validation_case_json::text AS validation_case_json, case_sha256, rationale,
     designated_by, designated_at_ms
+"""
+_GOLDEN_COLUMNS_FOR_ALIAS = """
+    golden.id, golden.source_run_id, golden.command_id, golden.command_sha256,
+    golden.label, golden.strategy_name, golden.symbol,
+    golden.validation_case_json::text AS validation_case_json, golden.case_sha256,
+    golden.rationale, golden.designated_by, golden.designated_at_ms
 """
 _REVIEW_COLUMNS = """
     id, golden_run_id, command_id, command_sha256, expected_evidence_revision,
@@ -135,12 +155,21 @@ async def list_golden_runs_for_deployment_scope(
     """
     rows = await conn.fetch(
         f"""
-        SELECT {_GOLDEN_COLUMNS}
-          FROM research_validation_golden_runs
-         WHERE strategy_name = $1
-           AND symbol = $2
-           AND validation_case_json->'parameters' = $3::jsonb
-         ORDER BY designated_at_ms DESC, id DESC
+        SELECT {_GOLDEN_COLUMNS_FOR_ALIAS}
+          FROM research_validation_golden_runs AS golden
+          LEFT JOIN LATERAL (
+              SELECT reviewed_at_ms, id
+                FROM research_golden_validation_reviews
+               WHERE golden_run_id = golden.id
+               ORDER BY reviewed_at_ms DESC, id DESC
+               LIMIT 1
+          ) AS latest_review ON true
+         WHERE golden.strategy_name = $1
+           AND golden.symbol = $2
+           AND golden.validation_case_json->'parameters' = $3::jsonb
+         ORDER BY latest_review.reviewed_at_ms DESC NULLS LAST,
+                  latest_review.id DESC NULLS LAST,
+                  golden.id DESC
         """,
         strategy_name,
         symbol,
@@ -159,29 +188,99 @@ async def golden_runs_exist_for_strategy(conn: asyncpg.Connection, strategy_name
     )
 
 
-async def list_latest_accepted_golden_runs(
+async def list_latest_accepted_golden_catalog_rows(
     conn: asyncpg.Connection,
     *,
     symbol: str | None,
-) -> list[GoldenRunRow]:
-    """Return cases whose latest human disposition is acceptance, without a page cap."""
+) -> list[GoldenCatalogRow]:
+    """Project accepted Golden cases without N review and parity fetches.
+
+    The caller can batch-load all retained parity verdicts in one query and
+    assemble lightweight dossiers for the deploy catalog.  This deliberately
+    remains uncapped: a valid older scope must not disappear behind unrelated
+    later research history.
+    """
     rows = await conn.fetch(
         f"""
-        SELECT {_GOLDEN_COLUMNS}
+        SELECT
+            golden.id AS golden_id,
+            golden.source_run_id AS golden_source_run_id,
+            golden.command_id AS golden_command_id,
+            golden.command_sha256 AS golden_command_sha256,
+            golden.label AS golden_label,
+            golden.strategy_name AS golden_strategy_name,
+            golden.symbol AS golden_symbol,
+            golden.validation_case_json::text AS golden_validation_case_json,
+            golden.case_sha256 AS golden_case_sha256,
+            golden.rationale AS golden_rationale,
+            golden.designated_by AS golden_designated_by,
+            golden.designated_at_ms AS golden_designated_at_ms,
+            latest_review.id AS review_id,
+            latest_review.golden_run_id AS review_golden_run_id,
+            latest_review.command_id AS review_command_id,
+            latest_review.command_sha256 AS review_command_sha256,
+            latest_review.expected_evidence_revision AS review_expected_evidence_revision,
+            latest_review.decision AS review_decision,
+            latest_review.classification AS review_classification,
+            latest_review.evidence_state AS review_evidence_state,
+            latest_review.parity_verdict_id AS review_parity_verdict_id,
+            latest_review.evidence_json::text AS review_evidence_json,
+            latest_review.evidence_sha256 AS review_evidence_sha256,
+            latest_review.reason AS review_reason,
+            latest_review.quantconnect_backtest_id AS review_quantconnect_backtest_id,
+            latest_review.authorized_program_version AS review_authorized_program_version,
+            latest_review.reviewed_by AS review_reviewed_by,
+            latest_review.reviewed_at_ms AS review_reviewed_at_ms
           FROM research_validation_golden_runs AS golden
           JOIN LATERAL (
-              SELECT decision
+              SELECT {_REVIEW_COLUMNS}
                 FROM research_golden_validation_reviews
                WHERE golden_run_id = golden.id
                ORDER BY reviewed_at_ms DESC, id DESC
                LIMIT 1
           ) AS latest_review ON latest_review.decision = 'accept'
          WHERE ($1::text IS NULL OR golden.symbol = $1)
-         ORDER BY golden.designated_at_ms DESC, golden.id DESC
+         ORDER BY latest_review.reviewed_at_ms DESC, latest_review.id DESC
         """,
         symbol,
     )
-    return [GoldenRunRow(**row) for row in rows]
+    return [
+        GoldenCatalogRow(
+            golden_run=GoldenRunRow(
+                id=row["golden_id"],
+                source_run_id=row["golden_source_run_id"],
+                command_id=row["golden_command_id"],
+                command_sha256=row["golden_command_sha256"],
+                label=row["golden_label"],
+                strategy_name=row["golden_strategy_name"],
+                symbol=row["golden_symbol"],
+                validation_case_json=row["golden_validation_case_json"],
+                case_sha256=row["golden_case_sha256"],
+                rationale=row["golden_rationale"],
+                designated_by=row["golden_designated_by"],
+                designated_at_ms=row["golden_designated_at_ms"],
+            ),
+            latest_review=GoldenReviewRow(
+                id=row["review_id"],
+                golden_run_id=row["review_golden_run_id"],
+                command_id=row["review_command_id"],
+                command_sha256=row["review_command_sha256"],
+                expected_evidence_revision=row["review_expected_evidence_revision"],
+                decision=row["review_decision"],
+                classification=row["review_classification"],
+                evidence_state=row["review_evidence_state"],
+                parity_verdict_id=row["review_parity_verdict_id"],
+                evidence_json=row["review_evidence_json"],
+                evidence_sha256=row["review_evidence_sha256"],
+                reason=row["review_reason"],
+                quantconnect_backtest_id=row["review_quantconnect_backtest_id"],
+                authorized_program_version=row["review_authorized_program_version"],
+                reviewed_by=row["review_reviewed_by"],
+                reviewed_at_ms=row["review_reviewed_at_ms"],
+            ),
+        )
+        for row in rows
+    ]
 
 
 async def insert_golden_run(
@@ -261,6 +360,26 @@ async def parity_verdict_for_case(
         + lock_clause,
         parity_group_id,
     )
+
+
+async def parity_verdicts_for_cases(
+    conn: asyncpg.Connection,
+    parity_group_ids: Iterable[str],
+) -> dict[str, asyncpg.Record]:
+    """Load retained parity verdicts for a catalog projection in one query."""
+    identifiers = sorted(set(parity_group_ids))
+    if not identifiers:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT id, parity_group_id, left_run_id, right_run_id, verdict_version,
+               status, verdict_json::text AS verdict_json, created_at_ms
+          FROM research_parity_verdicts
+         WHERE parity_group_id = ANY($1::text[])
+        """,
+        identifiers,
+    )
+    return {str(row["parity_group_id"]): row for row in rows}
 
 
 async def lock_paired_evidence_for_golden_case(

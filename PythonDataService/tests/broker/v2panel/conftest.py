@@ -190,12 +190,12 @@ def deploy_app(
         lambda _registry: validation_entries,
     )
 
-    async def no_golden_validations(_symbol: str | None) -> dict[str, str]:
+    async def no_golden_validations(_symbol: str | None) -> dict[str, tuple[object, ...]]:
         return {}
 
     monkeypatch.setattr(
         panel_deploy,
-        "_current_golden_validation_symbols",
+        "_current_golden_validation_scopes",
         no_golden_validations,
     )
     clear_broker_account_snapshot_cache_for_testing()

@@ -15,6 +15,8 @@ export const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'Deployment Validation',
   explanation: 'Validated canonical decision kernel.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'accepted',
   paper_access_state: 'enabled',
   selectable: true,
@@ -28,6 +30,8 @@ export const EMA_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'EMA Crossover Signal',
   explanation: 'Validated EMA(5), EMA(10), and RSI(14) crossover signal.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'accepted',
   paper_access_state: 'enabled',
   selectable: true,
@@ -46,6 +50,8 @@ export const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'SMA Crossover',
   explanation: 'Human-validated SMA crossover with evidence-only parity.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'evidence_only',
   paper_access_state: 'enabled',
   selectable: true,
@@ -232,4 +238,3 @@ export const LIVE_DEPLOY_VIEW: DeployBotView = {
     },
   ],
 };
-

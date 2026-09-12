@@ -1,0 +1,51 @@
+<article class="golden-review">
+  <header>
+    <div>
+      <p class="golden-review__eyebrow">Human review</p>
+      <h3>Record judgment</h3>
+      <p>Missing, failed, or corrupt evidence requires Manual override. An accepted mismatch remains Reviewed deviations—not engine agreement.</p>
+    </div>
+    @if (golden().latest_review; as review) {
+      <span class="golden-review__state">{{ review.decision | receiptLabel }} · {{ (review.classification ?? review.evidence_state) | receiptLabel }}</span>
+    }
+  </header>
+  @if (golden().review_is_current === false) {
+    <p class="golden-review__warning" role="alert">This decision reviewed an earlier evidence revision and no longer applies. Review the current evidence again.</p>
+  }
+  <form novalidate (submit)="$event.preventDefault(); submit()">
+    <fieldset>
+      <legend>Decision</legend>
+      <label><input type="radio" name="golden-review" value="accept" [checked]="draft().decision === 'accept'" (change)="setDecision($event)" /> Accept</label>
+      <label><input type="radio" name="golden-review" value="reject" [checked]="draft().decision === 'reject'" (change)="setDecision($event)" /> Reject</label>
+    </fieldset>
+    <label>
+      <span>Review note</span>
+      <textarea [value]="draft().reason" (input)="setReason($event)" rows="3" required></textarea>
+    </label>
+    <label>
+      <span>QuantConnect Cloud backtest ID <em>optional</em></span>
+      <input [value]="draft().quantConnectBacktestId" (input)="setQuantConnectBacktestId($event)" placeholder="Optional external reference" />
+    </label>
+    @if (requiresHistoricalAuthorization()) {
+      <label>
+        <span>Authorized Signal Program version <em>required to accept this historical run</em></span>
+        <input [value]="draft().authorizedProgramVersion" (input)="setAuthorizedProgramVersion($event)" placeholder="Exact version, for example ema-crossover-signal/v1" />
+      </label>
+    } @else if (historicalRunIsRejected()) {
+      <p class="golden-review__notice" role="status">A rejection does not authorize a Signal Program version.</p>
+    }
+    <button type="submit" [disabled]="busy()">Save review</button>
+  </form>
+  @if (golden().reviews.length > 0) {
+    <ol class="golden-review__history" aria-label="Review history">
+      @for (review of golden().reviews; track review.id) {
+        <li>
+          <strong>{{ review.decision | receiptLabel }} · {{ (review.classification ?? review.evidence_state) | receiptLabel }}</strong>
+          <span>{{ review.reviewed_at_ms | timestampDisplay: 'local' : 'datetime' }} by {{ review.reviewed_by }}</span>
+          @if (review.authorized_program_version) { <small>Authorized program version: {{ review.authorized_program_version }}</small> }
+          <p>{{ review.reason }}</p>
+        </li>
+      }
+    </ol>
+  }
+</article>

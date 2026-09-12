@@ -240,16 +240,20 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "strategy_key",
         "label",
         "explanation",
-            "validation_case_symbol",
-            "evidence_status",
-            "paper_access_state",
-            "selectable",
+        "validation_case_symbol",
+        "validation_case_parameters",
+        "golden_validation_scope",
+        "evidence_status",
+        "paper_access_state",
+        "selectable",
         "admissible_modes",
         "override_explanation",
         "blocked_explanation",
         "params_schema",
     }
     assert strategy["validation_case_symbol"] == "SPY"
+    assert strategy["validation_case_parameters"] == {}
+    assert strategy["golden_validation_scope"] is False
     assert strategy["evidence_status"] == "accepted"
     assert strategy["paper_access_state"] == "enabled"
     assert strategy["selectable"] is True

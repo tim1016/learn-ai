@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -27,6 +27,8 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'RSI Mean Reversion',
   explanation: 'Validated RSI mean-reversion entries with ADX confirmation.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'blocked',
   paper_access_state: 'enabled',
   selectable: false,
@@ -49,12 +51,21 @@ const NO_RUNTIME_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'Strategy B',
   explanation: 'Validated RSI-range strategy with no registered runtime yet.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'blocked',
   paper_access_state: 'enabled',
   selectable: false,
   admissible_modes: [],
   override_explanation: null,
   blocked_explanation: 'This strategy has no registered live-decision runtime yet.',
+};
+
+const GOLDEN_TSLA_STRATEGY: DeployBotView['strategies'][number] = {
+  ...EMA_STRATEGY,
+  validation_case_symbol: 'TSLA',
+  validation_case_parameters: { gap: 0.75 },
+  golden_validation_scope: true,
 };
 
 const NO_RUNTIME_EXPLANATION = NO_RUNTIME_STRATEGY.blocked_explanation;
@@ -278,6 +289,45 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).parameters).toEqual({ gap: 5 });
   });
 
+  it('seeds an accepted non-default Golden scope and submits its exact configuration', async () => {
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [GOLDEN_TSLA_STRATEGY],
+    });
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'golden-tsla-01' },
+    });
+
+    expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('TSLA');
+    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.symbol).toBe('TSLA');
+    expect(body.parameters).toEqual({ gap: 0.75 });
+  });
+
+  it('does not offer broker deployment after an operator changes a Golden parameter', async () => {
+    await renderWorkflow(mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [GOLDEN_TSLA_STRATEGY],
+    }));
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'golden-tsla-edited' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Crossover gap' }), { target: { value: '0.2' } });
+
+    expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
+    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Broker deployment is limited to the selected Golden Validation symbol and parameters.'))
+      .toBeTruthy();
+  });
+
   it('blocks deployment while a strategy parameter is showing unparseable text', async () => {
     const service = mockService();
     await renderWorkflow(service);
@@ -402,6 +452,84 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('ema_crossover_signal');
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
+  });
+
+  it('honors a changed strategy-key query parameter while the deploy route is reused', async () => {
+    const initialQuery = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
+    const queryParamMap = new BehaviorSubject(initialQuery);
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap, snapshot: { queryParamMap: initialQuery } },
+        },
+        { provide: BrokerV2PanelService, useValue: mockService() },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByRole('heading', { name: 'Bot binding' });
+
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+      .toBe('ema_crossover_signal');
+
+    queryParamMap.next(convertToParamMap({ strategy_key: 'sma_crossover' }));
+
+    await vi.waitFor(() => {
+      expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+        .toBe('sma_crossover');
+    });
+    expect(screen.getByRole('button', {
+      name: `About ${SMA_OVERRIDE_STRATEGY.label}: ${SMA_OVERRIDE_STRATEGY.explanation}`,
+    })).toBeTruthy();
+  });
+
+  it('clears admission and evidence-only state when a reused route selects another strategy', async () => {
+    const initialQuery = convertToParamMap({ strategy_key: 'sma_crossover' });
+    const queryParamMap = new BehaviorSubject(initialQuery);
+    const deniedAdmission = {
+      ...ADMISSION,
+      allowed: false,
+      explanation: 'This admission result belongs only to SMA.',
+    };
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(deniedAdmission);
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap, snapshot: { queryParamMap: initialQuery } },
+        },
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByRole('heading', { name: 'Dangerous human override' });
+
+    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'route-reset-01' } });
+    fireEvent.click(screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'));
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'This override belongs only to the SMA deployment.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+    await screen.findByText('Start blocked');
+
+    queryParamMap.next(convertToParamMap({ strategy_key: 'ema_crossover_signal' }));
+
+    await vi.waitFor(() => {
+      expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+        .toBe('ema_crossover_signal');
+    });
+    expect(screen.queryByText('Start blocked')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
+
+    queryParamMap.next(convertToParamMap({ strategy_key: 'sma_crossover' }));
+
+    await screen.findByRole('heading', { name: 'Dangerous human override' });
+    expect((screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.') as HTMLInputElement)
+      .checked).toBe(false);
+    expect((screen.getByLabelText('Operator reason') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('renders a blocked strategy selectable for Dry Run while Paper stays disabled with the backend reason', async () => {

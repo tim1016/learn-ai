@@ -1,0 +1,16 @@
+:host { display: block; }
+
+summary { cursor: pointer; color: var(--accent); font-weight: var(--fw-bold); }
+
+.golden-scope { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-3); }
+.golden-scope section { display: grid; gap: var(--space-2); min-width: 0; }
+.golden-scope h4 { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); }
+.golden-scope p { margin: 0; color: var(--text-secondary); }
+.golden-scope pre { max-height: 18rem; margin: 0; padding: var(--space-3); overflow: auto; border-radius: var(--radius-sm); background: var(--bg-canvas); color: var(--text-secondary); font-size: var(--fs-xs); }
+.golden-scope__facts { display: grid; gap: var(--space-2); margin: 0; }
+.golden-scope__facts div { min-width: 0; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
+.golden-scope__facts dt { color: var(--text-subtle); font-size: var(--fs-xs); font-weight: var(--fw-bold); }
+.golden-scope__facts dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.golden-scope__opaque-value { font-family: var(--font-mono); }
+
+@media (max-width: 760px) { .golden-scope { grid-template-columns: 1fr; } }

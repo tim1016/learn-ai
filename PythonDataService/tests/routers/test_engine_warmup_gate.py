@@ -8,7 +8,7 @@ Contract: PRD #1925 "The gate", PRD #1926 "Execution and parity".
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -19,7 +19,7 @@ from app.config import settings
 from app.data_lake.path_policy import lake_subpath
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
-from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms, et_wall_clock_ms
 from tests._helpers.lean_store import seed_store_day
 
 _ET = ZoneInfo("America/New_York")
@@ -109,6 +109,19 @@ def test_an_unprimed_run_reports_one_window_and_saves_its_study(seeded_lake, rec
     assert response.study_id == 42
     assert len(recorded_persistence["save"]) == 1
     assert recorded_persistence["save"][0]["start_date"] == DAYS[1].isoformat()
+
+
+def test_study_persists_recurring_session_rules_as_utc_ms_receipts(seeded_lake, recorded_persistence) -> None:
+    response = _run(_request(session_entry_cutoff="15:55:00", force_flat_at="15:58:00"))
+
+    assert response.success, response.error
+    execution_config = recorded_persistence["save"][0]["execution_config"]
+    assert execution_config["session_time_reference_ms"] == et_midnight_ms(DAYS[1])
+    assert execution_config["session_time_zone"] == "America/New_York"
+    assert execution_config["session_entry_cutoff_ms"] == et_wall_clock_ms(DAYS[1], time(15, 55))
+    assert execution_config["force_flat_at_ms"] == et_wall_clock_ms(DAYS[1], time(15, 58))
+    assert "session_entry_cutoff" not in execution_config
+    assert "force_flat_at" not in execution_config
 
 
 def test_a_primed_run_scopes_every_reported_figure_to_the_evaluation_window(seeded_lake, recorded_persistence) -> None:

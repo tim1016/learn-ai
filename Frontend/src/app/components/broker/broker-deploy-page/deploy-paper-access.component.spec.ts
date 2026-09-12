@@ -15,6 +15,8 @@ const AVAILABLE_STRATEGY: DeployBotStrategy = {
   label: 'EMA Crossover Signal',
   explanation: 'Validated EMA crossover strategy.',
   validation_case_symbol: 'SPY',
+  validation_case_parameters: {},
+  golden_validation_scope: false,
   evidence_status: 'blocked',
   paper_access_state: 'available',
   selectable: false,
