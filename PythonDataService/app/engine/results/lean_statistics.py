@@ -41,6 +41,7 @@ format_lean_statistics_summary = _format_lean_statistics_summary
 
 TRADING_DAYS_PER_YEAR = 252
 LEAN_STATISTICS_SOURCE_COMMIT = "261366a7e26ae942df858ab20df4fef8fa07de67"
+LEAN_STATISTICS_REPRODUCTION_VERSION = 2
 
 
 def _variance(xs: list[float]) -> float:
@@ -198,15 +199,18 @@ def reproduce_lean_total_performance(
 ) -> dict[str, dict[str, Any]]:
     """Independently reproduce LEAN's native portfolio and trade statistics.
 
-    Formula/reference: QuantConnect LEAN source commit
+    Formula: Reproduce LEAN's 25 portfolio and 41 trade statistics, including
+    the upper-middle duration median selected at index ``n / 2``.
+    Reference: QuantConnect LEAN source commit
     ``261366a7e26ae942df858ab20df4fef8fa07de67``:
     ``StatisticsBuilder.cs``, ``PortfolioStatistics.cs``,
     ``TradeStatistics.cs`` and ``Statistics.cs``. Inputs are the exact native
     primitive vectors retained by ``lean-native-r1``; the function never reads
     LEAN's reported portfolio/trade statistic values.
-
-    Validated against: ``tests/engine/results/test_lean_native_statistics.py``
-    and the immutable ``lean-statistics-oracle-v1`` fixture.
+    Canonical implementation: This function and its focused formatting module,
+    ``app.engine.results.lean_statistics_format``.
+    Validated against: ``tests/test_lean_statistics.py``, including the immutable
+    ``lean-statistics-oracle-v1`` fixture and odd/even duration subsets.
     """
     charts = normalized_result.get("full_charts")
     total_performance = normalized_result.get("total_performance")
@@ -484,8 +488,9 @@ def _reproduce_lean_trade_statistics(closed_trades: Sequence[Any]) -> dict[str, 
             # LEAN's empty trade subset has a zero duration summary; avoid
             # manufacturing a missing value when every closed trade has one sign.
             return Decimal(0)
-        middle = len(ordered) // 2
-        return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+        # LEAN QuickSelects index n / 2, which is the upper-middle element for
+        # an even-sized input; it does not interpolate between the two middles.
+        return ordered[len(ordered) // 2]
 
     average_mfe = average([_decimal(trade["mfe"]) for trade in trades])
     return {

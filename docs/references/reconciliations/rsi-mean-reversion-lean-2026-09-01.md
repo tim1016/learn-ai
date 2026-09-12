@@ -131,21 +131,32 @@ trades (odd) → `medianTradeDuration` **agrees**; 10 winning trades (even) →
 `medianWinningTradeDuration` **diverges**. The defect fires on even-count
 subsets and only there.
 
-**Disposition.** Reported, not fixed here. This is pre-existing shared code
+**Disposition at the time.** Reported, not fixed in the RSI twin change. This
+was pre-existing shared code
 affecting `medianTradeDuration`, `medianWinningTradeDuration`, and
 `medianLosingTradeDuration` for *every* strategy with an even-count subset; the
 helper is strategy-independent and nothing about RSI reaches it. Correcting it
 changes persisted statistics repo-wide and
 belongs in its own change with its own regression test, not smuggled into the
 PR that introduces this twin. Per `numerical-rigor.md` the divergence is **not**
-accepted as tolerance: the convention is simply wrong relative to the reference
-and should be repaired. It is carried in the repository's open-defect authority,
-`docs/known-gaps.md` § 5, so it survives this receipt no longer being read.
+accepted as tolerance: the convention was simply wrong relative to the
+reference and needed a separate repair. It was carried in the repository's
+open-defect authority, `docs/known-gaps.md` § 5, so it survived this receipt no
+longer being read.
+
+**Resolution (2026-09-11).** The shared reproduction now uses LEAN's
+upper-middle selection and pins both even and odd all-trade, winning-trade, and
+losing-trade subsets in `tests/test_lean_statistics.py`. New reproduction
+receipts use the versioned `lean-native-statistics-v2-<source-commit>` contract.
+The W3mo/W6mo values above remain the immutable evidence recorded at the time;
+existing saved rows and their original unversioned receipt IDs are not
+rewritten or silently backfilled.
 
 Because the sole divergence is a statistics-formatting convention with zero
 trade-level, input, or readiness divergences across both cells, this receipt
 records the RSI mean reversion **signal and execution** logic as reconciled
-against LEAN, and the median convention as a separate open defect.
+against LEAN. The median convention was a separate open defect at the time and
+is now resolved as recorded above.
 
 ## Not covered
 
