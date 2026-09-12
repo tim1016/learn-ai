@@ -284,6 +284,14 @@ jobs:
         tests/unit tests/indicators tests/edge tests/utils
         tests/engine tests/routers tests/schemas tests/services tests/operator
         tests/contracts tests/broker
+      # Numerical evidence is a baseline obligation, not a change-detection
+      # heuristic. The fixture path exercises the committed reference outputs
+      # (the metadata-only manifest test has its own job below); the reconciler
+      # and fast cross-engine cells prove the core comparison paths.
+      PYTHON_SCIENTIFIC_PROOF_TEST_PATHS: >-
+        tests/fixtures
+        tests/research/parity/test_qc_reconciler.py
+        tests/research/parity/test_cross_engine_study.py
       # asyncpg DSN — see `POSTGRES_URL` in `PythonDataService/app/config.py`
       # and `catalog_client.init_pool`. Same postgres:16 service as
       # `backend-test`, same credentials, so both jobs' migrated schemas agree.
@@ -363,22 +371,24 @@ jobs:
           # Deleted sources cannot own tests in the current checkout and must not
           # contribute paths that pytest can no longer collect.
           changed=$(git diff --name-only --diff-filter=ACMRT "$range" || true)
-          # Baseline dirs are always run; skip them here to avoid duplicate paths.
+          # Baseline and scientific-proof paths are always run; skip them here
+          # to avoid duplicate collection through the change-driven extras.
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
-          baseline_pattern=$(
-            printf '%s\n' "${baseline_dirs[@]}" \
+          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
+          always_run_pattern=$(
+            printf '%s\n' "${baseline_dirs[@]}" "${scientific_proof_paths[@]}" \
               | sed 's#^#PythonDataService/#' \
               | sed 's#[][(){}.^$*+?|\\]#\\&#g' \
               | paste -sd'|' -
           )
-          baseline_pattern="^(${baseline_pattern})(/|$)"
+          always_run_pattern="^(${always_run_pattern})(/|$)"
           extra=""
-          # (1) Directly-changed test files outside the baseline dirs.
+          # (1) Directly-changed test files outside the always-run paths.
           while IFS= read -r p; do
             [ -z "$p" ] && continue
             case "$p" in
               PythonDataService/tests/*test_*.py)
-                if [[ ! "$p" =~ $baseline_pattern ]]; then
+                if [[ ! "$p" =~ $always_run_pattern ]]; then
                   rel="${p#PythonDataService/}"
                   [ -f "PythonDataService/$rel" ] && extra="$extra $rel"
                 fi
@@ -398,7 +408,7 @@ jobs:
                 stem=$(basename "$p" .py)
                 [ "$stem" = "__init__" ] && continue
                 while IFS= read -r t; do
-                  if [[ ! "PythonDataService/$t" =~ $baseline_pattern ]]; then
+                  if [[ ! "PythonDataService/$t" =~ $always_run_pattern ]]; then
                     extra="$extra $t"
                   fi
                 done < <(cd PythonDataService && find tests -type f \( -name "test_${stem}.py" -o -name "test_${stem}_*.py" \) 2>/dev/null || true)
@@ -442,6 +452,11 @@ jobs:
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           extra="${{ steps.changed.outputs.extra }}"
           python -m pytest "${baseline_dirs[@]}" $extra --ignore=tests/unit/data_lake --ignore=tests/integration/data_lake -n auto -v -m "not slow" --tb=short
+
+      - name: Run scientific proof tests
+        run: |
+          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
+          python -m pytest "${scientific_proof_paths[@]}" --ignore=tests/fixtures/test_golden_manifest.py -n auto -v -m "not slow" --tb=short
 
       # Postgres-gated lake tests (catalog write ops, cache import, ensure_data,
       # schema drift) — see #1862. These skipped in CI for lack of POSTGRES_URL
