@@ -57,7 +57,7 @@ schedule (Nemes-style) bounds the wing-spread bias without needing
 historical NBBO. Default for new synthesis paths going forward;
 ``DEFAULT_HALF_SPREAD_RULE`` (flat 0.5%·S) is preserved for the SPY
 2024-12-20 golden fixture so its reconstructions stay byte-identical.
-See ``docs/architecture/iv-research-chat-notes.md`` §5.5."""
+See ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.5."""
 
 
 def tiered_moneyness_half_spread(

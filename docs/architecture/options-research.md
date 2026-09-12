@@ -17,6 +17,12 @@
 > `docs/architecture/options-routes-research.md` § 6.2.
 >
 > **Last revised:** 2026-04-29 (initial scaffold).
+>
+> **Note (2026-09-12):** the companion cleanup record
+> `docs/architecture/options-routes-research.md` was pruned to git history
+> (its decisions are absorbed here and in `options-math-authorities.md`);
+> recover its §6.2 rigor template and §7 decision log from git history when
+> needed.
 
 ---
 
@@ -154,7 +160,7 @@ Page-specific constraints:
 
 ## 4. Mathematical foundations
 
-Per [§7 D6](../architecture/options-routes-research.md#7-decisions-log)
+Per §7 D6
 of the research plan, every formula is anchored on a textbook example
 (Hull, *Options, Futures, and Other Derivatives*, 9th ed.) so that
 external reviewers can independently verify without vendor access.
@@ -342,7 +348,7 @@ Key skeleton points planned:
 - After R0b: also hosts the per-contract historical drill-down
   drawer (D9 + D9a — full Greek display per row, drill-down on
   click). UX details deferred to the design-pass per
-  [§7 D11](options-routes-research.md#7-decisions-log) of the
+  §7 D11 of the
   research plan; entries UX-Q1, UX-Q2, UX-Q4 in
   [`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md).
 - End-to-end fixture: SPY 2024-12-20 multi-leg strategy with
@@ -378,7 +384,7 @@ Key skeleton points planned:
 - Data flow: ticker + past date → `past-chain.service.fetchPastChain(...)`
   → batched `getOrFetchStockAggregates(occTicker, ...)` → renders.
 - UX details deferred to the design-pass per
-  [§7 D11](options-routes-research.md#7-decisions-log); entry UX-Q3
+  §7 D11; entry UX-Q3
   in [`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md).
 
 ### 5.4 Companion data formats
@@ -419,7 +425,7 @@ cross-engine parity assertions).
 ## 7. Decisions log
 
 The full decision history for the *cleanup* lives in
-[`docs/architecture/options-routes-research.md` § 7](options-routes-research.md#7-decisions-log).
+`docs/architecture/options-routes-research.md` § 7.
 This section captures only decisions that bear on the *math or wire
 shape* of the surviving feature.
 
@@ -445,7 +451,7 @@ shape* of the surviving feature.
 Tracked items that affect the math or wire shape of the surviving
 feature. *Cleanup-mechanical* items (extractions, redirects,
 component deletions) live in
-[`docs/architecture/options-routes-research.md` § 9](options-routes-research.md#9-phased-execution-plan).
+`docs/architecture/options-routes-research.md` § 9.
 
 - **R8 — server-side BS authority migration.** Phase 1.2 of
   `options-vol-platform-tdd.md`. Today, `/pricing-lab` and
@@ -499,7 +505,7 @@ component deletions) live in
 
 **Internal references:**
 
-- [`docs/architecture/options-routes-research.md`](options-routes-research.md)
+- `docs/architecture/options-routes-research.md`
   — the cleanup plan that produced this doc.
 - [`docs/architecture/options-math-authorities.md`](options-math-authorities.md)
   — the canonical implementation index for every formula in §4.
@@ -567,7 +573,7 @@ inside the `polygon-data-service` container.
 
 The exhaustive file map for the cleanup (all in-scope code touched by
 the consolidation) lives in
-[`docs/architecture/options-routes-research.md` § 13 Appendix A](options-routes-research.md#13-appendix-a--file-map-of-every-options-touchpoint).
+`docs/architecture/options-routes-research.md` § 13 Appendix A.
 This appendix lists only the files that *implement* the math and
 data flow described in §4–§5.
 

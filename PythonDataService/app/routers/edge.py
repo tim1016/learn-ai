@@ -373,7 +373,7 @@ def _parse_iv_series(
     the bar visually rather than silently treat it as fully validated.
 
     See ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log
-    and ``docs/architecture/iv-research-chat-notes.md`` §5.3.
+    and ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.3.
     """
     if not iv_series:
         return pd.Series(index=bars_index, dtype=float), None, None

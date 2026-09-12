@@ -787,7 +787,7 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
 
 def test_qc_shadow_container_fallback_copies_are_byte_identical_to_references() -> None:
     """The containerized data plane can't mount references/ (see
-    docs/archive/plans/live-control-data-plane-topology-investigation-prd.md),
+    the archived data-plane topology investigation PRD, git history),
     so reference_code_for_entry falls back to app/data/qc-shadow/ whenever
     references/qc-shadow/ is absent. ruff.toml documents the intent that the
     two stay byte-identical ("Reference artifacts must stay byte-identical to

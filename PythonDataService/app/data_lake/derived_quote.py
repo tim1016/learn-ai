@@ -6,7 +6,7 @@ we synthesize quote = trade with zero spread + zero size. This is enough
 for LEAN to load without warnings and matches the existing
 lean_sidecar_service.stage_quote_bars behavior.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.6
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.6
 
 Real quote data from Polygon (when the plan tier permits) is a Slice 5
 deferred item.

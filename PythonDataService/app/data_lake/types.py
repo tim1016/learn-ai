@@ -1,6 +1,6 @@
 """Pydantic models for the ensure_data contract.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.1, § 4.2
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.1, § 4.2
 
 Spec-update corrections applied (post-plan review):
 - ``include_lean_metadata`` field removed; LEAN metadata is an unconditional

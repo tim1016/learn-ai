@@ -1,6 +1,6 @@
 """Deterministic data-contract fingerprint.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 3.1
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 3.1
 ("data_contract_hash" — proves same-contract identity at the catalog level).
 
 `data_contract_hash` is sha256 over canonical JSON of:

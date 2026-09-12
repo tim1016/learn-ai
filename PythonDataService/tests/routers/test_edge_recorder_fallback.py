@@ -318,7 +318,7 @@ class TestHealthScoreImputedPrior:
     UI can flag the bar even though the numeric confidence may match the
     explicit full-health case.
 
-    Refined per ``docs/architecture/iv-research-chat-notes.md`` §5.3 — the
+    Refined per ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.3 — the
     earlier 0.5 imputed-prior policy was replaced because halving every
     no-evidence confidence is itself a real signal-attenuation choice
     with no evidence to support the cut.

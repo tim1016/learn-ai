@@ -2,11 +2,13 @@
 
 **Purpose:** One map to load first. Tells an AI agent (or human) which docs are authoritative, which are supporting context, and which are archived. Load canonical docs for a domain before editing that domain's code.
 
-**Agent convention:** Only docs marked `canonical` or `protected-canonical` should be used as implementation authority. `supporting` docs provide context and provenance. `archived` docs in `docs/archive/` carry status banners and must not be treated as authority.
+**Agent convention:** Only docs marked `canonical` or `protected-canonical` should be used as implementation authority. `supporting` docs provide context and provenance. There is no `docs/archive/` tree anymore — retired material lives in Git history (pruned 2026-09-12).
 
-**2026-07-04 and 2026-08-19 prunes.** Point-in-time implementation plans, session
-handoffs, shipped-feature PRDs, closed audit findings, and the retired IBKR
-launcher/evaluator operating record were **hard-deleted to Git history**. Git history
+**2026-07-04, 2026-08-19, and 2026-09-12 prunes.** Point-in-time implementation plans, session
+handoffs, shipped-feature PRDs, closed audit findings, the retired IBKR
+launcher/evaluator operating record, the entire `docs/archive/` tree, shipped
+superpowers plans/specs, retired-protocol reference notes, and dead validation
+artifacts were **hard-deleted to Git history**. Git history
 is their provenance record. Open defects belong in `docs/known-gaps.md`; current
 Alpaca Broker V2 behavior belongs in `docs/broker-v2-operator-manual.md`.
 
@@ -23,9 +25,8 @@ rows below take precedence. The remaining rules, in order, are:
 |---|---|---|
 | `docs/architecture/adrs/**` | `canonical` | Durable decision rationale; the ADR file owns its status. |
 | `docs/prds/**` | `in-flight` | Design context; verify status before acting on it. |
-| `docs/architecture/**`, `docs/audits/**`, `docs/design/**`, `docs/domain/**`, `docs/process/**`, `docs/references/**`, `docs/research/**`, `docs/runbooks/**`, `docs/screenshots/**`, `docs/spy-lean-output/**`, `docs/superpowers/**`, `docs/validation/**` | `supporting` | Context or evidence, never a replacement for its canonical authority. |
+| `docs/architecture/**`, `docs/audits/**`, `docs/design/**`, `docs/domain/**`, `docs/process/**`, `docs/references/**`, `docs/research/**`, `docs/runbooks/**`, `docs/spy-lean-output/**`, `docs/superpowers/**`, `docs/validation/**` | `supporting` | Context or evidence, never a replacement for its canonical authority. |
 | Other `docs/*.md` files | `supporting`, unless listed as canonical below | Root-level context or index. |
-| `docs/archive/**` | `archived` | Retained non-operational history; never implementation authority. |
 
 An unknown directory fails the documentation contract rather than inheriting a broad
 catch-all classification.
@@ -151,7 +152,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
-| `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
+| `docs/architecture/options-math-authorities.md` | Options math | `options-routes-research.md` cleanup record (pruned to git history 2026-09-12) | 2026-04-29 |
 | `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-19 |
 | `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the Broker V2 manual; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
@@ -160,7 +161,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | Retired phase plans and the pre-#1583 executable snapshot (Git history) | 2026-08-19 |
 | `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
 | `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
-| `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — PR2) | — |
+| `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — pruned archive copy, git history) | — |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
 | `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-08-19 |
 
@@ -171,17 +172,11 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Notes |
 |---|---|---|
 | `docs/architecture/alpaca-configuration-ownership-inventory.md` | Per-setting class, callers and migration disposition for every `ALPACA_*` variable | Evidence for ADR 0060 Decision 1; records the type-fidelity constraint on the envelope sha and that `ALPACA_PAPER_CARRYOVER_ENABLED` has no runtime consumer |
-| `docs/architecture/backtesting-engine-grounding-2026-04-26.md` | Engine diagnostic | Cited by `numerical-authority-migration-plan.md` |
 | `docs/architecture/broker-configuration-profile-contract.md` | Record shapes, credential-slot scheme, route surface and error taxonomy for broker configuration profiles | The shared contract packages B-E implement under ADR 0060; not authority over the ADR |
 | `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |
 | `docs/architecture/edge-feature-design.md` | Edge feature engineering spec | Actionable engineering spec |
-| `docs/architecture/edge-functionality-testing.md` | Edge testing guide | Engineering-focused |
-| `docs/architecture/external-trading-platform-inspiration-2026-05-08.md` | Platform inspiration | Recent (2026-05-08) |
 | `docs/architecture/iv-ownership-research.md` | IV pipeline research | ~32k tokens; authoritative research backing IV pipeline |
-| `docs/architecture/options-cleanup-2026-04-29.md` | Options cleanup audit trail | Referenced by `options-math-authorities.md` |
-| `docs/architecture/options-research.md` | Options implementation truth | — |
-| `docs/architecture/options-routes-research.md` | Options routes cleanup record | Motivated Phase 1 of `options-math-authorities.md` |
-| `docs/architecture/options-vol-platform-tdd.md` | Vol platform design | Contains actionable architectural decisions |
+| `docs/architecture/options-research.md` | Options implementation truth | Self-declared single-source doc for surviving options surfaces; §5 pipeline stubs still being authored |
 | `docs/architecture/sse-job-streams.md` | SSE job streams | SSE is in use per IBKR integration |
 | `docs/audits/computational-fidelity-2026-04-22.md` | Timestamp ban motivation | Cited by `numerical-rigor.md` |
 | `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
@@ -190,14 +185,13 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md` | ADR-0037 legacy Alpaca custody retirement and migration-gate receipt | Records structural deletion, preserved SQLite/IBKR evidence boundaries, and the explicit external-inventory prerequisite for #1618/#1656–#1660 |
 | `docs/audits/numeric-authority-census-2026-08-17.md` | P&L / exposure / position implementation census | Supporting evidence for #1590 and ADR 0036; refutes the suspected FIFO duplication |
 | `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md` | Alpaca submit-to-custody fail-open seams (5 confirmed, 9 refuted) | Supporting evidence for #1592; its confirmed seams are landed in `docs/known-gaps.md` via #1604 |
-| `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
 | `docs/design/user-owned-broker-configurations-plan-2026-09-10.md` | Delegation plan for moving broker configuration out of the environment file | Owner decisions D1-D5 (2026-09-10) and the A-G package split; ADR 0060 is its Package A |
-| `docs/engine-phase-1-2-refined-plan.md` | Engine Lab / Strategy Lab deprecation lineage | Historical planning context; Strategy Lab remains an active product surface. |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
-| `docs/lean-engine-phase1-verification-report.md` | Engine correctness evidence | Evidential artifact |
 | `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
 | `docs/references/alpaca-sqlite-clerk-recovery-language.md` | Trader/operator action-language matrix | Backend-authored wording contract evidence; operator policy remains in the manuals |
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
+| `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | Consolidated 2026-09-12 from three per-invariant stubs; defers to the pinned contracts doc |
+| `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
 | `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by `math-sources-of-truth.md` — keep for traceability |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
 | `docs/options-cross-section-overview.md` | Options cross-section research | Useful pipeline context |
@@ -207,9 +201,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/process/pr-review-escalations.md` | PR escalation protocol | Operational |
 | `docs/spy-lean-output-report.md` | SPY LEAN reconciliation | Evidential artifact |
 | `docs/spy-lean-output/source-map.md` | LEAN output source map | Pairs with the report |
-| `docs/superpowers/specs/2026-05-08-golden-fixtures-design.md` | Golden fixtures design spec | Recent (2026-05-08) |
 | `docs/tv-polygon-validation-gotchas.md` | TradingView/Polygon alignment | Operational gotchas |
-| `docs/validation-study-inventory.md` | Validation study inventory | Research provenance |
 
 ---
 
@@ -222,18 +214,16 @@ PRDs were on 2026-07-04). Verify status before trusting them as current.
 
 | Doc | Domain |
 |---|---|
-| `docs/architecture/operator-notice-prd.md` | Operator notice contract implementation (ADR-0015) |
 | `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` | Proposed Alpaca Account Clerk SQLite authority, operation-first custody timeline, and fail-closed recovery; requires a follow-up ADR before implementation authority |
 | `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md` | In-flight strategy-composition, deterministic replay, synthetic Dry Run, and Clerk-governed Alpaca Paper design; requires ADR capture before authority-changing implementation |
 
 ---
 
-## Archive (retained non-operational history — not implementation authority)
+## Retired material (Git history only)
 
-`docs/archive/` is limited to historical material that has a continuing research or
-decision-record purpose. Retired IBKR launcher/evaluator plans, runbooks, audits,
-handoffs, and prompts were deleted rather than moved here; use Git history when that
-specific history is needed.
-
-Remaining archive files carry a status banner and must not be used as implementation
-authority. See `docs/archive/README.md` for the convention.
+The `docs/archive/` tree was deleted outright in the 2026-09-12 prune —
+retired material is recovered from Git history when needed, not kept as a
+parallel tree. Retired IBKR launcher/evaluator plans, runbooks, audits,
+handoffs, prompts, and point-in-time artifacts were already being deleted
+rather than archived under the earlier prunes; the 2026-09-12 prune
+extended that to everything the archive tree still held.

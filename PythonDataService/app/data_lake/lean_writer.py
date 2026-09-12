@@ -1,6 +1,6 @@
 """LEAN deci-cent CSV-in-zip writer.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.1
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 5.1
 Reference for the on-disk format: PythonDataService/app/engine/data/lean_format.py
 (existing writer; this module supersedes it inside the data lake but does not
 remove the existing one until Slice 1d).

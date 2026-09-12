@@ -1,7 +1,7 @@
 """Normalized (basis-point) gap between two price-scale quantities.
 
 Formula: ``difference_bps(left, right) = 10,000 * (left - right) / right``.
-Reference: ``docs/references/spy-ema-normalized-gap-walk-forward.md``.
+Reference: ``docs/math-sources-of-truth.md`` ("Relative operand difference in basis points" row).
 Canonical implementation: this file. ``app.engine.strategy.spec.primitives``
 re-exports it so the spec evaluator's ``DifferenceBps`` operand and the
 hand-coded ``EmaCrossoverSignalAlgorithm`` gate share one implementation

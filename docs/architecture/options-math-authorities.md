@@ -1,8 +1,8 @@
 # Options-math authorities
 
 **Status:** Active
-**Last reviewed:** 2026-04-29 (Phase 1 of options-routes cleanup —
-[docs/architecture/options-routes-research.md](options-routes-research.md))
+**Last reviewed:** 2026-04-29 (Phase 1 of options-routes cleanup; the routes
+cleanup record `options-routes-research.md` was pruned to git history 2026-09-12)
 **Owner of this doc:** the person editing options-math code
 
 This document is the answer to "where does the canonical implementation of

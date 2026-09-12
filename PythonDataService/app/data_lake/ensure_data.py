@@ -15,7 +15,7 @@ factor_file, map_file), Pass 2 (derived: minute-quote, daily-trade). Real
 data_contract_hash replaces the 'x' * 64 placeholder. fake_polygon is
 retired as a defensive boundary.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4
 """
 
 from __future__ import annotations

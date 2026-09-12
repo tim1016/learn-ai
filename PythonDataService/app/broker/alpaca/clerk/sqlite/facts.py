@@ -310,7 +310,7 @@ class ExitReducingOrderCreatedFacts:
     for the reducing/close order — symbol and side are needed to place the
     order; ``quantity`` is the Clerk-proven remaining attributed quantity at
     the moment cancellation resolved (the acceptance criterion this fact
-    exists to prove — see ``docs/references/clerk-exit-reducing-quantity.md``).
+    exists to prove — see ``docs/references/clerk-invariants.md §1``).
     ``order_type``, ``time_in_force``, ``limit_price`` and ``extended_hours``
     carry the decision's session-dependent leg shape (ADR 0059 D5.3), so a
     resumed submission rebuilds the identical leg without being told it

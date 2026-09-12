@@ -882,7 +882,7 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
 
 #: Numerical-rigor tolerance for "is this position flat/drifted" — same
 #: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
-#: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
+#: ``docs/references/clerk-invariants.md §3``). Lives here, not in
 #: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
 #: ``exit.py`` can import it without either depending on the other —
 #: account reconciliation needs to call ``exit.resolve_exit`` for an
@@ -894,7 +894,7 @@ def position_quantity_is_nonzero(quantity: float) -> bool:
     """Return whether custody must treat ``quantity`` as exposure.
 
     Formula: ``nonzero(q) = abs(q) >= POSITION_QTY_EPSILON``.
-    Reference: ``docs/references/clerk-position-drift-tolerance.md``.
+    Reference: ``docs/references/clerk-invariants.md §3``.
     Canonical implementation: this file.
     Validated against:
       ``tests/broker/alpaca/clerk/sqlite/test_reconcile.py::test_position_quantity_boundary_is_unambiguous``.
@@ -1239,7 +1239,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
 
     Formula: delta_qty = cumulative_qty - prior_effective_qty; attributed_qty'
       = attributed_qty + sign(side) * delta_qty.
-    Reference: docs/references/clerk-fill-quantity-tolerance.md.
+    Reference: docs/references/clerk-invariants.md §2.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_cumulative_recovery_fill_is_explicitly_tagged.

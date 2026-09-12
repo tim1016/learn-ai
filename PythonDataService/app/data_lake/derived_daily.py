@@ -1,6 +1,6 @@
 """Daily-trade aggregation: minute-trade artifacts to daily zip.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.6
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.6
 
 LEAN daily format (inner CSV name: `<sym_lower>.csv`):
   Columns (no header): "<YYYYMMDD HH:MM>", open*10000, high*10000, low*10000,

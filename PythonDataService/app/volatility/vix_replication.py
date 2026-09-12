@@ -201,7 +201,7 @@ def _select_atm_strike_normalized(quotes: list[NormalizedOptionQuote]) -> Normal
 DOMINANCE_GATE_THRESHOLD = 0.50
 """Maximum tolerated single-strike variance share before the gate
 iteratively drops the dominator and recomputes. See
-``docs/architecture/iv-research-chat-notes.md`` §5.8 for the rationale
+``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.8 for the rationale
 on threshold choice (50% — half the variance from one strike is the
 "this IV is unreliable" line, lower than CBOE's implicit tolerance via
 two-zero-bid truncation but higher than the empirical SPY ~0.34 max

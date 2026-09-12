@@ -9,7 +9,7 @@ app.lean_sidecar.staging._stage_lean_metadata_via_launcher, the original
 caller this module mirrors). Tests mock the HTTP call and pre-place the
 files a real launcher would have written, under a tmp_path artifacts root.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.5
 """
 
 from __future__ import annotations

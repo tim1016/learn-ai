@@ -7,7 +7,7 @@ the lake's on-disk layout, and insert a catalog row under the zip's *true*
 adjustment mode (read from the cache's per-symbol provenance file, never
 guessed from a directory-name convention).
 
-Issue: #1832. Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.
+Issue: #1832. Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.
 
 Cache layout expected under ``--cache-root`` (one "policy root" at a time,
 e.g. ``lean-cache/polygon-adjusted/`` or ``lean-cache/polygon-raw/``): each

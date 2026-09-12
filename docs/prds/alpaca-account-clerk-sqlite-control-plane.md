@@ -999,9 +999,9 @@ The source-backed Alpaca matrix must record:
 Repository design and authority:
 
 - [`docs/architecture/adrs/0035-alpaca-clerk-sqlite-event-sourced-authority.md`](../architecture/adrs/0035-alpaca-clerk-sqlite-event-sourced-authority.md)
-- [`docs/prds/alpaca-bot-control-safety-reliability-remediation.md`](alpaca-bot-control-safety-reliability-remediation.md)
-- [`docs/prds/alpaca-clerk-governed-bot-control.md`](alpaca-clerk-governed-bot-control.md)
-- [`docs/architecture/alpaca-bot-control-remediation-research-plan-2026-08-02.md`](../architecture/alpaca-bot-control-remediation-research-plan-2026-08-02.md)
+- `docs/prds/alpaca-bot-control-safety-reliability-remediation.md` (pruned to git history 2026-09-12)
+- `docs/prds/alpaca-clerk-governed-bot-control.md` (pruned to git history 2026-09-12)
+- `docs/architecture/alpaca-bot-control-remediation-research-plan-2026-08-02.md` (pruned to git history 2026-09-12)
 - [`docs/architecture/adrs/0001-control-plane-substrate-json-parquet.md`](../architecture/adrs/0001-control-plane-substrate-json-parquet.md)
 - [`docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md`](../architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md)
 - [`docs/architecture/adrs/0030-account-clerk-account-rooted-journal.md`](../architecture/adrs/0030-account-clerk-account-rooted-journal.md)

@@ -3,7 +3,7 @@
 Schema-write path: Slice 1b. This module in Slice 1a is read-only:
 just a connection pool and a coverage SELECT.
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4.4
 """
 
 from __future__ import annotations

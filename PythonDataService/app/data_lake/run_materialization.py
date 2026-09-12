@@ -24,7 +24,7 @@ caller should have to solve — or be able to second-guess — for itself:
    loop, and the catalog's connection pool is bound to the loop that
    created it (see :func:`_materialize_run_data_sync`).
 
-Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4
+Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4
 """
 
 from __future__ import annotations
