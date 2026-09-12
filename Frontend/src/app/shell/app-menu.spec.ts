@@ -77,9 +77,9 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/jobs-demo').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
-  it('reaches the Data Lake Observatory from the Data Lab group', () => {
+  it('reaches the Data Lake Observatory from the Stocks group', () => {
     const entry = menuItemsFor('/data-lake')
-      .find((group) => group.label === 'Data Lab')
+      .find((group) => group.label === 'Stocks')
       ?.items?.find((item) => item.label === 'Data Lake Observatory');
 
     expect(entry?.routerLink).toBe('/data-lake');
@@ -87,9 +87,19 @@ describe('app menu projections', () => {
     expect(pageTitleFor('/data-lake')).toBe('Data Lake Observatory');
   });
 
-  it('keeps Data Lab and Data Lake as separate destinations', () => {
-    expect(pageTitleFor('/data-lab')).toBe('Data Lab');
+  it('presents the Data Lab route as Stocks while keeping Data Lake separate', () => {
+    expect(pageTitleFor('/data-lab')).toBe('Stocks');
     expect(activeMenuNodeFor('/data-lab')?.item.route).toBe('/data-lab');
+  });
+
+  it('nests Edge Analysis within Research instead of using a separate top-level group', () => {
+    const groups = menuItemsFor('/edge/regimes');
+    const research = groups.find((group) => group.label === 'Research');
+
+    expect(groups.map((group) => group.label)).not.toContain('Edge Analysis');
+    expect(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink).toBe('/edge');
+    expect(research?.items?.find((item) => item.label === 'Regimes')?.styleClass).toBe(ACTIVE_ITEM_CLASS);
+    expect(research?.styleClass).toBe(ACTIVE_GROUP_CLASS);
   });
 
   it('omits the retired Indicator Report and Design Lab surfaces', () => {

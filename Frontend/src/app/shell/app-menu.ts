@@ -43,10 +43,10 @@ export const ACTIVE_ITEM_CLASS = 'app-menubar-item--active';
 export const APP_MENU: readonly AppMenuGroup[] = [
   {
     id: 'data-lab',
-    title: 'Data Lab',
-    icon: 'pi pi-database',
+    title: 'Stocks',
+    icon: 'pi pi-chart-line',
     items: [
-      { title: 'Data Lab', route: '/data-lab' },
+      { title: 'Stocks', route: '/data-lab' },
       { title: 'Data Lake Observatory', route: '/data-lake' },
     ],
   },
@@ -68,14 +68,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     items: [
       { title: 'Research Lab', route: '/research-lab' },
       { title: 'Golden Fixtures', route: '/golden-fixtures' },
-    ],
-  },
-  {
-    id: 'edge',
-    title: 'Edge Analysis',
-    icon: 'pi pi-bolt',
-    items: [
-      { title: 'Overview', route: '/edge' },
+      { title: 'Edge Analysis', route: '/edge' },
       { title: 'Realized vs IV', route: '/edge/realized-vs-iv' },
       { title: 'Cross-Asset', route: '/edge/cross-asset' },
       { title: 'Regimes', route: '/edge/regimes' },

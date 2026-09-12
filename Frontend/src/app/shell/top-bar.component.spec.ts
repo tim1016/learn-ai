@@ -17,11 +17,24 @@ import { TopBarComponent } from './top-bar.component';
 class TopBarProjectionHostComponent {}
 
 describe('TopBarComponent', () => {
-  it('renders a labelled header and Market Scope home link', async () => {
-    await render(TopBarComponent, { providers: [provideRouter([])] });
+  it('renders a labelled header and centered Botasur home link', async () => {
+    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 
-    expect(screen.getByRole('banner', { name: 'Market Scope application' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Market Scope home' }).getAttribute('href')).toBe('/data-lab');
+    expect(screen.getByRole('banner', { name: 'Botasur application' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Botasur home' }).getAttribute('href')).toBe('/data-lab');
+    expect(screen.getByText('Botasur')).toBeTruthy();
+    expect(container.querySelector('.top-bar__brand-lockup')?.getAttribute('src')).toBe(
+      '/assets/brand/botasur-header-mark.svg',
+    );
+  });
+
+  it.each([
+    ['paper', 'top-bar--paper'],
+    ['live', 'top-bar--live'],
+  ] as const)('reflects the %s account mode in the header treatment', async (accountMode, className) => {
+    await render(TopBarComponent, { inputs: { accountMode }, providers: [provideRouter([])] });
+
+    expect(screen.getByRole('banner').classList.contains(className)).toBe(true);
   });
 
   it('provides named regions for shell extensions', async () => {
