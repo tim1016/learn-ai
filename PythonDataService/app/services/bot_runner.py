@@ -264,7 +264,7 @@ class BotTaskRegistry:
         market_liveness: MarketLivenessFactResolver | None = None,
         symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
-        validation_fact: ValidationFactResolver = current_strategy_validation_fact,
+        validation_fact: ValidationFactResolver | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -329,13 +329,14 @@ class BotTaskRegistry:
             binding_for=self._read_binding,
             installed_custody_account_id=lambda: None if (c := get_alpaca_clerk()) is None else c.account_id,
         )
+        active_validation_fact = validation_fact or current_strategy_validation_fact
         self._start_admission = BotStartAdmission(
             now_ms=self._now_ms,
             feed_resolver=self._feed_resolver,
             custody_guard=self._start_custody_guard,
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
-            validation_fact=validation_fact,
+            validation_fact=active_validation_fact,
             activate=self._activate_start_binding,
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
@@ -351,7 +352,7 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
             terminal_evidence=self._resume_terminal_evidence_fact,
-            validation_fact=validation_fact,
+            validation_fact=active_validation_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_market_data_capability_service().read_latest_for,
