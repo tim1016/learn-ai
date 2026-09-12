@@ -75,15 +75,26 @@ Every port of mathematical logic from a reference source ships with:
 - Aim for **every branch in business logic** tested. Don't chase coverage on boilerplate.
 - Coverage reports are diagnostic, not a goal.
 
+## Two-minute change-gate budget
+
+Developer and pull-request test commands must finish within 120 seconds. The
+Python gate is `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m
+scripts.run_fast_tests`; the frontend gate is `npm test`. Both commands enforce
+the limit rather than treating it as a guideline. Mark slow or
+infrastructure-heavy Python coverage with `@pytest.mark.slow`; it remains in
+the scheduled `.github/workflows/daily-tests.yml` run. PostgreSQL-backed .NET
+integration tests and browser E2E coverage are also daily. Do not delete
+numerical parity or regression coverage merely to meet the budget.
+
 ## Pre-push test-suite hygiene
 
-**The full project-scope suite is CI's job, not local dev's** (decided
-2026-08-30). Locally, run *targeted* tests — the suites for every surface the
-diff touches, plus every suite that consumes a shared helper you edited — and
-let CI run the full per-stack sweep. The full local run (~8 min Python on the
-host venv; frontend container runs that OOM under load) duplicates what CI
-does minutes later; spend that wall-time only as an explicit choice when the
-blast radius is genuinely unknowable, never as a default.
+**The full project-scope suite is the daily workflow's job, not local dev's or
+pull-request CI's** (revised 2026-09-11). Locally, run *targeted* tests — the
+suites for every surface the diff touches, plus every suite that consumes a
+shared helper you edited — and use the bounded gate before handoff. The full
+local run (~8 min Python on the host venv) duplicates scheduled coverage;
+spend that wall-time only as an explicit diagnostic choice, never as a
+default.
 
 - **Pick targets by consumer, not just by file.** A shared-helper edit breaks
   suites far from the diff (a parent spec pins a child component's copy; an

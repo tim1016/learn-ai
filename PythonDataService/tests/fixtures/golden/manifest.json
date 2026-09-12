@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -39,7 +39,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures.py"
+      ]
     },
     {
       "id": "BS-002",
@@ -50,7 +53,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -79,7 +82,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures.py"
+      ]
     },
     {
       "id": "BS-003",
@@ -90,7 +96,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -119,7 +125,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures.py"
+      ]
     },
     {
       "id": "BS-004",
@@ -130,7 +139,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -159,7 +168,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures_extended.py"
+      ]
     },
     {
       "id": "BS-005",
@@ -170,7 +182,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -201,7 +213,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures_extended.py"
+      ]
     },
     {
       "id": "BS-006",
@@ -212,7 +227,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -243,7 +258,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures_extended.py"
+      ]
     },
     {
       "id": "BS-007",
@@ -254,7 +272,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -285,7 +303,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_options_pricing_fixtures_extended.py"
+      ]
     },
     {
       "id": "ENG-001",
@@ -296,7 +317,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) \u00a7IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -325,7 +346,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_fixtures.py"
+      ]
     },
     {
       "id": "ENG-001b",
@@ -336,7 +360,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -365,7 +389,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_fixtures.py"
+      ]
     },
     {
       "id": "ENG-002",
@@ -376,7 +403,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -405,7 +432,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_extended_fixtures.py"
+      ]
     },
     {
       "id": "ENG-003",
@@ -445,7 +475,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_extended_fixtures.py"
+      ]
     },
     {
       "id": "ENG-004",
@@ -485,7 +518,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_extended_fixtures.py"
+      ]
     },
     {
       "id": "ENG-005",
@@ -525,7 +561,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_engine_stats_extended_fixtures.py"
+      ]
     },
     {
       "id": "IND-001",
@@ -565,7 +604,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_indicator_fixtures.py"
+      ]
     },
     {
       "id": "IND-002",
@@ -605,11 +647,14 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_indicator_fixtures.py"
+      ]
     },
     {
       "id": "IND-003",
-      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
@@ -645,18 +690,21 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_indicator_fixtures.py"
+      ]
     },
     {
       "id": "IV-001",
-      "name": "Implied Volatility Solver — Round-Trip Recovery",
+      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "sigma_known — BSM pricing formula generates market_price; solver must recover sigma_known",
-        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) §19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives §4."
+        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00a74."
       },
       "market_input": {
         "source": "synthetic",
@@ -685,11 +733,14 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "IV-002",
-      "name": "SVI Total Variance Surface — Gatheral Raw Parameterisation",
+      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/fitting.py",
       "canonical_callable": "fit_svi",
@@ -725,11 +776,14 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "IV-003",
-      "name": "IV30 Constant-Maturity — Variance-Time Interpolation",
+      "name": "IV30 Constant-Maturity \u2014 Variance-Time Interpolation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "vix_style_iv30",
@@ -765,7 +819,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "IV-004",
@@ -805,11 +862,14 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "RV-002",
-      "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
+      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
       "canonical_callable": "hf_realized_vol_trd252",
@@ -845,11 +905,14 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "RV-004",
-      "name": "Model-Free Variance Replication — CBOE VIX 2019 Formula",
+      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "replicate_expiry_variance",
@@ -885,7 +948,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "RV-001",
@@ -925,7 +991,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "RV-003",
@@ -965,7 +1034,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_volatility_fixtures.py"
+      ]
     },
     {
       "id": "RP-001",
@@ -995,7 +1067,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1007,7 +1079,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP001InformationCoefficient"
+      ]
     },
     {
       "id": "RP-002",
@@ -1037,7 +1112,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
@@ -1049,7 +1124,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP002QuantileMonotonicity"
+      ]
     },
     {
       "id": "RP-003",
@@ -1079,7 +1157,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
@@ -1091,7 +1169,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP003PhipsonSmyth"
+      ]
     },
     {
       "id": "RP-004",
@@ -1121,7 +1202,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
@@ -1133,7 +1214,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestRP004SignalZscore"
+      ]
     },
     {
       "id": "REL-001",
@@ -1163,7 +1247,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1175,7 +1259,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestREL001ICHitRate"
+      ]
     },
     {
       "id": "REL-004",
@@ -1205,7 +1292,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
@@ -1217,7 +1304,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_research_fixtures.py::TestREL004ICDecayCurve"
+      ]
     },
     {
       "id": "BFL-2008-MICRO-001",
@@ -1259,7 +1349,8 @@
           }
         }
       },
-      "status": "planned"
+      "status": "planned",
+      "validated_by": null
     },
     {
       "id": "OPT-IB-002",
@@ -1301,14 +1392,17 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_ibkr_iv_fixtures.py"
+      ]
     },
     {
       "id": "ENG-007",
       "name": "EMA Crossover 2 bps LEAN trade parity",
       "category": "strategy-parity",
-      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/ema_crossover_2_bps.py",
-      "canonical_callable": "EmaCrossover2BpsAlgorithm",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/ema_crossover_signal.py",
+      "canonical_callable": "EmaCrossoverSignalAlgorithm",
       "reference": {
         "kind": "cross_engine",
         "oracle": "QuantConnect LEAN 17748 at source commit 261366a7e26ae942df858ab20df4fef8fa07de67",
@@ -1342,7 +1436,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/integration/reconciliation/test_ema_crossover_2_bps_lean_golden.py"
+      ]
     },
     {
       "id": "ENG-006",
@@ -1383,17 +1480,20 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/engine/results/test_equity_downsample.py"
+      ]
     },
     {
       "id": "ENG-008",
       "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
       "category": "strategy-parity",
-      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, spy_strategy_b.py, spy_strategy_c.py (shared base: _rsi_range_base.py)",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_b.py, PythonDataService/app/engine/strategy/algorithms/spy_strategy_c.py",
       "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
       "reference": {
         "kind": "internal_regression",
-        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt — not an external correctness oracle.",
+        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt \u2014 not an external correctness oracle.",
         "citation": "docs/references/strategy-abc-self-equivalence.md"
       },
       "market_input": {
@@ -1424,7 +1524,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_strategy_parity_fixtures.py"
+      ]
     },
     {
       "id": "ENG-009",
@@ -1465,7 +1568,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/integration/reconciliation/test_rsi_mean_reversion_lean_golden.py"
+      ]
     },
     {
       "id": "FEE-001",
@@ -1506,7 +1612,10 @@
           }
         }
       },
-      "status": "active"
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_alpaca_regulatory_fees_fixture.py"
+      ]
     }
   ]
 }

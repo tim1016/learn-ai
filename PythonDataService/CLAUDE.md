@@ -2,16 +2,16 @@
 
 ## Commands
 
-| Action     | Command                                                                      |
-|------------|------------------------------------------------------------------------------|
-| Run        | `podman compose up python-service` (localhost:8000)                          |
-| Test       | `podman exec polygon-data-service python -m pytest tests/ -v`                |
-| Test (fast)| `podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"`  |
-| Build      | `podman compose build python-service`                                        |
-| Lint       | `ruff check PythonDataService/app/`                                          |
-| Format     | `ruff format PythonDataService/app/`                                         |
-| Logs       | `podman logs -f polygon-data-service`                                        |
-| API docs   | http://localhost:8000/docs (Swagger UI)                                      |
+| Action       | Command                                                                   |
+|--------------|---------------------------------------------------------------------------|
+| Run          | `podman compose up python-service` (localhost:8000)                       |
+| Test (PR)    | `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests` |
+| Test (daily) | `python -m pytest tests app/engine/tests -v`                              |
+| Build        | `podman compose build python-service`                                     |
+| Lint         | `ruff check PythonDataService/app/`                                       |
+| Format       | `ruff format PythonDataService/app/`                                      |
+| Logs         | `podman logs -f polygon-data-service`                                     |
+| API docs     | http://localhost:8000/docs (Swagger UI)                                   |
 
 Python service has **no dependencies** — runs standalone.
 
@@ -140,7 +140,7 @@ app/
 - Fixtures in `tests/conftest.py`
 - Mock external APIs (Polygon, FRED) at HTTP layer with `respx` or `pytest-httpx`
 - Name pattern: `test_<function>_<scenario>`
-- Marker `@pytest.mark.slow` for long-running ML/backtest tests
+- Marker `@pytest.mark.slow` for daily-only slow or infrastructure-heavy tests
 
 ## Gotchas
 

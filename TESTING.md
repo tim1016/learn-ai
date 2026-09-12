@@ -8,18 +8,17 @@ This project has test coverage across all three layers: Angular frontend (Vitest
 
 ```bash
 # Angular (Vitest)
-cd Frontend && npx vitest run
+cd Frontend && npm test
 
 # .NET
-cd Backend.Tests && dotnet test
+cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"
 
 # .NET migration integration test (requires PostgreSQL)
 BACKEND_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=<password>' \
   dotnet test --filter "Category=PostgresIntegration"
 
-# Python — the host venv is the real gate (see below); provision it once
-# from the repo root with ./bootstrap-host-venv.sh
-cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests -n auto -q -m "not slow"
+# Python — the checked-in runner enforces the 120-second PR budget
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scripts.run_fast_tests
 ```
 
 ---
@@ -117,8 +116,8 @@ fixture.detectChanges();
 ```bash
 cd Frontend
 
-# Run all tests
-npx vitest run
+# Run all tests (hard-stops at 120 seconds)
+npm test
 
 # Watch mode
 npx vitest
@@ -190,7 +189,10 @@ Backend.Tests/
 ```bash
 cd Backend.Tests
 
-# Run all tests
+# Pull-request gate (hard-limited to 120 seconds in CI)
+dotnet test --filter "Category!=PostgresIntegration"
+
+# Complete suite (normally run by .github/workflows/daily-tests.yml)
 dotnet test
 
 # Verbose output
@@ -290,11 +292,11 @@ tests return 403 against a developer's real secret.
 ```bash
 cd PythonDataService
 
-# The gate — full suite, as CI runs it
-DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests -n auto -q -m "not slow"
+# The developer/PR gate — hard-stops at 120 seconds
+DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scripts.run_fast_tests
 
-# Run all tests
-python -m pytest tests/ -v
+# Full suite — normally run by .github/workflows/daily-tests.yml
+python -m pytest tests app/engine/tests -v
 
 # Single file
 python -m pytest tests/test_strategy_engine.py -v

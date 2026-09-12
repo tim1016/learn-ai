@@ -19,12 +19,9 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-  push:
-    branches: [master]
-    paths:
-      - 'Frontend/**'
-      - '.github/workflows/frontend-e2e.yml'
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 jobs:
   cockpit-e2e:

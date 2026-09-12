@@ -92,6 +92,7 @@ class Fixture(BaseModel):
     active_version: int
     versions: dict[int, FixtureFiles]
     status: Literal["planned", "active", "breach", "deprecated"]
+    validated_by: list[str] | None = None  # test file paths that execute this fixture's parity proof
 
     @model_validator(mode="after")
     def _active_version_exists(self) -> Fixture:

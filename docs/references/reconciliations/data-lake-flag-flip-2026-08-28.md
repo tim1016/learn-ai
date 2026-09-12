@@ -88,11 +88,12 @@ contract returns two byte fields), is logged once per run, and is documented in
 
 `PythonDataService/tests/integration/data_lake/test_flag_flip_parity.py` — 8 tests.
 
-Seven need no Postgres and therefore run in CI, where the "Python Tests" job sets no
-`POSTGRES_URL`. They exercise the byte path: the importer's own verify/promote primitives, the
-readers, and the fingerprint function. The eighth is gated and documents why it must be — "zero
-provider calls" is a statement about what `ensure_data` decides *after* consulting the catalog,
-and a fake catalog would be making that decision for us.
+Seven need no Postgres and remain independently runnable on a plain checkout. They exercise the
+byte path: the importer's own verify/promote primitives, the readers, and the fingerprint
+function. The eighth is gated and documents why it must be — "zero provider calls" is a
+statement about what `ensure_data` decides *after* consulting the catalog, and a fake catalog
+would be making that decision for us. The daily workflow supplies disposable Postgres and runs
+all eight; the two-minute pull-request gate defers this directory.
 
 Supporting: `tests/unit/data_lake/test_deci_cent_canonical.py` (the canonical rounding rule, and
 the two writers' row-level agreement on sub-grid prices).

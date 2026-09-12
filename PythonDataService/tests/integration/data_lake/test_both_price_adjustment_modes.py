@@ -40,10 +40,9 @@ catch it, rather than passing on two identical fixtures that could not tell
 the modes apart.
 
 No Postgres, no run: every test in this module skips cleanly when
-``POSTGRES_URL`` is unset (CI's "Python Tests" job sets none; see
-``test_flag_flip_parity.py``'s module docstring for why). Never point
-``POSTGRES_URL`` at ``my-postgres`` -- a disposable, migrated-to-head Postgres
-only.
+``POSTGRES_URL`` is unset. The pull-request gate defers this directory; the
+daily workflow supplies the disposable, migrated-to-head Postgres required to
+execute it. Never point ``POSTGRES_URL`` at ``my-postgres``.
 """
 
 from __future__ import annotations

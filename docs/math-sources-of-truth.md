@@ -204,7 +204,7 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|
-| Information coefficient (IC) | `PythonDataService/app/research/validation/ic.py` | — | Lopez de Prado, *Advances in Financial Machine Learning* (2018), §8 (or whichever method is implemented — verify) | `NONE — pending` | pending-fixture — reference needs verification |
+| Information coefficient (IC) | `PythonDataService/app/research/validation/ic.py` | — | Grinold & Kahn (1999): IC = Spearman rank correlation of signal vs next-day return. Phipson & Smyth (2010) two-sided t-stat. | `PythonDataService/tests/fixtures/test_research_fixtures.py::TestRP001InformationCoefficient`, `PythonDataService/tests/fixtures/test_research_fixtures.py::TestREL001ICHitRate` | canonical |
 | Quantile-based statistics (binning, monotonicity, returns by quantile) | `PythonDataService/app/research/validation/quantile.py` | — | Standard non-parametric statistics (Conover, *Practical Nonparametric Statistics*) | `NONE — pending` | pending-fixture |
 | Robustness statistics (block bootstrap, regime breakdowns) | `PythonDataService/app/research/validation/robustness.py` | — | Politis & Romano (1994) for block bootstrap (verify) | `NONE — pending` | pending-fixture — reference needs verification |
 

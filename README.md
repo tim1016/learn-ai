@@ -518,14 +518,20 @@ podman compose down -v
 
 ```bash
 # Frontend (Vitest via Angular CLI)
-cd Frontend && npx ng test
+cd Frontend && npm test
 
 # Backend (.NET xUnit)
-cd Backend.Tests && dotnet test
+cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"
 
 # Python (pytest)
-cd PythonDataService && python -m pytest tests/ -v
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests
 ```
+
+Frontend and Python change-gating tests have a hard two-minute wall-clock
+budget, and CI applies the same limit to backend tests. The complete Python
+suite, PostgreSQL-backed .NET integration tests, and browser end-to-end
+coverage run daily in GitHub Actions; use targeted tests while developing a
+change.
 
 ## Stopping the Stack
 

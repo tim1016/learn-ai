@@ -501,6 +501,9 @@ async def _assert_every_read_surface_projected_the_whole_fleet(
     assert posture["ready"] is True, posture["explanation"]
 
 
+# The deploy projection consults PostgreSQL-backed validation scope. The daily
+# workflow supplies its disposable migrated database.
+@pytest.mark.slow
 @pytest.mark.parametrize("fleet_size", [1, 50], indirect=True)
 async def test_reads_of_a_stopped_bot_never_invoke_the_broker_port(
     stopped_api, fleet_size: int
@@ -543,6 +546,7 @@ async def test_reads_of_a_stopped_bot_never_invoke_the_broker_port(
     assert port.calls == 0, f"a read reached the broker port: {port.methods}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("fleet_size", [1, 50], indirect=True)
 async def test_repeated_reads_never_advance_the_control_revision(
     stopped_api, fleet_size: int
