@@ -228,6 +228,33 @@ def test_incomplete_golden_scope_fails_closed_instead_of_using_current_defaults(
     assert "cannot be represented" in rows[0].blocked_explanation
 
 
+@pytest.mark.parametrize(
+    ("parameter", "recorded_value"),
+    (
+        ("gap_bps", 0),
+        ("gap_bps", False),
+        ("rsi_min", True),
+    ),
+)
+def test_golden_scope_rejects_pydantic_coercible_parameter_types(
+    parameter: str,
+    recorded_value: object,
+) -> None:
+    """A Golden scope is an exact serialized receipt, not a coerced request."""
+    rows = _strategy_views(
+        [],
+        account_id=ACCT,
+        custody_world="real_paper",
+        golden_validation_scopes={
+            "ema_crossover_signal": (_golden_scope(**{parameter: recorded_value}),)
+        },
+    )
+
+    assert rows[0].evidence_status == "blocked"
+    assert rows[0].selectable is False
+    assert rows[0].golden_validation_scope is False
+
+
 @pytest.mark.parametrize("recorded_symbol", ["missing", None, "tsla"])
 def test_golden_scope_requires_a_canonical_symbol_in_its_exact_parameter_map(
     monkeypatch: pytest.MonkeyPatch,

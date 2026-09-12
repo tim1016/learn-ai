@@ -5,12 +5,8 @@
       <h2>Validation Golden Runs</h2>
       <p>A frozen baseline links one ticker and parameter set to its engine evidence and human judgment.</p>
     </div>
-    @if (sourceRunId() !== null) {
-      <span class="golden-workbench__run">Python run #{{ sourceRunId() }}</span>
-    }
-    <button type="button" class="golden-workbench__refresh" [disabled]="busy()" (click)="refreshEvidence()">
-      Refresh evidence
-    </button>
+    @if (sourceRunId() !== null) { <span class="golden-workbench__run">Python run #{{ sourceRunId() }}</span> }
+    <button type="button" class="golden-workbench__refresh" [disabled]="busy()" (click)="refreshEvidence()">Refresh evidence</button>
   </header>
 
   @if (catalog.isLoading()) {
@@ -24,14 +20,8 @@
           <h3>Designate this Python run</h3>
           <p>This freezes its exact strategy, ticker, parameters, time window, data policy, and execution assumptions.</p>
         </div>
-        <label>
-          <span>Label <em>optional</em></span>
-          <input [value]="designationLabel()" (input)="setDesignationLabel($event)" placeholder="e.g. SPY baseline, Sept 2026" />
-        </label>
-        <label>
-          <span>Why is this the chosen baseline?</span>
-          <textarea [value]="designationRationale()" (input)="setDesignationRationale($event)" rows="3" required></textarea>
-        </label>
+        <label><span>Label <em>optional</em></span><input [value]="designationLabel()" (input)="setDesignationLabel($event)" placeholder="e.g. SPY baseline, Sept 2026" /></label>
+        <label><span>Why is this the chosen baseline?</span><textarea [value]="designationRationale()" (input)="setDesignationRationale($event)" rows="3" required></textarea></label>
         <button type="submit" [disabled]="busy()">Designate golden run</button>
       </form>
     }
@@ -54,178 +44,10 @@
 
     @if (selected(); as golden) {
       <div class="golden-workbench__layout">
-        <article class="golden-card golden-card--case">
-          <header>
-            <div>
-              <p class="golden-card__eyebrow">Frozen validation case</p>
-              <h3>{{ golden.label ?? golden.strategy_name }}</h3>
-              <p>{{ golden.strategy_name }} · <app-asset-identity [symbol]="golden.symbol" size="xs" /></p>
-            </div>
-            <span class="golden-card__state">{{ golden.state | receiptLabel }}</span>
-          </header>
-          <dl class="golden-card__facts">
-            <div><dt>Reference</dt><dd>Golden Validation #{{ golden.id }}</dd></div>
-            <div><dt>Strategy</dt><dd>{{ golden.validation_case.strategy.name }}</dd></div>
-            <div><dt>Symbol</dt><dd><app-asset-identity [symbol]="golden.validation_case.symbol" size="sm" /></dd></div>
-            <div><dt>Program version</dt><dd>{{ golden.validation_case.strategy.program_version ?? 'Not recorded' }}</dd></div>
-            <div><dt>Window</dt><dd>{{ golden.validation_case.window.start_ms | timestampDisplay: 'date-et' }} – {{ golden.validation_case.window.end_ms | timestampDisplay: 'date-et' }} · {{ golden.validation_case.window.timespan | receiptLabel }}</dd></div>
-            <div><dt>Execution</dt><dd>{{ golden.validation_case.execution.fill_mode | receiptLabel }} · ${{ golden.validation_case.execution.initial_cash }}</dd></div>
-            <div><dt>Data policy</dt><dd>{{ golden.validation_case.data_policy ? 'Recorded' : 'Not recorded' }}</dd></div>
-            <div><dt>Parity group</dt><dd>{{ golden.validation_case.parity_group_id ?? 'No paired run' }}</dd></div>
-          </dl>
-          <details>
-            <summary>Exact parameters, data, and execution scope</summary>
-            <div class="golden-card__scope">
-              <section>
-                <h4>Parameters</h4>
-                @if (parameterScope().symbol; as symbol) {
-                  <dl class="golden-card__scope-facts">
-                    <div>
-                      <dt>Symbol</dt>
-                      <dd><app-asset-identity [symbol]="symbol" size="xs" /></dd>
-                    </div>
-                  </dl>
-                }
-                <pre>{{ json(parameterScope().values) }}</pre>
-              </section>
-              <section>
-                <h4>Data policy</h4>
-                @if (dataPolicyFacts().length > 0) {
-                  <dl class="golden-card__scope-facts">
-                    @for (fact of dataPolicyFacts(); track fact.label) {
-                      <div>
-                        <dt>{{ fact.label }}</dt>
-                        <dd [class.golden-card__opaque-value]="fact.opaque">
-                          @if (fact.symbol; as symbol) { <app-asset-identity [symbol]="symbol" size="xs" /> } @else { {{ fact.value }} }
-                        </dd>
-                      </div>
-                    }
-                  </dl>
-                } @else {
-                  <p>Not recorded</p>
-                }
-              </section>
-              <section>
-                <h4>Execution configuration</h4>
-                @if (executionFacts().length > 0) {
-                  <dl class="golden-card__scope-facts">
-                    @for (fact of executionFacts(); track fact.label) {
-                      <div>
-                        <dt>{{ fact.label }}</dt>
-                        <dd [class.golden-card__opaque-value]="fact.opaque">{{ fact.value }}</dd>
-                      </div>
-                    }
-                  </dl>
-                } @else {
-                  <p>Not recorded</p>
-                }
-              </section>
-            </div>
-          </details>
-          <p class="golden-card__rationale"><strong>Baseline note:</strong> {{ golden.rationale }}</p>
-        </article>
-
-        <article class="golden-card golden-card--evidence">
-          <header>
-            <div>
-              <p class="golden-card__eyebrow">Computed engine evidence</p>
-              <h3>{{ golden.evidence_state | receiptLabel }}</h3>
-              <p>This is calculated evidence. A human decision below cannot rewrite it.</p>
-            </div>
-          </header>
-          <dl class="golden-card__facts">
-            <div><dt>Parity verdict</dt><dd>{{ parityStatus() ? (parityStatus() | receiptLabel) : 'No paired verdict' }}</dd></div>
-            <div><dt>Compared runs</dt><dd>{{ parityLeftRunId() ? '#' + parityLeftRunId() : '—' }} → {{ parityRightRunId() ? '#' + parityRightRunId() : '—' }}</dd></div>
-            @if (parityReason(); as reason) {
-              <div><dt>Reason</dt><dd>{{ reason | receiptLabel }}</dd></div>
-            }
-            <div><dt>Trade deviations</dt><dd>{{ divergences().length }}</dd></div>
-          </dl>
-          @if (parityChecks().length > 0) {
-            <ul class="golden-card__checks">
-              @for (check of parityChecks(); track check.label) {
-                <li><strong>{{ check.label }}</strong><span>{{ check.status | receiptLabel }}@if (check.reason) { · {{ check.reason | receiptLabel }}}</span></li>
-              }
-            </ul>
-          }
-          @if (divergences().length > 0) {
-            <details>
-              <summary>Review {{ divergences().length }} recorded deviation{{ divergences().length === 1 ? '' : 's' }}</summary>
-              <ol class="golden-card__divergences">
-                @for (item of divergences(); track $index) {
-                  <li>
-                    <strong>{{ item.category | receiptLabel }}@if (item.tradeNumber !== null) { · trade #{{ item.tradeNumber }}}</strong>
-                    <span>{{ item.message }}</span>
-                    @if (item.atMs !== null) { <small>{{ item.atMs | timestampDisplay: 'local' : 'datetime' }}</small> }
-                  </li>
-                }
-              </ol>
-            </details>
-          }
-          @if (qualificationWarnings().length > 0) {
-            <div class="golden-card__warning" role="note">
-              <strong>Qualification warning</strong>
-              @for (warning of qualificationWarnings(); track warning) { <span>{{ warning | receiptLabel }}</span> }
-            </div>
-          }
-        </article>
+        <app-golden-validation-case [golden]="golden" />
+        <app-golden-parity-evidence [golden]="golden" />
       </div>
-
-      <article class="golden-card golden-card--review">
-        <header>
-          <div>
-            <p class="golden-card__eyebrow">Human review</p>
-            <h3>Record judgment</h3>
-            <p>Missing, failed, or corrupt evidence requires Manual override. An accepted mismatch remains Reviewed deviations—not engine agreement.</p>
-          </div>
-          @if (golden.latest_review; as review) {
-            <span class="golden-card__state">{{ review.decision | receiptLabel }} · {{ (review.classification ?? review.evidence_state) | receiptLabel }}</span>
-          }
-        </header>
-        @if (golden.review_is_current === false) {
-          <p class="golden-card__warning" role="alert">
-            This decision reviewed an earlier evidence revision and no longer applies. Review the current evidence again.
-          </p>
-        }
-        <form class="golden-workbench__form golden-workbench__form--review" novalidate (submit)="$event.preventDefault(); submitReview()">
-          <fieldset>
-            <legend>Decision</legend>
-            <label><input type="radio" name="golden-review" value="accept" [checked]="reviewDecision() === 'accept'" (change)="setReviewDecision($event)" /> Accept</label>
-            <label><input type="radio" name="golden-review" value="reject" [checked]="reviewDecision() === 'reject'" (change)="setReviewDecision($event)" /> Reject</label>
-          </fieldset>
-          <label>
-            <span>Review note</span>
-            <textarea [value]="reviewReason()" (input)="setReviewReason($event)" rows="3" required></textarea>
-          </label>
-          <label>
-            <span>QuantConnect Cloud backtest ID <em>optional</em></span>
-            <input [value]="quantConnectBacktestId()" (input)="setQuantConnectBacktestId($event)" placeholder="Optional external reference" />
-          </label>
-          @if (golden.validation_case.strategy.program_version === null && reviewDecision() === "accept") {
-            <label>
-              <span>Authorized Signal Program version <em>required to accept this historical run</em></span>
-              <input [value]="authorizedProgramVersion()" (input)="setAuthorizedProgramVersion($event)" placeholder="Exact version, for example ema-crossover-signal/v1" />
-            </label>
-          } @else if (golden.validation_case.strategy.program_version === null) {
-            <p class="golden-workbench__notice" role="status">A rejection does not authorize a Signal Program version.</p>
-          }
-          <button type="submit" [disabled]="busy()">Save review</button>
-        </form>
-        @if (golden.reviews.length > 0) {
-          <ol class="golden-workbench__reviews" aria-label="Review history">
-            @for (review of golden.reviews; track review.id) {
-              <li>
-                <strong>{{ review.decision | receiptLabel }} · {{ (review.classification ?? review.evidence_state) | receiptLabel }}</strong>
-                <span>{{ review.reviewed_at_ms | timestampDisplay: 'local' : 'datetime' }} by {{ review.reviewed_by }}</span>
-                @if (review.authorized_program_version) {
-                  <small>Authorized program version: {{ review.authorized_program_version }}</small>
-                }
-                <p>{{ review.reason }}</p>
-              </li>
-            }
-          </ol>
-        }
-      </article>
+      <app-golden-validation-review [golden]="golden" [busy]="busy()" [draft]="reviewDraft()" (draftChanged)="setReviewDraft($event)" (submitted)="submitReview()" />
     }
   }
 

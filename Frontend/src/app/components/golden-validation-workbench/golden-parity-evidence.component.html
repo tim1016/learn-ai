@@ -1,0 +1,42 @@
+<article class="golden-evidence">
+  <header>
+    <div>
+      <p class="golden-evidence__eyebrow">Computed engine evidence</p>
+      <h3>{{ golden().evidence_state | receiptLabel }}</h3>
+      <p>This is calculated evidence. A human decision below cannot rewrite it.</p>
+    </div>
+  </header>
+  <dl class="golden-evidence__facts">
+    <div><dt>Parity verdict</dt><dd>{{ parityStatus() ? (parityStatus() | receiptLabel) : 'No paired verdict' }}</dd></div>
+    <div><dt>Compared runs</dt><dd>{{ parityLeftRunId() ? '#' + parityLeftRunId() : '—' }} → {{ parityRightRunId() ? '#' + parityRightRunId() : '—' }}</dd></div>
+    @if (parityReason(); as reason) { <div><dt>Reason</dt><dd>{{ reason | receiptLabel }}</dd></div> }
+    <div><dt>Trade deviations</dt><dd>{{ divergences().length }}</dd></div>
+  </dl>
+  @if (parityChecks().length > 0) {
+    <ul class="golden-evidence__checks">
+      @for (check of parityChecks(); track check.label) {
+        <li><strong>{{ check.label }}</strong><span>{{ check.status | receiptLabel }}@if (check.reason) { · {{ check.reason | receiptLabel }}}</span></li>
+      }
+    </ul>
+  }
+  @if (divergences().length > 0) {
+    <details>
+      <summary>Review {{ divergences().length }} recorded deviation{{ divergences().length === 1 ? '' : 's' }}</summary>
+      <ol class="golden-evidence__divergences">
+        @for (item of divergences(); track $index) {
+          <li>
+            <strong>{{ item.category | receiptLabel }}@if (item.tradeNumber !== null) { · trade #{{ item.tradeNumber }}}</strong>
+            <span>{{ item.message }}</span>
+            @if (item.atMs !== null) { <small>{{ item.atMs | timestampDisplay: 'local' : 'datetime' }}</small> }
+          </li>
+        }
+      </ol>
+    </details>
+  }
+  @if (qualificationWarnings().length > 0) {
+    <div class="golden-evidence__warning" role="note">
+      <strong>Qualification warning</strong>
+      @for (warning of qualificationWarnings(); track warning) { <span>{{ warning | receiptLabel }}</span> }
+    </div>
+  }
+</article>

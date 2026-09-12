@@ -176,6 +176,31 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     }
   });
 
+  it('replaces a strategy that disappears from a scoped catalog with the refreshed selection', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const qqqOnlyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [QQQ_STRATEGY] };
+      const service = mockService();
+      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+        Promise.resolve(symbol === 'QQQ' ? qqqOnlyView : DEPLOY_VIEW),
+      );
+      await renderWorkflow(service);
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      await typeSymbol('QQQ');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      // A one-row catalog renders its chosen strategy as a label, not a
+      // `<select>`; its strategy-specific help control proves the ticket key
+      // was replaced rather than left pointing to the vanished row.
+      expect(screen.getByRole('button', {
+        name: `About ${QQQ_STRATEGY.label}: ${QQQ_STRATEGY.explanation}`,
+      })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reseeds the reviewed parameters when a scoped refresh selects another Golden run', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

@@ -331,6 +331,25 @@ def _unrepresentable_golden_scope_disposition(*, has_runtime: bool) -> _Disposit
     )
 
 
+def _has_exact_parameter_types_and_values(
+    expected: Mapping[str, object],
+    recorded: Mapping[str, object],
+) -> bool:
+    """Whether schema normalization preserved every Golden parameter exactly.
+
+    ``dict.__eq__`` follows Python numeric equality, so it would treat an
+    operator-recorded ``0`` or ``False`` as the schema's ``0.0``. A Golden
+    scope is evidence for an exact serialized configuration, not merely an
+    equivalent value after Pydantic's permissive boundary coercion.
+    """
+    if expected.keys() != recorded.keys():
+        return False
+    return all(
+        type(expected[name]) is type(recorded[name]) and expected[name] == recorded[name]
+        for name in expected
+    )
+
+
 def _representable_golden_scope(
     strategy_key: str,
     scopes: tuple[GoldenValidationScope, ...],
@@ -356,7 +375,7 @@ def _representable_golden_scope(
             expected = registration.param_schema.model_validate(raw).model_dump(mode="json")
         except (TypeError, ValidationError, ValueError):
             continue
-        if expected != raw:
+        if not _has_exact_parameter_types_and_values(expected, raw):
             continue
         public_parameters = {name: value for name, value in expected.items() if name != "symbol"}
         if hidden_params_present(registration, public_parameters, extra_hidden=frozenset({"symbol"})):

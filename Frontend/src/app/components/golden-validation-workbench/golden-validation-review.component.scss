@@ -1,0 +1,27 @@
+:host { display: block; }
+
+.golden-review { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border-light); border-left: 4px solid var(--accent); border-radius: var(--radius-md); background: var(--bg-elevated); }
+.golden-review > header { display: flex; justify-content: space-between; gap: var(--space-4); align-items: start; }
+.golden-review > header > div { display: grid; gap: var(--space-1); }
+.golden-review h3, .golden-review p { margin: 0; }
+.golden-review header p:not(.golden-review__eyebrow) { color: var(--text-secondary); }
+.golden-review__eyebrow { color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: .04em; text-transform: uppercase; }
+.golden-review__state { padding: var(--space-1) var(--space-2); border: 1px solid var(--badge-info-border); border-radius: var(--radius-pill); background: var(--accent-faint); color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); white-space: nowrap; }
+.golden-review form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.golden-review form > label:last-of-type, .golden-review form > button, .golden-review__notice { grid-column: 1 / -1; }
+.golden-review label { display: grid; gap: var(--space-1); color: var(--text-secondary); font-size: var(--fs-sm); }
+.golden-review em { color: var(--text-subtle); font-style: normal; }
+.golden-review input, .golden-review textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text); font: inherit; }
+.golden-review button { width: fit-content; padding: var(--space-2) var(--space-3); border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent); color: var(--text-on-accent); font: inherit; font-weight: var(--fw-bold); cursor: pointer; }
+.golden-review button:disabled { opacity: .6; cursor: not-allowed; }
+.golden-review fieldset { display: flex; gap: var(--space-3); align-items: center; border: 0; padding: 0; margin: 0; }
+.golden-review fieldset label { display: flex; gap: var(--space-1); align-items: center; }
+.golden-review fieldset input { width: auto; }
+.golden-review__warning { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--badge-warn-border); border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--badge-warn-text); }
+.golden-review__notice { margin: 0; color: var(--text-secondary); }
+.golden-review__history { display: grid; gap: var(--space-2); margin: 0; padding-left: var(--space-5); }
+.golden-review__history li { display: grid; gap: var(--space-1); }
+.golden-review__history span { color: var(--text-subtle); font-size: var(--fs-xs); }
+.golden-review__history p { color: var(--text-secondary); }
+
+@media (max-width: 760px) { .golden-review > header, .golden-review form { display: grid; grid-template-columns: 1fr; } }

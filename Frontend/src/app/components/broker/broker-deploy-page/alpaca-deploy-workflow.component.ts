@@ -523,7 +523,12 @@ export class AlpacaDeployWorkflowComponent {
         ?? view?.strategies.find((candidate) => candidate.selectable)
         ?? view?.strategies[0];
       if (!strategy) return;
-      const strategyKey = current.strategyKey || strategy.strategy_key;
+      // A scoped catalog can legitimately omit the ticket's prior strategy
+      // (for example, its Golden evidence only applies to another symbol).
+      // Once selection falls through to the request/default candidate, carry
+      // that resolved key into the ticket; retaining the vanished key leaves
+      // `selectedStrategy` null against the refreshed view.
+      const strategyKey = strategy.strategy_key;
       const nextValidationScope = validationScopeSeed(strategy);
       const scopeChanged = !sameValidationScope(this.lastValidationScope, nextValidationScope);
       const priorParametersRemainIntact = this.lastValidationScope !== null

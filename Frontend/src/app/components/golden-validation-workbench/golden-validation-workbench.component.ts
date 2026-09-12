@@ -15,77 +15,13 @@ import { firstValueFrom } from "rxjs";
 import { GoldenValidationService } from "../../services/golden-validation.service";
 import type { GoldenReviewDecision, GoldenValidation } from "../../services/golden-validation.types";
 import { AssetIdentityComponent } from "../../shared/asset-identity/asset-identity.component";
+import { formatReceiptLabel, ReceiptLabelPipe } from "../../shared/pipes/receipt-label.pipe";
+import { GoldenParityEvidenceComponent } from "./golden-parity-evidence.component";
+import { GoldenValidationCaseComponent } from "./golden-validation-case.component";
 import {
-  formatReceiptLabel,
-  formatReceiptValue,
-  isOpaqueReceiptValueLabel,
-  ReceiptLabelPipe,
-} from "../../shared/pipes/receipt-label.pipe";
-import { TimestampDisplayPipe } from "../../shared/timestamp";
-
-interface ParityCheckView {
-  label: string;
-  status: string;
-  reason: string | null;
-}
-
-interface DivergenceView {
-  category: string;
-  tradeNumber: number | null;
-  atMs: number | null;
-  message: string;
-}
-
-interface ScopeFact {
-  label: string;
-  value: string;
-  opaque: boolean;
-  symbol: string | null;
-}
-
-interface ParameterScopeView {
-  symbol: string | null;
-  values: Record<string, unknown>;
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
-}
-
-function numberValue(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function flattenScope(value: unknown, path: string[] = []): ScopeFact[] {
-  const object = record(value);
-  if (object !== null) {
-    return Object.entries(object).flatMap(([key, child]) => flattenScope(child, [...path, key]));
-  }
-  if (path.length === 0 || (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean" && value !== null)) {
-    return [];
-  }
-  const key = path[path.length - 1];
-  return [{
-    label: path.map((segment) => formatReceiptLabel(segment)).join(" · "),
-    value: value === null ? "Not recorded" : formatReceiptValue(key, value),
-    opaque: isOpaqueReceiptValueLabel(key),
-    symbol: key === "symbol" && typeof value === "string" ? value : null,
-  }];
-}
-
-function separateParameterSymbol(value: Record<string, unknown>): ParameterScopeView {
-  const { symbol, ...values } = value;
-  return {
-    symbol: stringValue(symbol),
-    values: typeof symbol === "string" ? values : value,
-  };
-}
+  GoldenValidationReviewComponent,
+  type GoldenReviewDraft,
+} from "./golden-validation-review.component";
 
 /**
  * A focused research workbench for an immutable Validation Golden Run.
@@ -94,7 +30,13 @@ function separateParameterSymbol(value: Record<string, unknown>): ParameterScope
  */
 @Component({
   selector: "app-golden-validation-workbench",
-  imports: [AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayPipe],
+  imports: [
+    AssetIdentityComponent,
+    GoldenParityEvidenceComponent,
+    GoldenValidationCaseComponent,
+    GoldenValidationReviewComponent,
+    ReceiptLabelPipe,
+  ],
   templateUrl: "./golden-validation-workbench.component.html",
   styleUrl: "./golden-validation-workbench.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -141,56 +83,12 @@ export class GoldenValidationWorkbenchComponent {
   });
 
   protected readonly canDesignate = computed(() => this.sourceRunId() !== null && this.selected() === null);
-  protected readonly parityEnvelope = computed(() => record(this.selected()?.parity_evidence["parity_verdict"]));
-  protected readonly parityPayload = computed(() => {
-    const envelope = this.parityEnvelope();
-    return record(envelope?.["payload"]) ?? envelope;
-  });
-  protected readonly parityStatus = computed(() =>
-    stringValue(this.parityEnvelope()?.["status"]) ?? stringValue(this.parityPayload()?.["status"]),
-  );
-  protected readonly parityReason = computed(() => stringValue(this.parityPayload()?.["reason"]));
-  protected readonly parityLeftRunId = computed(() => numberValue(this.parityEnvelope()?.["left_run_id"]));
-  protected readonly parityRightRunId = computed(() => numberValue(this.parityEnvelope()?.["right_run_id"]));
-  protected readonly qualificationWarnings = computed(() => {
-    const raw = this.selected()?.parity_evidence["qualification_warnings"];
-    return Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [];
-  });
-  protected readonly dataPolicyFacts = computed(() => flattenScope(this.selected()?.validation_case.data_policy));
-  protected readonly executionFacts = computed(() => flattenScope(this.selected()?.validation_case.execution));
-  protected readonly parameterScope = computed(() => separateParameterSymbol(this.selected()?.validation_case.parameters ?? {}));
-  protected readonly parityChecks = computed<ParityCheckView[]>(() => {
-    const payload = this.parityPayload();
-    if (payload === null) return [];
-    return [
-      ["Native metrics", "native_metric_parity"],
-      ["Readiness", "readiness_parity"],
-      ["Inputs", "input_parity"],
-      ["Parameters", "parameter_parity"],
-      ["Program version", "program_version_parity"],
-    ].flatMap(([label, key]) => {
-      const check = record(payload[key]);
-      const status = stringValue(check?.["status"]);
-      return status === null ? [] : [{ label, status, reason: stringValue(check?.["reason"]) }];
-    });
-  });
-  protected readonly divergences = computed<DivergenceView[]>(() => {
-    const raw = this.parityPayload()?.["divergences"];
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((entry) => {
-      const item = record(entry);
-      const category = stringValue(item?.["category"]);
-      const message = stringValue(item?.["message"]);
-      return category === null || message === null
-        ? []
-        : [{
-          category,
-          tradeNumber: numberValue(item?.["trade_number"]),
-          atMs: numberValue(item?.["ms_utc"]),
-          message,
-        }];
-    });
-  });
+  protected readonly reviewDraft = computed<GoldenReviewDraft>(() => ({
+    decision: this.reviewDecision(),
+    reason: this.reviewReason(),
+    quantConnectBacktestId: this.quantConnectBacktestId(),
+    authorizedProgramVersion: this.authorizedProgramVersion(),
+  }));
 
   constructor() {
     effect(() => {
@@ -204,11 +102,7 @@ export class GoldenValidationWorkbenchComponent {
 
   selectCase(entry: GoldenValidation): void {
     this.selectedId.set(entry.id);
-    this.reviewDecision.set("accept");
-    this.reviewReason.set("");
-    this.quantConnectBacktestId.set("");
-    this.authorizedProgramVersion.set("");
-    this.reviewCommandId.set(this.commandId("review"));
+    this.resetReviewDraft();
     this.clearNotice();
   }
 
@@ -223,38 +117,6 @@ export class GoldenValidationWorkbenchComponent {
     if (event.target instanceof HTMLTextAreaElement) {
       this.designationRationale.set(event.target.value);
       this.designationCommandId.set(this.commandId("designate"));
-    }
-  }
-
-  setReviewReason(event: Event): void {
-    if (event.target instanceof HTMLTextAreaElement) {
-      this.reviewReason.set(event.target.value);
-      this.reviewCommandId.set(this.commandId("review"));
-    }
-  }
-
-  setQuantConnectBacktestId(event: Event): void {
-    if (event.target instanceof HTMLInputElement) {
-      this.quantConnectBacktestId.set(event.target.value);
-      this.reviewCommandId.set(this.commandId("review"));
-    }
-  }
-
-  setAuthorizedProgramVersion(event: Event): void {
-    if (event.target instanceof HTMLInputElement) {
-      this.authorizedProgramVersion.set(event.target.value);
-      this.reviewCommandId.set(this.commandId("review"));
-    }
-  }
-
-  setReviewDecision(event: Event): void {
-    if (!(event.target instanceof HTMLInputElement)) return;
-    if (event.target.value === "accept" || event.target.value === "reject") {
-      this.reviewDecision.set(event.target.value);
-      if (event.target.value === "reject") {
-        this.authorizedProgramVersion.set("");
-      }
-      this.reviewCommandId.set(this.commandId("review"));
     }
   }
 
@@ -290,6 +152,14 @@ export class GoldenValidationWorkbenchComponent {
     }
   }
 
+  setReviewDraft(draft: GoldenReviewDraft): void {
+    this.reviewDecision.set(draft.decision);
+    this.reviewReason.set(draft.reason);
+    this.quantConnectBacktestId.set(draft.quantConnectBacktestId);
+    this.authorizedProgramVersion.set(draft.authorizedProgramVersion);
+    this.reviewCommandId.set(this.commandId("review"));
+  }
+
   async submitReview(): Promise<void> {
     const selected = this.selected();
     const reason = this.reviewReason().trim();
@@ -319,15 +189,11 @@ export class GoldenValidationWorkbenchComponent {
           ? { quantconnect_backtest_id: this.quantConnectBacktestId().trim() }
           : {}),
         ...(this.reviewDecision() === "accept" && authorizedProgramVersion
-          ? { authorized_program_version: authorizedProgramVersion }
-          : {}),
+          ? { authorized_program_version: authorizedProgramVersion } : {}),
       }));
       this.latestResponse.set(result);
       this.changed.emit(result);
-      this.reviewReason.set("");
-      this.quantConnectBacktestId.set("");
-      this.authorizedProgramVersion.set("");
-      this.reviewCommandId.set(this.commandId("review"));
+      this.resetReviewDraft();
       this.message.set(
         result.latest_review?.decision === "accept"
           ? `Golden validation accepted as ${formatReceiptLabel(result.latest_review.classification ?? "manual_override")}.`
@@ -348,10 +214,6 @@ export class GoldenValidationWorkbenchComponent {
     }
   }
 
-  protected json(value: unknown): string {
-    return JSON.stringify(value, null, 2);
-  }
-
   refreshEvidence(): void {
     this.latestResponse.set(null);
     this.clearNotice();
@@ -367,7 +229,20 @@ export class GoldenValidationWorkbenchComponent {
     return `golden-${action}-${crypto.randomUUID()}`;
   }
 
+  private resetReviewDraft(): void {
+    this.reviewDecision.set("accept");
+    this.reviewReason.set("");
+    this.quantConnectBacktestId.set("");
+    this.authorizedProgramVersion.set("");
+    this.reviewCommandId.set(this.commandId("review"));
+  }
+
   private errorCode(error: HttpErrorResponse): string | null {
-    return stringValue(record(record(error.error)?.["detail"])?.["code"]);
+    const payload = error.error;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+    const detail = payload["detail"];
+    if (typeof detail !== "object" || detail === null || Array.isArray(detail)) return null;
+    const code = detail["code"];
+    return typeof code === "string" && code ? code : null;
   }
 }
