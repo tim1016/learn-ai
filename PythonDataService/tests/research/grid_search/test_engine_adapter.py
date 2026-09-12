@@ -20,7 +20,7 @@ from app.config import settings
 from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.grid_search import engine_adapter, service
-from app.research.sweep.grid import StrategyGridConfig, ValueListRange, expand_grid
+from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange, expand_grid
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
@@ -44,6 +44,34 @@ def lake(tmp_path: Path, monkeypatch) -> Path:
 
 def _noop(_: str) -> None:
     return None
+
+
+def test_an_empty_engine_run_becomes_a_failed_sweep_cell(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "empty-writer-root"))
+    candidate = RunSpec(
+        symbol="SPY",
+        strategy_key="sma_crossover",
+        params={"short_window": 2.0, "long_window": 5.0},
+        params_hash="empty-cell",
+    )
+    response = execute_engine_backtest(
+        request=EngineBacktestRequest(
+            strategy_name="sma_crossover",
+            params={"symbol": "SPY", "short_window": 2, "long_window": 5},
+            from_date=START.isoformat(),
+            to_date=END.isoformat(),
+            auto_fetch=False,
+            save_study=False,
+        ),
+        on_phase=_noop,
+        on_log=_noop,
+    )
+
+    cell = engine_adapter.cell_from_response(candidate, response)
+
+    assert cell.status == "failed"
+    assert cell.error == "missing data: backtest evaluated zero bars for the requested window"
+    assert cell.bars_consumed is None
 
 
 async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_are_identical(conn: asyncpg.Connection, lake: Path) -> None:

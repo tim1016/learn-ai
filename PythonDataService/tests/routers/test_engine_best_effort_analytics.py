@@ -30,7 +30,7 @@ class _Result:
 
 
 def test_lean_statistics_are_absent_rather_than_wrong_when_there_is_nothing_to_compare() -> None:
-    """No bars or no trades is not a failure — it is a run with no comparison."""
+    """This optional panel stays absent; aggregation separately rejects zero-bar runs."""
     assert _lean_parity_statistics(result=_Result(bars=[], equity_curve=[]), trades=[]) is None
     assert _lean_parity_statistics(result=_Result(bars=[object()]), trades=[]) is None
 

@@ -255,6 +255,37 @@ def test_flag_on_run_without_auto_fetch_claims_no_manifest(seeded_roots, monkeyp
     assert response.lake_data_availability_hash is None
 
 
+def test_run_without_evaluated_bars_reports_missing_data(monkeypatch, tmp_path: Path) -> None:
+    """An empty lake is a failed experiment, never a successful zero-trade run."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "empty-writer-root"))
+    request = _request()
+    request.auto_fetch = False
+    log: list[str] = []
+
+    response = execute_engine_backtest(request=request, on_phase=_noop, on_log=log.append)
+
+    assert response.success is False
+    assert response.error == "missing data: backtest evaluated zero bars for the requested window"
+    assert response.total_trades == 0
+    assert response.equity_curve == []
+    assert response.chart_bars == []
+    assert response.run_verdict is None
+    assert any(response.error in line for line in log)
+
+
+def test_run_with_evaluated_bars_and_no_trades_remains_successful(seeded_roots) -> None:
+    request = _request()
+    request.auto_fetch = False
+    request.params.update({"short_window": 500, "long_window": 1000})
+
+    response = execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
+
+    assert response.success is True
+    assert response.error is None
+    assert response.total_trades == 0
+    assert response.equity_curve
+
+
 def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monkeypatch):
 
     def _explode(**kwargs):
@@ -280,11 +311,15 @@ def test_flag_on_run_materializes_the_legacy_adjusted_default_into_its_own_root(
     segment of the root, so the same request materializes the adjusted root
     instead of failing.
     """
+    adjusted_lake = Path(settings.LEAN_DATA_WRITE_ROOT) / lake_subpath("polygon_split_adjusted")
+    adjusted_lake.mkdir(parents=True)
+    for day in SEEDED_DAYS:
+        seed_store_day(adjusted_lake, "SPY", day)
     calls: list[dict] = []
 
     def _fake_materialize(**kwargs):
         calls.append(kwargs)
-        return _materialization(seeded_roots)
+        return _materialization(adjusted_lake)
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
     request = EngineBacktestRequest(
