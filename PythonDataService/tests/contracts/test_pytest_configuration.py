@@ -100,10 +100,10 @@ def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
     frontend_config = FRONTEND_CI_CONFIG.read_text(encoding="utf-8")
 
     assert "python-test-shard:" in ci_contents
-    assert "shard: [1, 2, 3, 4, 5, 6, 7, 8]" in ci_contents
-    assert 'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/8"' in ci_contents
+    assert "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]" in ci_contents
+    assert 'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/12"' in ci_contents
     assert "frontend-test-shard:" in ci_contents
-    assert "shard: [1, 2, 3]" in ci_contents
+    assert "shard: [1, 2, 3, 4, 5, 6]" in ci_contents
     assert "--runner-config=vitest.ci.config.ts" in ci_contents
     assert "shard:" in frontend_config
 
