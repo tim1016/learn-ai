@@ -1,0 +1,26 @@
+<ol class="tracker" aria-label="Configuration change tracker">
+  @if (generationsMatch()) {
+    @for (step of steps(); track step.key) {
+      <li
+        class="tracker__step"
+        [attr.data-status]="step.status"
+        [attr.aria-current]="step.status === 'current' ? 'step' : null"
+      >
+        <span class="tracker__marker" aria-hidden="true"></span>
+        <span class="tracker__label">{{ step.label }}</span>
+        <span class="tracker__status">{{ step.status_label }}</span>
+      </li>
+    }
+  } @else {
+    <li class="tracker__unknown">Refreshing / state unknown</li>
+  }
+</ol>
+<p class="tracker__restart" role="note">
+  @if (applyRecorded()) {
+    Apply is recorded. The staged revision becomes effective at the operator's next
+    controlled restart of the worker, run on the host — never from this browser.
+  } @else {
+    Stage, then Apply, then restart the worker on the host. This page records intent;
+    it never restarts the worker or arms live trading.
+  }
+</p>

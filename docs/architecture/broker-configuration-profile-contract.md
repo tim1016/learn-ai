@@ -245,6 +245,36 @@ with a generic 500.
 - A crash with a staged selection and an open position boots the last-effective revision and keeps EXITs running.
 - A refused apply preflight boots the last-effective revision and does not leave the apply request pending.
 
+## 9. Desk truth sources and future-clerk invariants (2026-09-12)
+
+Recorded from the lens/Paper-Live UX simplification (task `.agents/tasks/2026-09-12-alpaca-lens-paper-live-ux.md`). These are frontend presentation rules; they add no contract surface.
+
+### 9.1 Lens dimension (Trader/Operator)
+
+- One shared lens kernel lives at `Frontend/src/app/components/broker/shared/lens/` (type/parser, accessible tablist, preference service, URL helpers). The Alpaca account desk, the full bot panel, and the triage detail all render it; no host keeps a private copy of the tablist or its keyboard handling.
+- The names `Trader` and `Operator` and the URL values `trader` | `operator` are user-facing vocabulary and are not renamed.
+- Exactly one storage key exists: `learn-ai.alpaca-desk.lens`. The routed desk and the full bot panel share it. The triage detail keeps a purely component-local lens and never reads or writes the preference.
+- Precedence is `?lens=` > stored preference > `trader`. Lens switches navigate with `replaceUrl: true` and query-parameter merging so deep links and unrelated parameters survive.
+- Lens is a presentation dimension only; it never gates authority. Operator evidence/journal reads stay parked behind an actual Operator act (audit semantics unchanged).
+
+### 9.2 Effective Paper/Live identity (truth layers)
+
+- When `effective_choice` exists on the desk state, the identity strip's profile, revision, account label, and endpoint mode come **only** from it. Effective identity is never inferred from staged state.
+- Only when `effective_choice` is absent may the generation-zero `BrokerAccountSnapshot` show an *observed* account id and mode — and never a revision, which the snapshot does not have.
+- If the effective choice's account id and the independently observed account id disagree, the desk shows an explicit warning and gates identity-dependent actions; the records are never silently merged.
+
+### 9.3 Stage → Apply → Restart tracker
+
+- The adopted `SelectionResponse` is authoritative for staged/effective and Apply progress.
+- Desk lifecycle copy/labels are used only while `desk_state.selection_generation` equals the adopted response's `selection_generation`. On mismatch the tracker renders "Refreshing / state unknown" and Stage/Apply writes are disabled until a newly adopted response agrees.
+- The browser may display or copy the restart command but never initiates a restart or arms Live trading (ADR 0060/0059 unchanged).
+
+### 9.4 Future clerk support (invariant, not implemented)
+
+- Clerk IDs are opaque and backend-issued. The frontend must never fabricate, default, or infer a clerk ID, and must never introduce a `?clerk=` query parameter or a second lens-style storage key for one.
+- Every clerk-scoped command must carry the explicit backend-issued ID; presentation-only context objects (e.g. a shared `DESK_CONTEXT`) may expose data already present in server responses and nothing else, and are never command authority.
+- Clerk is a **context/lane** dimension (which clerk's surface is in view). Trader/Operator remains the **lens** dimension. The two never merge.
+
 
 ## Integration enforcement (Package G)
 

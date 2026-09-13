@@ -59,33 +59,51 @@
   backdrop-filter: blur(12px);
 }
 
-.lens-toggle {
+// The shared tab widget, laid out as the nav's underline-style tab row.
+.lens-navigation__tabs {
   display: flex;
   align-self: stretch;
+  width: auto;
   gap: var(--space-1);
   padding: 0 var(--space-4);
+  border: 0;
+  background: transparent;
+
+  ::ng-deep .lens-tabs {
+    gap: var(--space-1);
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  ::ng-deep .lens-tabs__tab {
+    min-width: 7rem;
+    min-height: auto;
+    padding: 0.65rem 1rem 0.55rem;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+
+    &:hover { background: transparent; color: var(--text-primary); }
+
+    &--active,
+    &--active:hover {
+      background: transparent;
+      border-bottom-color: var(--accent);
+      color: var(--text-primary);
+      font-weight: var(--fw-semi);
+    }
+  }
 }
 
 .panel-feedback { padding: 0 var(--space-4); }
 
-.lens-toggle__tab {
-  min-width: 7rem;
-  padding: 0.65rem 1rem 0.55rem;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-
-  &:hover { color: var(--text-primary); }
-  &--active { border-bottom-color: var(--accent); color: var(--text-primary); font-weight: var(--fw-semi); }
-}
-
 @media (max-width: 800px) {
-  .lens-toggle,
+  .lens-navigation__tabs,
   .panel-feedback { padding-inline: var(--space-3); }
-  .lens-toggle { width: 100%; }
-  .lens-toggle__tab { flex: 1; }
+  .lens-navigation__tabs { width: 100%; }
+  .lens-navigation__tabs ::ng-deep .lens-tabs__tab { flex: 1; }
 }
 
 @media (max-width: 1100px) {

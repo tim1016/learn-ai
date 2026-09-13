@@ -14,6 +14,10 @@ import { DialogModule } from 'primeng/dialog';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import type { AlpacaDeskSelectionSummary } from '../../../api/alpaca.types';
+import { LensPreferenceService } from '../../broker/shared/lens/lens-preference.service';
+import { LensTabsComponent } from '../../broker/shared/lens/lens-tabs.component';
+import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../broker/shared/lens/lens';
+import { lensNavigationExtras } from '../../broker/shared/lens/lens-url';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
@@ -28,35 +32,6 @@ import {
   BrokersService,
   type SqliteTimelineQuery,
 } from '../../../services/brokers.service';
-
-const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
-
-type AlpacaDeskLens = 'trader' | 'operator';
-
-function lensFrom(value: string | null): AlpacaDeskLens | null {
-  return value === 'trader' || value === 'operator' ? value : null;
-}
-
-function storedLens(): AlpacaDeskLens | null {
-  if (typeof localStorage === 'undefined') return null;
-  try {
-    return lensFrom(localStorage.getItem(LENS_STORAGE_KEY));
-  } catch (error) {
-    // Storage can be disabled without making the in-memory desk unusable.
-    void error;
-    return null;
-  }
-}
-
-function persistLens(lens: AlpacaDeskLens): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(LENS_STORAGE_KEY, lens);
-  } catch (error) {
-    // Persistence is an enhancement; keep the current session's choice.
-    void error;
-  }
-}
 
 function timelineQueryFromRoute(params: { get(name: string): string | null }): SqliteTimelineQuery | null {
   const rawSequence = params.get('timelineSequence');
@@ -92,6 +67,7 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
     AlpacaOrderEntryComponent,
     AlpacaTraderLensComponent,
     DialogModule,
+    LensTabsComponent,
     RouterLink,
   ],
   templateUrl: './alpaca-desk.component.html',
@@ -105,6 +81,7 @@ export class AlpacaDeskComponent {
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly brokers = inject(BrokersService);
   private readonly configuration = inject(BrokerConfigurationService);
+  private readonly lensPreference = inject(LensPreferenceService);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
@@ -116,8 +93,8 @@ export class AlpacaDeskComponent {
     this.configurationState.hasValue() ? this.configurationState.value() : null,
   );
 
-  protected readonly lens = linkedSignal<AlpacaDeskLens>(() =>
-    lensFrom(this.queryParams().get('lens')) ?? storedLens() ?? 'trader',
+  protected readonly lens = linkedSignal<DeskLens>(() =>
+    parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
   protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
@@ -126,6 +103,9 @@ export class AlpacaDeskComponent {
   );
   protected readonly ticketAccountId = computed(() =>
     this.accountData.account.hasValue() ? this.accountData.account.value().account_id : null,
+  );
+  protected readonly accountSnapshot = computed(() =>
+    this.accountData.account.hasValue() ? this.accountData.account.value() : null,
   );
   protected readonly operatingDeskVisible = computed(
     () => this.accountData.account.hasValue(),
@@ -177,14 +157,13 @@ export class AlpacaDeskComponent {
     });
   }
 
-  protected selectLens(lens: AlpacaDeskLens): void {
+  protected selectLens(lens: DeskLens): void {
     if (lens === this.lens()) return;
     this.lens.set(lens);
-    persistLens(lens);
+    this.lensPreference.write(lens);
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { lens },
-      queryParamsHandling: 'merge',
+      ...lensNavigationExtras(lens),
     });
   }
 
@@ -220,20 +199,5 @@ export class AlpacaDeskComponent {
     void this.router.navigate(['/brokers/alpaca/configuration'], {
       queryParams: { profileId: choice.profile_id, revision: choice.revision },
     });
-  }
-
-  protected onLensKeydown(event: KeyboardEvent): void {
-    const nextLens =
-      event.key === 'ArrowRight' || event.key === 'End'
-        ? 'operator'
-        : event.key === 'ArrowLeft' || event.key === 'Home'
-          ? 'trader'
-          : null;
-    if (nextLens === null) return;
-    event.preventDefault();
-    this.selectLens(nextLens);
-    if (!(event.currentTarget instanceof HTMLElement)) return;
-    const target = event.currentTarget.parentElement?.querySelector(`[data-lens="${nextLens}"]`);
-    if (target instanceof HTMLElement) target.focus();
   }
 }

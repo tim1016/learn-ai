@@ -19,6 +19,10 @@ import type {
   HistoricalExecutionRecoveryPlan,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
+import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
+import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
+import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../shared/lens/lens';
+import { lensNavigationExtras } from '../../shared/lens/lens-url';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
@@ -45,7 +49,7 @@ import {
   PanelActionReceiptComponent,
 } from './panel-action-receipt.component';
 
-type PanelLens = 'trader' | 'operator';
+type PanelLens = DeskLens;
 
 interface HistoricalExecutionRecoveryDraft {
   readonly action: PanelAction;
@@ -73,6 +77,7 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    LensTabsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
@@ -103,16 +108,18 @@ export class BotPanelShellComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
+  private readonly lensPreference = inject(LensPreferenceService);
 
   // ── Active lens ──────────────────────────────────────────────────────────
-  // Reads the `?lens=` query param if provided; defaults to 'trader'.
-  // Set via selectLens() or the tab toggle in the template.
+  // Precedence: the `?lens=` query param, then the stored preference the
+  // account desk also shares, then 'trader'. Set via selectLens() or the
+  // shared tab widget.
 
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
   protected readonly activeLens = linkedSignal<PanelLens>(() =>
-    this.queryParams().get('lens') === 'operator' ? 'operator' : 'trader',
+    parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
 
   // ── Internal state ────────────────────────────────────────────────────────
@@ -206,35 +213,18 @@ export class BotPanelShellComponent {
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────
 
-  /** Called by the tab bar to switch between lenses. */
+  /** Called by the shared tab widget to switch between lenses. */
   protected selectLens(lens: PanelLens): void {
     this.activeLens.set(lens);
+    this.lensPreference.write(lens);
     if (lens === 'trader') {
       this.selectedTransactionRef.set(null);
       this.liveStore.clearSelectedTransaction();
     }
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { lens },
-      queryParamsHandling: 'merge',
-      replaceUrl: true,
+      ...lensNavigationExtras(lens),
     });
-  }
-
-  protected onLensKeydown(event: KeyboardEvent): void {
-    const nextLens =
-      event.key === 'ArrowRight' || event.key === 'End'
-        ? 'operator'
-        : event.key === 'ArrowLeft' || event.key === 'Home'
-          ? 'trader'
-          : null;
-    if (nextLens === null) return;
-    event.preventDefault();
-    this.selectLens(nextLens);
-    const target = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelector(
-      `[data-lens="${nextLens}"]`,
-    );
-    if (target instanceof HTMLElement) target.focus();
   }
 
   private routeParams(): {

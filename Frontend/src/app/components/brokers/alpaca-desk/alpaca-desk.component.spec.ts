@@ -228,7 +228,9 @@ describe('AlpacaDeskComponent', () => {
 
   it('switches instantly, updates the query parameter, persists, and lazy-loads operator data', async () => {
     const { brokers, router } = await renderDesk();
-    await screen.findByText('PA1');
+    // PA1 reaches the desk twice while no effective choice exists: the
+    // identity strip's observed-account fallback and the account card.
+    await screen.findAllByText('PA1');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 
@@ -289,7 +291,8 @@ describe('AlpacaDeskComponent', () => {
     if (effective === null) throw new Error('effective selection fixture is incomplete');
 
     expect(await screen.findByText(/Couldn't reach Alpaca/)).toBeTruthy();
-    expect(screen.getByText(effective.profile_label)).toBeTruthy();
+    // The identity strip and the connectivity section both name the effective profile.
+    expect((await screen.findAllByText(effective.profile_label)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Strategy lab · PA-123.*Paper.*Revision 3/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Review account configuration' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
@@ -317,7 +320,9 @@ describe('AlpacaDeskComponent', () => {
       headline: 'Strategy lab remains the effective selection',
       detail: 'Alpaca Live is selected next; the effective configuration remains Alpaca Paper.',
       staged_choice: stagedChoice,
-      effective_choice: accountActivation.choices[0],
+      // The connected account must match the effective choice, or the desk's
+      // identity-mismatch gating correctly disables the pending action.
+      effective_choice: { ...accountActivation.choices[0], account_id: 'PA1' },
       action: { kind: 'review_staged_configuration', label: 'Review & apply Alpaca Live', enabled: true },
     };
     const { router } = await renderDesk({}, brokerService(), pending);

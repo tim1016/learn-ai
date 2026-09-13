@@ -505,6 +505,9 @@ function openDisclosure(label: string): void {
 describe('BotPanelShellComponent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The panel now shares the desk's stored lens preference; a test that
+    // switched lenses must not leak that choice into the next render.
+    localStorage.clear();
   });
 
   afterAll(() => {

@@ -19,6 +19,8 @@ import {
   formatReceiptLabel,
 } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
+import type { DeskLens } from '../../shared/lens/lens';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
@@ -40,7 +42,6 @@ import type {
 } from '../lib/broker-v2-panel.types';
 
 type Tone = 'positive' | 'negative' | 'warn' | 'neutral' | 'muted';
-type TriageLens = 'trader' | 'operator';
 
 interface MetricTile {
   readonly label: string;
@@ -100,6 +101,7 @@ function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
     BotBannerOverflowComponent,
     MissionVerdictStatusComponent,
     AssetIdentityComponent,
+    LensTabsComponent,
     TriageActivityComponent,
     TriageEvidenceComponent,
     TriageTapeComponent,
@@ -121,7 +123,7 @@ export class BotTriageDetailComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
 
-  protected readonly lens = signal<TriageLens>('trader');
+  protected readonly lens = signal<DeskLens>('trader');
   protected readonly tapeResolution = signal<ChartLiveResolution>('1m');
   /** Trails `sid()` by `TAPE_DEBOUNCE_MS`; only the tape reads it. */
   private readonly settledSid = signal<string | null>(null);
@@ -388,26 +390,8 @@ export class BotTriageDetailComponent {
 
   protected readonly actionTone = actionTone;
 
-  protected selectLens(lens: TriageLens): void {
+  protected selectLens(lens: DeskLens): void {
     this.lens.set(lens);
-  }
-
-  /**
-   * Roving-tabindex keyboard nav for the lens tablist (WAI-ARIA tabs pattern),
-   * mirroring `DualPaneChartComponent`'s source switcher: only the active tab
-   * is tabbable, and Arrow/Home/End move both the selection and focus so a
-   * keyboard-only operator can reach the other lens.
-   */
-  protected onLensKeydown(event: KeyboardEvent): void {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const lens: TriageLens =
-      event.key === 'ArrowLeft' || event.key === 'Home' ? 'trader' : 'operator';
-    this.lens.set(lens);
-    const target = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelector(
-      `[data-lens="${lens}"]`,
-    );
-    if (target instanceof HTMLElement) target.focus();
   }
 
   protected onTapeResolutionChange(resolution: ChartLiveResolution): void {

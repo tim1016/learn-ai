@@ -195,6 +195,9 @@ class FakeConfigurationService {
       staged_revision: rev,
       selection_generation: generation + 1,
     };
+    // The backend reports the desk projection from the same generation as the
+    // selection it just wrote; the fake mirrors that so the two reads agree.
+    this.desk = { ...this.desk, selection_generation: generation + 1 };
     return this.current;
   });
 
@@ -206,6 +209,7 @@ class FakeConfigurationService {
       apply_requested_at_ms: 1_757_000_500_000,
       selection_generation: generation + 1,
     };
+    this.desk = { ...this.desk, selection_generation: generation + 1 };
     return this.current;
   });
 }
@@ -229,6 +233,18 @@ async function renderPage(
     ],
   });
   return { ...view, queryParamMap };
+}
+
+/**
+ * Writes stay disabled until the page has read both the selection and the
+ * desk projection and their generations agree; wait for that before clicking.
+ */
+async function clickWhenWritesEnabled(name: string): Promise<void> {
+  const button = await screen.findByRole('button', { name });
+  await vi.waitFor(() => {
+    if ((button as HTMLButtonElement).disabled) throw new Error('writes are still disabled');
+  });
+  await userEvent.click(button);
 }
 
 async function saveProfile(name: string): Promise<void> {
@@ -444,11 +460,11 @@ describe('AlpacaConfigurationPageComponent', () => {
     first.fixture.destroy();
     TestBed.resetTestingModule();
     await renderPage(service);
-    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+    await clickWhenWritesEnabled('Stage');
 
     expect(service.staged).toEqual([{ profileId: 'profile-1', revision: 1, generation: 0 }]);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Apply staged revision' }));
+    await clickWhenWritesEnabled('Apply staged revision');
 
     expect(service.applied).toEqual([1]);
     expect(screen.getByText(/nothing has changed yet/)).toBeTruthy();
@@ -467,6 +483,9 @@ describe('AlpacaConfigurationPageComponent', () => {
       last_apply_outcome: 'refused',
       last_apply_refusal_reason: 'The prior account has outstanding obligations.',
     });
+    // Same generation as the selection read, or the page's stale-generation
+    // gating correctly disables Stage.
+    service.desk = deskState({ selection_generation: 8 });
     if (conflict) {
       service.stageRefusal = new HttpErrorResponse({
         status: 409,
@@ -482,7 +501,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     await userEvent.click(await screen.findByText('Revision history (3)'));
     expect((screen.getByRole('button', { name: 'Stage revision 3' }) as HTMLButtonElement).disabled).toBe(true);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Stage revision 1' }));
+    await clickWhenWritesEnabled('Stage revision 1');
 
     expect(service.stageSelection).toHaveBeenCalledExactlyOnceWith('profile-paper', 1, 8);
     expect(service.applied).toEqual([]);
@@ -511,13 +530,42 @@ describe('AlpacaConfigurationPageComponent', () => {
     });
     await renderPage(service);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+    await clickWhenWritesEnabled('Stage');
 
     // The code-like reason arrives through the shared `receiptLabel` pipe.
     expect(screen.getByText('Selection Generation Conflict')).toBeTruthy();
     expect(screen.getByText('The selection changed while this page was open.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Reload configuration' })).toBeTruthy();
     expect(service.stageSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Stage and Apply while the desk lifecycle and selection generations disagree', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    service.current = selection({
+      staged_profile_id: 'profile-1',
+      staged_revision: 1,
+      selection_generation: 4,
+    });
+    // The desk projection was read before another writer moved the fence.
+    service.readDeskState = vi.fn(async () => ({
+      ...service.desk,
+      lifecycle: [
+        { key: 'effective_configuration', label: 'Paper is active', status: 'complete', status_label: 'Complete' },
+        { key: 'selected_configuration', label: 'Select configuration', status: 'current', status_label: 'Current step' },
+        { key: 'worker_handoff', label: 'Restart worker', status: 'pending', status_label: 'Pending' },
+      ],
+      selection_generation: 3,
+    }));
+    await renderPage(service);
+
+    expect(await screen.findByText('Refreshing / state unknown')).toBeTruthy();
+    expect(screen.queryByText('Restart worker')).toBeNull();
+    expect((await screen.findByRole('button', { name: 'Stage' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Apply staged revision' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(service.stageSelection).not.toHaveBeenCalled();
+    expect(service.applySelection).not.toHaveBeenCalled();
   });
 
   it('renames durably rather than only in the row it was typed in', async () => {
