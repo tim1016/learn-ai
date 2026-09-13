@@ -10,6 +10,8 @@
 
 **Partially superseded 2026-09-11:** [ADR 0060](0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) replaces only the environment-source rule for the six live-envelope values in Decisions 3, 4 and 5.3 and the corresponding rejected alternative. Their authority is now the effective profile revision. Required values, validation, sealed arming, mode agreement, account isolation and the Live/Shadow developer-reset refusals remain unchanged. The provenance above records the original decision.
 
+**Scope extended 2026-09-12:** [ADR 0062](0062-broker-clerk-fleet-control-plane.md) lifts this ADR's "Not done by this ADR: more than one live account per installation" boundary by making each lane its own clerk — its own process, volume, credentials and custody. Every `real_live` clerk retains the full three-way mode agreement, per-instance arming, sealed envelope and cash-bound ENTER semantics independently; nothing in this ADR is weakened or shared across lanes.
+
 ## Context
 
 The scope memo established what this ADR takes as given:

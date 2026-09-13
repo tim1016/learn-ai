@@ -2093,6 +2093,24 @@ Decision record: ADR 0060; owner decisions D1–D5 and the accepted nickname, re
 - **Installation** — one independently operated deployment with its own broker configuration and a single worker. A Paper twin is a separate installation, even when operated by the same person.
 - **Paper developer reset** — an offline clean slate for one disposable Paper account, including its bots and associated saved configuration. It preserves unrelated Live profiles, other accounts, the installation owner and audit history; recreating Paper requires a fresh Apply and authority activation.
 
+## Broker clerk fleet (resolved 2026-09-12)
+
+**Lineage: live.**
+
+Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`.
+
+- **Broker clerk agent** — one provider-specific process controlling a single clerk lane and its own physical volume. A future Tradier integration supplies a `TradierClerkAgent`, a future Webull integration a `WebullClerkAgent`; neither inherits Alpaca behaviour by registering a string.
+- **Clerk** — a durable execution lane identified by an opaque backend-issued `clerk_id`. Callers never mint, parse or infer it; retirement is terminal and IDs are never recycled. Alpaca Paper and Alpaca Live run as two different clerks.
+- **Fleet coordinator** — the broker-neutral Python control plane for identity, discovery, assignment fencing, routing and health. It is not an execution authority: its registry stores no lane configuration or custody, and its directory computes no balances, positions, P&L or risk.
+- **Clerk volume** — the distinct physical mounted root holding one clerk's configuration, custody, ledgers, receipts, backups and recovery state. Its **volume identity** is a backend-issued `volume_id` plus a nonsecret mount attestation, verified before any database writer or broker client opens; a copied or mis-mounted root fails closed.
+- **Worker key** — the durable per-clerk worker identity ADR 0060 deferred and ADR 0062 designs. It never crosses the public API.
+- **Routing epoch** — the monotonic identity of one agent registration; retries must not silently cross an epoch change.
+- **Effective binding generation** — the clerk-local counter that changes only when the clerk's effective profile, revision or account changes; commands carry the generation they were prepared against.
+- **Account assignment** — the fleet reservation for `(broker, canonical external account id)`. Only one reserved or effective assignment exists per key, it never expires into takeover (heartbeat loss marks the lane unreachable but transfers nothing), and reassignment is a proof-driven host ceremony.
+- **Capability** — a closed typed operation declared by a concrete provider adapter. An undeclared action is a typed refusal, never an emulation or a cross-provider parity assumption.
+- **Lane** — the provider-plus-clerk routing dimension of the frontend, orthogonal to the Trader/Operator **lens**: routes carry broker and clerk identity explicitly, and a browser selection is never command authority.
+- **Fleet directory** — the broker-neutral read-only listing of every lane's identity, lifecycle, generations, capabilities and provider-authored summary, with per-lane provenance preserved on partial failure.
+
 ## Data lake (resolved 2026-08-27)
 
 **Lineage: live.**
