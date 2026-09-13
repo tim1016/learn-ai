@@ -917,6 +917,26 @@ app.add_middleware(
     allowed_hosts=settings.get_trusted_hosts(),
 )
 
+# Delivery D: a deployed clerk agent receives an explicit pair of bounded
+# per-process pools. The coordinator and legacy combined topology deliberately
+# do not install this lane runtime. Keep it inside the identity middleware so
+# capacity refusals cannot grant, retarget, or weaken a fleet identity pin.
+if _FLEET_ROLE == "clerk_agent":
+    from app.broker.fleet.lane_runtime import (
+        CompatibilityReadEvidence,
+        FleetLaneRuntimeMiddleware,
+        LaneRuntimeConfig,
+    )
+    from app.broker_configuration.runtime import resolve_clerk_dir
+
+    _fleet_lane_runtime_config = LaneRuntimeConfig.from_settings(fleet_settings)
+    _fleet_lane_compatibility_evidence = CompatibilityReadEvidence(resolve_clerk_dir())
+    app.add_middleware(
+        FleetLaneRuntimeMiddleware,
+        config=_fleet_lane_runtime_config,
+        evidence=_fleet_lane_compatibility_evidence,
+    )
+
 # The serving runtime's identity echo (fleet delivery B): fleet-addressed
 # requests — the ones a coordinator pins — are answered with the identity
 # this runtime actually serves, per response and per streamed event. Browser

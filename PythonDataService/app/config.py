@@ -62,6 +62,15 @@ class FleetSettings(BaseSettings):
     DEPLOYMENT_NAMESPACE: str = "host:local"
     # Heartbeat cadence; the registry's staleness window is 30 s.
     HEARTBEAT_INTERVAL_S: float = 10.0
+    # A fleet clerk agent is explicitly sized by the deployment.  Zero keeps
+    # the middleware disabled for the legacy/combined posture; a clerk-agent
+    # process must supply positive values for both pools at startup.
+    MAX_INFLIGHT_REQUESTS: int = 0
+    MAX_INFLIGHT_STREAMS: int = 0
+    # Requests may wait for a request or stream slot only within this bounded
+    # queue and deadline. A zero queue limit refuses immediately.
+    REQUEST_QUEUE_LIMIT: int = 0
+    REQUEST_QUEUE_TIMEOUT_MS: int = 0
 
 
 class Settings(BaseSettings):

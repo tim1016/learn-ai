@@ -598,6 +598,18 @@ def _route_paths_for_role(role: str) -> set[str]:
 
     service_root = Path(__file__).resolve().parents[3]
     environment = {**os.environ, "FLEET_ROLE": str(role)}
+    if role == "clerk_agent":
+        # Delivery D requires an agent deployment to size both independent
+        # runtime pools explicitly; this route-surface probe is one such
+        # minimal deployment rather than a legacy combined compatibility boot.
+        environment.update(
+            {
+                "FLEET_MAX_INFLIGHT_REQUESTS": "1",
+                "FLEET_MAX_INFLIGHT_STREAMS": "1",
+                "FLEET_REQUEST_QUEUE_LIMIT": "0",
+                "FLEET_REQUEST_QUEUE_TIMEOUT_MS": "0",
+            }
+        )
     # A CI harness may put tests/ itself on PYTHONPATH; tests/operator would
     # then shadow the stdlib operator module inside the child interpreter's
     # bootstrap. Filter that entry from the inherited path before prepending
