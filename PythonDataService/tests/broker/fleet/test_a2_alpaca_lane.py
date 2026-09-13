@@ -501,9 +501,20 @@ def _route_paths_for_role(role: str) -> set[str]:
     import subprocess
     import sys
 
-    service_root = str(Path(__file__).resolve().parents[3])
-    environment = {**os.environ, "FLEET_ROLE": role, "PYTHONPATH": service_root}
+    service_root = Path(__file__).resolve().parents[3]
+    environment = {**os.environ, "FLEET_ROLE": str(role)}
+    # A CI harness may put tests/ itself on PYTHONPATH; tests/operator would
+    # then shadow the stdlib operator module inside the child interpreter's
+    # bootstrap. Filter that entry from the inherited path before prepending
+    # the service root; the in-child scrub below is the second line of defense.
+    inherited = [
+        entry
+        for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if entry and Path(entry).resolve() != service_root / "tests"
+    ]
+    environment["PYTHONPATH"] = os.pathsep.join([str(service_root), *inherited])
     probe = (
+        "import sys; sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]; "
         "import json; from app.main import app; "
         "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
     )
@@ -543,14 +554,20 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
     import tempfile
 
     with tempfile.TemporaryDirectory() as control:
-        service_root = str(Path(__file__).resolve().parents[3])
+        service_root = Path(__file__).resolve().parents[3]
+        inherited = [
+            entry
+            for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+            if entry and Path(entry).resolve() != service_root / "tests"
+        ]
         environment = {
             **os.environ,
             "FLEET_ROLE": "fleet_coordinator",
             "FLEET_CONTROL_DIR": control,
-            "PYTHONPATH": service_root,
+            "PYTHONPATH": os.pathsep.join([str(service_root), *inherited]),
         }
         probe = (
+            "import sys; sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]; "
             "import json; from app.main import app; "
             "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
         )
