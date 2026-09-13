@@ -72,6 +72,11 @@ def _build_agent_app(
     async def selection() -> JSONResponse:
         return JSONResponse({"effective_account_id": ACCOUNT.upper()})
 
+    @agent.post("/api/brokers/alpaca/configuration/profiles")
+    async def create_profile(request: Request) -> JSONResponse:
+        del request
+        return JSONResponse({"profile_id": "prof_new", "created": True})
+
     @agent.get(
         "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/panel",
         dependencies=None,
@@ -559,9 +564,20 @@ async def test_the_composed_auth_policy_honors_both_caller_families(
             )
             assert wrong.status_code == 403
             forwarded = await client.post(
-                "/guarded", headers={COORDINATOR_TOKEN_HEADER: COORDINATOR_TOKEN}
+                "/guarded",
+                headers={
+                    COORDINATOR_TOKEN_HEADER: COORDINATOR_TOKEN,
+                    # A fleet dispatch always pins the lane identity; the
+                    # token alone is not a general-purpose bypass.
+                    "X-Fleet-Broker": "alpaca",
+                    "X-Fleet-Clerk-Id": CLERK_ID,
+                },
             )
             assert forwarded.status_code == 200
+            token_without_pin = await client.post(
+                "/guarded", headers={COORDINATOR_TOKEN_HEADER: COORDINATOR_TOKEN}
+            )
+            assert token_without_pin.status_code == 403
             browser = await client.post(
                 "/guarded",
                 headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
@@ -738,5 +754,218 @@ def test_a_broker_without_the_operation_refuses_the_capability(
         with pytest.raises(FleetControlError) as raised:
             _lookup_operation("fake_alpha", custody, service)
         assert raised.value.reason == "broker_clerk_capability_unavailable"
+    finally:
+        service.close()
+
+
+async def test_the_envelope_generation_fence_and_target_are_enforced(
+    fleet: _Fleet,
+) -> None:
+    """No generation fence, wrong target or malformed fence → 422, never 500."""
+    actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
+    async with fleet.client() as client:
+        no_generation = await client.post(
+            actions,
+            json={
+                "action_id": "arm",
+                "idempotency_key": "g-1",
+                "command_context": {
+                    "capability": "bot_action",
+                    "idempotency_key": "g-1",
+                },
+            },
+        )
+        assert no_generation.status_code == 422
+        assert "expected_effective_binding_generation" in no_generation.json()[
+            "message"
+        ]
+
+        malformed = await client.post(
+            actions,
+            json={
+                "action_id": "arm",
+                "idempotency_key": "g-2",
+                "command_context": {
+                    "capability": "bot_action",
+                    "idempotency_key": "g-2",
+                    "expected_effective_binding_generation": "not-a-generation",
+                },
+            },
+        )
+        assert malformed.status_code == 422
+        assert malformed.json()["reason"] == "command_envelope_invalid"
+
+        wrong_target = await client.post(
+            actions,
+            json={
+                "action_id": "arm",
+                "idempotency_key": "g-3",
+                "command_context": {
+                    "capability": "bot_action",
+                    "idempotency_key": "g-3",
+                    "expected_effective_binding_generation": 3,
+                    "target": {
+                        "account_id": "00000000-0000-0000-0000-000000000000",
+                        "entity_id": "sid-9",
+                    },
+                },
+            },
+        )
+        assert wrong_target.status_code == 422
+        assert "target names account" in wrong_target.json()["message"]
+
+        wrong_entity = await client.post(
+            actions,
+            json={
+                "action_id": "arm",
+                "idempotency_key": "g-4",
+                "command_context": {
+                    "capability": "bot_action",
+                    "idempotency_key": "g-4",
+                    "expected_effective_binding_generation": 3,
+                    "target": {"account_id": ACCOUNT, "entity_id": "sid-other"},
+                },
+            },
+        )
+        assert wrong_entity.status_code == 422
+
+
+async def test_a_settled_attempt_never_redispatches(fleet: _Fleet) -> None:
+    """D11: a retry of a settled key reconciles; it never resubmits."""
+    actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
+    payload = {
+        "action_id": "arm",
+        "idempotency_key": "dk-once",
+        "command_context": {
+            "capability": "bot_action",
+            "idempotency_key": "dk-once",
+            "expected_effective_binding_generation": 3,
+        },
+    }
+    async with fleet.client() as client:
+        first = await client.post(actions, json=payload)
+        assert first.status_code == 200
+        retry = await client.post(actions, json=payload)
+        assert retry.status_code == 409
+        body = retry.json()
+        assert body["reason"] == "clerk_routing_attempt_conflict"
+        assert "provider/command-dk-once" in body["message"]
+        assert "reconcile" in body["message"].lower()
+        assert "never resubmit" in body["next_step"].lower()
+    receipts = [
+        receipt
+        for receipt in fleet.lane.service._store.list_routing_receipts(
+            clerk_id=fleet.lane.clerk_id
+        )
+        if receipt.idempotency_key == "dk-once"
+    ]
+    assert len(receipts) == 1, "the retry must not mint a second attempt"
+
+
+async def test_one_shot_commands_get_distinct_attempt_identities(
+    fleet: _Fleet,
+) -> None:
+    """Repeated one-shot operations never share a routing receipt."""
+    profiles = f"{fleet.base}/configuration/profiles"
+    async with fleet.client() as client:
+        for _ in range(2):
+            created = await client.post(
+                profiles,
+                json={
+                    "name": "p",
+                    "command_context": {"capability": "configuration_manage"},
+                },
+            )
+            assert created.status_code == 200, created.text
+    receipts = fleet.lane.service._store.list_routing_receipts(
+        clerk_id=fleet.lane.clerk_id
+    )
+    one_shot = [r for r in receipts if r.idempotency_key.startswith("oneshot-")]
+    assert len(one_shot) == 2
+    assert len({r.idempotency_key for r in one_shot}) == 2
+
+
+async def test_a_stale_pin_is_refused_before_the_agent_handler(fleet: _Fleet) -> None:
+    """A mutation pinned to a stale epoch never reaches the handler."""
+    async with httpx.AsyncClient(base_url=fleet.agent.base_url, timeout=5.0) as client:
+        stale = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT}/bots/sid-9/actions",
+            headers={
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": fleet.lane.clerk_id,
+                "X-Fleet-Routing-Epoch": str(int(fleet.identity["routing_epoch"]) + 99),
+                "X-Fleet-Binding-Generation": "3",
+                COORDINATOR_TOKEN_HEADER: "irrelevant-here",
+            },
+            json={"action_id": "arm", "idempotency_key": "never"},
+        )
+        assert stale.status_code == 409
+        assert stale.json()["reason"] == "clerk_identity_mismatch"
+        # A read pinned the same stale way stays servable — the echo and the
+        # coordinator's checks own read provenance.
+        read = await client.get(
+            "/api/brokers/alpaca/account",
+            headers={
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": fleet.lane.clerk_id,
+                "X-Fleet-Routing-Epoch": "999",
+            },
+        )
+        assert read.status_code == 200
+        assert read.headers["x-fleet-routing-epoch"] == str(
+            fleet.identity["routing_epoch"]
+        )
+
+
+async def test_a_refused_stream_keeps_its_refusal_status(fleet: _Fleet) -> None:
+    """A provider 404 on a stream is that 404, not an empty 200 stream."""
+    from app.broker.alpaca.clerk.fleet_adapter import ALPACA_OPERATIONS
+    from app.broker.fleet.delivery import HttpLaneDelivery
+
+    live = next(op for op in ALPACA_OPERATIONS if op.operation_id == "bot_live_stream")
+    delivery = HttpLaneDelivery(
+        base_url=fleet.agent.base_url, coordinator_service_token=COORDINATOR_TOKEN
+    )
+    result = await delivery.stream(
+        DeliveryRequest(
+            broker="alpaca",
+            clerk_id=fleet.lane.clerk_id,
+            operation=live,
+            path_params={"account_id": ACCOUNT, "sid": "sid-9"},
+            routing_epoch=int(fleet.identity["routing_epoch"]),
+            binding_generation=3,
+        )
+    )
+    assert result.status_code == 404
+    assert result.error_body is not None
+
+
+def test_an_older_adapter_build_refuses_registration(
+    control_dir: Path, clock: FrozenClock
+) -> None:
+    """A mixed build (older agent, newer coordinator catalog) refuses."""
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        volume_root = control_dir.parent / "volumes" / "oldbuild"
+        volume_root.mkdir(parents=True, exist_ok=True)
+        provisioned = service.provision_clerk(
+            broker="alpaca",
+            display_label="old build",
+            volume_root=volume_root,
+            attestation_id="vol-oldbuild",
+        )
+        with pytest.raises(FleetControlError) as raised:
+            service.register_agent_session(
+                clerk_id=provisioned.clerk.clerk_id,
+                worker_key=provisioned.clerk.worker_key,
+                fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+                adapter_version="alpaca-fleet.2",
+            )
+        assert raised.value.reason == "fleet_protocol_incompatible"
+        assert "Upgrade the agent" in raised.value.message
     finally:
         service.close()

@@ -297,10 +297,23 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
             coordinator_tokens = _json.loads(
                 fleet_settings.COORDINATOR_SERVICE_TOKENS_JSON or "{}"
             )
-        except ValueError:
-            coordinator_tokens = None
-        if not isinstance(coordinator_tokens, dict):
-            coordinator_tokens = {}
+        except ValueError as exc:
+            # A coordinator that silently reports healthy with no per-clerk
+            # tokens would fail every remote dispatch later with a
+            # misleading unreachable; malformed credential configuration is
+            # a startup refusal.
+            raise RuntimeError(
+                "FLEET_COORDINATOR_SERVICE_TOKENS_JSON is not valid JSON: "
+                f"{exc}"
+            ) from exc
+        if not isinstance(coordinator_tokens, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in coordinator_tokens.items()
+        ):
+            raise RuntimeError(
+                "FLEET_COORDINATOR_SERVICE_TOKENS_JSON must be a JSON object "
+                "of clerk_id to token strings."
+            )
 
         app.state.fleet_lane_router = LaneRouter(
             service=fleet_service_instance,

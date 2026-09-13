@@ -53,7 +53,10 @@ def _schema_text() -> str:
     # Same reasoning for the fleet coordinator surface: the clerk-scoped
     # routing surface mounts only with a control directory, and the committed
     # contract must describe it. The schema path never opens a registry, so a
-    # placeholder path pins the mount deterministically.
+    # placeholder path pins the mount deterministically — and the role is
+    # forced to the combined posture so an inherited clerk-agent environment
+    # cannot shrink the contract either.
+    os.environ["FLEET_ROLE"] = "combined"
     os.environ.setdefault("FLEET_CONTROL_DIR", "contract-schema-fleet")
     sys.path.insert(0, str(SERVICE_ROOT))
 

@@ -103,11 +103,17 @@ class DeliveryResult:
 
 @dataclass(frozen=True, slots=True)
 class StreamDeliveryResult:
-    """One streaming delivery: headers plus parsed events."""
+    """One streaming delivery: headers plus parsed events.
+
+    ``error_body`` carries the provider's refusal body when the agent
+    answered a non-2xx — a refused stream is that refusal, not an empty
+    successful SSE response.
+    """
 
     status_code: int
     headers: Mapping[str, str]
     events: AsyncIterator[SseEvent]
+    error_body: bytes | None = None
 
 
 def verify_identity_echo(
@@ -198,6 +204,12 @@ async def _identity_validated_events(
         yield event
 
 
+async def _empty_events() -> AsyncIterator[SseEvent]:
+    """No events: the refused-stream carrier."""
+    return
+    yield  # pragma: no cover - makes this an async generator
+
+
 class HttpLaneDelivery:
     """Delivery to a real agent process over the internal HTTP surface."""
 
@@ -253,6 +265,16 @@ class HttpLaneDelivery:
             await response.aclose()
             await client.aclose()
             raise
+        if response.status_code >= 400:
+            error_body = await response.aread()
+            await response.aclose()
+            await client.aclose()
+            return StreamDeliveryResult(
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                events=_empty_events(),
+                error_body=error_body,
+            )
         return StreamDeliveryResult(
             status_code=response.status_code,
             headers=dict(response.headers),

@@ -13,13 +13,13 @@ hierarchy is the contract; this router invents no refusal of its own.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
-import json
 import re
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.broker.fleet.delivery import SseEvent
@@ -163,15 +163,35 @@ def _lookup_operation(broker: str, operation: ProviderOperation, service: Any):
     )
 
 
+#: Idle gap after which the public stream emits a keepalive comment, so
+#: proxies and browsers do not time out an otherwise healthy lane whose
+#: provider heartbeats as SSE comments the framing layer drops.
+_KEEPALIVE_INTERVAL_S = 15.0
+
+
 async def _sse_frames(events: AsyncIterator[SseEvent]) -> AsyncIterator[bytes]:
-    """Re-emit verified events as public SSE frames, provenance included."""
-    async for event in events:
+    """Re-emit verified events as public SSE frames, provenance included.
+
+    Multiline data is re-emitted one ``data:`` field per line per the SSE
+    framing — a joined blob would make the later lines unreadable fields.
+    """
+    iterator = events.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(
+                iterator.__anext__(), timeout=_KEEPALIVE_INTERVAL_S
+            )
+        except TimeoutError:
+            yield b": keepalive\n\n"
+            continue
+        except StopAsyncIteration:
+            return
         lines = [f"event: {event.event}"]
         for name, value in sorted(event.identity.items()):
             lines.append(f"{name}: {value}")
         if event.id is not None:
             lines.append(f"id: {event.id}")
-        lines.append(f"data: {event.data}")
+        lines.extend(f"data: {line}" for line in event.data.split("\n"))
         yield ("\n".join(lines) + "\n\n").encode()
 
 
@@ -179,14 +199,15 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
     """Build one route handler bound to a catalog operation.
 
     The signature carries every path parameter explicitly so the exported
-    contract documents them; the body stays opaque — the provider clerk owns
-    its request and response shapes.
+    contract documents them, and every mutating operation declares an opaque
+    JSON body — the provider clerk owns its request and response shapes.
     """
     is_stream = operation.stream == OperationStream.SSE
     path_param_names = [
         match.group(1)
         for match in _PATH_PARAM_NAME_PATTERN.finditer(operation.path_template)
     ]
+    declares_body = operation.method != "GET"
 
     async def handler(**kwargs: Any) -> Response:
         request: Request = kwargs["request"]
@@ -200,30 +221,19 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
         except FleetControlError as error:
             return _refuse(error)
         query = dict(request.query_params)
-        body: Any = None
+        body: Any = kwargs.get("body")
         envelope = None
-        if routed.method != "GET":
-            raw = await request.body()
-            if raw:
-                try:
-                    body = json.loads(raw)
-                except ValueError:
-                    from fastapi import HTTPException
-
-                    raise HTTPException(
-                        status_code=422, detail="body is not JSON"
-                    ) from None
-                if isinstance(body, dict) and _ENVELOPE_KEY in body:
-                    from app.broker.fleet.routing import CommandEnvelope
-
-                    envelope = CommandEnvelope.from_body(body)
-                    forwarded = {
-                        key: value
-                        for key, value in body.items()
-                        if key != _ENVELOPE_KEY
-                    }
-                    body = forwarded or None
         try:
+            if declares_body and isinstance(body, dict) and _ENVELOPE_KEY in body:
+                from app.broker.fleet.routing import CommandEnvelope
+
+                envelope = CommandEnvelope.from_body(body)
+                forwarded = {
+                    key: value
+                    for key, value in body.items()
+                    if key != _ENVELOPE_KEY
+                }
+                body = forwarded or None
             if is_stream:
                 result = await lane.stream_read(
                     broker=broker,
@@ -232,13 +242,23 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
                     path_params=path_params,
                     query=query,
                 )
+                if result.status_code >= 400:
+                    # A refused stream is the provider's refusal, not an
+                    # empty successful SSE response.
+                    return Response(
+                        status_code=result.status_code,
+                        content=getattr(result, "error_body", None) or b"",
+                        media_type="application/json",
+                    )
                 return StreamingResponse(
                     _sse_frames(result.events),
+                    status_code=result.status_code,
                     media_type="text/event-stream",
                     headers={
                         key: value
                         for key, value in result.headers.items()
                         if key.lower().startswith("x-fleet-")
+                        or key.lower() in ("cache-control", "x-accel-buffering")
                     },
                 )
             if routed.idempotency == OperationIdempotency.READ:
@@ -299,6 +319,18 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
             for name in path_param_names
         ),
     ]
+    if declares_body:
+        # An opaque JSON body declaration: the exported contract and the
+        # generated consumers must be able to represent the command body,
+        # even though its schema belongs to the provider clerk.
+        parameters.append(
+            inspect.Parameter(
+                "body",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=dict[str, Any] | None,
+                default=Body(default=None),
+            )
+        )
     handler.__signature__ = inspect.Signature(parameters)  # type: ignore[attr-defined]
     handler.__doc__ = (
         f"Fleet-routed {operation.method} {operation.path_template} "
@@ -314,15 +346,15 @@ def register_catalog_operations(
 
     Two providers may declare the same public route shape; the handler
     resolves the named broker's own declaration at request time, so the
-    route registers once and refuses brokers that do not declare it.
+    route registers once and refuses brokers that do not declare it. Reads
+    carry the always-on protected-read guard — these routes expose exactly
+    the sensitive broker state the lane-local routers protect — and
+    mutations the control-secret guard.
     """
     seen: set[tuple[str, str]] = set()
-    mutating: set[tuple[str, str]] = set()
     for operations in operations_by_broker.values():
         for operation in operations:
             key = operation.route_key()
-            if operation.method != "GET":
-                mutating.add(key)
             if key in seen:
                 continue
             seen.add(key)
@@ -330,7 +362,7 @@ def register_catalog_operations(
             dependencies = (
                 [Depends(require_data_plane_control_secret)]
                 if operation.method != "GET"
-                else None
+                else [Depends(require_data_plane_control_secret_always)]
             )
             router.add_api_route(
                 path,

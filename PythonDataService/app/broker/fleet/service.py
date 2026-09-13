@@ -54,6 +54,7 @@ from app.broker.fleet.errors import (
     ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
     ClerkVolumeCloneDetected,
+    FleetProtocolIncompatible,
 )
 from app.broker.fleet.identity import (
     is_clerk_id,
@@ -512,9 +513,13 @@ class FleetControlService:
 
         An ``endpoint_ref`` must cite the deployment-approved reference for
         this clerk; it can never install or move a destination. A declared
-        ``fleet_protocol_version`` must match this coordinator's, so mixed
-        builds refuse explicitly instead of a newer coordinator advertising
-        operations an older agent cannot serve (audit 2026-09-13, finding 6).
+        ``fleet_protocol_version`` must match this coordinator's, and a
+        declared ``adapter_version`` must equal this coordinator's adapter
+        label for the clerk's broker — the coordinator's routing allowlist
+        derives from its own catalog, so a mixed build (an older agent
+        registering against a newer coordinator's expanded catalog) refuses
+        at registration instead of failing per-operation later (audit
+        2026-09-13, finding 6).
         """
         clerk = self._require_clerk(clerk_id)
         if not hmac.compare_digest(clerk.worker_key, worker_key):
@@ -531,6 +536,19 @@ class FleetControlService:
             raise ClerkIdentityMismatch(
                 "An adapter version string is a short build label, not free text.",
             )
+        if adapter_version is not None:
+            expected_adapter = self._provider_adapters.get(clerk.broker)
+            expected_version = (
+                expected_adapter.adapter_version if expected_adapter else None
+            )
+            if expected_version is not None and adapter_version != expected_version:
+                raise FleetProtocolIncompatible(
+                    f"Clerk {clerk_id}'s agent declares adapter version "
+                    f"{adapter_version!r}; this coordinator routes {clerk.broker!r} "
+                    f"by catalog {expected_version!r}. Upgrade the agent before "
+                    "registering — a mixed build refuses rather than serving a "
+                    "partial catalog.",
+                )
         require_protocol_compatible(reported=fleet_protocol_version)
         if endpoint_ref is not None:
             approved = self._store.read_approved_endpoint(clerk_id)

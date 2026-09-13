@@ -34,12 +34,15 @@ from app.broker.fleet.delivery import (
 from app.broker.fleet.errors import (
     ClerkBindingGenerationConflict,
     ClerkIdentityMismatch,
+    ClerkRoutingAttemptConflict,
     ClerkRoutingOutcomeUnknown,
     ClerkUnreachable,
     FleetControlError,
 )
+from app.broker.fleet.identity import new_correlation_id
 from app.broker.fleet.provider import (
     OperationIdempotency,
+    OperationReadiness,
     ProviderOperation,
 )
 from app.broker.fleet.records import (
@@ -51,8 +54,16 @@ from app.broker.fleet.service import FleetControlService
 logger = logging.getLogger(__name__)
 
 #: Response body keys treated as the provider clerk's durable receipt
-#: reference on a delivered command (checked in order; the first present wins).
-_RECEIPT_BODY_KEYS = ("receipt_id", "receipt_ref", "receipt", "command_id")
+#: reference on a delivered command (checked in order; the first present
+#: wins), plus a nested ``command`` mapping some families return.
+_RECEIPT_BODY_KEYS = (
+    "receipt_id",
+    "receipt_ref",
+    "receipt",
+    "command_id",
+    "cancel_request_id",
+    "ticket_id",
+)
 
 
 class CommandEnvelopeInvalid(ValueError):
@@ -74,13 +85,26 @@ class CommandEnvelope:
 
     @staticmethod
     def from_body(body: Any) -> CommandEnvelope | None:
-        """Extract the envelope a command body carries, if any."""
+        """Extract the envelope a command body carries, if any.
+
+        Raises `CommandEnvelopeInvalid` for a present-but-malformed envelope:
+        a boundary validation error belongs to the 422 family, not the
+        catch-all 500.
+        """
         if not isinstance(body, Mapping):
             return None
         context = body.get("command_context")
         if not isinstance(context, Mapping):
             return None
         target = context.get("target")
+        generation = context.get("expected_effective_binding_generation")
+        if generation is not None and (
+            isinstance(generation, bool) or not isinstance(generation, int)
+        ):
+            raise CommandEnvelopeInvalid(
+                "expected_effective_binding_generation must be an integer "
+                f"when present, got {generation!r}."
+            )
         return CommandEnvelope(
             capability=str(context.get("capability") or ""),
             idempotency_key=(
@@ -88,11 +112,7 @@ class CommandEnvelope:
                 if context.get("idempotency_key") is not None
                 else None
             ),
-            expected_effective_binding_generation=(
-                int(context["expected_effective_binding_generation"])
-                if context.get("expected_effective_binding_generation") is not None
-                else None
-            ),
+            expected_effective_binding_generation=generation,
             target=dict(target) if isinstance(target, Mapping) else {},
         )
 
@@ -292,7 +312,9 @@ class LaneRouter:
                 query=query,
                 body=body,
             )
-        validated = self._validated_envelope(operation, envelope, body)
+        validated = self._validated_envelope(
+            operation, envelope, body, path_params
+        )
         _clerk, session, assignment = self._resolve(
             broker=broker,
             clerk_id=clerk_id,
@@ -336,7 +358,8 @@ class LaneRouter:
             nonsecret_target_ref=nonsecret_target or operation.path_template,
             idempotency_key=(
                 validated.idempotency_key
-                or f"oneshot:{operation.operation_id}:{nonsecret_target}"
+                if validated.idempotency_key
+                else f"oneshot-{new_correlation_id()}"
             ),
             pinned_routing_epoch=session.routing_epoch,
             pinned_agent_instance_id=session.agent_instance_id,
@@ -344,6 +367,22 @@ class LaneRouter:
                 assignment.confirmed_binding_generation if assignment else None
             ),
         )
+        if receipt.state != RoutingReceiptState.NOT_DISPATCHED:
+            # A settled attempt never redispatches: the provider clerk's
+            # receipt is the outcome authority, and a retry of the same key
+            # must reconcile against it, not resubmit (D11).
+            raise ClerkRoutingAttemptConflict(
+                f"Idempotency key {receipt.idempotency_key} already settled as "
+                f"{receipt.state.value}"
+                + (
+                    f" with provider receipt {receipt.upstream_receipt_ref!r}"
+                    if receipt.upstream_receipt_ref
+                    else ""
+                )
+                + "; reconcile with the provider clerk's receipt.",
+                next_step="Read the command's outcome by its durable identity; "
+                "never resubmit the same key.",
+            )
         delivery = self._delivery_for(broker, session)
         # Dispatch is one-way from here: whatever happens next, the attempt
         # can never present as definitively un-sent (D11).
@@ -481,6 +520,7 @@ class LaneRouter:
         operation: ProviderOperation,
         envelope: CommandEnvelope | None,
         body: object,
+        path_params: Mapping[str, str],
     ) -> CommandEnvelope:
         """Validate the §10.3 envelope against the operation being routed."""
         if envelope is None:
@@ -502,6 +542,16 @@ class LaneRouter:
                 f"Operation {operation.operation_id} is durable-keyed; the "
                 "envelope must carry a non-empty idempotency_key."
             )
+        if operation.readiness == OperationReadiness.EXECUTION and (
+            envelope.expected_effective_binding_generation is None
+        ):
+            # A command without its generation fence executes whatever the
+            # lane currently serves — a stale intent must conflict instead.
+            raise CommandEnvelopeInvalid(
+                f"An execution command to {operation.path_template} must pin "
+                "expected_effective_binding_generation; re-prepare the "
+                "command against the lane's current resource."
+            )
         if (
             isinstance(body, Mapping)
             and envelope.idempotency_key
@@ -511,6 +561,29 @@ class LaneRouter:
             raise CommandEnvelopeInvalid(
                 "The body's idempotency_key disagrees with the envelope's; a "
                 "command has exactly one durable identity."
+            )
+        if operation.requires_effective_account:
+            target_account = envelope.target.get("account_id")
+            if (
+                target_account is not None
+                and target_account.strip().lower()
+                != str(path_params.get("account_id", "")).strip().lower()
+            ):
+                raise CommandEnvelopeInvalid(
+                    f"The envelope's target names account {target_account!r}; "
+                    f"the command path targets "
+                    f"{path_params.get('account_id')!r}. Frozen intent and "
+                    "routed target must agree."
+                )
+        target_entity = envelope.target.get("entity_id")
+        if (
+            target_entity is not None
+            and "sid" in path_params
+            and target_entity != path_params["sid"]
+        ):
+            raise CommandEnvelopeInvalid(
+                f"The envelope's target names entity {target_entity!r}; the "
+                f"command path targets {path_params['sid']!r}."
             )
         return envelope
 
@@ -527,6 +600,12 @@ def _extract_receipt_ref(body: bytes) -> str | None:
         value = parsed.get(key)
         if isinstance(value, str) and value:
             return value
+    nested = parsed.get("command")
+    if isinstance(nested, Mapping):
+        for key in _RECEIPT_BODY_KEYS:
+            value = nested.get(key)
+            if isinstance(value, str) and value:
+                return value
     return None
 
 

@@ -29,14 +29,22 @@ UNSAFE_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 def _lane_forward_is_authorized(request: Request) -> bool:
     """Whether this request is an authorized fleet-forwarded operation.
 
-    A request presenting the coordinator token header authenticates by that
-    token alone — compared against the env-only value this agent was
-    provisioned with, in constant time, never logged. An absent or wrong
-    token returns ``False`` and the ordinary control-secret checks decide.
+    Two conditions, both required: the request presents the coordinator
+    token (compared against the env-only value this agent was provisioned
+    with, in constant time, never logged) **and** it carries the pinned
+    fleet identity a coordinator dispatch always attaches — a token alone
+    must never widen into a general-purpose bypass of the control secret on
+    routes the forwarding allowlist never names. An absent or wrong token
+    returns ``False`` and the ordinary control-secret checks decide.
     """
     supplied = request.headers.get(COORDINATOR_TOKEN_HEADER, "")
     expected = (fleet_settings.COORDINATOR_SERVICE_TOKEN or "").strip()
     if not expected or not supplied:
+        return False
+    if (
+        "x-fleet-clerk-id" not in request.headers
+        or "x-fleet-broker" not in request.headers
+    ):
         return False
     return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 

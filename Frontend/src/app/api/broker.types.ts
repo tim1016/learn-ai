@@ -28633,7 +28633,9 @@ export interface operations {
     fleet_account_read_api_brokers__broker__clerks__clerk_id__account_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -28675,7 +28677,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28710,7 +28716,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28735,7 +28745,9 @@ export interface operations {
     fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -28768,7 +28780,9 @@ export interface operations {
     fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -28811,7 +28825,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28836,7 +28854,9 @@ export interface operations {
     fleet_bot_cohort_flatten_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -28879,7 +28899,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28904,7 +28928,9 @@ export interface operations {
     fleet_bots_deploy_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -28947,7 +28973,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -28983,7 +29013,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29008,7 +29042,9 @@ export interface operations {
     fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29042,7 +29078,9 @@ export interface operations {
     fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29076,7 +29114,9 @@ export interface operations {
     fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29110,7 +29150,9 @@ export interface operations {
     fleet_bot_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__evidence_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29144,7 +29186,9 @@ export interface operations {
     fleet_bot_live_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_snapshot_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29178,7 +29222,9 @@ export interface operations {
     fleet_bot_live_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_stream_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29212,7 +29258,9 @@ export interface operations {
     fleet_bot_panel_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__panel_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29257,7 +29305,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29293,7 +29345,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29329,7 +29385,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29365,7 +29425,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29401,7 +29465,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29437,7 +29505,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29462,7 +29534,9 @@ export interface operations {
     fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29496,7 +29570,9 @@ export interface operations {
     fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29530,7 +29606,9 @@ export interface operations {
     fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29564,7 +29642,9 @@ export interface operations {
     fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29607,7 +29687,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29642,7 +29726,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29677,7 +29765,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29702,7 +29794,9 @@ export interface operations {
     fleet_custody_account_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_snapshot_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29735,7 +29829,9 @@ export interface operations {
     fleet_custody_account_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_timeline_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29768,7 +29864,9 @@ export interface operations {
     fleet_custody_transactions_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29812,7 +29910,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -29837,7 +29939,9 @@ export interface operations {
     fleet_custody_transaction_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions__transaction_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29871,7 +29975,9 @@ export interface operations {
     fleet_gallery_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_snapshot_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29904,7 +30010,9 @@ export interface operations {
     fleet_gallery_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_stream_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29937,7 +30045,9 @@ export interface operations {
     fleet_manual_order_ticket_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -29982,7 +30092,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30018,7 +30132,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30054,7 +30172,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30079,7 +30201,9 @@ export interface operations {
     fleet_manual_orders_capability_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_capability_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30122,7 +30246,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30158,7 +30286,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30194,7 +30326,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30230,7 +30366,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30255,7 +30395,9 @@ export interface operations {
     fleet_configuration_nicknames_read_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30297,7 +30439,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30322,7 +30468,9 @@ export interface operations {
     fleet_configuration_credential_slots_api_brokers__broker__clerks__clerk_id__configuration_credential_slots_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30354,7 +30502,9 @@ export interface operations {
     fleet_configuration_desk_state_api_brokers__broker__clerks__clerk_id__configuration_desk_state_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30386,7 +30536,9 @@ export interface operations {
     fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30418,7 +30570,9 @@ export interface operations {
     fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30459,7 +30613,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30484,7 +30642,9 @@ export interface operations {
     fleet_configuration_profiles_list_api_brokers__broker__clerks__clerk_id__configuration_profiles_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30525,7 +30685,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30550,7 +30714,9 @@ export interface operations {
     fleet_configuration_profile_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30593,7 +30759,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30628,7 +30798,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30653,7 +30827,9 @@ export interface operations {
     fleet_configuration_revisions_list_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30696,7 +30872,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30721,7 +30901,9 @@ export interface operations {
     fleet_configuration_revision_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30766,7 +30948,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30802,7 +30988,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30827,7 +31017,9 @@ export interface operations {
     fleet_configuration_selection_read_api_brokers__broker__clerks__clerk_id__configuration_selection_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30868,7 +31060,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30902,7 +31098,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -30927,7 +31127,9 @@ export interface operations {
     fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30959,7 +31161,9 @@ export interface operations {
     fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;
@@ -30991,7 +31195,9 @@ export interface operations {
     fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path: {
                 broker: string;
                 clerk_id: string;

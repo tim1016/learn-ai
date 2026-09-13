@@ -19,6 +19,7 @@ runtime's own identity provider, never from the request.
 from __future__ import annotations
 
 import codecs
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -68,6 +69,55 @@ def _identity_field_lines(identity: Mapping[str, Any]) -> bytes:
     return b"".join(parts)
 
 
+def _pin_mismatch(
+    pinned: Mapping[str, str],
+    identity: Mapping[str, Any],
+    method: str,
+) -> str | None:
+    """Compare the request's pinned identity with what this runtime serves.
+
+    Broker and clerk are always compared: a dispatch addressed to another
+    lane never reaches a handler. Epoch and binding generation are compared
+    for mutations — the dimensions whose staleness would make an effect
+    wrong — while reads stay servable and prove their origin through the
+    echo and per-event provenance instead.
+    """
+    served_broker = str(identity.get("broker"))
+    served_clerk = str(identity.get("clerk_id"))
+    if pinned.get("x-fleet-broker") not in (None, served_broker):
+        return (
+            f"This runtime serves broker {served_broker!r}; the dispatch pinned "
+            f"{pinned.get('x-fleet-broker')!r}."
+        )
+    if pinned.get("x-fleet-clerk-id") not in (None, served_clerk):
+        return (
+            f"This runtime serves clerk {served_clerk!r}; the dispatch pinned "
+            f"{pinned.get('x-fleet-clerk-id')!r}."
+        )
+    if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+        served_epoch = identity.get("routing_epoch")
+        pinned_epoch = pinned.get("x-fleet-routing-epoch")
+        if pinned_epoch is not None and served_epoch is not None and str(
+            served_epoch
+        ) != pinned_epoch:
+            return (
+                f"This runtime serves routing epoch {served_epoch}; the "
+                f"dispatch pinned {pinned_epoch}."
+            )
+        served_generation = identity.get("binding_generation")
+        pinned_generation = pinned.get("x-fleet-binding-generation")
+        if (
+            pinned_generation is not None
+            and served_generation is not None
+            and str(served_generation) != pinned_generation
+        ):
+            return (
+                f"This runtime serves binding generation {served_generation}; "
+                f"the dispatch pinned {pinned_generation}."
+            )
+    return None
+
+
 class _FrameInjector:
     """Re-frame a streamed body, injecting provenance into each SSE event.
 
@@ -77,14 +127,14 @@ class _FrameInjector:
     Re-framing buffers at most one event; the coordinator's parser owns the
     hard byte cap, and this buffer carries the same bound defensively.
 
-    The provenance is read from the live identity mapping **per frame**: if
-    the runtime re-registers mid-stream, subsequent frames stamp the new
-    epoch and the coordinator's pinned consumer closes the stream — a
-    superseded session cannot keep feeding its old subscriber.
+    The provenance is read from the runtime's identity **provider** per
+    frame: if the runtime re-registers mid-stream, subsequent frames stamp
+    the new epoch and the coordinator's pinned consumer closes the stream —
+    a superseded session cannot keep feeding its old subscriber.
     """
 
-    def __init__(self, identity: Mapping[str, Any]) -> None:
-        self._identity = identity
+    def __init__(self, identity_provider: Callable[[], Mapping[str, Any] | None]):
+        self._provider = identity_provider
         self._decoder = codecs.getincrementaldecoder("utf-8")()
         self._buffer = ""
         self._pending_cr = False
@@ -106,7 +156,10 @@ class _FrameInjector:
             drained = self._buffer.encode()
             self._buffer = ""
             return [drained]
-        fields = _identity_field_lines(self._identity)
+        identity = self._provider()
+        if not isinstance(identity, Mapping):
+            identity = {}
+        fields = _identity_field_lines(identity)
         frames: list[bytes] = []
         while "\n\n" in self._buffer:
             frame, self._buffer = self._buffer.split("\n\n", 1)
@@ -141,14 +194,23 @@ class FleetIdentityMiddleware:
         receive: Callable[[], Awaitable[dict[str, Any]]],
         send: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> None:
-        """Echo identity headers, and per-frame provenance on event streams."""
+        """Verify the pin, echo identity headers, stamp per-frame provenance.
+
+        A mutation pinned to a stale clerk, epoch or generation is refused
+        *before* the handler runs — discovering the mismatch in the response
+        echo would be after the effect. Reads pass with a provenance echo;
+        the coordinator's echo and per-event checks own their verification.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        pinned = any(
-            name.lower() == b"x-fleet-clerk-id" for name, _ in scope.get("headers", [])
-        )
-        if not pinned:
+        request_headers = {
+            name.decode("latin-1").lower(): value.decode("latin-1")
+            for name, value in scope.get("headers", [])
+        }
+        if "x-fleet-clerk-id" not in request_headers:
+            # Browser-direct traffic carries no pinned identity; the echo is
+            # the forwarded lane's contract, not the public API's.
             await self.app(scope, receive, send)
             return
         state = getattr(scope.get("app"), "state", None)
@@ -160,6 +222,28 @@ class FleetIdentityMiddleware:
                 "identity; the response will fail the coordinator's echo check."
             )
             await self.app(scope, receive, send)
+            return
+
+        mismatch = _pin_mismatch(request_headers, identity, scope.get("method", "GET"))
+        if mismatch is not None:
+            body = (
+                '{"reason": "clerk_identity_mismatch", "message": '
+                + json.dumps(mismatch)
+                + "}"
+            ).encode()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 409,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        *_served_header_values(identity),
+                    ],
+                }
+            )
+            await send(
+                {"type": "http.response.body", "body": body, "more_body": False}
+            )
             return
 
         echo_headers = _served_header_values(identity)
@@ -177,7 +261,10 @@ class FleetIdentityMiddleware:
                     b"",
                 )
                 if content_type.startswith(b"text/event-stream"):
-                    injector.append(_FrameInjector(identity))
+                    # The provider (not a snapshot) rides with the injector:
+                    # a re-registration mid-stream re-stamps later frames and
+                    # the coordinator closes the superseded stream.
+                    injector.append(_FrameInjector(provider))
                 await send({**message, "headers": headers})
                 return
             if message["type"] == "http.response.body" and injector:
