@@ -33,6 +33,7 @@ _ALLOWED_DIRECTORY_FIELDS = {
 
 
 def _live(fleet_service, tmp_path: Path, broker: str, label: str):
+    """Provision, register, reserve and confirm one lane so it projects ready."""
     lane = provision_lane(fleet_service, broker=broker, label=label, tmp_path=tmp_path)
     fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
@@ -50,6 +51,7 @@ def _live(fleet_service, tmp_path: Path, broker: str, label: str):
 def test_every_entry_carries_broker_clerk_identity_and_no_internal_secrets(
     control_dir: Path, fleet_service
 ) -> None:
+    """Directory entries carry exactly the allowed fields and never the worker key."""
     alpha = _live(fleet_service, control_dir.parent, "fake_alpha", "paper")
     beta = _live(fleet_service, control_dir.parent, "fake_beta", "live")
     directory = fleet_service.directory()
@@ -79,6 +81,7 @@ def test_every_entry_carries_broker_clerk_identity_and_no_internal_secrets(
 def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
     control_dir: Path, fleet_service
 ) -> None:
+    """Capability evidence is per provider; no parity is inferred in either direction."""
     from app.broker.fleet.errors import BrokerClerkCapabilityUnavailable
     from app.broker.fleet.provider import Capability
 
@@ -106,6 +109,7 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
     fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
 
     def entry() -> dict:
+        """The directory entry for the projecting clerk, re-read per assertion."""
         return next(
             e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
         )
@@ -132,11 +136,17 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
 
 
 def test_retired_lanes_leave_the_default_directory(control_dir: Path, fleet_service) -> None:
+    """Retired lanes disappear from the default directory and stay marked when included."""
     keeper = _live(fleet_service, control_dir.parent, "fake_alpha", "keeper")
     retiring = _live(fleet_service, control_dir.parent, "fake_alpha", "retiring")
+    retiring_assignment = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-RETIRING"
+    )
+    assert retiring_assignment is not None
     fleet_service.release_assignment(
         broker="fake_alpha",
         external_account_id="acct-retiring",
+        expected_assignment_generation=retiring_assignment.assignment_generation,
         proof="old-clerk-offline-and-obligations-clear",
     )
     fleet_service.retire_clerk(clerk_id=retiring.clerk_id)
@@ -150,6 +160,7 @@ def test_retired_lanes_leave_the_default_directory(control_dir: Path, fleet_serv
 def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
     control_dir: Path, fleet_service
 ) -> None:
+    """One lane's failure is reported explicitly and never fails the healthy lane."""
     healthy = _live(fleet_service, control_dir.parent, "fake_alpha", "healthy")
     broken = _live(fleet_service, control_dir.parent, "fake_beta", "broken")
     result = fleet_service.aggregate_lane_reads(

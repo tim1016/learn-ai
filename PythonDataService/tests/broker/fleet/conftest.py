@@ -42,9 +42,11 @@ class FrozenClock:
         self._now = start_ms
 
     def __call__(self) -> int:
+        """Return the frozen instant."""
         return self._now
 
     def advance(self, ms: int) -> int:
+        """Move the frozen clock forward by ``ms``."""
         self._now += ms
         return self._now
 
@@ -86,20 +88,24 @@ class FakeProviderAdapter:
 
 
 def fake_alpha() -> FakeProviderAdapter:
+    """Build the alpha fake provider with its declared capability set."""
     return FakeProviderAdapter(provider_id="fake_alpha", capabilities=FAKE_ALPHA_CAPABILITIES)
 
 
 def fake_beta() -> FakeProviderAdapter:
+    """Build the beta fake provider with its declared capability set."""
     return FakeProviderAdapter(provider_id="fake_beta", capabilities=FAKE_BETA_CAPABILITIES)
 
 
 @pytest.fixture
 def clock() -> FrozenClock:
+    """One frozen clock shared by a test's service constructions."""
     return FrozenClock()
 
 
 @pytest.fixture
 def control_dir(tmp_path: Path) -> Path:
+    """One fresh coordinator control volume per test."""
     return tmp_path / "fleet-control"
 
 
@@ -140,6 +146,7 @@ def provision_lane(
     tmp_path: Path,
     attestation_id: str | None = None,
 ) -> Lane:
+    """Provision one fake lane and return its identities and root."""
     volume_root = tmp_path / "volumes" / attestation_id if attestation_id else tmp_path / "volumes" / label
     volume_root.mkdir(parents=True, exist_ok=True)
     provisioned = service.provision_clerk(

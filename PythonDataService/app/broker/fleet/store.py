@@ -47,6 +47,7 @@ def registry_database_path(control_dir: Path) -> Path:
 
 
 def new_registry_id() -> str:
+    """Mint one opaque registry identity for a fresh control volume."""
     return f"fltr_{secrets.token_hex(12)}"
 
 
@@ -54,6 +55,7 @@ class FleetRegistryStore:
     """One open fleet registry database."""
 
     def __init__(self, conn: sqlite3.Connection, *, db_path: Path) -> None:
+        """Hold one open connection and the reentrant write lock."""
         self._conn = conn
         self._lock = RLock()
         self.db_path = db_path
@@ -74,7 +76,7 @@ class FleetRegistryStore:
                 conn.row_factory = sqlite3.Row
                 try:
                     schema.configure_connection(conn)
-                    cls._establish(conn)
+                    cls._establish(conn, db_path=db_path)
                 except Exception:
                     conn.close()
                     if creating:
@@ -100,7 +102,7 @@ class FleetRegistryStore:
         return cls(conn, db_path=db_path)
 
     @staticmethod
-    def _establish(conn: sqlite3.Connection) -> None:
+    def _establish(conn: sqlite3.Connection, *, db_path: Path) -> None:
         """Create the schema, or advance an older one to ``SCHEMA_VERSION``."""
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fleet_meta'"
@@ -150,7 +152,21 @@ class FleetRegistryStore:
                 (now_ms_utc(),),
             )
 
+        # An existing registry must prove its integrity before the store is
+        # handed out: corruption confined to the assignment tables or indexes
+        # would otherwise reach the account-ownership fence as if it were
+        # truth. ``quick_check`` is the fast variant of ``integrity_check``.
+        integrity = conn.execute("PRAGMA quick_check").fetchone()
+        if integrity is None or str(integrity[0]).lower() != "ok":
+            findings = "" if integrity is None else f": {integrity[0]}"
+            raise FleetRegistryUnavailable(
+                f"The fleet registry at {db_path} failed its integrity check{findings}.",
+                next_step="Restore the registry from the coordinator control volume's "
+                "backup, then retry.",
+            )
+
     def close(self) -> None:
+        """Close the registry connection."""
         with self._lock:
             self._conn.close()
 
@@ -188,15 +204,18 @@ class FleetRegistryStore:
                 self._conn.rollback()
 
     def _query(self, sql: str, parameters: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        """Run one read query under the connection lock."""
         with self._lock:
             return self._conn.execute(sql, parameters).fetchall()
 
     def _query_one(self, sql: str, parameters: tuple[Any, ...] = ()) -> sqlite3.Row | None:
+        """Run one single-row read query under the connection lock."""
         with self._lock:
             return self._conn.execute(sql, parameters).fetchone()
 
     @property
     def schema_version(self) -> int:
+        """The registry's schema version, from the guarded meta row."""
         row = self._query_one("SELECT schema_version FROM fleet_meta WHERE id = 1")
         if row is None:
             raise FleetRegistryUnavailable(
@@ -207,6 +226,7 @@ class FleetRegistryStore:
 
     @property
     def registry_id(self) -> str:
+        """The registry's opaque identity, stable across reopens."""
         row = self._query_one("SELECT registry_id FROM fleet_meta WHERE id = 1")
         if row is None:
             raise FleetRegistryUnavailable(
@@ -224,11 +244,43 @@ class FleetRegistryStore:
     )
 
     def read_clerk(self, clerk_id: str) -> ClerkRecord | None:
+        """Read one clerk row by identity."""
         row = self._query_one(
             f"SELECT {self._CLERK_COLUMNS} FROM clerks WHERE clerk_id = ?",
             (clerk_id,),
         )
         return None if row is None else _clerk_from_row(row)
+
+    def read_clerk_on(
+        self, conn: sqlite3.Connection, clerk_id: str
+    ) -> ClerkRecord | None:
+        """Read one clerk row on a caller's transaction connection.
+
+        For rechecks that must serialize with a concurrent write: reading
+        inside the ``BEGIN IMMEDIATE`` transaction is what excludes a rival
+        transition, where the lock-free ``read_clerk`` only excludes other
+        uses of this store's own connection.
+        """
+        row = conn.execute(
+            f"SELECT {self._CLERK_COLUMNS} FROM clerks WHERE clerk_id = ?",
+            (clerk_id,),
+        ).fetchone()
+        return None if row is None else _clerk_from_row(row)
+
+    def read_assignment_on(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        broker: str,
+        canonical_account_id: str,
+    ) -> AccountAssignmentRecord | None:
+        """Read one assignment row on a caller's transaction connection."""
+        row = conn.execute(
+            f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments "
+            "WHERE broker = ? AND canonical_external_account_id = ?",
+            (broker, canonical_account_id),
+        ).fetchone()
+        return None if row is None else _assignment_from_row(row)
 
     def find_clerk_by_volume(self, volume_id: str) -> ClerkRecord | None:
         """The active clerk owning a volume identity, if any (clone detection)."""
@@ -242,6 +294,7 @@ class FleetRegistryStore:
     def find_clerk_by_attestation(
         self, *, attestation_kind: str, attestation_id: str
     ) -> ClerkRecord | None:
+        """The active clerk owning one volume attestation, if any."""
         row = self._query_one(
             f"SELECT {self._CLERK_COLUMNS} FROM clerks WHERE volume_attestation_kind = ? "
             "AND volume_attestation_id = ? AND lifecycle_state <> 'retired'",
@@ -250,6 +303,7 @@ class FleetRegistryStore:
         return None if row is None else _clerk_from_row(row)
 
     def list_clerks(self, *, include_retired: bool = False) -> list[ClerkRecord]:
+        """List clerks in directory order, optionally including retired ones."""
         sql = f"SELECT {self._CLERK_COLUMNS} FROM clerks"
         if not include_retired:
             sql += " WHERE lifecycle_state <> 'retired'"
@@ -257,6 +311,7 @@ class FleetRegistryStore:
         return [_clerk_from_row(row) for row in self._query(sql)]
 
     def insert_clerk(self, conn: sqlite3.Connection, clerk: ClerkRecord) -> None:
+        """Insert one freshly provisioned clerk row."""
         conn.execute(
             "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
             "volume_root, volume_attestation_kind, volume_attestation_id, lifecycle_state, "
@@ -284,6 +339,7 @@ class FleetRegistryStore:
         lifecycle_state: StoredLifecycleState,
         retired_at_ms: int | None,
     ) -> bool:
+        """Move one clerk's durable lifecycle state forward."""
         cursor = conn.execute(
             "UPDATE clerks SET lifecycle_state = ?, retired_at_ms = ? WHERE clerk_id = ?",
             (str(lifecycle_state), retired_at_ms, clerk_id),
@@ -298,6 +354,7 @@ class FleetRegistryStore:
     )
 
     def read_session(self, clerk_id: str) -> ClerkSessionRecord | None:
+        """Read the clerk's one current session row."""
         row = self._query_one(
             f"SELECT {self._SESSION_COLUMNS} FROM clerk_sessions WHERE clerk_id = ?",
             (clerk_id,),
@@ -305,6 +362,7 @@ class FleetRegistryStore:
         return None if row is None else _session_from_row(row)
 
     def list_sessions(self) -> list[ClerkSessionRecord]:
+        """List every current session row in directory order."""
         rows = self._query(
             f"SELECT {self._SESSION_COLUMNS} FROM clerk_sessions "
             "ORDER BY broker ASC, clerk_id ASC"
@@ -314,6 +372,7 @@ class FleetRegistryStore:
     def archive_session(
         self, conn: sqlite3.Connection, session: ClerkSessionRecord, *, superseded_at_ms: int
     ) -> None:
+        """Move one superseded session into the append-only history."""
         conn.execute(
             "INSERT INTO clerk_session_history (clerk_id, broker, agent_instance_id, "
             "routing_epoch, started_at_ms, superseded_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
@@ -399,6 +458,7 @@ class FleetRegistryStore:
     )
 
     def read_assignment(self, *, broker: str, canonical_account_id: str) -> AccountAssignmentRecord | None:
+        """Read one broker-qualified assignment row."""
         row = self._query_one(
             f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments "
             "WHERE broker = ? AND canonical_external_account_id = ?",
@@ -407,6 +467,7 @@ class FleetRegistryStore:
         return None if row is None else _assignment_from_row(row)
 
     def list_assignments_for_clerk(self, clerk_id: str) -> list[AccountAssignmentRecord]:
+        """List every assignment row a clerk has ever owned."""
         rows = self._query(
             f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments WHERE clerk_id = ? "
             "ORDER BY recorded_at_ms ASC, broker ASC, canonical_external_account_id ASC",
@@ -415,6 +476,7 @@ class FleetRegistryStore:
         return [_assignment_from_row(row) for row in rows]
 
     def list_active_assignments(self) -> list[AccountAssignmentRecord]:
+        """List every non-released assignment row."""
         rows = self._query(
             f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments "
             "WHERE state <> 'released' ORDER BY broker ASC, canonical_external_account_id ASC"
@@ -424,6 +486,7 @@ class FleetRegistryStore:
     def insert_assignment(
         self, conn: sqlite3.Connection, assignment: AccountAssignmentRecord
     ) -> None:
+        """Insert the first reservation for one broker-qualified account."""
         conn.execute(
             "INSERT INTO account_assignments (broker, canonical_external_account_id, clerk_id, "
             "assignment_generation, state, effective_profile_id, effective_revision, "
@@ -440,6 +503,7 @@ class FleetRegistryStore:
                 assignment.updated_at_ms,
             ),
         )
+        self.append_assignment_history(conn, assignment)
 
     def cas_update_assignment(
         self,
@@ -447,17 +511,21 @@ class FleetRegistryStore:
         assignment: AccountAssignmentRecord,
         *,
         previous_generation: int,
+        previous_state: AssignmentState,
     ) -> bool:
-        """Compare-and-swap one assignment row on its generation.
+        """Compare-and-swap one assignment row on its generation *and* state.
 
-        Returns ``False`` when the recorded generation moved. Like the profiles
-        selection row, the check lives in the ``WHERE`` clause so two racing
-        writers cannot both land.
+        Returns ``False`` when the recorded row moved. Generation alone does
+        not fence transitions that keep it: confirmation and release both
+        leave the number untouched, so a stale reader could otherwise land its
+        transition over the other's. The check lives in the ``WHERE`` clause
+        so two racing writers cannot both land.
         """
         cursor = conn.execute(
             "UPDATE account_assignments SET clerk_id = ?, assignment_generation = ?, "
             "state = ?, effective_profile_id = ?, effective_revision = ?, updated_at_ms = ? "
-            "WHERE broker = ? AND canonical_external_account_id = ? AND assignment_generation = ?",
+            "WHERE broker = ? AND canonical_external_account_id = ? "
+            "AND assignment_generation = ? AND state = ?",
             (
                 assignment.clerk_id,
                 assignment.assignment_generation,
@@ -468,9 +536,53 @@ class FleetRegistryStore:
                 assignment.broker,
                 assignment.canonical_external_account_id,
                 previous_generation,
+                str(previous_state),
             ),
         )
+        if cursor.rowcount == 1:
+            self.append_assignment_history(conn, assignment)
         return cursor.rowcount == 1
+
+    # ---- assignment history ----------------------------------------------
+
+    def append_assignment_history(
+        self, conn: sqlite3.Connection, assignment: AccountAssignmentRecord
+    ) -> None:
+        """Record one assignment transition in the append-only audit table.
+
+        The current row in ``account_assignments`` is a pointer; this table is
+        what makes a release auditable after the account is re-reserved —
+        re-reservation overwrites the pointer, never the past.
+        """
+        conn.execute(
+            "INSERT INTO account_assignment_history (broker, "
+            "canonical_external_account_id, clerk_id, assignment_generation, state, "
+            "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                assignment.broker,
+                assignment.canonical_external_account_id,
+                assignment.clerk_id,
+                assignment.assignment_generation,
+                str(assignment.state),
+                assignment.effective_profile_id,
+                assignment.effective_revision,
+                assignment.recorded_at_ms,
+                assignment.updated_at_ms,
+            ),
+        )
+
+    def list_assignment_history(
+        self, *, broker: str, canonical_account_id: str
+    ) -> list[AccountAssignmentRecord]:
+        """Every recorded transition for one broker-qualified account, in order."""
+        rows = self._query(
+            f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignment_history "
+            "WHERE broker = ? AND canonical_external_account_id = ? "
+            "ORDER BY rowid ASC",
+            (broker, canonical_account_id),
+        )
+        return [_assignment_from_row(row) for row in rows]
 
     # ---- routing receipts -----------------------------------------------
 
@@ -480,6 +592,7 @@ class FleetRegistryStore:
     )
 
     def read_routing_receipt(self, correlation_id: str) -> RoutingReceiptRecord | None:
+        """Read one routing receipt by correlation identity."""
         row = self._query_one(
             f"SELECT {self._RECEIPT_COLUMNS} FROM routing_receipts WHERE correlation_id = ?",
             (correlation_id,),
@@ -489,6 +602,7 @@ class FleetRegistryStore:
     def find_routing_receipt_by_idempotency(
         self, *, broker: str, clerk_id: str, idempotency_key: str
     ) -> RoutingReceiptRecord | None:
+        """Find a lane's receipt for one idempotency key."""
         row = self._query_one(
             f"SELECT {self._RECEIPT_COLUMNS} FROM routing_receipts "
             "WHERE broker = ? AND clerk_id = ? AND idempotency_key = ?",
@@ -497,6 +611,7 @@ class FleetRegistryStore:
         return None if row is None else _receipt_from_row(row)
 
     def list_routing_receipts(self, *, clerk_id: str | None = None, limit: int = 100) -> list[RoutingReceiptRecord]:
+        """List receipts, newest first, optionally for one clerk."""
         sql = f"SELECT {self._RECEIPT_COLUMNS} FROM routing_receipts"
         parameters: tuple[Any, ...] = ()
         if clerk_id is not None:
@@ -509,6 +624,7 @@ class FleetRegistryStore:
     def insert_routing_receipt(
         self, conn: sqlite3.Connection, receipt: RoutingReceiptRecord
     ) -> None:
+        """Insert one routing-attempt receipt."""
         conn.execute(
             "INSERT INTO routing_receipts (correlation_id, broker, clerk_id, operation_kind, "
             "nonsecret_target_ref, idempotency_key, state, upstream_receipt_ref, created_at_ms, "
@@ -536,6 +652,7 @@ class FleetRegistryStore:
         upstream_receipt_ref: str | None,
         updated_at_ms: int,
     ) -> bool:
+        """Move one receipt's outcome state forward."""
         cursor = conn.execute(
             "UPDATE routing_receipts SET state = ?, upstream_receipt_ref = ?, "
             "updated_at_ms = ? WHERE correlation_id = ?",
@@ -545,11 +662,13 @@ class FleetRegistryStore:
 
 
 def _optional_int(row: sqlite3.Row, column: str) -> int | None:
+    """Read one nullable INTEGER column back as ``int | None``."""
     value = row[column]
     return None if value is None else int(value)
 
 
 def _clerk_from_row(row: sqlite3.Row) -> ClerkRecord:
+    """Map one clerks row to its record."""
     return ClerkRecord(
         clerk_id=row["clerk_id"],
         broker=row["broker"],
@@ -566,6 +685,7 @@ def _clerk_from_row(row: sqlite3.Row) -> ClerkRecord:
 
 
 def _session_from_row(row: sqlite3.Row) -> ClerkSessionRecord:
+    """Map one clerk_sessions row to its record."""
     return ClerkSessionRecord(
         broker=row["broker"],
         clerk_id=row["clerk_id"],
@@ -580,6 +700,7 @@ def _session_from_row(row: sqlite3.Row) -> ClerkSessionRecord:
 
 
 def _assignment_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
+    """Map one assignment row to its record."""
     return AccountAssignmentRecord(
         broker=row["broker"],
         canonical_external_account_id=row["canonical_external_account_id"],
@@ -594,6 +715,7 @@ def _assignment_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
 
 
 def _receipt_from_row(row: sqlite3.Row) -> RoutingReceiptRecord:
+    """Map one routing_receipts row to its record."""
     return RoutingReceiptRecord(
         correlation_id=row["correlation_id"],
         broker=row["broker"],

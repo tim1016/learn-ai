@@ -18,6 +18,7 @@ from tests.broker.fleet.conftest import FakeProviderAdapter, FrozenClock, fake_a
 
 
 def _argv(*args: str) -> list[str]:
+    """Wrap CLI arguments for a main() invocation."""
     return list(args)
 
 
@@ -27,6 +28,7 @@ def test_init_provision_verify_show_and_retire_round_trip(
     # The CLI talks to the production adapter set; a test adapter is injected
     # by patching the production mapping — proving injection exists at the
     # seam without the fake ever being *registered* in code.
+    """The full ceremony round trip answers with pinned exit codes and JSON shapes."""
     monkeypatch.setattr(
         "app.broker.fleet.service.PRODUCTION_PROVIDER_ADAPTERS",
         {"fake_alpha": fake_alpha()},
@@ -89,6 +91,7 @@ def test_init_provision_verify_show_and_retire_round_trip(
 def test_the_ceremony_refusals_exit_two_and_the_unknown_provider_refuses(
     tmp_path: Path, capsys
 ) -> None:
+    """Ceremony refusals exit 2 with their reason prefix; unknown providers fail closed."""
     control_dir = tmp_path / "control"
     volume_root = tmp_path / "volumes" / "x"
     volume_root.mkdir(parents=True)
@@ -121,6 +124,7 @@ def test_the_ceremony_refusals_exit_two_and_the_unknown_provider_refuses(
 
 
 def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -> None:
+    """Release demands the proof token and reports the released generation."""
     monkeypatch.setattr(
         "app.broker.fleet.service.PRODUCTION_PROVIDER_ADAPTERS",
         {"fake_alpha": fake_alpha()},
@@ -171,6 +175,8 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
                 "fake_alpha",
                 "--account-id",
                 "acct-cli",
+                "--expected-generation",
+                "1",
                 "--proof",
                 "not-the-proof",
             )
@@ -188,6 +194,8 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
                 "fake_alpha",
                 "--account-id",
                 "acct-cli",
+                "--expected-generation",
+                "1",
                 "--proof",
                 "old-clerk-offline-and-obligations-clear",
             )

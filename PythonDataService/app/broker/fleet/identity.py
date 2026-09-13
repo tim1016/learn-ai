@@ -51,22 +51,27 @@ def new_correlation_id() -> str:
 
 
 def is_clerk_id(value: object) -> bool:
+    """Whether the value is a well-formed opaque clerk identity."""
     return isinstance(value, str) and _CLERK_ID.fullmatch(value) is not None
 
 
 def is_volume_id(value: object) -> bool:
+    """Whether the value is a well-formed opaque volume identity."""
     return isinstance(value, str) and _VOLUME_ID.fullmatch(value) is not None
 
 
 def is_worker_key(value: object) -> bool:
+    """Whether the value is a well-formed opaque worker key."""
     return isinstance(value, str) and _WORKER_KEY.fullmatch(value) is not None
 
 
 def is_agent_instance_id(value: object) -> bool:
+    """Whether the value is a well-formed agent instance identity."""
     return isinstance(value, str) and _AGENT_INSTANCE_ID.fullmatch(value) is not None
 
 
 def is_correlation_id(value: object) -> bool:
+    """Whether the value is a well-formed correlation identity."""
     return isinstance(value, str) and _CORRELATION_ID.fullmatch(value) is not None
 
 

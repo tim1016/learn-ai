@@ -25,6 +25,7 @@ from tests.broker.fleet.conftest import FrozenClock, Lane, provision_lane
 def test_provision_mints_distinct_identities_and_marks_the_volume(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
+    """Provisioning mints distinct identities and writes the marker with them."""
     alpha = provision_lane(fleet_service, broker="fake_alpha", label="alpha", tmp_path=control_dir.parent)
     beta = provision_lane(fleet_service, broker="fake_beta", label="beta", tmp_path=control_dir.parent)
 
@@ -40,6 +41,7 @@ def test_provision_mints_distinct_identities_and_marks_the_volume(
 def test_provisioning_an_unknown_production_provider_fails_closed(
     control_dir: Path, clock: FrozenClock
 ) -> None:
+    """Provisioning an unknown production provider refuses before anything is marked."""
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
         provider_adapters={},  # the production set is empty in this slice
@@ -60,6 +62,7 @@ def test_provisioning_an_unknown_production_provider_fails_closed(
 def test_a_copied_volume_refuses_before_any_identity_is_minted(
     control_dir: Path, fleet_service
 ) -> None:
+    """A copied volume's pre-existing marker refuses provisioning and registers nothing."""
     original = provision_lane(
         fleet_service, broker="fake_alpha", label="original", tmp_path=control_dir.parent
     )
@@ -79,6 +82,7 @@ def test_a_copied_volume_refuses_before_any_identity_is_minted(
 
 
 def test_a_second_clerk_cannot_reuse_an_attested_volume(control_dir: Path, fleet_service) -> None:
+    """A second active clerk cannot claim an attested volume."""
     provision_lane(
         fleet_service,
         broker="fake_alpha",
@@ -133,6 +137,7 @@ def test_writable_subtrees_of_one_mounted_volume_never_host_two_clerks(
 def test_verify_refuses_missing_marker_wrong_identity_and_symlinked_root(
     control_dir: Path, fleet_service
 ) -> None:
+    """Verification refuses a missing marker, a foreign marker and a symlinked root, each with its family."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="lane", tmp_path=control_dir.parent
     )
@@ -163,6 +168,7 @@ def test_verify_refuses_missing_marker_wrong_identity_and_symlinked_root(
 def test_registration_and_reservation_verify_the_volume_before_authority(
     control_dir: Path, fleet_service
 ) -> None:
+    """Registration and reservation re-run the volume gate before authority opens."""
     lane: Lane = provision_lane(
         fleet_service, broker="fake_alpha", label="gated", tmp_path=control_dir.parent
     )
@@ -186,6 +192,7 @@ def test_registration_and_reservation_verify_the_volume_before_authority(
 def test_retirement_is_terminal_and_refuses_outstanding_assignments(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
+    """Retirement refuses outstanding obligations, is terminal, and revokes every route."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="retiring", tmp_path=control_dir.parent
     )
@@ -197,9 +204,14 @@ def test_retirement_is_terminal_and_refuses_outstanding_assignments(
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.retire_clerk(clerk_id=lane.clerk_id)
 
+    reserved_r = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-R"
+    )
+    assert reserved_r is not None
     fleet_service.release_assignment(
         broker="fake_alpha",
         external_account_id="acct-r",
+        expected_assignment_generation=reserved_r.assignment_generation,
         proof="old-clerk-offline-and-obligations-clear",
     )
     retired = fleet_service.retire_clerk(clerk_id=lane.clerk_id)
@@ -220,6 +232,7 @@ def test_retirement_is_terminal_and_refuses_outstanding_assignments(
 
 
 def test_a_wrong_worker_key_never_registers(control_dir: Path, fleet_service) -> None:
+    """A wrong worker key never registers a session."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="keyed", tmp_path=control_dir.parent
     )

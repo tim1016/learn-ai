@@ -18,8 +18,13 @@ from __future__ import annotations
 
 import sqlite3
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 SCHEMA_VERSION = 1
 
+#: Every ``*_ms`` column carries this bound in the schema, so a corrupt or
+#: hostile write cannot persist a negative or out-of-range instant as fleet
+#: evidence (ADR 0022's ``int64 ms UTC`` domain).
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
     "PRAGMA synchronous = FULL",
@@ -27,7 +32,9 @@ PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA busy_timeout = 5000",
 )
 
-SCHEMA_DDL = """\
+# The DDL spells the bound symbolically and the constant is substituted once,
+# below, so the checked number lives in exactly one place.
+_SCHEMA_DDL_TEMPLATE = """\
 -- ============================================================
 -- fleet_meta — guarded singleton carrying the schema version
 -- ============================================================
@@ -35,8 +42,8 @@ CREATE TABLE fleet_meta (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),
     schema_version      INTEGER NOT NULL,
     registry_id         TEXT NOT NULL,
-    created_at_ms       INTEGER NOT NULL,
-    updated_at_ms       INTEGER NOT NULL
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= MAX_TIMESTAMP_MS),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0 AND updated_at_ms <= MAX_TIMESTAMP_MS)
 );
 
 -- ============================================================
@@ -55,8 +62,8 @@ CREATE TABLE clerks (
     volume_attestation_kind TEXT NOT NULL CHECK (length(volume_attestation_kind) > 0),
     volume_attestation_id   TEXT NOT NULL CHECK (length(volume_attestation_id) > 0),
     lifecycle_state         TEXT NOT NULL CHECK (lifecycle_state IN ('provisioned', 'draining', 'retired')),
-    created_at_ms           INTEGER NOT NULL,
-    retired_at_ms           INTEGER,
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= MAX_TIMESTAMP_MS),
+    retired_at_ms INTEGER CHECK (retired_at_ms IS NULL OR (retired_at_ms >= 0 AND retired_at_ms <= MAX_TIMESTAMP_MS)),
     CHECK ((retired_at_ms IS NULL) = (lifecycle_state <> 'retired'))
 );
 
@@ -80,8 +87,8 @@ CREATE TABLE clerk_sessions (
     broker                      TEXT NOT NULL,
     agent_instance_id           TEXT NOT NULL,
     routing_epoch               INTEGER NOT NULL CHECK (routing_epoch >= 1),
-    started_at_ms               INTEGER NOT NULL,
-    last_seen_at_ms             INTEGER NOT NULL,
+    started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0 AND started_at_ms <= MAX_TIMESTAMP_MS),
+    last_seen_at_ms INTEGER NOT NULL CHECK (last_seen_at_ms >= 0 AND last_seen_at_ms <= MAX_TIMESTAMP_MS),
     reported_binding_generation INTEGER,
     reported_account_id         TEXT,
     reported_state              TEXT
@@ -95,8 +102,8 @@ CREATE TABLE clerk_session_history (
     broker                      TEXT NOT NULL,
     agent_instance_id           TEXT NOT NULL,
     routing_epoch               INTEGER NOT NULL CHECK (routing_epoch >= 1),
-    started_at_ms               INTEGER NOT NULL,
-    superseded_at_ms            INTEGER NOT NULL,
+    started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0 AND started_at_ms <= MAX_TIMESTAMP_MS),
+    superseded_at_ms INTEGER NOT NULL CHECK (superseded_at_ms >= 0 AND superseded_at_ms <= MAX_TIMESTAMP_MS),
     PRIMARY KEY (clerk_id, routing_epoch)
 );
 
@@ -111,8 +118,8 @@ CREATE TABLE account_assignments (
     state                           TEXT NOT NULL CHECK (state IN ('reserved', 'effective', 'released')),
     effective_profile_id            TEXT,
     effective_revision              INTEGER,
-    recorded_at_ms                  INTEGER NOT NULL,
-    updated_at_ms                   INTEGER NOT NULL,
+    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0 AND recorded_at_ms <= MAX_TIMESTAMP_MS),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0 AND updated_at_ms <= MAX_TIMESTAMP_MS),
     PRIMARY KEY (broker, canonical_external_account_id),
     CHECK ((effective_profile_id IS NULL) = (effective_revision IS NULL))
 );
@@ -132,8 +139,8 @@ CREATE TABLE routing_receipts (
     idempotency_key     TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('delivered', 'failed', 'outcome_unknown')),
     upstream_receipt_ref TEXT,
-    created_at_ms       INTEGER NOT NULL,
-    updated_at_ms       INTEGER NOT NULL
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= MAX_TIMESTAMP_MS),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0 AND updated_at_ms <= MAX_TIMESTAMP_MS)
 );
 
 -- One durable idempotency identity per lane and key (PRD FR-078): a retry
@@ -244,7 +251,38 @@ BEFORE DELETE ON routing_receipts
 BEGIN
     SELECT RAISE(ABORT, 'a routing receipt is never deleted');
 END;
+
+-- ============================================================
+-- account_assignment_history — append-only audit of every
+-- assignment transition; the current row above is the pointer
+-- ============================================================
+CREATE TABLE account_assignment_history (
+    broker                          TEXT NOT NULL,
+    canonical_external_account_id   TEXT NOT NULL,
+    clerk_id                        TEXT NOT NULL,
+    assignment_generation           INTEGER NOT NULL CHECK (assignment_generation >= 1),
+    state                           TEXT NOT NULL CHECK (state IN ('reserved', 'effective', 'released')),
+    effective_profile_id            TEXT,
+    effective_revision              INTEGER,
+    recorded_at_ms                  INTEGER NOT NULL CHECK (recorded_at_ms >= 0 AND recorded_at_ms <= MAX_TIMESTAMP_MS),
+    updated_at_ms                   INTEGER NOT NULL CHECK (updated_at_ms >= 0 AND updated_at_ms <= MAX_TIMESTAMP_MS),
+    PRIMARY KEY (broker, canonical_external_account_id, assignment_generation, state)
+);
+
+CREATE TRIGGER trg_account_assignment_history_immutable
+BEFORE UPDATE ON account_assignment_history
+BEGIN
+    SELECT RAISE(ABORT, 'assignment history is append-only');
+END;
+
+CREATE TRIGGER trg_account_assignment_history_no_delete
+BEFORE DELETE ON account_assignment_history
+BEGIN
+    SELECT RAISE(ABORT, 'assignment history is append-only');
+END;
 """
+
+SCHEMA_DDL = _SCHEMA_DDL_TEMPLATE.replace("MAX_TIMESTAMP_MS", str(MAX_TIMESTAMP_MS))
 
 # Additive-only upgrades keyed by the ``schema_version`` they start from; v1 is
 # the initial schema, so the registry is empty by construction. The machinery
@@ -254,9 +292,24 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {}
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:
-    """Apply the pinned PRAGMA set to a freshly-opened connection."""
+    """Apply the pinned PRAGMA set to a freshly-opened connection.
+
+    ``PRAGMA journal_mode`` returns the mode SQLite actually retained, not the
+    mode asked for: on a filesystem where WAL is unsupported it can silently
+    fall back to a rollback journal. The returned mode is therefore inspected
+    and anything other than ``wal`` refuses, so the concurrency-sensitive
+    registry never opens in a weaker mode than its fences assume.
+    """
     for statement in PRAGMA_STATEMENTS:
-        conn.execute(statement)
+        cursor = conn.execute(statement)
+        if statement == "PRAGMA journal_mode = WAL":
+            retained = str(cursor.fetchone()[0]).lower()
+            if retained != "wal":
+                raise ValueError(
+                    f"the fleet registry requires WAL journaling; SQLite retained "
+                    f"{retained!r} instead — mount the control volume from a "
+                    "container-local named volume"
+                )
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:

@@ -28,11 +28,13 @@ class FleetControlError(Exception):
     status_code: ClassVar[int] = 409
 
     def __init__(self, message: str, *, next_step: str | None = None) -> None:
+        """Capture the operator-facing message and optional next step."""
         super().__init__(message)
         self.message = message
         self.next_step = next_step
 
     def detail(self) -> dict[str, str]:
+        """The wire body: reason, message, and next_step when present."""
         body = {"reason": self.reason, "message": self.message}
         if self.next_step is not None:
             body["next_step"] = self.next_step

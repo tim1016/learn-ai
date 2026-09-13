@@ -78,6 +78,7 @@ def test_n_clerks_across_two_providers_run_concurrently(
 def test_a_fake_alpha_clerk_refuses_a_fake_beta_route(
     control_dir: Path, fleet_service
 ) -> None:
+    """A clerk is routable and assignable only under its own immutable provider."""
     alpha = provision_lane(
         fleet_service, broker="fake_alpha", label="cross", tmp_path=control_dir.parent
     )
@@ -128,6 +129,7 @@ def test_provider_clients_and_state_share_no_mutable_object(
 def test_killing_one_clerks_volume_does_not_mutate_another(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
+    """Corrupting one lane's volume leaves the other lane verified, routable and owning its assignment."""
     survivor = provision_lane(
         fleet_service, broker="fake_alpha", label="survivor", tmp_path=control_dir.parent
     )
@@ -168,6 +170,7 @@ def test_killing_one_clerks_volume_does_not_mutate_another(
 def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
     control_dir: Path, fleet_service
 ) -> None:
+    """Provider-qualified keys coexist; within one provider the rival is durably refused."""
     first = provision_lane(
         fleet_service, broker="fake_alpha", label="race-a", tmp_path=control_dir.parent
     )
@@ -200,6 +203,7 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
 def test_undeclared_capabilities_refuse_with_evidence_not_emulation(
     control_dir: Path, fleet_service
 ) -> None:
+    """An undeclared capability refuses, naming the provider and the capability."""
     with pytest.raises(BrokerClerkCapabilityUnavailable) as excinfo:
         fleet_service.require_capability(
             broker="fake_beta", capability=Capability.CUSTODY_READ

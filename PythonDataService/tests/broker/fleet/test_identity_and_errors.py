@@ -50,6 +50,7 @@ ALL_FAMILIES: list[type[FleetControlError]] = [
 
 
 def test_every_minted_identity_is_unique_and_nonsemantic() -> None:
+    """Minted identities are unique and carry format only, never meaning."""
     clerk_ids = {identity.new_clerk_id() for _ in range(500)}
     assert len(clerk_ids) == 500
     for value in clerk_ids:
@@ -60,6 +61,7 @@ def test_every_minted_identity_is_unique_and_nonsemantic() -> None:
 
 
 def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
+    """Validation rejects forged, wrong-family and non-string values."""
     assert not identity.is_clerk_id("alpaca-paper")
     assert not identity.is_clerk_id("clrk_ZZZZ")
     assert not identity.is_clerk_id(identity.new_volume_id())
@@ -72,6 +74,7 @@ def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
 
 @pytest.mark.parametrize("family", ALL_FAMILIES)
 def test_every_refusal_family_pins_reason_status_and_detail(family: type[FleetControlError]) -> None:
+    """Every family pins a unique snake_case reason, a status code, and its detail body."""
     error = family("message", next_step="step")
     detail = error.detail()
     assert detail["reason"] == family.reason
@@ -86,6 +89,7 @@ def test_every_refusal_family_pins_reason_status_and_detail(family: type[FleetCo
 
 
 def test_status_codes_pin_the_retry_semantics() -> None:
+    """Status codes group into terminal, state-conflict and retry-safe buckets."""
     terminal = {BrokerNotSupported.status_code, ClerkNotFound.status_code}
     conflict = {ClerkBrokerMismatch.status_code}
     retry_safe = {ClerkUnreachable.status_code, ClerkRoutingOutcomeUnknown.status_code}

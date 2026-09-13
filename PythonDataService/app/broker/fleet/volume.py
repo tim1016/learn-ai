@@ -44,6 +44,7 @@ _MARKER_FIELDS = (
 
 
 def marker_path(root: Path) -> Path:
+    """Where a volume root's identity marker lives."""
     return root / MARKER_FILENAME
 
 
@@ -54,6 +55,15 @@ def resolve_canonical_root(root: Path) -> Path:
     a link into another volume), so it refuses rather than resolving through
     (PRD FR-026). ``OSError`` and a missing root refuse the same way: an
     unavailable volume is not permission to proceed.
+
+    What this check deliberately does *not* claim: proof that the root is a
+    distinct mount point. Inside a container the registry cannot see the
+    host's mount table, and ``st_dev`` cannot distinguish two named volumes
+    on one backing filesystem. The deployment-owned attestation recorded in
+    the marker and the registry is that proof (owner decision D1: Docker
+    Compose named volumes); what this module adds on top is the canonical
+    path, the marker agreement, and the refusal of nested roots sharing one
+    mounted volume.
     """
     try:
         probe = root
@@ -143,14 +153,26 @@ def read_volume_marker(root: Path) -> VolumeMarker | None:
             f"version {MARKER_SCHEMA_VERSION}.",
             next_step="Re-provision the clerk volume with this build.",
         )
+    # Exact types, never coercions: a corrupted or hand-edited field must be a
+    # typed refusal, not a ``TypeError`` or a silently accepted lookalike
+    # (``"2"`` is not ``2``; ``True`` is not a version).
+    _require_marker_type(target, raw, "marker_version", int)
+    _require_marker_type(target, raw, "created_at_ms", int)
+    for field in ("broker", "clerk_id", "volume_id", "attestation_kind", "attestation_id"):
+        _require_marker_type(target, raw, field, str)
+        if not str(raw[field]):
+            raise ClerkVolumeIdentityMismatch(
+                f"The identity marker at {target} has an empty {field}.",
+                next_step="Restore the volume from backup or re-provision the clerk.",
+            )
     marker = VolumeMarker(
-        marker_version=int(raw["marker_version"]),
-        broker=str(raw["broker"]),
-        clerk_id=str(raw["clerk_id"]),
-        volume_id=str(raw["volume_id"]),
-        attestation_kind=str(raw["attestation_kind"]),
-        attestation_id=str(raw["attestation_id"]),
-        created_at_ms=int(raw["created_at_ms"]),
+        marker_version=raw["marker_version"],
+        broker=raw["broker"],
+        clerk_id=raw["clerk_id"],
+        volume_id=raw["volume_id"],
+        attestation_kind=raw["attestation_kind"],
+        attestation_id=raw["attestation_id"],
+        created_at_ms=raw["created_at_ms"],
     )
     if marker.marker_version != MARKER_SCHEMA_VERSION:
         raise ClerkVolumeIdentityMismatch(
@@ -159,6 +181,21 @@ def read_volume_marker(root: Path) -> VolumeMarker | None:
             next_step="Run the build that provisioned this volume, or re-provision it.",
         )
     return marker
+
+
+def _require_marker_type(target: Path, raw: dict, field: str, expected: type) -> None:
+    """Refuse a marker field whose JSON type is not exactly the declared one.
+
+    ``bool`` is rejected even where ``int`` is expected — it is an ``int``
+    subclass in Python, but ``true`` in a marker is corruption, not a version.
+    """
+    value = raw[field]
+    if isinstance(value, bool) or not isinstance(value, expected):
+        raise ClerkVolumeIdentityMismatch(
+            f"The identity marker at {target} has a malformed {field}: "
+            f"{value!r} is not {expected.__name__}.",
+            next_step="Restore the volume from backup or re-provision the clerk.",
+        )
 
 
 def verify_volume_identity(

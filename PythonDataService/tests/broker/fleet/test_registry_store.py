@@ -15,6 +15,7 @@ from tests.broker.fleet.conftest import FrozenClock, provision_lane
 
 
 def test_open_creates_schema_meta_and_reopens_idempotently(control_dir: Path) -> None:
+    """Opening creates the schema and metadata and reopens as the same registry."""
     store = FleetRegistryStore.open(control_dir=control_dir)
     try:
         assert store.schema_version == schema.SCHEMA_VERSION
@@ -49,6 +50,7 @@ def test_open_creates_schema_meta_and_reopens_idempotently(control_dir: Path) ->
 
 
 def test_unreadable_database_refuses_with_the_storage_family(tmp_path: Path) -> None:
+    """A non-database file refuses with the storage-unavailable family."""
     db_path = registry_database_path(tmp_path)
     db_path.parent.mkdir(parents=True)
     db_path.write_bytes(b"this is not a database")
@@ -57,6 +59,7 @@ def test_unreadable_database_refuses_with_the_storage_family(tmp_path: Path) -> 
 
 
 def test_newer_schema_version_refuses_rather_than_guessing(tmp_path: Path) -> None:
+    """A newer schema version refuses rather than being partially read."""
     store = FleetRegistryStore.open(control_dir=tmp_path)
     try:
         with store.transaction() as conn:
@@ -73,6 +76,7 @@ def test_newer_schema_version_refuses_rather_than_guessing(tmp_path: Path) -> No
 def test_clerk_rows_are_immutable_never_deleted_and_lifecycle_moves_forward(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
+    """Clerk identity columns are immutable, rows are never deleted, and lifecycle moves forward only."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="alpha", tmp_path=control_dir.parent)
     store = fleet_service._store
     with pytest.raises(sqlite3.IntegrityError, match="identity is written once"), store.transaction() as conn:
@@ -99,6 +103,7 @@ def test_clerk_rows_are_immutable_never_deleted_and_lifecycle_moves_forward(
 def test_foreign_key_pins_assignments_and_sessions_to_real_clerks(
     control_dir: Path, fleet_service
 ) -> None:
+    """Assignments and sessions are pinned to real clerk rows by foreign keys."""
     from app.broker.fleet.records import AccountAssignmentRecord, AssignmentState
 
     store: FleetRegistryStore = fleet_service._store

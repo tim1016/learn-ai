@@ -29,6 +29,7 @@ FORBIDDEN_PREFIXES = (
 
 
 def test_no_fleet_module_sources_import_a_provider_implementation() -> None:
+    """No fleet module's source imports a provider implementation."""
     modules = sorted(FLEET_PACKAGE.glob("*.py"))
     assert modules, "the fleet package vanished"
     offenders: list[str] = []

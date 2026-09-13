@@ -66,13 +66,19 @@ class BrokerProviderAdapter(Protocol):
     """What a broker-owned clerk implementation presents to the fleet spine."""
 
     @property
-    def provider_id(self) -> str: ...
+    def provider_id(self) -> str:
+        """The immutable, code-owned provider identity this adapter serves."""
+        ...
 
     @property
-    def adapter_version(self) -> str: ...
+    def adapter_version(self) -> str:
+        """The provider implementation's own version string."""
+        ...
 
     @property
-    def capabilities(self) -> frozenset[Capability]: ...
+    def capabilities(self) -> frozenset[Capability]:
+        """The closed set of typed operations this provider declares."""
+        ...
 
     @property
     def route_catalog(self) -> frozenset[str]:
@@ -131,7 +137,10 @@ def require_adapter(
     """Resolve one adapter from a deployment-owned mapping, failing closed.
 
     The one refusal construction every lookup shares, so the coordinator's
-    injected set and the production registry refuse identically.
+    injected set and the production registry refuse identically. The mapping
+    key must equal the adapter's own immutable ``provider_id``: registering a
+    Tradier adapter under ``"alpaca"`` would provision Alpaca-labelled clerks
+    with Tradier canonicalization, collapsing the provider boundary.
     """
     adapter = adapters.get(provider_id)
     if adapter is None:
@@ -139,6 +148,13 @@ def require_adapter(
             f"No provider adapter is registered for {provider_id!r} in this deployment.",
             next_step="Use a provider this deployment supports; adding one is a "
             "reviewed code change, not a request parameter.",
+        )
+    if adapter.provider_id != provider_id:
+        raise BrokerNotSupported(
+            f"The adapter registered for {provider_id!r} declares provider "
+            f"{adapter.provider_id!r}; a provider may only be registered under its "
+            "own identity.",
+            next_step="Fix the deployment's adapter registration.",
         )
     return adapter
 

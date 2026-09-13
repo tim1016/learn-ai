@@ -107,6 +107,7 @@ class FleetControlService:
         clock: Callable[[], int] = now_ms_utc,
         session_stale_after_ms: int = DEFAULT_SESSION_STALE_AFTER_MS,
     ) -> None:
+        """Bind the registry store, the deployment's adapters, and the clock."""
         self._store = store
         # Constructor injection is the extension boundary (PRD FR-002): a
         # test-only fake adapter is passed here and never enters the
@@ -118,11 +119,13 @@ class FleetControlService:
         self._session_stale_after_ms = session_stale_after_ms
 
     def close(self) -> None:
+        """Close the underlying registry store."""
         self._store.close()
 
     # ---- provider adapters ----------------------------------------------
 
     def _adapter(self, broker: str) -> BrokerProviderAdapter:
+        """Resolve the deployment's adapter for one broker, failing closed."""
         return require_adapter(self._provider_adapters, broker)
 
     def require_capability(self, *, broker: str, capability: Capability) -> None:
@@ -244,7 +247,27 @@ class FleetControlService:
         )
         with self._store.transaction() as conn:
             self._store.insert_clerk(conn, record)
-        volume_module.write_volume_marker(volume_root, marker)
+        try:
+            volume_module.write_volume_marker(volume_root, marker)
+        except Exception:
+            # Compensation: the registry row is committed but the volume never
+            # received its marker (read-only volume, full disk, killed
+            # process). Retire the half-born clerk so its attestation and
+            # volume identity leave the active set and the lane can be
+            # re-provisioned cleanly instead of wedging on a ghost.
+            with self._store.transaction() as conn:
+                self._store.update_clerk_lifecycle(
+                    conn,
+                    clerk_id=clerk_id,
+                    lifecycle_state=StoredLifecycleState.RETIRED,
+                    retired_at_ms=self._clock(),
+                )
+            logger.error(
+                "fleet clerk provisioning failed after registration; retired the "
+                "partial clerk",
+                extra={"broker": broker, "clerk_id": clerk_id},
+            )
+            raise
         logger.info(
             "fleet clerk provisioned",
             extra={
@@ -262,6 +285,7 @@ class FleetControlService:
         return self._verify_volume(clerk, volume_root)
 
     def _verify_volume(self, clerk: ClerkRecord, volume_root: Path) -> VolumeMarker:
+        """Verify the mounted root against the clerk's registry identity."""
         marker = volume_module.verify_volume_identity(
             volume_root,
             expected_broker=clerk.broker,
@@ -287,27 +311,31 @@ class FleetControlService:
 
         Refuses while the clerk still holds an effective assignment — the
         obligations the assignment represents must be resolved by the release
-        ceremony first, not silently orphaned.
+        ceremony first, not silently orphaned. The assignment check and the
+        lifecycle transition share one write transaction, so a concurrent
+        reservation cannot observe "provisioned" while retirement observes
+        "no assignments" and leave a retired clerk owning an active
+        assignment.
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
-        held = [
-            assignment
-            for assignment in self._store.list_assignments_for_clerk(clerk_id)
-            if assignment.state != AssignmentState.RELEASED
-        ]
-        if held:
-            raise ClerkAssignmentConflict(
-                f"Clerk {clerk_id} still holds {len(held)} account assignment(s); "
-                "retirement requires the release ceremony to prove obligations "
-                "clear first.",
-                next_step="Run the host release ceremony for each assigned account, "
-                "then retire.",
-            )
         now = self._clock()
         updated = False
         with self._store.transaction() as conn:
+            held = [
+                assignment
+                for assignment in self._store.list_assignments_for_clerk(clerk_id)
+                if assignment.state != AssignmentState.RELEASED
+            ]
+            if held:
+                raise ClerkAssignmentConflict(
+                    f"Clerk {clerk_id} still holds {len(held)} account assignment(s); "
+                    "retirement requires the release ceremony to prove obligations "
+                    "clear first.",
+                    next_step="Run the host release ceremony for each assigned account, "
+                    "then retire.",
+                )
             updated = self._store.update_clerk_lifecycle(
                 conn,
                 clerk_id=clerk_id,
@@ -355,38 +383,43 @@ class FleetControlService:
             self._verify_volume(clerk, volume_root)
         now = self._clock()
         instance = agent_instance_id if agent_instance_id is not None else new_agent_instance_id()
-        current = self._store.read_session(clerk_id)
-        if (
-            current is not None
-            and current.agent_instance_id == instance
-            and current.broker == clerk.broker
-        ):
-            # Idempotent re-registration of the same instance: refresh only.
-            refreshed = ClerkSessionRecord(
+        # The current-session read lives inside the write transaction: two
+        # coordinators registering different agents for one clerk otherwise
+        # both observe "no session", both take epoch 1, and the second upsert
+        # silently overwrites the first with no history row. Under
+        # ``BEGIN IMMEDIATE`` the second registration sees the first's row
+        # and takes epoch 2.
+        with self._store.transaction() as conn:
+            current = self._store.read_session(clerk_id)
+            if (
+                current is not None
+                and current.agent_instance_id == instance
+                and current.broker == clerk.broker
+            ):
+                # Idempotent re-registration of the same instance: refresh only.
+                refreshed = ClerkSessionRecord(
+                    broker=clerk.broker,
+                    clerk_id=clerk_id,
+                    agent_instance_id=instance,
+                    routing_epoch=current.routing_epoch,
+                    started_at_ms=current.started_at_ms,
+                    last_seen_at_ms=now,
+                    reported_binding_generation=current.reported_binding_generation,
+                    reported_account_id=current.reported_account_id,
+                    reported_state=current.reported_state,
+                )
+                self._store.upsert_session(conn, refreshed)
+                return refreshed
+
+            epoch = 1 if current is None else current.routing_epoch + 1
+            session = ClerkSessionRecord(
                 broker=clerk.broker,
                 clerk_id=clerk_id,
                 agent_instance_id=instance,
-                routing_epoch=current.routing_epoch,
-                started_at_ms=current.started_at_ms,
+                routing_epoch=epoch,
+                started_at_ms=now,
                 last_seen_at_ms=now,
-                reported_binding_generation=current.reported_binding_generation,
-                reported_account_id=current.reported_account_id,
-                reported_state=current.reported_state,
             )
-            with self._store.transaction() as conn:
-                self._store.upsert_session(conn, refreshed)
-            return refreshed
-
-        epoch = 1 if current is None else current.routing_epoch + 1
-        session = ClerkSessionRecord(
-            broker=clerk.broker,
-            clerk_id=clerk_id,
-            agent_instance_id=instance,
-            routing_epoch=epoch,
-            started_at_ms=now,
-            last_seen_at_ms=now,
-        )
-        with self._store.transaction() as conn:
             if current is not None:
                 self._store.archive_session(conn, current, superseded_at_ms=now)
             self._store.upsert_session(conn, session)
@@ -478,71 +511,86 @@ class FleetControlService:
             self._verify_volume(clerk, volume_root)
 
         now = self._clock()
-        existing = self._store.read_assignment(broker=broker, canonical_account_id=canonical)
-        if existing is None:
-            assignment = AccountAssignmentRecord(
-                broker=broker,
-                canonical_external_account_id=canonical,
-                clerk_id=clerk_id,
-                assignment_generation=1,
-                state=AssignmentState.RESERVED,
-                recorded_at_ms=now,
-                updated_at_ms=now,
-            )
-            try:
-                with self._store.transaction() as conn:
-                    self._store.insert_assignment(conn, assignment)
-            except sqlite3.IntegrityError as exc:
-                # Another writer's reservation committed between this read and
-                # insert; the constraint is the fence, and the loser gets the
-                # same typed refusal a sequential rival would.
-                raise ClerkAssignmentConflict(
-                    f"Account {canonical} under broker {broker!r} was reserved "
-                    "concurrently by another clerk.",
-                    next_step="Assignment ownership does not expire; reassignment "
-                    "is a proof-driven host ceremony.",
-                ) from exc
-            logger.info(
-                "fleet account assignment reserved",
-                extra={"broker": broker, "clerk_id": clerk_id},
-            )
-            return assignment
-        if existing.clerk_id == clerk_id and existing.state == AssignmentState.RESERVED:
-            return existing
-        if existing.state == AssignmentState.RELEASED:
-            # Reuse after the release ceremony: a fresh reservation at a
-            # higher generation, compare-and-swapped so a racing third writer
-            # cannot also land.
-            reasserted = AccountAssignmentRecord(
-                broker=broker,
-                canonical_external_account_id=canonical,
-                clerk_id=clerk_id,
-                assignment_generation=existing.assignment_generation + 1,
-                state=AssignmentState.RESERVED,
-                recorded_at_ms=now,
-                updated_at_ms=now,
-            )
-            accepted = False
+        # The read-decide-write runs inside one transaction with a lifecycle
+        # recheck, so a concurrent retirement cannot interleave: whichever
+        # write transaction commits first is the truth the other re-reads.
+        outcome: AccountAssignmentRecord | None = None
+        try:
             with self._store.transaction() as conn:
-                accepted = self._store.cas_update_assignment(
-                    conn, reasserted, previous_generation=existing.assignment_generation
+                live_clerk = self._store.read_clerk_on(conn, clerk_id)
+                if live_clerk is None or live_clerk.lifecycle_state != (
+                    StoredLifecycleState.PROVISIONED
+                ):
+                    raise ClerkAssignmentConflict(
+                        f"Clerk {clerk_id} is no longer provisioned; only a "
+                        "provisioned clerk reserves accounts.",
+                    )
+                existing = self._store.read_assignment_on(
+                    conn, broker=broker, canonical_account_id=canonical
                 )
-            if not accepted:
-                raise ClerkAssignmentConflict(
-                    f"Account {canonical} under broker {broker!r} changed while "
-                    "re-reserving; re-read and retry.",
-                )
-            logger.info(
-                "fleet account assignment re-reserved",
-                extra={"broker": broker, "clerk_id": clerk_id},
-            )
-            return reasserted
-        raise ClerkAssignmentConflict(
-            f"Account {canonical} under broker {broker!r} is already "
-            f"{existing.state.value} for clerk {existing.clerk_id}.",
-            next_step="Assignment ownership does not expire; reassignment is a "
-            "proof-driven host ceremony.",
+                if existing is None:
+                    outcome = AccountAssignmentRecord(
+                        broker=broker,
+                        canonical_external_account_id=canonical,
+                        clerk_id=clerk_id,
+                        assignment_generation=1,
+                        state=AssignmentState.RESERVED,
+                        recorded_at_ms=now,
+                        updated_at_ms=now,
+                    )
+                    self._store.insert_assignment(conn, outcome)
+                elif existing.clerk_id == clerk_id and existing.state == (
+                    AssignmentState.RESERVED
+                ):
+                    outcome = existing
+                elif existing.state == AssignmentState.RELEASED:
+                    # Reuse after the release ceremony: a fresh reservation at
+                    # a higher generation, compare-and-swapped on the prior
+                    # generation *and* state so a racing third writer cannot
+                    # also land.
+                    outcome = AccountAssignmentRecord(
+                        broker=broker,
+                        canonical_external_account_id=canonical,
+                        clerk_id=clerk_id,
+                        assignment_generation=existing.assignment_generation + 1,
+                        state=AssignmentState.RESERVED,
+                        recorded_at_ms=now,
+                        updated_at_ms=now,
+                    )
+                    accepted = self._store.cas_update_assignment(
+                        conn,
+                        outcome,
+                        previous_generation=existing.assignment_generation,
+                        previous_state=AssignmentState.RELEASED,
+                    )
+                    if not accepted:
+                        raise ClerkAssignmentConflict(
+                            f"Account {canonical} under broker {broker!r} changed "
+                            "while re-reserving; re-read and retry.",
+                        )
+                else:
+                    raise ClerkAssignmentConflict(
+                        f"Account {canonical} under broker {broker!r} is already "
+                        f"{existing.state.value} for clerk {existing.clerk_id}.",
+                        next_step="Assignment ownership does not expire; reassignment "
+                        "is a proof-driven host ceremony.",
+                    )
+        except sqlite3.IntegrityError as exc:
+            # Another writer's reservation committed before this transaction
+            # took the write lock; the constraint is the fence, and the loser
+            # gets the same typed refusal a sequential rival would.
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} was reserved "
+                "concurrently by another clerk.",
+                next_step="Assignment ownership does not expire; reassignment "
+                "is a proof-driven host ceremony.",
+            ) from exc
+        assert outcome is not None
+        logger.info(
+            "fleet account assignment reserved",
+            extra={"broker": broker, "clerk_id": clerk_id},
         )
+        return outcome
 
     def confirm_assignment(
         self,
@@ -565,6 +613,10 @@ class FleetControlService:
             raise ClerkBrokerMismatch(
                 f"Clerk {clerk_id} belongs to broker {clerk.broker!r}, not {broker!r}.",
             )
+        # The session must exist before anything is committed: an assignment
+        # that lands effective without a registered worker would present
+        # itself as confirmed with nobody to have acknowledged it.
+        self._require_session(clerk_id)
         adapter = self._adapter(broker)
         canonical = adapter.canonical_account_id(external_account_id)
         existing = self._store.read_assignment(broker=broker, canonical_account_id=canonical)
@@ -604,7 +656,10 @@ class FleetControlService:
         accepted = False
         with self._store.transaction() as conn:
             accepted = self._store.cas_update_assignment(
-                conn, confirmed, previous_generation=existing.assignment_generation
+                conn,
+                confirmed,
+                previous_generation=existing.assignment_generation,
+                previous_state=AssignmentState.RESERVED,
             )
         if not accepted:
             raise ClerkAssignmentConflict(
@@ -643,13 +698,17 @@ class FleetControlService:
         *,
         broker: str,
         external_account_id: str,
+        expected_assignment_generation: int,
         proof: str,
     ) -> AccountAssignmentRecord:
         """The host-only release ceremony (PRD FR-055).
 
-        Terminal for the generation: the row records ``released`` and stays,
-        which is what makes "never expire into takeover" auditable. Reuse of
-        the account starts a fresh reservation with a higher generation.
+        Terminal for the generation: the row records ``released`` and stays
+        in the append-only history, which is what makes "never expire into
+        takeover" auditable. Reuse of the account starts a fresh reservation
+        with a higher generation. The caller pins the assignment generation
+        its evidence was prepared against, so release evidence prepared for
+        generation N cannot silently release generation N+1's new owner.
         """
         if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
@@ -663,6 +722,19 @@ class FleetControlService:
         if existing is None:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} has no assignment to release.",
+            )
+        if (
+            existing.state == AssignmentState.RELEASED
+            and existing.assignment_generation == expected_assignment_generation
+        ):
+            return existing
+        if existing.assignment_generation != expected_assignment_generation:
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} is at assignment "
+                f"generation {existing.assignment_generation}, not the pinned "
+                f"{expected_assignment_generation}; release evidence cannot cross "
+                "a reassignment.",
+                next_step="Re-read the assignment and re-prepare the release evidence.",
             )
         if existing.state == AssignmentState.RELEASED:
             return existing
@@ -681,7 +753,10 @@ class FleetControlService:
         accepted = False
         with self._store.transaction() as conn:
             accepted = self._store.cas_update_assignment(
-                conn, released, previous_generation=existing.assignment_generation
+                conn,
+                released,
+                previous_generation=existing.assignment_generation,
+                previous_state=existing.state,
             )
         if not accepted:
             raise ClerkAssignmentConflict(
@@ -734,6 +809,12 @@ class FleetControlService:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} has no registered agent session.",
             )
+        if self._clock() - session.last_seen_at_ms > self._session_stale_after_ms:
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id}'s last heartbeat is older than "
+                f"{self._session_stale_after_ms} ms; an unreachable lane accepts no "
+                "routed operations until it recovers.",
+            )
         if (
             expected_routing_epoch is not None
             and session.routing_epoch != expected_routing_epoch
@@ -776,13 +857,18 @@ class FleetControlService:
 
         A receipt never replaces the provider clerk's execution or custody
         receipt; the upstream reference is carried, not interpreted. Retrying
-        the same idempotency identity updates the existing receipt.
+        the same idempotency identity updates the existing receipt — but only
+        when the retry names the same operation and target: a key reused for
+        a different target is a conflict, never a silent cross-attribution.
         """
         now = self._clock()
         existing = self._store.find_routing_receipt_by_idempotency(
             broker=broker, clerk_id=clerk_id, idempotency_key=idempotency_key
         )
         if existing is not None:
+            self._require_receipt_identity_match(
+                existing, operation_kind=operation_kind, nonsecret_target_ref=nonsecret_target_ref
+            )
             updated = False
             with self._store.transaction() as conn:
                 updated = self._store.update_routing_receipt_outcome(
@@ -808,9 +894,39 @@ class FleetControlService:
             created_at_ms=now,
             updated_at_ms=now,
         )
-        with self._store.transaction() as conn:
-            self._store.insert_routing_receipt(conn, receipt)
+        try:
+            with self._store.transaction() as conn:
+                self._store.insert_routing_receipt(conn, receipt)
+        except sqlite3.IntegrityError:
+            # A concurrent retry with the same lane-scoped key inserted first;
+            # resolve to the winner rather than surfacing the constraint.
+            winner = self._store.find_routing_receipt_by_idempotency(
+                broker=broker, clerk_id=clerk_id, idempotency_key=idempotency_key
+            )
+            if winner is None:
+                raise
+            self._require_receipt_identity_match(
+                winner, operation_kind=operation_kind, nonsecret_target_ref=nonsecret_target_ref
+            )
+            return winner
         return receipt
+
+    @staticmethod
+    def _require_receipt_identity_match(
+        receipt: RoutingReceiptRecord, *, operation_kind: str, nonsecret_target_ref: str
+    ) -> None:
+        """Refuse an idempotency key reused for a different correlated attempt."""
+        if (
+            receipt.operation_kind != operation_kind
+            or receipt.nonsecret_target_ref != nonsecret_target_ref
+        ):
+            raise ClerkIdentityMismatch(
+                f"Idempotency key {receipt.idempotency_key!r} on lane "
+                f"{receipt.broker}/{receipt.clerk_id} already correlates "
+                f"{receipt.operation_kind} of {receipt.nonsecret_target_ref!r}; it "
+                "cannot be reused for a different operation or target.",
+                next_step="Mint a fresh idempotency key for the new attempt.",
+            )
 
     # ---- directory ---------------------------------------------------------
 
@@ -839,6 +955,7 @@ class FleetControlService:
     def _descriptor(
         self, clerk: ClerkRecord, session: ClerkSessionRecord | None, now: int
     ) -> ClerkDescriptor:
+        """Project one clerk and session into its directory entry."""
         adapter = self._provider_adapters.get(clerk.broker)
         capabilities: tuple[str, ...] = ()
         provider_summary: dict[str, object] | None = None
@@ -908,6 +1025,7 @@ class FleetControlService:
     def _require_clerk(self, clerk_id: str) -> ClerkRecord:
         # A malformed identity cannot exist, so it is reported as not found —
         # callers learn nothing about any real clerk from the distinction.
+        """Resolve one clerk or refuse; malformed ids are simply absent."""
         if not is_clerk_id(clerk_id):
             raise ClerkNotFound(f"No clerk carries identity {clerk_id!r}.")
         clerk = self._store.read_clerk(clerk_id)
@@ -916,6 +1034,7 @@ class FleetControlService:
         return clerk
 
     def _require_session(self, clerk_id: str) -> ClerkSessionRecord:
+        """Resolve the clerk's current session or refuse as unreachable."""
         session = self._store.read_session(clerk_id)
         if session is None:
             raise ClerkUnreachable(f"Clerk {clerk_id} has no registered agent session.")

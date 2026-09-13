@@ -27,11 +27,13 @@ RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
 
 @pytest.fixture
 def seeded_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put realistic-looking fake credentials in the environment."""
     monkeypatch.setenv("FAKE_ALPHA_API_KEY_ID", FAKE_ALPHA_KEY)
     monkeypatch.setenv("FAKE_ALPHA_API_SECRET_KEY", FAKE_ALPHA_SECRET)
 
 
 def _drive_ceremonies(fleet_service, tmp_path: Path) -> dict[str, object]:
+    """Drive every ceremony once and return the directory payload."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="secrets-check", tmp_path=tmp_path
     )
@@ -54,8 +56,15 @@ def _drive_ceremonies(fleet_service, tmp_path: Path) -> dict[str, object]:
         state=RoutingReceiptState.DELIVERED,
         upstream_receipt_ref="upstream/r-1",
     )
+    secret_assignment = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-SECRET"
+    )
+    assert secret_assignment is not None
     fleet_service.release_assignment(
-        broker="fake_alpha", external_account_id="acct-secret", proof=RELEASE_PROOF
+        broker="fake_alpha",
+        external_account_id="acct-secret",
+        expected_assignment_generation=secret_assignment.assignment_generation,
+        proof=RELEASE_PROOF,
     )
     return fleet_service.directory(include_retired=True)
 
@@ -66,6 +75,7 @@ def test_no_secret_reaches_a_row_a_payload_or_a_log(
     seeded_env,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Env secrets never reach the registry bytes, payloads or logs."""
     with caplog.at_level(logging.DEBUG):
         payload = _drive_ceremonies(fleet_service, control_dir.parent)
 
@@ -93,6 +103,7 @@ def test_no_secret_reaches_a_row_a_payload_or_a_log(
 def test_the_worker_key_is_stored_but_never_projected(
     control_dir: Path, fleet_service, seeded_env
 ) -> None:
+    """The worker key lives only in the registry, never in a projection."""
     payload = _drive_ceremonies(fleet_service, control_dir.parent)
     db_path = registry_database_path(control_dir)
     registry_bytes = db_path.read_bytes()

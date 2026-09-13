@@ -26,6 +26,7 @@ RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
 
 
 def _reserved(fleet_service: FleetControlService, broker: str, clerk_id: str, account: str):
+    """Reserve one account for a clerk through the service seam."""
     return fleet_service.reserve_assignment(
         broker=broker, clerk_id=clerk_id, external_account_id=account
     )
@@ -34,6 +35,7 @@ def _reserved(fleet_service: FleetControlService, broker: str, clerk_id: str, ac
 def test_a_duplicate_canonical_account_within_one_provider_refuses(
     control_dir: Path, fleet_service
 ) -> None:
+    """The fence canonicalizes before it fences, so whitespace and case cannot smuggle a rival past one provider's reservation."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="a1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="a2", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-shared ")
@@ -45,6 +47,7 @@ def test_a_duplicate_canonical_account_within_one_provider_refuses(
 def test_identical_raw_account_ids_coexist_across_providers(
     control_dir: Path, fleet_service
 ) -> None:
+    """Assignment identity is provider-qualified: the same raw string under two providers is two reservations."""
     alpha = provision_lane(fleet_service, broker="fake_alpha", label="x", tmp_path=control_dir.parent)
     beta = provision_lane(fleet_service, broker="fake_beta", label="y", tmp_path=control_dir.parent)
     first = _reserved(fleet_service, "fake_alpha", alpha.clerk_id, "acct-1")
@@ -57,12 +60,14 @@ def test_identical_raw_account_ids_coexist_across_providers(
 def test_a_clerk_cannot_reserve_under_another_brokers_route(
     control_dir: Path, fleet_service
 ) -> None:
+    """A reservation under a broker the clerk does not belong to refuses."""
     alpha = provision_lane(fleet_service, broker="fake_alpha", label="mismatch", tmp_path=control_dir.parent)
     with pytest.raises(ClerkBrokerMismatch):
         _reserved(fleet_service, "fake_beta", alpha.clerk_id, "acct-1")
 
 
 def test_an_empty_canonical_account_refuses(control_dir: Path, fleet_service) -> None:
+    """A canonicalization that yields nothing is a refusal, not a reservation of the empty key."""
     alpha = provision_lane(fleet_service, broker="fake_alpha", label="empty", tmp_path=control_dir.parent)
     with pytest.raises(ClerkAccountMismatch):
         _reserved(fleet_service, "fake_alpha", alpha.clerk_id, "   ")
@@ -98,6 +103,7 @@ def test_heartbeat_loss_never_releases_ownership(
 
 
 def test_reserve_for_the_same_owner_is_idempotent(control_dir: Path, fleet_service) -> None:
+    """Re-reserving for the current owner returns the existing reservation."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="same", tmp_path=control_dir.parent)
     first = _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-i")
     again = _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-i")
@@ -107,6 +113,7 @@ def test_reserve_for_the_same_owner_is_idempotent(control_dir: Path, fleet_servi
 def test_confirm_moves_reserved_to_effective_and_records_the_binding(
     control_dir: Path, fleet_service
 ) -> None:
+    """Confirmation moves the assignment to effective and records the binding on the session."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="confirm", tmp_path=control_dir.parent)
     fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-c")
@@ -130,10 +137,14 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
 def test_confirm_refuses_a_rival_and_a_released_assignment(
     control_dir: Path, fleet_service
 ) -> None:
+    """Rivals, session-less clerks and released assignments can never confirm."""
     owner = provision_lane(fleet_service, broker="fake_alpha", label="own", tmp_path=control_dir.parent)
     rival = provision_lane(fleet_service, broker="fake_alpha", label="riv", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", owner.clerk_id, "acct-o")
+    # Both lanes have sessions: the refusals below are about assignment
+    # ownership, not about a missing worker.
     fleet_service.register_agent_session(clerk_id=rival.clerk_id, worker_key=rival.worker_key)
+    fleet_service.register_agent_session(clerk_id=owner.clerk_id, worker_key=owner.worker_key)
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.confirm_assignment(
             broker="fake_alpha",
@@ -141,9 +152,29 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
             external_account_id="acct-o",
             binding_generation=1,
         )
+    # A session-less clerk cannot confirm anything at all: there is no worker
+    # to have acknowledged the binding (FR-064's gate, on the write path).
+    third = provision_lane(fleet_service, broker="fake_alpha", label="third", tmp_path=control_dir.parent)
+    _reserved(fleet_service, "fake_alpha", third.clerk_id, "acct-t")
+    from app.broker.fleet.errors import ClerkUnreachable
 
+    with pytest.raises(ClerkUnreachable):
+        fleet_service.confirm_assignment(
+            broker="fake_alpha",
+            clerk_id=third.clerk_id,
+            external_account_id="acct-t",
+            binding_generation=1,
+        )
+
+    reserved_o = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-O"
+    )
+    assert reserved_o is not None
     fleet_service.release_assignment(
-        broker="fake_alpha", external_account_id="acct-o", proof=RELEASE_PROOF
+        broker="fake_alpha",
+        external_account_id="acct-o",
+        expected_assignment_generation=reserved_o.assignment_generation,
+        proof=RELEASE_PROOF,
     )
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.confirm_assignment(
@@ -157,19 +188,43 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
 def test_release_requires_the_ceremony_proof_and_starts_a_higher_generation(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
+    """The release ceremony demands its proof token, a pinned generation, and reuse restarts at a higher generation."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="gen1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="gen2", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-g")
+    reserved_g = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-G"
+    )
+    assert reserved_g is not None
 
     with pytest.raises(ClerkAssignmentConflict):
-        fleet_service.release_assignment(broker="fake_alpha", external_account_id="acct-g", proof="")
+        fleet_service.release_assignment(
+            broker="fake_alpha",
+            external_account_id="acct-g",
+            expected_assignment_generation=reserved_g.assignment_generation,
+            proof="",
+        )
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.release_assignment(
-            broker="fake_alpha", external_account_id="acct-g", proof="just-trust-me"
+            broker="fake_alpha",
+            external_account_id="acct-g",
+            expected_assignment_generation=reserved_g.assignment_generation,
+            proof="just-trust-me",
+        )
+    # A stale pin refuses: release evidence cannot cross a reassignment.
+    with pytest.raises(ClerkAssignmentConflict, match="pinned"):
+        fleet_service.release_assignment(
+            broker="fake_alpha",
+            external_account_id="acct-g",
+            expected_assignment_generation=reserved_g.assignment_generation + 5,
+            proof=RELEASE_PROOF,
         )
 
     released = fleet_service.release_assignment(
-        broker="fake_alpha", external_account_id="acct-g", proof=RELEASE_PROOF
+        broker="fake_alpha",
+        external_account_id="acct-g",
+        expected_assignment_generation=reserved_g.assignment_generation,
+        proof=RELEASE_PROOF,
     )
     assert released.state == AssignmentState.RELEASED
     # The released row stays as terminal history…

@@ -17,6 +17,7 @@ from tests.broker.fleet.conftest import provision_lane
 
 
 def _live_lane(fleet_service, tmp_path: Path, label: str):
+    """Provision, register, reserve and confirm one routable lane."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label=label, tmp_path=tmp_path)
     session = fleet_service.register_agent_session(
         clerk_id=lane.clerk_id, worker_key=lane.worker_key
@@ -36,6 +37,7 @@ def _live_lane(fleet_service, tmp_path: Path, label: str):
 def test_registration_bumps_the_epoch_and_archives_the_previous_session(
     control_dir: Path, fleet_service
 ) -> None:
+    """A new instance bumps the epoch and archives the old session; the same instance is idempotent."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="epochs", tmp_path=control_dir.parent
     )
@@ -65,6 +67,7 @@ def test_registration_bumps_the_epoch_and_archives_the_previous_session(
 def test_a_stale_instance_cannot_heartbeat_over_the_current_session(
     control_dir: Path, fleet_service
 ) -> None:
+    """A superseded instance's heartbeat is a no-op against the current session."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="stale", tmp_path=control_dir.parent
     )
@@ -92,6 +95,7 @@ def test_a_stale_instance_cannot_heartbeat_over_the_current_session(
 def test_route_resolution_verifies_broker_identity_and_epoch_fencing(
     control_dir: Path, fleet_service
 ) -> None:
+    """Routing verifies broker identity, epoch fences and rejects unknown identities."""
     lane, session = _live_lane(fleet_service, control_dir.parent, "routed")
 
     clerk, resolved = fleet_service.resolve_route(
@@ -123,6 +127,7 @@ def test_route_resolution_verifies_broker_identity_and_epoch_fencing(
 
 
 def test_a_clerk_without_a_session_is_not_routable(control_dir: Path, fleet_service) -> None:
+    """A clerk with no session is not routable."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="silent", tmp_path=control_dir.parent
     )
@@ -188,6 +193,7 @@ def test_a_stale_expected_binding_generation_refuses_instead_of_retargeting(
 def test_routing_receipts_correlate_and_never_replace_upstream_evidence(
     control_dir: Path, fleet_service
 ) -> None:
+    """Receipts correlate attempts idempotently per lane and carry, never replace, upstream evidence."""
     lane, _session = _live_lane(fleet_service, control_dir.parent, "receipts")
 
     first = fleet_service.record_routing_receipt(
@@ -230,6 +236,7 @@ def test_routing_receipts_correlate_and_never_replace_upstream_evidence(
 
 
 def test_routing_receipt_identities_are_immutable(fleet_service, control_dir: Path) -> None:
+    """A receipt's identity columns are immutable and its rows are never deleted."""
     import sqlite3
 
     lane, _ = _live_lane(fleet_service, control_dir.parent, "immutable")

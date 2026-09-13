@@ -20,7 +20,8 @@ volume::
         --attestation-id learn-ai-alpaca-paper-clerk
 
     python -m scripts.manage_broker_fleet verify \\
-        --control-dir /app/artifacts/fleet --clerk-id clrk_...
+        --control-dir /app/artifacts/fleet --clerk-id clrk_... \\
+        --volume-root /app/artifacts/clerks/paper
 
 The worker key printed by ``provision`` is the one secret-shaped artifact the
 ceremony mints; it is handed to exactly one agent process and never returned
@@ -46,15 +47,18 @@ from scripts._operator_cli import jsonable
 def _write(payload: object) -> None:
     # stdout.write, not print: the sibling operator CLIs emit machine-readable
     # JSON lines and the repo's no-print rule binds here too.
+    """Emit one machine-readable JSON line to stdout."""
     sys.stdout.write(json.dumps(jsonable(payload), sort_keys=True) + "\n")
 
 
 def _service(args: argparse.Namespace) -> FleetControlService:
+    """Open the registry and build the control service for a command."""
     store = FleetRegistryStore.open(control_dir=Path(args.control_dir))
     return FleetControlService(store=store)
 
 
 def _init(args: argparse.Namespace) -> int:
+    """Handle ``init``: create or open the registry."""
     store = FleetRegistryStore.open(control_dir=Path(args.control_dir))
     try:
         _write(
@@ -70,6 +74,7 @@ def _init(args: argparse.Namespace) -> int:
 
 
 def _provision(args: argparse.Namespace) -> int:
+    """Handle ``provision``: mint one clerk lane on a fresh volume."""
     service = _service(args)
     try:
         provisioned = service.provision_clerk(
@@ -98,6 +103,7 @@ def _provision(args: argparse.Namespace) -> int:
 
 
 def _verify(args: argparse.Namespace) -> int:
+    """Handle ``verify``: re-run the volume identity gate."""
     service = _service(args)
     try:
         marker = service.verify_clerk_volume(
@@ -110,6 +116,7 @@ def _verify(args: argparse.Namespace) -> int:
 
 
 def _show(args: argparse.Namespace) -> int:
+    """Handle ``show``: print the directory or one clerk."""
     service = _service(args)
     try:
         if args.clerk_id:
@@ -122,6 +129,7 @@ def _show(args: argparse.Namespace) -> int:
 
 
 def _retire(args: argparse.Namespace) -> int:
+    """Handle ``retire``: retire a clerk terminally."""
     service = _service(args)
     try:
         retired = service.retire_clerk(clerk_id=args.clerk_id)
@@ -132,11 +140,13 @@ def _retire(args: argparse.Namespace) -> int:
 
 
 def _release(args: argparse.Namespace) -> int:
+    """Handle ``release-assignment``: run the host release ceremony."""
     service = _service(args)
     try:
         released = service.release_assignment(
             broker=args.broker,
             external_account_id=args.account_id,
+            expected_assignment_generation=args.expected_generation,
             proof=args.proof,
         )
         _write(
@@ -153,6 +163,7 @@ def _release(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Assemble the CLI's subcommand parser."""
     parser = argparse.ArgumentParser(
         prog="manage_broker_fleet",
         description="Host ceremonies for the broker clerk fleet control plane.",
@@ -200,6 +211,12 @@ def _build_parser() -> argparse.ArgumentParser:
     release.add_argument("--broker", required=True)
     release.add_argument("--account-id", required=True)
     release.add_argument(
+        "--expected-generation",
+        type=int,
+        required=True,
+        help="The assignment generation this release's evidence was prepared against",
+    )
+    release.add_argument(
         "--proof",
         required=True,
         help="Offline-and-obligations-clear proof token",
@@ -209,6 +226,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one CLI invocation; map refusals to the exit-code vocabulary."""
     args = _build_parser().parse_args(argv)
     try:
         return args.func(args)
