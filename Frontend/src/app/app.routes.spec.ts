@@ -71,7 +71,7 @@ describe('routes', () => {
 
     await router.navigateByUrl(url);
 
-    expect(router.url).toBe('/data-lab');
+    expect(router.url).toBe('/data-lab/explore');
   });
 
   it('resolves the legacy engine/runs/:id bookmark onto the one-page workbench', async () => {
@@ -163,6 +163,6 @@ describe('routes', () => {
     if (route?.loadComponent === undefined) throw new Error('Data Lake Observatory route is missing.');
 
     expect(await route.loadComponent()).toBe(DataLakeObservatoryComponent);
-    expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadComponent).toBeDefined();
+    expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
 });

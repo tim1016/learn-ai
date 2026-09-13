@@ -138,6 +138,12 @@ const DEFAULT_COMPANIONS: DataLabCompanionSettings = {
   includeStockQuotes: false,
 };
 
+function omitKey<T extends Record<string, unknown>>(map: T, key: string): T {
+  return Object.fromEntries(
+    Object.entries(map).filter(([k]) => k !== key),
+  ) as T;
+}
+
 function isFiniteInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && Number.isFinite(v);
 }
@@ -270,9 +276,7 @@ export class DataLabWorkspaceStore {
     this._indicators.update(list => list.filter(i => i.id !== id));
     this._colorOverrides.update(map => {
       if (!(id in map)) return map;
-      const next = { ...map };
-      delete next[id];
-      return next;
+      return omitKey(map, id);
     });
     this.markChartStale();
   }
@@ -313,10 +317,7 @@ export class DataLabWorkspaceStore {
       this._colorOverrides.update(map => {
         const token = map[id];
         if (!token) return map;
-        const nextMap = { ...map };
-        delete nextMap[id];
-        nextMap[nextId] = token;
-        return nextMap;
+        return { ...omitKey(map, id), [nextId]: token };
       });
     }
     this.markChartStale();
@@ -336,9 +337,7 @@ export class DataLabWorkspaceStore {
   clearColorToken(instanceId: string): void {
     this._colorOverrides.update(map => {
       if (!(instanceId in map)) return map;
-      const next = { ...map };
-      delete next[instanceId];
-      return next;
+      return omitKey(map, instanceId);
     });
   }
 

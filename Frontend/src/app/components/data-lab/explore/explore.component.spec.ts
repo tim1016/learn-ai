@@ -54,6 +54,10 @@ function flushCatalog(http: HttpTestingController): void {
   req.flush({ success: true, categories: {}, total: 0 });
 }
 
+function throwChartRequestMissing(): never {
+  throw new Error('expected exactly one chart request');
+}
+
 describe('ExploreComponent', () => {
   it('marks the chart stale on edits without issuing any chart HTTP request', async () => {
     const { http, store, fixture } = await renderExplore();
@@ -87,7 +91,7 @@ describe('ExploreComponent', () => {
     const req = await waitFor(() => {
       const matches = http.match(`${environment.pythonServiceUrl}/api/chart/data`);
       expect(matches).toHaveLength(1);
-      return matches[0]!;
+      return matches[0] ?? throwChartRequestMissing();
     });
     expect(req.request.method).toBe('POST');
     // The one-path mapper payload: numeric window + derived UTC dates.
