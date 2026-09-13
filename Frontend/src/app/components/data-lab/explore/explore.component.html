@@ -1,0 +1,183 @@
+<section class="explore__bar" aria-label="Explore scope">
+  <span class="explore__ticker">
+    @if (chartTicker()) {
+      <app-asset-identity [symbol]="chartTicker()" [size]="'sm'" />
+    } @else {
+      <span class="explore__muted">No ticker committed</span>
+    }
+  </span>
+  <span class="explore__muted">{{ chartFromDate() }} → {{ chartToDate() }} · {{ chartTimeframe() }}</span>
+  <button type="button" class="explore__primary" (click)="refreshChart()" [disabled]="!canRefresh()">
+    Refresh chart
+  </button>
+  <button type="button" (click)="openScopeDrawer()">Edit scope</button>
+  <button type="button" (click)="indicatorsDrawerOpen.set(true)">Indicators</button>
+  @if (chartRendered() && store.chartStale()) {
+    <span class="explore__stale" role="status">Out of date</span>
+  }
+</section>
+
+@if (scopeDrawerOpen()) {
+  <section class="explore__drawer" role="region" aria-label="Edit scope">
+    <div class="explore__drawer-head">
+      <h2>Edit scope</h2>
+      <button type="button" (click)="scopeDrawerOpen.set(false)" aria-label="Close edit scope">Close</button>
+    </div>
+    <app-ticker-range-picker
+      [value]="scopeRange()"
+      (valueChange)="scopeRange.set($event)"
+      [hideSampling]="true"
+      [showAutoFetch]="false"
+      presentation="card"
+      title="Data Lab scope"
+    />
+    <div class="explore__drawer-actions">
+      <button type="button" class="explore__primary" (click)="applyScopeDrawer()">Apply scope</button>
+      <button type="button" (click)="scopeDrawerOpen.set(false)">Cancel</button>
+    </div>
+  </section>
+}
+
+@if (indicatorsDrawerOpen()) {
+  <section class="explore__drawer" role="region" aria-label="Indicators">
+    <div class="explore__drawer-head">
+      <h2>Indicators</h2>
+      <button type="button" (click)="indicatorsDrawerOpen.set(false)" aria-label="Close indicators">Close</button>
+    </div>
+    <app-indicator-picker
+      [categories]="catalogCategories()"
+      [activeKeys]="store.indicators().map((i) => i.canonicalKey)"
+      [loading]="catalogLoading()"
+      [searchable]="true"
+      (add)="onPickerAdd($event)"
+      (addInstance)="onPickerAdd($event)"
+    />
+  </section>
+}
+
+<section class="explore__chips" aria-label="Active indicators">
+  <button type="button" class="explore__chips-toggle" (click)="chipsExpanded.set(!chipsExpanded())">
+    {{ activeIndicatorCount() }} active
+  </button>
+  @if (chipsExpanded()) {
+    <ul class="explore__chip-list">
+      @for (chip of chipEntries(); track chip.instance.id) {
+        <li class="explore__chip">
+          <span class="explore__chip-label">{{ chip.label }}</span>
+          <button type="button" (click)="configuringInstanceId.set(chip.instance.id)">Configure</button>
+          <button type="button" (click)="removeIndicator(chip.instance.id)" [attr.aria-label]="'Remove ' + chip.label">Remove</button>
+          <app-chart-series-color-picker
+            [groupLabel]="'Color for ' + chip.label"
+            [selected]="store.colorTokenOverrides()[chip.instance.id] ?? null"
+            (tokenSelected)="onColorTokenSelected(chip.instance.id, $event)"
+          />
+        </li>
+      }
+    </ul>
+  }
+</section>
+
+<app-indicator-config-modal
+  [visible]="configuringInstanceId() !== null"
+  (visibleChange)="onModalVisibleChange($event)"
+  mode="configure"
+  [entry]="configuringEntry()"
+  [paramConfigs]="configuringParamConfigs()"
+  [activeIndicatorKeys]="activeIndicatorNames()"
+  (paramChange)="onModalParamChange($event)"
+  (resetDefaults)="onModalResetDefaults()"
+  (resetParam)="onModalResetParam($event)"
+  (addRelated)="onModalAddRelated($event)"
+  (removeRelated)="onModalRemoveRelated($event)"
+  (addPreview)="onModalAddPreview($event)"
+/>
+
+<section class="explore__chart" aria-label="Chart">
+  @if (!hasCommittedScope() && !chartRendered()) {
+    <p class="explore__muted">Commit a ticker and range, then press Refresh chart.</p>
+  }
+  @if (chartRendered()) {
+    <app-data-lab-chart
+      #chartComponent
+      [ticker]="chartTicker()"
+      [fromDate]="chartFromDate()"
+      [toDate]="chartToDate()"
+      [startMsUtc]="store.committedWindow()?.startMsUtc ?? null"
+      [endMsUtc]="store.committedWindow()?.endMsUtc ?? null"
+      [session]="store.draft().session"
+      [forwardFill]="store.draft().forwardFill"
+      [timeframe]="chartTimeframe()"
+      [adjusted]="store.draft().adjusted"
+      [chartIndicators]="store.indicators().map((i) => ({ name: i.canonicalKey, params: i.params }))"
+      [computeAllIndicators]="computeAllIndicators()"
+      (dataLoaded)="onChartDataLoaded($event)"
+      (timeframeRejected)="onChartTimeframeRejected($event)"
+    />
+  }
+</section>
+
+<section class="explore__quality" aria-label="Quality status">
+  <p class="explore__muted">{{ qualitySummary() }}</p>
+  @if (lastQuality()) {
+    <button type="button" (click)="qualityModalOpen.set(true)">View quality report</button>
+  }
+  @if (qualityModalOpen() && lastQuality(); as q) {
+    <app-quality-modal [quality]="q" (closed)="qualityModalOpen.set(false)" />
+  }
+</section>
+
+<section class="explore__news" aria-label="Headlines">
+  <h3 class="explore__news-head">
+    <button type="button" class="explore__news-toggle" (click)="toggleNews()" [attr.aria-expanded]="newsExpanded()">
+      Headlines for {{ chartTicker() || '—' }}
+    </button>
+    @if (newsExpanded()) {
+      <button type="button" (click)="refreshNews()" [disabled]="!hasCommittedScope()">Refresh</button>
+    }
+  </h3>
+  @if (newsExpanded()) {
+    @switch (newsState()) {
+      @case ('loading') {
+        <p class="explore__muted" role="status">Loading headlines…</p>
+      }
+      @case ('error') {
+        <p class="explore__news-error" role="alert">Could not load headlines: {{ newsError() }}</p>
+      }
+      @case ('rate-limited') {
+        <p class="explore__news-error" role="alert">{{ newsError() }}</p>
+      }
+      @case ('stale') {
+        <p class="explore__muted" role="status">Headlines out of date — refresh to reload.</p>
+      }
+      @default {
+        @if (newsHeadlines().length === 0) {
+          <p class="explore__muted">No headlines in this window.</p>
+        } @else {
+          <ul class="explore__news-list">
+            @for (article of newsHeadlines(); track article.id ?? article.title) {
+              <li class="explore__news-item">
+                @if (article.article_url) {
+                  <a [href]="article.article_url" target="_blank" rel="noopener">{{ article.title }}</a>
+                } @else {
+                  <span>{{ article.title }}</span>
+                }
+                <span class="explore__muted">
+                  <app-timestamp-display [value]="article.published_utc_ms ?? null" mode="local" />
+                  @if (article.publisher?.name) {
+                    · {{ article.publisher.name }}
+                  }
+                  @for (insight of article.insights ?? []; track insight.ticker) {
+                    @if (insight.ticker === chartTicker() && insight.sentiment) {
+                      · vendor sentiment: {{ insight.sentiment }} (Polygon-asserted)
+                    }
+                  }
+                </span>
+              </li>
+            }
+          </ul>
+        }
+      }
+    }
+    <a routerLink="/research-lab/market/news">View all</a>
+  }
+</section>

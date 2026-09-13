@@ -8,6 +8,26 @@
   </span>
 </div>
 
+<!-- Search (opt-in, PRD §9) -->
+@if (searchable()) {
+  <div class="ip-search">
+    <input #searchInput
+           class="ip-search-input"
+           type="search"
+           placeholder="Search indicators…"
+           aria-label="Search indicators"
+           [value]="searchQuery()"
+           (input)="onSearchInput($event)"
+           (keydown)="onSearchKeydown($event)" />
+    @if (hasSearch()) {
+      <button class="ip-search-clear" type="button" (click)="clearSearch()">
+        Clear search
+      </button>
+    }
+  </div>
+  <span class="ip-sr-only" role="status" aria-live="polite">{{ searchAnnouncement() }}</span>
+}
+
 @if (loading()) {
   <div class="ip-empty"><strong>Loading indicators…</strong></div>
 } @else {
@@ -66,11 +86,11 @@
     @if (totalVisible() === 0) {
       <div class="ip-empty">
         <strong>No indicators match these filters</strong>
-        Try removing a pane or category constraint.
-        @if (hasFilter()) {
+        Try removing a pane or category constraint, or clearing the search.
+        @if (hasFilter() || hasSearch()) {
           <br/>
-          <button class="ip-link" type="button" (click)="clearFilters()">
-            Clear all filters
+          <button class="ip-link" type="button" (click)="clearAll()">
+            Clear search and filters
           </button>
         }
       </div>
@@ -102,7 +122,9 @@
               @for (ind of group.indicators; track ind.name) {
                 @let active = activeCountFor(ind.name);
                 @let isHovered = hoveredName() === ind.name;
+                @let isActiveOption = activeOption()?.name === ind.name;
                 <div class="ip-row"
+                     [class.ip-row--active-option]="isActiveOption"
                      [attr.data-name]="ind.name"
                      [attr.data-active]="active > 0"
                      (mouseenter)="onRowEnter(ind)"

@@ -1,0 +1,114 @@
+<section class="validate__section" aria-labelledby="validate-compare-h">
+  <h2 id="validate-compare-h">Compare datasets</h2>
+  <p class="validate__muted">
+    Compare a pandas-ta export against a TradingView export. Files never leave this page
+    except as the validation request below.
+  </p>
+
+  <label class="validate__file">
+    <span>Our CSV (pandas-ta export)</span>
+    <input
+      type="file"
+      name="validate-our-csv"
+      accept=".csv"
+      (change)="onOurCsvSelected($event)"
+    />
+    @if (ourCsvFile(); as f) {
+      <span class="validate__filename">{{ f.name }}</span>
+    }
+  </label>
+
+  <label class="validate__file">
+    <span>TradingView CSV</span>
+    <input
+      type="file"
+      name="validate-tv-csv"
+      accept=".csv"
+      (change)="onTvCsvSelected($event)"
+    />
+    @if (tvCsvFile(); as f) {
+      <span class="validate__filename">{{ f.name }}</span>
+    }
+  </label>
+
+  <div class="validate__actions">
+    <button
+      type="button"
+      class="validate__primary"
+      (click)="runValidation()"
+      [disabled]="!canRunValidation()"
+    >
+      {{ loadingValidation() ? 'Validating…' : 'Run validation' }}
+    </button>
+    @if (validationReport()) {
+      <button type="button" (click)="downloadValidationReport()">Download report</button>
+    }
+  </div>
+
+  @if (validationError()) {
+    <p class="validate__error" role="alert">{{ validationError() }}</p>
+  }
+  @if (validationReport()) {
+    <div class="validate__report" role="region" aria-label="Validation report">
+      <pre class="validate__pre">{{ validationReport() }}</pre>
+    </div>
+  }
+</section>
+
+<details class="validate__disclosure">
+  <summary>Quality evidence</summary>
+  <p class="validate__muted">{{ qualityScopeSummary() }}</p>
+  <div class="validate__actions">
+    <button
+      type="button"
+      (click)="runQualityAnalysis()"
+      [disabled]="qualityLoading()"
+    >
+      {{ qualityLoading() ? 'Analyzing…' : 'Run quality analysis' }}
+    </button>
+    @if (qualityResult()) {
+      <button type="button" (click)="downloadQualityReport()">Download quality report</button>
+    }
+  </div>
+  @if (qualityError()) {
+    <p class="validate__error" role="alert">{{ qualityError() }}</p>
+  }
+  @if (qualityResult(); as q) {
+    <div class="validate__quality" role="region" aria-label="Quality summary">
+      <h3>{{ q.ticker }} · {{ q.from_date }} → {{ q.to_date }}</h3>
+      <div class="validate__table-wrap" role="region" aria-label="Quality metrics table" tabindex="0">
+        <table class="validate__table">
+          <thead>
+            <tr><th scope="col">Metric</th><th scope="col">Raw</th><th scope="col">Clean</th></tr>
+          </thead>
+          <tbody>
+            @for (row of qualityMetricRows(); track row.label) {
+              <tr>
+                <th scope="row">{{ row.label }}</th>
+                <td>{{ row.raw }}</td>
+                <td>{{ row.clean }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <h4>Pipeline steps</h4>
+      <ol class="validate__steps">
+        @for (step of q.steps; track step.order) {
+          <li>
+            <strong>{{ step.name }}</strong> ({{ step.library }}) —
+            {{ step.bars_before }} → {{ step.bars_after }} bars ({{ step.bars_removed }} removed)
+          </li>
+        }
+      </ol>
+    </div>
+  }
+</details>
+
+<details class="validate__disclosure">
+  <summary>Options past-chain inspection</summary>
+  <p class="validate__muted">
+    Past-chain inspection stays with the options companion on
+    <a routerLink="/data-lab/export">Build dataset</a> — open its options disclosure there.
+  </p>
+</details>

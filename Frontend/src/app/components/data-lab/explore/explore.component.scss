@@ -1,0 +1,237 @@
+// Data Lab Explore (PRD §7.3 / §8) — document scroll, no fixed rails.
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.explore__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.explore__primary {
+  background: $accent;
+  color: var(--text-on-accent);
+  border-color: $accent;
+  font-weight: 600;
+}
+
+.explore__ticker {
+  min-width: 0;
+}
+
+.explore__muted {
+  color: $text-secondary;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explore__stale {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+// ── Drawers ───────────────────────────────────────────────
+.explore__drawer {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+}
+
+.explore__drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+}
+
+.explore__drawer-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+  }
+}
+
+// ── Active-indicator chips ────────────────────────────────
+.explore__chips {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+}
+
+.explore__chips-toggle {
+  min-height: 44px;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+  background: $bg-surface;
+  color: $text-primary;
+  cursor: pointer;
+}
+
+.explore__chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.explore__chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+
+  button {
+    min-height: 44px;
+    padding: 0 0.6rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-sunken;
+    color: $text-primary;
+    cursor: pointer;
+  }
+}
+
+.explore__chip-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+// ── Chart canvas ──────────────────────────────────────────
+.explore__chart {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+}
+
+// ── Quality status row ────────────────────────────────────
+.explore__quality {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  p {
+    margin: 0;
+    min-width: 0;
+    flex: 1 1 16rem;
+  }
+
+  button {
+    min-height: 44px;
+    padding: 0 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+  }
+}
+
+// ── Headlines ─────────────────────────────────────────────
+.explore__news {
+  min-width: 0;
+  border-top: 1px solid $border-light;
+  padding-top: 0.5rem;
+}
+
+.explore__news-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.explore__news-toggle {
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: $text-primary;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: start;
+}
+
+.explore__news-error {
+  color: var(--bear);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explore__news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.explore__news-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+
+  a {
+    color: $accent-text;
+    overflow-wrap: anywhere;
+  }
+
+  span {
+    font-size: 0.8rem;
+  }
+}

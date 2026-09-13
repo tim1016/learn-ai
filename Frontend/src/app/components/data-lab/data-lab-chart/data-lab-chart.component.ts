@@ -213,6 +213,13 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   ticker = input.required<string>();
   fromDate = input.required<string>();
   toDate = input.required<string>();
+  /** Numeric int64 ms UTC window (PRD §12): when the parent owns a numeric
+   *  committed window, it flows through here so the wire body carries the
+   *  additive `start_ms_utc` / exclusive `end_ms_utc` authority fields
+   *  alongside the legacy date strings. Null for parents that only have
+   *  date-only intent. */
+  startMsUtc = input<number | null>(null);
+  endMsUtc = input<number | null>(null);
   session = input.required<string>();
   forwardFill = input.required<boolean>();
   timeframe = input.required<string>();
@@ -403,6 +410,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             ticker,
             from_date: fromDate,
             to_date: toDate,
+            // Numeric temporal authority (PRD §12) — additive, sent only
+            // when the parent supplied a numeric committed window.
+            ...(this.startMsUtc() !== null ? { start_ms_utc: this.startMsUtc() } : {}),
+            ...(this.endMsUtc() !== null ? { end_ms_utc: this.endMsUtc() } : {}),
             timeframe: this.timeframe(),
             session: this.session(),
             forward_fill: this.forwardFill(),

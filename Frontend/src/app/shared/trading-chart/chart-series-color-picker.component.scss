@@ -1,0 +1,55 @@
+/* Chart series color picker — accessible named swatch radio group.
+ * Scoped under .cscp-root (set via the component host class). */
+
+:host {
+  display: block;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+
+.cscp-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cscp-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 5px;
+  font: inherit;
+  font-size: var(--fs-xs, 0.72rem);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill, 9999px);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+  &:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* Selection is never color-only: checked outline + check glyph + label. */
+  &[aria-checked='true'] {
+    color: var(--text-primary);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+}
+
+.cscp-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.cscp-check {
+  font-size: 10px;
+  color: var(--text-primary);
+}

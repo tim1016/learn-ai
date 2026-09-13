@@ -41,6 +41,24 @@ $bear: #ef5350;  // was #e5334e — TV red
 $warn: #ff9800;  // was #f59e0b — TV warn
 $info: #29b6f6;  // TV info (new)
 
+// ── Chart series palette (PRD 2026-09-12 data-lab §10) ─────
+// Named, theme-owned series colors for indicator overlays and
+// sub-panel lines. Chart code stores token IDs only and resolves
+// var(--chart-series-*) at the chart boundary. Contrast verified
+// programmatically against $bg-surface #131722 (>= 3:1 WCAG
+// non-text contrast) by chart-series-color-tokens.spec.ts —
+// update both files together.
+$chart-series-blue:   #4d8dff;  // 5.6:1
+$chart-series-sky:    #29b6f6;  // 7.8:1
+$chart-series-teal:   #26c6da;  // 8.7:1
+$chart-series-green:  #26a69a;  // 6.0:1
+$chart-series-amber:  #f2ad3d;  // 9.2:1
+$chart-series-orange: #ff6d00;  // 6.3:1
+$chart-series-red:    #ef5350;  // 5.1:1
+$chart-series-pink:   #ec407a;  // 4.8:1
+$chart-series-purple: #ab47bc;  // 3.7:1
+$chart-series-violet: #a78bfa;  // 6.6:1
+
 // ── Data availability (green/amber/red days on disk) ───────
 $day-complete: $bull;
 $day-partial:  $warn;
@@ -115,6 +133,19 @@ $container-lg: 1400px;
   --day-partial:    #{$day-partial};
   --day-missing:    #{$day-missing};
   --day-hole:       #{$day-hole};
+
+  // Chart series palette (single TV-dark surface today; a future light theme
+  // re-registers the same token IDs against its own values)
+  --chart-series-blue:   #{$chart-series-blue};
+  --chart-series-sky:    #{$chart-series-sky};
+  --chart-series-teal:   #{$chart-series-teal};
+  --chart-series-green:  #{$chart-series-green};
+  --chart-series-amber:  #{$chart-series-amber};
+  --chart-series-orange: #{$chart-series-orange};
+  --chart-series-red:    #{$chart-series-red};
+  --chart-series-pink:   #{$chart-series-pink};
+  --chart-series-purple: #{$chart-series-purple};
+  --chart-series-violet: #{$chart-series-violet};
 
   // ITM / OTM / ATM (options chain)
   --itm-call-bg:    rgba(6, 78, 59, 0.45);
