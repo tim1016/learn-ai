@@ -603,12 +603,16 @@ def _route_paths_for_role(role: str) -> set[str]:
         "import json; from app.main import app; "
         "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
     )
+    # The child's cwd must be the service root: `python -c` puts the cwd at
+    # sys.path[0], and a tests/ cwd would shadow the stdlib `operator` module
+    # with tests/operator/ before the in-child scrub can remove it ('' does
+    # not end with '/tests').
     completed = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
         env=environment,
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=service_root,
     )
     assert completed.returncode == 0, completed.stderr[-2000:]
     return set(json.loads(completed.stdout.strip().splitlines()[-1]))
