@@ -100,16 +100,16 @@ def test_a_registered_migration_advances_the_version_and_preserves_rows(
     created = paper_profile(first)
     first.close()
 
-    monkeypatch.setattr(schema, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", 3)
     monkeypatch.setattr(
         schema,
         "SCHEMA_MIGRATIONS",
-        {1: ("ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",)},
+        {2: ("ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",)},
     )
 
     upgraded = ProfilesStore.open(clerk_dir=clerk_dir)
     try:
-        assert upgraded.schema_version == 2
+        assert upgraded.schema_version == 3
         assert upgraded.read_profile(created.profile.profile_id) is not None
     finally:
         upgraded.close()
@@ -117,7 +117,7 @@ def test_a_registered_migration_advances_the_version_and_preserves_rows(
     # Replaying the same open is a no-op, not a second ALTER.
     replayed = ProfilesStore.open(clerk_dir=clerk_dir)
     try:
-        assert replayed.schema_version == 2
+        assert replayed.schema_version == 3
         assert replayed.read_profile(created.profile.profile_id) is not None
     finally:
         replayed.close()
@@ -130,12 +130,12 @@ def test_a_partially_failing_migration_leaves_the_version_untouched(
     created = paper_profile(first)
     first.close()
 
-    monkeypatch.setattr(schema, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", 3)
     monkeypatch.setattr(
         schema,
         "SCHEMA_MIGRATIONS",
         {
-            1: (
+            2: (
                 "ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",
                 "ALTER TABLE table_that_does_not_exist ADD COLUMN nope TEXT",
             )

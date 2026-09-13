@@ -359,6 +359,23 @@ class FleetControlService:
         clerk = self._require_clerk(clerk_id)
         return self._verify_volume(clerk, volume_root)
 
+    def clerk_volume_expectation(self, clerk_id: str) -> dict[str, object]:
+        """The nonsecret marker facts an agent proves its mounted root against.
+
+        Served by the coordinator's internal surface so a remote agent can
+        run the volume gate locally — the coordinator never inspects an
+        agent-local path (audit 2026-09-13, finding 4).
+        """
+        clerk = self._require_clerk(clerk_id)
+        return {
+            "registry_id": self._store.registry_id,
+            "broker": clerk.broker,
+            "clerk_id": clerk.clerk_id,
+            "volume_id": clerk.volume_id,
+            "attestation_kind": clerk.volume_attestation_kind,
+            "attestation_id": clerk.volume_attestation_id,
+        }
+
     def _verify_volume(self, clerk: ClerkRecord, volume_root: Path) -> VolumeMarker:
         """Verify the mounted root against the clerk's registry identity."""
         marker = volume_module.verify_volume_identity(

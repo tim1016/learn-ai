@@ -66,13 +66,30 @@ def effective_acknowledged(
     account_id: str | None,
     at_ms: int,
 ) -> InstallationSelection:
-    """The worker bound a revision, after construction succeeded under its lease."""
+    """The worker bound a revision, after construction succeeded under its lease.
+
+    The binding generation advances by one exactly when this acknowledgement
+    changes the effective ``(profile, revision, account)`` tuple (D9, audit
+    2026-09-13 finding 9): stage, refused Apply, ordinary restart and an
+    Apply that re-acknowledges the same tuple leave it alone, and a change
+    away and back receives a new generation. The fleet's confirmed binding
+    observation carries this number; the selection transaction here is its
+    single authority.
+    """
+    acknowledged_tuple = (profile_id, revision, account_id)
+    previous_tuple = (
+        current.effective_profile_id,
+        current.effective_revision,
+        current.effective_account_id,
+    )
     return replace(
         current,
         apply_requested=False,
         apply_requested_at_ms=None,
         apply_requested_generation=None,
         selection_generation=current.selection_generation + 1,
+        effective_binding_generation=current.effective_binding_generation
+        + (1 if acknowledged_tuple != previous_tuple else 0),
         effective_profile_id=profile_id,
         effective_revision=revision,
         effective_account_id=account_id,

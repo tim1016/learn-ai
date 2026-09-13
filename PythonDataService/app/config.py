@@ -1,8 +1,58 @@
 """Application configuration loaded from environment variables"""
 
+from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class FleetSettings(BaseSettings):
+    """Fleet role and presence settings (ADR 0062, delivery A2).
+
+    ``FLEET_ROLE`` names this process's composition explicitly — the
+    ``combined`` default is the legacy/development compatibility posture
+    only, and a deployment that runs the fleet names its roles (ADR 0062
+    addendum). Once a volume is fleet-enrolled, a missing marker or fleet
+    configuration in a non-combined role is a startup refusal, never a
+    silent fallback to unfenced legacy authority.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="FLEET_",
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    ROLE: Literal["combined", "fleet_coordinator", "clerk_agent"] = "combined"
+    # The coordinator's own control volume root (registry lives under
+    # <control_dir>/fleet/registry.db). Required for fleet_coordinator and
+    # for a clerk_agent using local presence (single-host) instead of the
+    # internal HTTP surface.
+    CONTROL_DIR: Path | None = None
+    # The clerk agent's identities: the opaque clerk it serves, its durable
+    # worker key (presented at registration; never a transport credential),
+    # and the deployment-approved endpoint reference it cites.
+    CLERK_ID: str | None = None
+    WORKER_KEY: str | None = None
+    AGENT_ENDPOINT_REF: str | None = None
+    # The internal coordinator base URL for remote presence. When set, the
+    # agent registers over HTTP; when unset with a control dir, presence is
+    # local (one process, one host).
+    COORDINATOR_URL: str | None = None
+    # The agent→coordinator transport token (env-only, minted by the host
+    # ceremony; the coordinator holds the same value per clerk).
+    AGENT_SERVICE_TOKEN: str | None = None
+    # The coordinator's per-clerk agent token mapping, as JSON text —
+    # ``{"clrk_…": "svct_…"}``. Env-only credential material; never stored
+    # in a registry and never logged.
+    AGENT_SERVICE_TOKENS_JSON: str = ""
+    # The deployment namespace qualifying volume roots (audit 2026-09-13,
+    # finding 4).
+    DEPLOYMENT_NAMESPACE: str = "host:local"
+    # Heartbeat cadence; the registry's staleness window is 30 s.
+    HEARTBEAT_INTERVAL_S: float = 10.0
 
 
 class Settings(BaseSettings):
@@ -154,6 +204,7 @@ class Settings(BaseSettings):
     LEAN_LAUNCHER_TOKEN: str = ""
 
 settings = Settings()
+fleet_settings = FleetSettings()
 
 # The deterministic root UUID every pre-#1876 catalog row was backfilled with
 # (Backend migration AddDataRootIdToDataLakeArtifactsAndRuns) and the value

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -133,6 +133,12 @@ CREATE TABLE installation_selection (
     apply_requested_at_ms       INTEGER,
     apply_requested_generation  INTEGER,
     selection_generation        INTEGER NOT NULL CHECK (selection_generation >= 0),
+    -- D9 (audit 2026-09-13, finding 9): the clerk-local binding generation,
+    -- advanced by one exactly when an acknowledgement changes the effective
+    -- (profile, revision, account) tuple. Stage, refused Apply, ordinary
+    -- restart and an unchanged-tuple acknowledgement leave it alone.
+    effective_binding_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (effective_binding_generation >= 0),
     effective_profile_id        TEXT,
     effective_revision          INTEGER,
     effective_account_id        TEXT,
@@ -231,7 +237,18 @@ END;
 # ships with it (and is exercised by
 # ``tests/broker_configuration/test_schema_migration.py``) so the first real
 # upgrade is a table entry rather than a new mechanism designed under pressure.
-SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {}
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: (
+        # v1 -> v2 (fleet delivery A2): the D9 binding generation column.
+        # Additive only; existing rows keep generation 0 and the first
+        # acknowledgement that changes their tuple advances it.
+        (
+            "ALTER TABLE installation_selection ADD COLUMN "
+            "effective_binding_generation INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (effective_binding_generation >= 0)"
+        ),
+    ),
+}
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:

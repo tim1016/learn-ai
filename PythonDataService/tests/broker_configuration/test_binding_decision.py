@@ -30,6 +30,7 @@ def _selection(**overrides: object) -> InstallationSelection:
         "apply_requested_at_ms": None,
         "apply_requested_generation": None,
         "selection_generation": 7,
+        "effective_binding_generation": 0,
         "effective_profile_id": None,
         "effective_revision": None,
         "effective_account_id": None,

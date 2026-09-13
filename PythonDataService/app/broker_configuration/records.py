@@ -135,6 +135,7 @@ class InstallationSelection:
     apply_requested_at_ms: int | None
     apply_requested_generation: int | None
     selection_generation: int
+    effective_binding_generation: int
     effective_profile_id: str | None
     effective_revision: int | None
     effective_account_id: str | None
