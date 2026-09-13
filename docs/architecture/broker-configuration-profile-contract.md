@@ -269,11 +269,12 @@ Recorded from the lens/Paper-Live UX simplification (task `.agents/tasks/2026-09
 - Desk lifecycle copy/labels are used only while `desk_state.selection_generation` equals the adopted response's `selection_generation`. On mismatch the tracker renders "Refreshing / state unknown" and Stage/Apply writes are disabled until a newly adopted response agrees.
 - The browser may display or copy the restart command but never initiates a restart or arms Live trading (ADR 0060/0059 unchanged).
 
-### 9.4 Future clerk support (invariant, not implemented)
+### 9.4 Future clerk support (invariant; spine accepted by ADR 0062)
 
 - Clerk IDs are opaque and backend-issued. The frontend must never fabricate, default, or infer a clerk ID, and must never introduce a `?clerk=` query parameter or a second lens-style storage key for one.
 - Every clerk-scoped command must carry the explicit backend-issued ID; presentation-only context objects (e.g. a shared `DESK_CONTEXT`) may expose data already present in server responses and nothing else, and are never command authority.
 - Clerk is a **context/lane** dimension (which clerk's surface is in view). Trader/Operator remains the **lens** dimension. The two never merge.
+- The fleet spine these invariants anticipated is accepted by ADR 0062 and lands as `PythonDataService/app/broker/fleet/`. It changes nothing in this contract's storage or selection model: each clerk volume keeps its own profiles database and its own single-row installation selection, and ADR 0060's Apply semantics operate per clerk. The worker identity ADR 0060 Decision 5 deferred lives in the fleet registry (`worker_key`), not in any profiles table — this contract's "no `worker_id` column and no workers table" rule (§2) continues to describe the profiles database exactly.
 
 
 ## Integration enforcement (Package G)

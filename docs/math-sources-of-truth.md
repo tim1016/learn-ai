@@ -17,6 +17,14 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 ## Registry
 
+> **No-new-concept note — broker clerk fleet control plane (ADR 0062, Phase 1).**
+> `PythonDataService/app/broker/fleet/` introduces **no new math concept** and
+> therefore gains **no registry row**. It mints opaque identities, fences
+> broker-qualified account assignments, and records routing correlation — all
+> identity and bookkeeping, never a formula over market or account values. The
+> AGENTS.md "update both registries" rule is satisfied by the new row in
+> `docs/architecture/engine-authority-map.md` plus this explicit note.
+
 > **No-new-concept note — run-scoped replay proof (PRD #1753, Direction 2).** The
 > replay-proof engine path added by issues #1758–#1762
 > (`PythonDataService/app/services/run_replay_proof.py`) introduces **no new math
