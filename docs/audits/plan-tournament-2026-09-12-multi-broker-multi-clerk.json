@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-12T22:20:40.1347746-05:00",
+  "tournament_kind": "two_contestant_plan_tournament",
+  "task": {
+    "hash_sha256": "4b8445587a14fc5e50287094044e212635fabaf27189a98be87f3810837bfab9",
+    "hash_basis": "normalized final task packet",
+    "summary": "Plan a production multi-clerk control plane with distinct physical volumes, Alpaca Paper and Live first, and separate broker-specific clerk agents for future providers such as Tradier and Webull.",
+    "post_selection_delta": "The user required unique volumes per clerk and a broker-neutral fleet spine supporting distinct provider-owned clerk implementations; this was incorporated in the winning author's sole revision without restarting the tournament."
+  },
+  "repository": {
+    "plan_baseline": "a11b020ac030d4e459f0492dab32f1dca3664b43",
+    "prd_branch_base": "7aec52f7170ec4377322cabdb2b87b056e593fc5",
+    "unrelated_dirty_worktree_preserved": true
+  },
+  "contestants": [
+    {
+      "anonymous_label": "A",
+      "model": "GLM-5.3",
+      "provider": "Z.ai",
+      "effort": "Deep Think Max",
+      "plan_hash_sha256": "d68a8b8b70751e3cf708540098a1896d983fb2174f79298aa0adc175280f6996",
+      "hash_basis": "exact UTF-8 draft copied from the signed-in Z.ai session"
+    },
+    {
+      "anonymous_label": "B",
+      "model": "gpt-5.6-sol",
+      "provider": "native subagent",
+      "effort": "high",
+      "plan_hash_sha256": "ad391f476c072c59554896e5049bbc2601460f90375fc72c1fa7a567371b406e",
+      "hash_basis": "UTF-8 canonicalized winning draft supplied to the reviewer; the author's longer exact response bytes were unavailable"
+    }
+  ],
+  "rubric": {
+    "correctness_and_coverage": 40,
+    "dependencies": 25,
+    "feasibility": 15,
+    "verification": 10,
+    "simplicity_and_cost": 10
+  },
+  "matches": [
+    {
+      "plans": ["A", "B"],
+      "judge": "Codex tournament coordinator",
+      "winner": "B",
+      "scoreA": 69,
+      "scoreB": 89,
+      "category_scores": {
+        "A": {
+          "correctness_and_coverage": 28,
+          "dependencies": 17,
+          "feasibility": 10,
+          "verification": 8,
+          "simplicity_and_cost": 6
+        },
+        "B": {
+          "correctness_and_coverage": 37,
+          "dependencies": 23,
+          "feasibility": 13,
+          "verification": 9,
+          "simplicity_and_cost": 7
+        }
+      },
+      "rationale": "Plan B adds the durable broker-qualified account-assignment fence missing from Plan A, grounds the process split in current repository singletons, prevents automatic ownership release after liveness loss, and verifies routing and binding identity at coordinator and agent boundaries."
+    }
+  ],
+  "winner": {
+    "anonymous_label": "B",
+    "model": "gpt-5.6-sol",
+    "score": 89
+  },
+  "review": {
+    "reviewer": "GLM-5.3 Deep Think Max",
+    "review_hash_sha256": "1916c791de1c3541892129c4a4ae156938d51685c642bfce645f69d116a4bf8c",
+    "result": "NO MATERIAL BLOCKERS"
+  },
+  "revision": {
+    "count": 1,
+    "final_plan_hash_sha256": "645f8aad5b86ee13287fbd8792603792082202ce1d0da947ad0fc53c0a4dd624",
+    "hash_basis": "canonical final decision-set digest; exact response bytes were not retained",
+    "incorporated_unique_volume_requirement": true,
+    "incorporated_broker_specific_clerk_requirement": true
+  },
+  "losing_plan_contents_retained": false
+}
