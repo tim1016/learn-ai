@@ -60,6 +60,51 @@ def test_init_provision_verify_show_and_retire_round_trip(
     clerk_id = provisioned["clerk_id"]
     assert clerk_id.startswith("clrk_")
     assert provisioned["worker_key"].startswith("wkrk_")
+    # The two transport tokens are minted once for the operator's environment
+    # files and stored nowhere (audit 2026-09-13, finding 3).
+    assert provisioned["agent_service_token"].startswith("svct_")
+    assert provisioned["coordinator_service_token"].startswith("svct_")
+    assert provisioned["agent_service_token"] != provisioned["coordinator_service_token"]
+
+    # Endpoint approval is a host ceremony the registration later cites.
+    assert (
+        main(
+            _argv(
+                "approve-endpoint",
+                "--control-dir",
+                str(control_dir),
+                "--clerk-id",
+                clerk_id,
+                "--endpoint-ref",
+                "agent:paper-1",
+                "--base-url",
+                "http://alpaca-paper-clerk:8000/",
+            )
+        )
+        == 0
+    )
+    approved = json.loads(capsys.readouterr().out)
+    assert approved["endpoint_ref"] == "agent:paper-1"
+    assert approved["base_url"] == "http://alpaca-paper-clerk:8000"
+
+    # Rotation mints a fresh token without touching the registry.
+    assert (
+        main(
+            _argv(
+                "rotate-credentials",
+                "--control-dir",
+                str(control_dir),
+                "--clerk-id",
+                clerk_id,
+                "--slot",
+                "agent",
+            )
+        )
+        == 0
+    )
+    rotated = json.loads(capsys.readouterr().out)
+    assert rotated["service_token"].startswith("svct_")
+    assert rotated["service_token"] != provisioned["agent_service_token"]
 
     assert (
         main(

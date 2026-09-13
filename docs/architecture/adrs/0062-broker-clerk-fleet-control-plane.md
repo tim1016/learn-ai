@@ -96,3 +96,75 @@ The fleet spine and fake-provider conformance land first (this ADR plus `app/bro
 - ADR 0059 — arming and envelope semantics, retained per clerk.
 - ADR 0035 / ADR 0037 — custody authority, unchanged.
 - `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)" — domain terminology.
+
+## Addendum — protocol hardening accepted 2026-09-13 (delivery A1)
+
+The adversarial review recorded in
+[`docs/design/2026-09-13-clerk-fleet-delivery-review.md`](../../design/2026-09-13-clerk-fleet-delivery-review.md)
+reproduced four admission gaps in the spine as first delivered and required
+protocol clarifications before any production wiring. Delivery A1 (fleet
+protocol hardening) accepts those clarifications into this ADR's contract;
+the PRD's requirements are unchanged, and nothing in this addendum
+supersedes the decisions above.
+
+1. **Observed facts never confirm anything.** Session rows carry heartbeat
+   observations only. The coordinator's *confirmed binding observation* —
+   generation, effective tuple, confirming instance and epoch — lives on the
+   assignment row, is written by `confirm_assignment` inside one transaction
+   that compares the current session's instance and epoch, refuses
+   generations lower than the confirmed one, and is the only routing fence
+   for execution operations. A heartbeat carrying plausible binding facts
+   leaves execution routing closed and the directory projecting at most
+   `starting`. Same-owner reservation resume is defined: re-reserving an
+   account the clerk already holds — reserved or effective — returns the row
+   with its confirmed facts untouched.
+2. **The four generations stay separate.** Selection generation fences
+   configuration edits; binding generation changes only when the effective
+   `(profile, revision, account)` tuple changes; routing epoch changes on
+   process registration; assignment generation changes ownership history.
+   None substitutes for another.
+3. **Readiness is per operation, not per lane.** The provider operation
+   catalog declares each operation `configuration_access` or `execution`.
+   Configuration surfaces stay routable for a provisioned lane whose binding
+   is missing or broken, so the operator can reach the repair path;
+   execution operations require the confirmed effective account and binding
+   generation plus every provider gate.
+4. **One typed operation catalog is the contract.** Providers declare
+   operations — method, public and agent path templates, capability,
+   readiness, account requirement, idempotency kind, stream kind, schema
+   references — and the coordinator allowlist, agent mounts, exported
+   OpenAPI and generated frontend builders derive from that single source.
+   Registration carries the agent's fleet protocol version and adapter
+   build; incompatible versions refuse explicitly.
+5. **Transport credentials are not durable identity.** The `worker_key`
+   stays stored registry identity and never authenticates a transport. Each
+   clerk gets two environment-only service tokens (agent→coordinator,
+   coordinator→agent), minted by the host ceremony, persisted only in the
+   operator's uncommitted environment files, never stored in any registry,
+   receipt or log, and rotatable by ceremony without touching the registry.
+6. **Volume and endpoint evidence is deployment-qualified.** Root
+   comparisons are scoped to a deployment namespace, because equal path
+   strings in two containers are two mounts. Approved endpoints are
+   deployment-owned rows: a registration cites an approved reference and can
+   never change where it points; re-targeting is a host ceremony. Internal
+   clients refuse redirects and environment-proxy inheritance.
+7. **Routing attempts pin before dispatch and never erase success.** An
+   attempt's context — epoch, binding generation, instance, nonsecret
+   target — is persisted `not_dispatched` before delivery. Outcomes are
+   `provider_refused`, `delivered` (with the provider's durable receipt
+   reference; terminal) or `outcome_unknown` (reconcile by identity, never
+   auto-resubmit). A delivered outcome can never be downgraded, and dispatch
+   is one-way. The provider clerk remains the sole deduplication and outcome
+   authority.
+8. **Reported lane summaries are bounded typed observations.** An agent may
+   report `endpoint_mode` (closed vocabulary), `authority_state` (bounded
+   snake-case) and a short detail line; anything else refuses at ingestion.
+
+Schema v2 carries these fences (confirmed columns, deployment namespace,
+approved endpoints, pinned attempt context with delivered-terminal and
+dispatch-monotonic triggers) behind a registered, row-preserving v1→v2
+migration. The registry remains custody-free. Registry backup restore
+remains a safety event — routing and assignment creation stay closed until a
+host reconciliation ceremony compares durable lane evidence — and clerk-side
+confirmation evidence plus the resumable migration ledger land with the A2
+lane delivery, as the audit's delivery sequence requires.

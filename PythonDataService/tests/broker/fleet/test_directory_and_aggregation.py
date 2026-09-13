@@ -35,7 +35,7 @@ _ALLOWED_DIRECTORY_FIELDS = {
 def _live(fleet_service, tmp_path: Path, broker: str, label: str):
     """Provision, register, reserve and confirm one lane so it projects ready."""
     lane = provision_lane(fleet_service, broker=broker, label=label, tmp_path=tmp_path)
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker=broker, clerk_id=lane.clerk_id, external_account_id=f"acct-{label}"
     )
@@ -44,6 +44,8 @@ def _live(fleet_service, tmp_path: Path, broker: str, label: str):
         clerk_id=lane.clerk_id,
         external_account_id=f"acct-{label}",
         binding_generation=3,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
     )
     return lane
 
@@ -102,11 +104,13 @@ def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
 def test_lifecycle_projects_from_observations_not_stored_flags(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """FR-081: a historical acknowledgement never presents as current liveness."""
+    """FR-081 + audit 2026-09-13 finding 1: a historical acknowledgement never
+    presents as current liveness, and a heartbeat alone never presents as a
+    confirmed binding."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="projecting", tmp_path=control_dir.parent
     )
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
 
     def entry() -> dict:
         """The directory entry for the projecting clerk, re-read per assertion."""
@@ -114,15 +118,35 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
             e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
         )
 
-    assert entry()["lifecycle_state"] == "starting"  # session, no binding acknowledged
+    assert entry()["lifecycle_state"] == "starting"  # session, nothing confirmed
 
+    # A heartbeat carrying plausible binding facts proves nothing: without a
+    # confirmed assignment the lane still projects starting.
     fleet_service.observe_session(
         clerk_id=lane.clerk_id,
         agent_instance_id=fleet_service._store.read_session(lane.clerk_id).agent_instance_id,
         reported_binding_generation=1,
         reported_state="binding_confirmed",
     )
+    assert entry()["lifecycle_state"] == "starting"
+    assert entry()["effective_binding_generation"] is None
+
+    # The confirmed assignment is what projects ready, with its generation.
+    session = fleet_service._store.read_session(lane.clerk_id)
+    assert session is not None
+    fleet_service.reserve_assignment(
+        broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-projecting"
+    )
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-projecting",
+        binding_generation=1,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
     assert entry()["lifecycle_state"] == "ready"
+    assert entry()["effective_binding_generation"] == 1
 
     fleet_service.observe_session(
         clerk_id=lane.clerk_id,
@@ -191,3 +215,45 @@ def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
     assert lanes[1]["ok"] is False
     assert lanes[1]["broker"] == "fake_beta"
     assert lanes[1]["error_reason"] == "clerk_unreachable"
+
+
+def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
+    control_dir: Path, fleet_service
+) -> None:
+    """Regression (independent review): a corrupted multi-assignment state is
+    surfaced — degraded lifecycle, flagged observation — never silently
+    first-row-projected, and execution routing refuses it."""
+    from app.broker.fleet.errors import ClerkIdentityMismatch
+    from app.broker.fleet.records import AssignmentState
+    from app.broker.fleet.service import OperationReadiness
+
+    lane = _live(fleet_service, control_dir.parent, "fake_alpha", "anomalous")
+    # Corrupt the registry directly: a second effective assignment for the
+    # same clerk is a state only a broken writer could produce.
+    with fleet_service._store.transaction() as conn:
+        conn.execute(
+            "INSERT INTO account_assignments (broker, canonical_external_account_id, "
+            "clerk_id, assignment_generation, state, confirmed_binding_generation, "
+            "confirmed_at_ms, recorded_at_ms, updated_at_ms) VALUES "
+            "('fake_alpha', 'ACCT-SHADOW', ?, 1, 'effective', 9, 1, 1, 1)",
+            (lane.clerk_id,),
+        )
+    entry = next(
+        e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
+    )
+    assert entry["lifecycle_state"] == "degraded"
+    assert fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-ANOMALOUS"
+    ).state == AssignmentState.EFFECTIVE
+    with pytest.raises(ClerkIdentityMismatch, match="effective assignments"):
+        fleet_service.resolve_route(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            readiness=OperationReadiness.EXECUTION,
+        )
+    # Configuration access still routes: the repair path stays reachable.
+    fleet_service.resolve_route(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        readiness=OperationReadiness.CONFIGURATION_ACCESS,
+    )

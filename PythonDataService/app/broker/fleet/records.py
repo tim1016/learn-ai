@@ -3,11 +3,19 @@
 Frozen dataclasses only. Every timestamp is ``int64 ms UTC`` (ADR 0022); no
 record carries a credential value, fragment, length, environment name or
 secret-derived hash. ``worker_key`` is durable registry identity and never
-appears in a public projection (PRD FR-012).
+appears in a public projection (PRD FR-012), and — since the 2026-09-13
+audit — it is never a transport credential either.
+
+Schema v2 separates *observed* facts (heartbeats, session rows) from the
+*confirmed* binding observation the coordinator keeps on the assignment row:
+the confirmed columns are the routing fence, and only a confirming worker
+fenced by its instance and epoch can move them.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -52,9 +60,95 @@ class AssignmentState(StrEnum):
 
 
 class RoutingReceiptState(StrEnum):
+    """The four-way outcome vocabulary of one routing attempt.
+
+    ``not_dispatched`` is provably un-sent; ``provider_refused`` is a
+    definitive provider refusal; ``delivered`` carries the provider's durable
+    receipt reference and is terminal; ``outcome_unknown`` means the attempt
+    may have executed and must be reconciled by identity, never resubmitted
+    blindly (audit 2026-09-13, finding 7).
+    """
+
+    NOT_DISPATCHED = "not_dispatched"
+    PROVIDER_REFUSED = "provider_refused"
     DELIVERED = "delivered"
-    FAILED = "failed"
     OUTCOME_UNKNOWN = "outcome_unknown"
+
+
+class SummaryEndpointMode(StrEnum):
+    """The closed endpoint-mode vocabulary of a lane summary observation."""
+
+    PAPER = "paper"
+    LIVE = "live"
+    UNIDENTIFIED = "unidentified"
+
+
+_AUTHORITY_STATE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_DETAIL_MAX_CHARS = 200
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSummaryObservation:
+    """The bounded, typed summary an agent may report about its lane.
+
+    Provider-authored, but never arbitrary agent JSON (audit 2026-09-13,
+    finding 6): the endpoint mode comes from a closed vocabulary, the
+    authority state matches a bounded snake-case pattern, and the detail line
+    is length-capped prose. The provider adapter authors the public
+    ``provider_summary`` projection from this observation plus registry facts.
+    """
+
+    endpoint_mode: SummaryEndpointMode
+    authority_state: str
+    detail: str | None = None
+
+    def to_json(self) -> str:
+        """The strict storage encoding for the session row."""
+        payload: dict[str, str] = {
+            "endpoint_mode": str(self.endpoint_mode),
+            "authority_state": self.authority_state,
+        }
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def parse(cls, raw: object) -> ProviderSummaryObservation | None:
+        """Parse stored or reported JSON into the typed observation.
+
+        Returns ``None`` for ``None``; raises ``ValueError`` for anything that
+        is present but not a valid bounded observation, so ingestion can
+        refuse agent-authored free-form JSON instead of projecting it.
+        """
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"a lane summary must be valid JSON: {exc}") from exc
+        elif isinstance(raw, Mapping):
+            payload = dict(raw)
+        else:
+            raise ValueError("a lane summary must be a JSON object")
+        if set(payload) - {"endpoint_mode", "authority_state", "detail"}:
+            raise ValueError("a lane summary carries only endpoint_mode, authority_state and detail")
+        mode = payload.get("endpoint_mode")
+        if mode not in tuple(item.value for item in SummaryEndpointMode):
+            raise ValueError(f"unknown endpoint_mode {mode!r}")
+        authority = payload.get("authority_state")
+        if not isinstance(authority, str) or _AUTHORITY_STATE_PATTERN.fullmatch(authority) is None:
+            raise ValueError(f"authority_state {authority!r} is not a bounded snake-case token")
+        detail = payload.get("detail")
+        if detail is not None and (
+            not isinstance(detail, str) or len(detail) > _DETAIL_MAX_CHARS
+        ):
+            raise ValueError("summary detail must be a short string")
+        return cls(
+            endpoint_mode=SummaryEndpointMode(mode),
+            authority_state=authority,
+            detail=detail,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +159,7 @@ class ClerkRecord:
     display_label: str
     volume_id: str
     volume_root: str
+    deployment_namespace: str
     volume_attestation_kind: str
     volume_attestation_id: str
     lifecycle_state: StoredLifecycleState
@@ -83,6 +178,9 @@ class ClerkSessionRecord:
     reported_binding_generation: int | None = None
     reported_account_id: str | None = None
     reported_state: str | None = None
+    endpoint_ref: str | None = None
+    adapter_version: str | None = None
+    reported_summary_json: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +192,12 @@ class AccountAssignmentRecord:
     state: AssignmentState
     effective_profile_id: str | None = None
     effective_revision: int | None = None
+    confirmed_binding_generation: int | None = None
+    confirmed_profile_id: str | None = None
+    confirmed_revision: int | None = None
+    confirmed_at_ms: int | None = None
+    confirmed_agent_instance_id: str | None = None
+    confirmed_routing_epoch: int | None = None
     recorded_at_ms: int = 0
     updated_at_ms: int = 0
 
@@ -108,8 +212,28 @@ class RoutingReceiptRecord:
     idempotency_key: str
     state: RoutingReceiptState
     upstream_receipt_ref: str | None = None
+    pinned_routing_epoch: int | None = None
+    pinned_binding_generation: int | None = None
+    pinned_agent_instance_id: str | None = None
+    dispatched_at_ms: int | None = None
     created_at_ms: int = 0
     updated_at_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEndpointRecord:
+    """One deployment-owned internal destination for a clerk's agent.
+
+    Nonsecret placement data, written only by the host ceremony; a session
+    registration may cite ``endpoint_ref`` but can never change what it
+    points at (audit 2026-09-13, finding 4).
+    """
+
+    endpoint_ref: str
+    clerk_id: str
+    base_url: str
+    created_at_ms: int
+    updated_at_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +277,7 @@ class ClerkDescriptor:
     observed_at_ms: int
 
     def public_fields(self) -> dict[str, object]:
-        """The wire shape; ``provider_summary`` is provider-authored and opaque."""
+        """The wire shape; ``provider_summary`` is provider-authored and typed."""
         return {
             "broker": self.broker,
             "clerk_id": self.clerk_id,
@@ -171,13 +295,16 @@ class ClerkDescriptor:
 
 __all__ = [
     "AccountAssignmentRecord",
+    "ApprovedEndpointRecord",
     "AssignmentState",
     "ClerkDescriptor",
     "ClerkLifecycleState",
     "ClerkRecord",
     "ClerkSessionRecord",
+    "ProviderSummaryObservation",
     "RoutingReceiptRecord",
     "RoutingReceiptState",
     "StoredLifecycleState",
+    "SummaryEndpointMode",
     "VolumeMarker",
 ]

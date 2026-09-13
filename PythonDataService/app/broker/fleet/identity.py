@@ -18,6 +18,7 @@ _VOLUME_ID = re.compile(r"^vol_[0-9a-f]{24}$")
 _WORKER_KEY = re.compile(r"^wkrk_[0-9a-f]{32}$")
 _AGENT_INSTANCE_ID = re.compile(r"^agnt_[0-9a-f]{24}$")
 _CORRELATION_ID = re.compile(r"^corr_[0-9a-f]{24}$")
+_SERVICE_TOKEN = re.compile(r"^svct_[0-9a-f]{32}$")
 
 
 def new_clerk_id() -> str:
@@ -50,6 +51,18 @@ def new_correlation_id() -> str:
     return f"corr_{secrets.token_hex(12)}"
 
 
+def new_service_token() -> str:
+    """A fresh environment-only internal service token (audit 2026-09-13, finding 3).
+
+    Transport credential, never durable identity: the value is minted by a
+    host ceremony, persisted only in the operator's uncommitted environment
+    files on both ends, and never stored in a registry, receipt or log. The
+    ``worker_key`` stays the stored durable identity and is never used to
+    authenticate a transport.
+    """
+    return f"svct_{secrets.token_hex(16)}"
+
+
 def is_clerk_id(value: object) -> bool:
     """Whether the value is a well-formed opaque clerk identity."""
     return isinstance(value, str) and _CLERK_ID.fullmatch(value) is not None
@@ -75,15 +88,22 @@ def is_correlation_id(value: object) -> bool:
     return isinstance(value, str) and _CORRELATION_ID.fullmatch(value) is not None
 
 
+def is_service_token(value: object) -> bool:
+    """Whether the value is a well-formed internal service token."""
+    return isinstance(value, str) and _SERVICE_TOKEN.fullmatch(value) is not None
+
+
 __all__ = [
     "is_agent_instance_id",
     "is_clerk_id",
     "is_correlation_id",
+    "is_service_token",
     "is_volume_id",
     "is_worker_key",
     "new_agent_instance_id",
     "new_clerk_id",
     "new_correlation_id",
+    "new_service_token",
     "new_volume_id",
     "new_worker_key",
 ]

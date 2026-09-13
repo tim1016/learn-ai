@@ -39,6 +39,7 @@ import sys
 from pathlib import Path
 
 from app.broker.fleet.errors import FleetControlError, FleetRegistryUnavailable
+from app.broker.fleet.identity import new_service_token
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from scripts._operator_cli import jsonable
@@ -82,19 +83,68 @@ def _provision(args: argparse.Namespace) -> int:
             display_label=args.label,
             volume_root=Path(args.volume_root),
             attestation_id=args.attestation_id,
+            deployment_namespace=args.deployment_namespace,
         )
         _write(
             {
                 "clerk_id": provisioned.clerk.clerk_id,
                 "broker": provisioned.clerk.broker,
                 "volume_id": provisioned.clerk.volume_id,
+                "deployment_namespace": provisioned.clerk.deployment_namespace,
                 "worker_key": provisioned.clerk.worker_key,
+                "agent_service_token": provisioned.agent_service_token,
+                "coordinator_service_token": provisioned.coordinator_service_token,
                 "attestation": (
                     provisioned.clerk.volume_attestation_kind,
                     provisioned.clerk.volume_attestation_id,
                 ),
-                "note": "Hand the worker key to exactly one agent process; it "
-                "never crosses an API.",
+                "note": "Persist the worker key and the two service tokens in the "
+                "operator's uncommitted environment files now: the tokens are "
+                "minted once, stored nowhere, and re-running never reprints them.",
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _rotate_credentials(args: argparse.Namespace) -> int:
+    """Handle ``rotate-credentials``: mint one fresh transport token."""
+    service = _service(args)
+    try:
+        descriptor = service.describe_clerk(args.clerk_id)
+        token = new_service_token()
+        _write(
+            {
+                "clerk_id": args.clerk_id,
+                "broker": descriptor.broker,
+                "slot": args.slot,
+                "service_token": token,
+                "note": "The registry stores no credential; copy this token into the "
+                "operator's uncommitted environment file for the serving side and "
+                "restart both processes.",
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _approve_endpoint(args: argparse.Namespace) -> int:
+    """Handle ``approve-endpoint``: approve or re-target an agent destination."""
+    service = _service(args)
+    try:
+        record = service.approve_endpoint(
+            clerk_id=args.clerk_id,
+            endpoint_ref=args.endpoint_ref,
+            base_url=args.base_url,
+        )
+        _write(
+            {
+                "clerk_id": record.clerk_id,
+                "endpoint_ref": record.endpoint_ref,
+                "base_url": record.base_url,
+                "updated_at_ms": record.updated_at_ms,
             }
         )
     finally:
@@ -185,7 +235,42 @@ def _build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--label", required=True)
     provision.add_argument("--volume-root", required=True, help="Mounted volume root for the clerk")
     provision.add_argument("--attestation-id", default=None, help="Nonsecret mount attestation")
+    provision.add_argument(
+        "--deployment-namespace",
+        default="host:local",
+        help="Deployment namespace qualifying volume roots (for example compose:prod)",
+    )
     provision.set_defaults(func=_provision)
+
+    rotate = subparsers.add_parser(
+        "rotate-credentials",
+        help="Mint one fresh environment-only transport token for a clerk",
+    )
+    _with_control(rotate)
+    rotate.add_argument("--clerk-id", required=True)
+    rotate.add_argument(
+        "--slot",
+        required=True,
+        choices=("agent", "coordinator"),
+        help="Which transport direction the token authenticates",
+    )
+    rotate.set_defaults(func=_rotate_credentials)
+
+    approve = subparsers.add_parser(
+        "approve-endpoint",
+        help="Approve or re-target one clerk's internal agent destination",
+    )
+    _with_control(approve)
+    approve.add_argument("--clerk-id", required=True)
+    approve.add_argument(
+        "--endpoint-ref", required=True, help="Stable reference registrations cite"
+    )
+    approve.add_argument(
+        "--base-url",
+        required=True,
+        help="Internal destination, for example http://alpaca-paper-clerk:8000",
+    )
+    approve.set_defaults(func=_approve_endpoint)
 
     verify = subparsers.add_parser("verify", help="Re-run the volume identity gate")
     _with_control(verify)

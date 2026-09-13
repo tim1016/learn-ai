@@ -20,6 +20,7 @@ _ALLOWED_TABLES = {
     "clerks",
     "clerk_sessions",
     "clerk_session_history",
+    "approved_endpoints",
     "account_assignments",
     "account_assignment_history",
     "routing_receipts",

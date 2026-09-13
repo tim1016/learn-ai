@@ -1,0 +1,247 @@
+"""The registered v1 → v2 registry migration (audit 2026-09-13).
+
+A v1 registry — the only shape the pre-hardening spine ever wrote, and one
+that exists in no production deployment — must upgrade to v2 inside one
+transaction, preserving every clerk, session, assignment and receipt row,
+mapping the old ``failed`` receipt outcome to ``provider_refused``, and
+installing the confirmed/namespace/endpoint fences the hardened protocol
+expects.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from app.broker.fleet import schema
+from app.broker.fleet.store import FleetRegistryStore, registry_database_path
+
+
+def _build_v1_registry(control_dir: Path) -> None:
+    """Materialize a populated v1 registry exactly as the old spine wrote it."""
+    db_path = registry_database_path(control_dir)
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.executescript(schema.SCHEMA_DDL_V1)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO fleet_meta (id, schema_version, registry_id, created_at_ms, "
+            "updated_at_ms) VALUES (1, 1, 'fltr_legacy0000000000000000', 1, 1)"
+        )
+        conn.execute(
+            "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
+            "volume_root, volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+            "created_at_ms, retired_at_ms) VALUES "
+            "('clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 'fake_alpha', 'wkrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "'legacy', 'vol_aaaaaaaaaaaaaaaaaaaaaaaa', '/volumes/legacy', "
+            "'compose_named_volume', 'learn-ai-legacy', 'provisioned', 10, NULL)"
+        )
+        conn.execute(
+            "INSERT INTO clerk_sessions (clerk_id, broker, agent_instance_id, routing_epoch, "
+            "started_at_ms, last_seen_at_ms, reported_binding_generation, reported_account_id, "
+            "reported_state) VALUES ('clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 'fake_alpha', "
+            "'agnt_aaaaaaaaaaaaaaaaaaaaaaaa', 4, 20, 30, 2, 'ACCT-LEGACY', 'binding_confirmed')"
+        )
+        conn.execute(
+            "INSERT INTO account_assignments (broker, canonical_external_account_id, clerk_id, "
+            "assignment_generation, state, effective_profile_id, effective_revision, "
+            "recorded_at_ms, updated_at_ms) VALUES ('fake_alpha', 'ACCT-LEGACY', "
+            "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 2, 'effective', 'prof_1', 3, 40, 50)"
+        )
+        conn.execute(
+            "INSERT INTO routing_receipts (correlation_id, broker, clerk_id, operation_kind, "
+            "nonsecret_target_ref, idempotency_key, state, upstream_receipt_ref, created_at_ms, "
+            "updated_at_ms) VALUES ('corr_aaaaaaaaaaaaaaaaaaaaaaaa', 'fake_alpha', "
+            "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 'bot_action', 'strategy/sid-1', 'key-1', "
+            "'delivered', 'upstream/1', 60, 61)"
+        )
+        conn.execute(
+            "INSERT INTO routing_receipts (correlation_id, broker, clerk_id, operation_kind, "
+            "nonsecret_target_ref, idempotency_key, state, upstream_receipt_ref, created_at_ms, "
+            "updated_at_ms) VALUES ('corr_bbbbbbbbbbbbbbbbbbbbbbbb', 'fake_alpha', "
+            "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 'bot_action', 'strategy/sid-2', 'key-2', "
+            "'failed', NULL, 62, 63)"
+        )
+        conn.execute(
+            "INSERT INTO routing_receipts (correlation_id, broker, clerk_id, operation_kind, "
+            "nonsecret_target_ref, idempotency_key, state, upstream_receipt_ref, created_at_ms, "
+            "updated_at_ms) VALUES ('corr_cccccccccccccccccccccccc', 'fake_alpha', "
+            "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 'bot_action', 'strategy/sid-3', 'key-3', "
+            "'outcome_unknown', NULL, 64, 65)"
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
+def test_a_v1_registry_migrates_preserving_every_row(control_dir: Path) -> None:
+    """The registered migration upgrades v1 to v2 with no row lost or weakened."""
+    _build_v1_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION
+
+        clerk = store.read_clerk("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert clerk is not None
+        assert clerk.deployment_namespace == "host:local"
+
+        session = store.read_session("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert session is not None
+        assert session.routing_epoch == 4
+        assert session.reported_binding_generation == 2
+        assert session.endpoint_ref is None
+
+        assignment = store.read_assignment(
+            broker="fake_alpha", canonical_account_id="ACCT-LEGACY"
+        )
+        assert assignment is not None
+        assert assignment.state.value == "effective"
+        # The confirmed observation starts empty: pre-v2 evidence was
+        # observed, not confirmed, and the hardened protocol re-confirms.
+        assert assignment.confirmed_binding_generation is None
+
+        receipts = {
+            receipt.idempotency_key: receipt
+            for receipt in store.list_routing_receipts()
+        }
+        assert set(receipts) == {"key-1", "key-2", "key-3"}
+        assert receipts["key-1"].state.value == "delivered"
+        assert receipts["key-1"].upstream_receipt_ref == "upstream/1"
+        # 'failed' maps to the definitive provider refusal; pre-v2 receipts
+        # count as dispatched at their last update.
+        assert receipts["key-2"].state.value == "provider_refused"
+        assert receipts["key-2"].dispatched_at_ms == 63
+        assert receipts["key-3"].state.value == "outcome_unknown"
+        for receipt in receipts.values():
+            assert receipt.pinned_routing_epoch is None
+
+        # The v2 fences are live on the migrated registry.
+        with pytest.raises(sqlite3.IntegrityError, match="pinned context"), store.transaction() as conn:
+            conn.execute(
+                "UPDATE routing_receipts SET pinned_binding_generation = 9 "
+                "WHERE correlation_id = 'corr_aaaaaaaaaaaaaaaaaaaaaaaa'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="never downgraded"), store.transaction() as conn:
+            conn.execute(
+                "UPDATE routing_receipts SET state = 'outcome_unknown' "
+                "WHERE correlation_id = 'corr_aaaaaaaaaaaaaaaaaaaaaaaa'"
+            )
+    finally:
+        store.close()
+
+
+def test_the_migration_is_idempotent_and_reopening_changes_nothing(
+    control_dir: Path,
+) -> None:
+    """Reopening a migrated registry neither re-migrates nor disturbs rows."""
+    _build_v1_registry(control_dir)
+    first = FleetRegistryStore.open(control_dir=control_dir)
+    registry_id = first.registry_id
+    first.close()
+    second = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert second.schema_version == schema.SCHEMA_VERSION
+        assert second.registry_id == registry_id
+    finally:
+        second.close()
+
+
+def test_an_incomplete_v1_schema_without_a_registered_path_refuses(
+    tmp_path: Path,
+) -> None:
+    """A schema version with no registered upgrade path refuses, never guesses."""
+    db_path = registry_database_path(tmp_path)
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.executescript(schema.SCHEMA_DDL_V1)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO fleet_meta (id, schema_version, registry_id, created_at_ms, "
+            "updated_at_ms) VALUES (1, 1, 'fltr_legacy0000000000000000', 1, 1)"
+        )
+        conn.execute("COMMIT")
+        # Amputate one of the v1 tables: the registered migration assumes the
+        # full v1 shape, and a registry that is not really v1 must refuse
+        # rather than produce a broken v2.
+        conn.execute("DROP TABLE routing_receipts")
+    finally:
+        conn.close()
+    from app.broker.fleet.errors import FleetRegistryUnavailable
+
+    try:
+        FleetRegistryStore.open(control_dir=tmp_path)
+    except FleetRegistryUnavailable:
+        return
+    except sqlite3.Error:
+        return  # a hard SQL refusal is equally fail-closed
+    raise AssertionError("an amputated v1 registry must refuse to open")
+
+
+def test_a_migrated_registry_carries_the_fresh_v2_fences(control_dir: Path, tmp_path: Path) -> None:
+    """Regression (independent review): the migration converges on the v2
+    schema — the no-delete trigger exists, delivered is terminal, and the
+    attestation uniqueness is namespace-scoped, exactly as in a fresh build."""
+    _build_v1_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        # Object parity: every trigger and index a fresh v2 registry has,
+        # the migrated one has too (column-level CHECK parity on an ALTERed
+        # table is not expressible in SQLite and stays service-guarded).
+        fresh_dir = tmp_path / "fresh"
+        fresh = FleetRegistryStore.open(control_dir=fresh_dir)
+        try:
+            def objects(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+                return {
+                    (str(row[0]), str(row[1]))
+                    for row in conn.execute(
+                        "SELECT type, name FROM sqlite_master "
+                        "WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'"
+                    )
+                }
+
+            assert objects(store._conn) == objects(fresh._conn)
+        finally:
+            fresh.close()
+
+        # The no-delete fence is live on the migrated registry.
+        with pytest.raises(sqlite3.IntegrityError, match="never deleted"), store.transaction() as conn:
+            conn.execute("DELETE FROM routing_receipts")
+
+        # Attestation uniqueness is namespace-scoped: the same attestation in
+        # two namespaces is two volumes, not a collision.
+        with store.transaction() as conn:
+            for suffix, namespace in (("d", "compose:prod"), ("e", "compose:staging")):
+                conn.execute(
+                    "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, "
+                    "volume_id, volume_root, deployment_namespace, "
+                    "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+                    "created_at_ms, retired_at_ms) VALUES (?, 'fake_alpha', ?, ?, ?, "
+                    "'/volumes/other', ?, 'compose_named_volume', 'shared-name', "
+                    "'provisioned', 100, NULL)",
+                    (
+                        f"clrk_{suffix * 24}",
+                        f"wkrk_{suffix * 32}",
+                        f"clerk-{suffix}",
+                        f"vol_{suffix * 24}",
+                        namespace,
+                    ),
+                )
+        # …and within one namespace it still refuses.
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute(
+                "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, "
+                "volume_id, volume_root, deployment_namespace, "
+                "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+                "created_at_ms, retired_at_ms) VALUES ('clrk_ffffffffffffffffffffffff', "
+                "'fake_alpha', 'wkrk_ffffffffffffffffffffffffffffffff', 'dupe', "
+                "'vol_ffffffffffffffffffffffff', '/volumes/dupe', 'compose:prod', "
+                "'compose_named_volume', 'shared-name', 'provisioned', 100, NULL)"
+            )
+    finally:
+        store.close()

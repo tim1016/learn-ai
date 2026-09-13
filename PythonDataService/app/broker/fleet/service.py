@@ -1,10 +1,11 @@
 """The fleet control service: the coordinator's rules surface.
 
 One seam for provisioning, volume verification, session registration,
-broker-qualified assignment fencing, routing receipts and the broker-neutral
-directory. The refusals this service raises are PRD §10.4's stable families;
-storage lives in ``store.py``, identity minting in ``identity.py``, and
-provider declarations in ``provider.py``.
+broker-qualified assignment fencing, routing attempts and the broker-neutral
+directory. The refusals this service raises are PRD §10.4's stable families
+plus the internal families added by the 2026-09-13 audit; storage lives in
+``store.py``, identity minting in ``identity.py``, and provider declarations
+in ``provider.py``.
 
 The load-bearing invariants, each with a test:
 
@@ -12,19 +13,30 @@ The load-bearing invariants, each with a test:
   heartbeat age before refusing a rival reservation (PRD FR-054); liveness
   only projects ``unreachable`` in the directory.
 - Volume identity is proven before authority: registration and reservation
-  both verify the marker against the registry row (PRD FR-025/026).
+  both verify the marker against the registry row (PRD FR-025/026), and root
+  comparisons are qualified by deployment namespace so equal path strings in
+  two containers never masquerade as one physical volume.
+- Observed facts never confirm anything (audit 2026-09-13, finding 1): a
+  heartbeat refreshes liveness projections only; the confirmed binding
+  observation lives on the assignment row, is fenced by the confirming
+  instance and epoch, refuses stale generations, and is the only routing
+  fence for execution operations.
 - The directory computes no financial facts (PRD FR-034) and never exposes
   ``worker_key`` (FR-012).
+- Routing attempts pin their context before dispatch, and a delivered
+  outcome is terminal (audit 2026-09-13, finding 7).
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
+import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.broker.fleet import volume as volume_module
 from app.broker.fleet.errors import (
@@ -34,8 +46,10 @@ from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkBindingGenerationConflict,
     ClerkBrokerMismatch,
+    ClerkEndpointNotApproved,
     ClerkIdentityMismatch,
     ClerkNotFound,
+    ClerkRoutingAttemptConflict,
     ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
     ClerkVolumeCloneDetected,
@@ -45,22 +59,28 @@ from app.broker.fleet.identity import (
     new_agent_instance_id,
     new_clerk_id,
     new_correlation_id,
+    new_service_token,
     new_volume_id,
     new_worker_key,
 )
 from app.broker.fleet.provider import (
+    FLEET_PROTOCOL_VERSION,
     PRODUCTION_PROVIDER_ADAPTERS,
     BrokerProviderAdapter,
     Capability,
+    OperationReadiness,
     require_adapter,
+    require_protocol_compatible,
 )
 from app.broker.fleet.records import (
     AccountAssignmentRecord,
+    ApprovedEndpointRecord,
     AssignmentState,
     ClerkDescriptor,
     ClerkLifecycleState,
     ClerkRecord,
     ClerkSessionRecord,
+    ProviderSummaryObservation,
     RoutingReceiptRecord,
     RoutingReceiptState,
     StoredLifecycleState,
@@ -87,13 +107,33 @@ RELEASE_PROOF_TOKEN = "old-clerk-offline-and-obligations-clear"
 _COMPOSE_NAMED_VOLUME = "compose_named_volume"
 ATTESTATION_KINDS = frozenset({_COMPOSE_NAMED_VOLUME})
 
+#: The namespace a single-host, unfenced deployment provisions into. Real
+#: deployments name their own (for example ``compose:prod``); roots compare
+#: only within one namespace, because the same path in two containers is two
+#: mounts, not one shared volume (audit 2026-09-13, finding 4).
+DEFAULT_DEPLOYMENT_NAMESPACE = "host:local"
+
+_NAMESPACE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,63}$")
+_ENDPOINT_REF_PATTERN = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,63}$")
+_ADAPTER_VERSION_MAX_CHARS = 64
+
 
 @dataclass(frozen=True, slots=True)
 class ProvisionedClerk:
-    """What a host ceremony gets back: identities to wire into deployment."""
+    """What a host ceremony gets back: identities to wire into deployment.
+
+    The two service tokens are transport credentials minted once for the
+    operator's uncommitted environment files — the agent-to-coordinator
+    token and the coordinator-to-agent token. They are never stored in the
+    registry; the ``worker_key`` in ``clerk`` remains the stored durable
+    identity and is never a transport credential (audit 2026-09-13,
+    finding 3).
+    """
 
     clerk: ClerkRecord
     marker: VolumeMarker
+    agent_service_token: str
+    coordinator_service_token: str
 
 
 class FleetControlService:
@@ -149,19 +189,28 @@ class FleetControlService:
         volume_root: Path,
         attestation_kind: str = _COMPOSE_NAMED_VOLUME,
         attestation_id: str | None = None,
+        deployment_namespace: str = DEFAULT_DEPLOYMENT_NAMESPACE,
     ) -> ProvisionedClerk:
         """Create one clerk lane: mint identities, mark the volume, register.
 
         The attestation for a compose named volume is the volume's name —
         deployment-owned and nonsecret. The root must be a fresh canonical
         mount; a root that already carries a marker is a copied or re-mounted
-        volume and refuses (PRD FR-026).
+        volume and refuses (PRD FR-026). Root comparisons run only against
+        clerks in the same deployment namespace: equal path strings across
+        namespaces are different mounts, and different strings do not prove
+        different volumes (audit 2026-09-13, finding 4).
         """
         if not broker or not display_label:
             raise BrokerAndClerkRequired(
                 "Provisioning requires a broker and a display label.",
             )
         self._adapter(broker)  # unknown production provider fails closed here
+        if _NAMESPACE_PATTERN.fullmatch(deployment_namespace) is None:
+            raise ValueError(
+                f"deployment namespace {deployment_namespace!r} is not a bounded "
+                "host:style token"
+            )
         if attestation_kind not in ATTESTATION_KINDS:
             raise ClerkVolumeCloneDetected(
                 f"Unknown volume attestation kind {attestation_kind!r}.",
@@ -187,18 +236,23 @@ class FleetControlService:
             )
         # FR-020/021: writable subtrees of one mounted volume never host two
         # clerks. Distinct attestations do not make nested roots distinct
-        # physical volumes, so containment is refused in both directions.
-        # ``resolve()`` is pure normalization here — the canonical-root proof
-        # above has already excluded every symlink in the chain.
+        # physical volumes, so containment is refused in both directions —
+        # but only within one deployment namespace, where path strings share
+        # a filesystem. ``resolve()`` is pure normalization here — the
+        # canonical-root proof above has already excluded every symlink in
+        # the chain.
         new_root = canonical_root.resolve()
         for active in self._store.list_clerks():
+            if active.deployment_namespace != deployment_namespace:
+                continue
             existing_root = Path(active.volume_root)
             if new_root == existing_root or new_root.is_relative_to(
                 existing_root
             ) or existing_root.is_relative_to(new_root):
                 raise ClerkVolumeAlreadyRegistered(
                     f"The root {volume_root} shares a mounted volume with active "
-                    f"clerk {active.clerk_id} ({existing_root}); one clerk, one "
+                    f"clerk {active.clerk_id} ({existing_root}) in deployment "
+                    f"namespace {deployment_namespace!r}; one clerk, one "
                     "physical volume.",
                     next_step="Mount a separate named volume for the new clerk.",
                 )
@@ -220,11 +274,14 @@ class FleetControlService:
         # volume identity for an active clerk refuses here, before the volume
         # is marked, so a failed provisioning leaves no half-marked root.
         if self._store.find_clerk_by_attestation(
-            attestation_kind=attestation_kind, attestation_id=attestation_id
+            deployment_namespace=deployment_namespace,
+            attestation_kind=attestation_kind,
+            attestation_id=attestation_id,
         ) is not None:
             raise ClerkVolumeAlreadyRegistered(
                 f"Another active clerk already attests volume "
-                f"{attestation_kind}:{attestation_id}.",
+                f"{attestation_kind}:{attestation_id} in deployment namespace "
+                f"{deployment_namespace!r}.",
                 next_step="Each clerk owns a distinct physical volume; mount a "
                 "fresh one for the new clerk.",
             )
@@ -239,6 +296,7 @@ class FleetControlService:
             display_label=display_label,
             volume_id=volume_id,
             volume_root=str(new_root),
+            deployment_namespace=deployment_namespace,
             volume_attestation_kind=attestation_kind,
             volume_attestation_id=attestation_id,
             lifecycle_state=StoredLifecycleState.PROVISIONED,
@@ -246,7 +304,18 @@ class FleetControlService:
             retired_at_ms=None,
         )
         with self._store.transaction() as conn:
-            self._store.insert_clerk(conn, record)
+            try:
+                self._store.insert_clerk(conn, record)
+            except sqlite3.IntegrityError as exc:
+                # A rival provisioning committed between the pre-checks and
+                # this insert; the loser gets the typed refusal, never the
+                # constraint traceback.
+                raise ClerkVolumeAlreadyRegistered(
+                    f"Another active clerk already claims this volume's identity "
+                    f"in deployment namespace {deployment_namespace!r}.",
+                    next_step="Each clerk owns a distinct physical volume; mount a "
+                    "fresh one for the new clerk.",
+                ) from exc
         try:
             volume_module.write_volume_marker(volume_root, marker)
         except Exception:
@@ -275,9 +344,15 @@ class FleetControlService:
                 "clerk_id": clerk_id,
                 "volume_id": volume_id,
                 "attestation_kind": attestation_kind,
+                "deployment_namespace": deployment_namespace,
             },
         )
-        return ProvisionedClerk(clerk=record, marker=marker)
+        return ProvisionedClerk(
+            clerk=record,
+            marker=marker,
+            agent_service_token=new_service_token(),
+            coordinator_service_token=new_service_token(),
+        )
 
     def verify_clerk_volume(self, *, clerk_id: str, volume_root: Path) -> VolumeMarker:
         """Re-run the fail-before-authority gate against the registry."""
@@ -349,6 +424,47 @@ class FleetControlService:
         assert retired is not None
         return retired
 
+    # ---- approved endpoints (host ceremony) --------------------------------
+
+    def approve_endpoint(
+        self, *, clerk_id: str, endpoint_ref: str, base_url: str
+    ) -> ApprovedEndpointRecord:
+        """Approve or re-target one clerk's internal agent destination.
+
+        Deployment-owned placement evidence (audit 2026-09-13, finding 4): a
+        registration may cite ``endpoint_ref`` but can never change what it
+        points at. The reference and the clerk binding are stable; only the
+        destination moves, by re-running this ceremony.
+        """
+        clerk = self._require_clerk(clerk_id)
+        if _ENDPOINT_REF_PATTERN.fullmatch(endpoint_ref) is None:
+            raise ValueError(
+                f"endpoint reference {endpoint_ref!r} is not a bounded host:style token"
+            )
+        normalized = _validate_internal_base_url(base_url)
+        now = self._clock()
+        try:
+            with self._store.transaction() as conn:
+                record = self._store.approve_endpoint(
+                    conn,
+                    clerk_id=clerk.clerk_id,
+                    endpoint_ref=endpoint_ref,
+                    base_url=normalized,
+                    now_ms=now,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ClerkEndpointNotApproved(
+                f"The endpoint approval for clerk {clerk_id} refused: {exc}",
+                next_step="An approved reference is stable; re-approve the same "
+                "reference with a new destination, or approve under a fresh "
+                "reference for a new clerk.",
+            ) from exc
+        logger.info(
+            "fleet agent endpoint approved",
+            extra={"broker": clerk.broker, "clerk_id": clerk_id, "endpoint_ref": endpoint_ref},
+        )
+        return record
+
     # ---- agent sessions ---------------------------------------------------
 
     def register_agent_session(
@@ -358,6 +474,9 @@ class FleetControlService:
         worker_key: str,
         agent_instance_id: str | None = None,
         volume_root: Path | None = None,
+        endpoint_ref: str | None = None,
+        adapter_version: str | None = None,
+        fleet_protocol_version: int | None = None,
     ) -> ClerkSessionRecord:
         """Install the clerk's one current agent session, bumping the epoch.
 
@@ -367,6 +486,12 @@ class FleetControlService:
         recovery); the archived session keeps the epoch history auditable.
         Retirement refuses registration — routing to a retired clerk is gone
         for good.
+
+        An ``endpoint_ref`` must cite the deployment-approved reference for
+        this clerk; it can never install or move a destination. A declared
+        ``fleet_protocol_version`` must match this coordinator's, so mixed
+        builds refuse explicitly instead of a newer coordinator advertising
+        operations an older agent cannot serve (audit 2026-09-13, finding 6).
         """
         clerk = self._require_clerk(clerk_id)
         if not hmac.compare_digest(clerk.worker_key, worker_key):
@@ -379,6 +504,25 @@ class FleetControlService:
             raise ClerkNotFound(
                 f"Clerk {clerk_id} is retired; a retired lane never returns to service.",
             )
+        if adapter_version is not None and len(adapter_version) > _ADAPTER_VERSION_MAX_CHARS:
+            raise ClerkIdentityMismatch(
+                "An adapter version string is a short build label, not free text.",
+            )
+        require_protocol_compatible(reported=fleet_protocol_version)
+        if endpoint_ref is not None:
+            approved = self._store.read_approved_endpoint(clerk_id)
+            if approved is None or approved.endpoint_ref != endpoint_ref:
+                raise ClerkEndpointNotApproved(
+                    f"Clerk {clerk_id} cites endpoint reference {endpoint_ref!r}; the "
+                    "deployment has "
+                    + (
+                        f"approved {approved.endpoint_ref!r}."
+                        if approved is not None
+                        else "approved no endpoint for this clerk."
+                    ),
+                    next_step="A registration cites an approved reference; destinations "
+                    "change only through the host approval ceremony.",
+                )
         if volume_root is not None:
             self._verify_volume(clerk, volume_root)
         now = self._clock()
@@ -390,7 +534,7 @@ class FleetControlService:
         # ``BEGIN IMMEDIATE`` the second registration sees the first's row
         # and takes epoch 2.
         with self._store.transaction() as conn:
-            current = self._store.read_session(clerk_id)
+            current = self._store.read_session_on(conn, clerk_id)
             if (
                 current is not None
                 and current.agent_instance_id == instance
@@ -407,6 +551,9 @@ class FleetControlService:
                     reported_binding_generation=current.reported_binding_generation,
                     reported_account_id=current.reported_account_id,
                     reported_state=current.reported_state,
+                    endpoint_ref=endpoint_ref if endpoint_ref is not None else current.endpoint_ref,
+                    adapter_version=adapter_version if adapter_version is not None else current.adapter_version,
+                    reported_summary_json=current.reported_summary_json,
                 )
                 self._store.upsert_session(conn, refreshed)
                 return refreshed
@@ -419,6 +566,8 @@ class FleetControlService:
                 routing_epoch=epoch,
                 started_at_ms=now,
                 last_seen_at_ms=now,
+                endpoint_ref=endpoint_ref,
+                adapter_version=adapter_version,
             )
             if current is not None:
                 self._store.archive_session(conn, current, superseded_at_ms=now)
@@ -442,15 +591,30 @@ class FleetControlService:
         reported_binding_generation: int | None = None,
         reported_account_id: str | None = None,
         reported_state: str | None = None,
+        reported_summary: Mapping[str, object] | None = None,
     ) -> bool:
-        """Record a heartbeat and the worker's observed binding facts.
+        """Record a heartbeat and the worker's *observed* binding facts.
 
         An observation updates liveness projections only; it can never move
-        an assignment, a lifecycle state, or ownership of anything.
+        an assignment, a lifecycle state, a confirmed binding observation or
+        ownership of anything (audit 2026-09-13, finding 1). The optional
+        summary must be the bounded typed observation; agent-authored
+        free-form JSON refuses.
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             raise ClerkNotFound(f"Clerk {clerk_id} is retired.")
+        summary_json = None
+        if reported_summary is not None:
+            try:
+                summary_json = ProviderSummaryObservation.parse(reported_summary).to_json()
+            except ValueError as exc:
+                raise ClerkIdentityMismatch(
+                    f"Clerk {clerk_id} reported a lane summary that is not a "
+                    f"bounded typed observation: {exc}",
+                    next_step="The lane summary vocabulary is endpoint_mode, "
+                    "authority_state and a short detail line.",
+                ) from exc
         touched = False
         with self._store.transaction() as conn:
             touched = self._store.touch_session(
@@ -461,6 +625,7 @@ class FleetControlService:
                 reported_binding_generation=reported_binding_generation,
                 reported_account_id=reported_account_id,
                 reported_state=reported_state,
+                reported_summary_json=summary_json,
             )
         return touched
 
@@ -480,7 +645,10 @@ class FleetControlService:
         provider-qualified, so the same raw string under another provider is a
         different reservation. A rival active reservation or assignment
         refuses — *regardless of heartbeat age*: liveness never transfers
-        ownership (FR-054). Re-reserving for the same owner is idempotent.
+        ownership (FR-054). Re-reserving is defined for the same owner in
+        both live states: a reserved row returns as-is, and an effective row
+        is the same-owner resume of a restarted clerk, returning the
+        confirmed facts untouched (audit 2026-09-13, finding 1).
         """
         if not broker:
             raise BrokerAndClerkRequired("A reservation requires a broker.")
@@ -539,9 +707,14 @@ class FleetControlService:
                         updated_at_ms=now,
                     )
                     self._store.insert_assignment(conn, outcome)
-                elif existing.clerk_id == clerk_id and existing.state == (
-                    AssignmentState.RESERVED
+                elif existing.clerk_id == clerk_id and existing.state in (
+                    AssignmentState.RESERVED,
+                    AssignmentState.EFFECTIVE,
                 ):
+                    # Same-owner resume: an idempotent re-reservation by the
+                    # owning clerk (restart recovery, lost reply). The
+                    # confirmed observation on an effective row survives
+                    # untouched — a resume is not a re-confirmation.
                     outcome = existing
                 elif existing.state == AssignmentState.RELEASED:
                     # Reuse after the release ceremony: a fresh reservation at
@@ -599,99 +772,155 @@ class FleetControlService:
         clerk_id: str,
         external_account_id: str,
         binding_generation: int,
+        agent_instance_id: str,
+        routing_epoch: int,
         effective_profile_id: str | None = None,
         effective_revision: int | None = None,
     ) -> AccountAssignmentRecord:
-        """Move this clerk's reservation to effective (PRD FR-064).
+        """Record the worker's confirmed binding observation (PRD FR-064).
 
-        The worker calls this after acknowledging its local binding; the
-        generation and profile facts recorded here are what a routed command
-        is later checked against.
+        One transaction compares the authenticated clerk, the *current*
+        session's instance and epoch, the reserved-or-effective assignment
+        owner, and the proposed binding facts (audit 2026-09-13, finding 1):
+
+        - a confirmation from a superseded session refuses atomically;
+        - a generation lower than the confirmed one refuses — restoring old
+          evidence is its own ceremony, not a confirmation;
+        - an equal generation re-acknowledges (crash recovery converging on
+          the same identity, including after a session replacement);
+        - a higher generation advances the confirmed observation, which is
+          the normal Stage → Apply → restart progression.
+
+        The clerk-local selection transaction remains the authority for the
+        effective tuple; this row is the coordinator's confirmed observation
+        of it and the fence routed commands are checked against.
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
                 f"Clerk {clerk_id} belongs to broker {clerk.broker!r}, not {broker!r}.",
             )
-        # The session must exist before anything is committed: an assignment
-        # that lands effective without a registered worker would present
-        # itself as confirmed with nobody to have acknowledged it.
-        self._require_session(clerk_id)
+        if binding_generation < 1:
+            raise ClerkBindingGenerationConflict(
+                "A binding generation is a positive integer.",
+            )
+        if (effective_profile_id is None) != (effective_revision is None):
+            raise ValueError(
+                "an effective tuple carries both profile id and revision, or neither"
+            )
         adapter = self._adapter(broker)
         canonical = adapter.canonical_account_id(external_account_id)
-        existing = self._store.read_assignment(broker=broker, canonical_account_id=canonical)
-        if existing is None or existing.clerk_id != clerk_id:
-            raise ClerkAssignmentConflict(
-                f"Account {canonical} under broker {broker!r} is not reserved for "
-                f"clerk {clerk_id}.",
-            )
-        if existing.state == AssignmentState.EFFECTIVE:
-            # Already effective for this clerk: the worker is re-acknowledging
-            # after a Stage→Apply→restart (FR-060). The assignment row stands;
-            # the session still absorbs the freshly reported binding facts,
-            # because those are what routed commands are checked against.
-            self._record_binding_observation(
-                clerk_id=clerk_id,
-                binding_generation=binding_generation,
-                canonical_account_id=canonical,
-            )
-            return existing
-        if existing.state == AssignmentState.RELEASED:
-            raise ClerkAssignmentConflict(
-                f"Account {canonical} under broker {broker!r} was released; a "
-                "released assignment is re-reserved, never re-confirmed.",
-            )
         now = self._clock()
-        confirmed = AccountAssignmentRecord(
-            broker=broker,
-            canonical_external_account_id=canonical,
-            clerk_id=clerk_id,
-            assignment_generation=existing.assignment_generation,
-            state=AssignmentState.EFFECTIVE,
-            effective_profile_id=effective_profile_id,
-            effective_revision=effective_revision,
-            recorded_at_ms=existing.recorded_at_ms,
-            updated_at_ms=now,
-        )
-        accepted = False
+        outcome: AccountAssignmentRecord | None = None
         with self._store.transaction() as conn:
+            # The session check lives inside the write transaction: a
+            # superseded instance must not slip its confirmation between the
+            # read and the commit.
+            session = self._store.read_session_on(conn, clerk_id)
+            if session is None:
+                raise ClerkUnreachable(
+                    f"Clerk {clerk_id} has no registered agent session.",
+                )
+            if (
+                session.agent_instance_id != agent_instance_id
+                or session.routing_epoch != routing_epoch
+            ):
+                raise ClerkIdentityMismatch(
+                    f"The confirmation for clerk {clerk_id} was prepared by session "
+                    f"{agent_instance_id}/{routing_epoch}, but the current session is "
+                    f"{session.agent_instance_id}/{session.routing_epoch}; a "
+                    "superseded session cannot confirm.",
+                    next_step="The replacement session re-confirms from the clerk's "
+                    "current effective binding.",
+                )
+            existing = self._store.read_assignment_on(
+                conn, broker=broker, canonical_account_id=canonical
+            )
+            if existing is None or existing.clerk_id != clerk_id:
+                raise ClerkAssignmentConflict(
+                    f"Account {canonical} under broker {broker!r} is not reserved for "
+                    f"clerk {clerk_id}.",
+                )
+            if existing.state == AssignmentState.RELEASED:
+                raise ClerkAssignmentConflict(
+                    f"Account {canonical} under broker {broker!r} was released; a "
+                    "released assignment is re-reserved, never re-confirmed.",
+                )
+            if (
+                existing.state == AssignmentState.EFFECTIVE
+                and existing.confirmed_binding_generation is not None
+                and binding_generation < existing.confirmed_binding_generation
+            ):
+                raise ClerkBindingGenerationConflict(
+                    f"Clerk {clerk_id} confirmed binding generation "
+                    f"{existing.confirmed_binding_generation}; the stale generation "
+                    f"{binding_generation} refuses — restoring superseded evidence "
+                    "is its own ceremony.",
+                    next_step="Re-read the clerk's current effective binding and "
+                    "confirm that.",
+                )
+            if (
+                existing.state == AssignmentState.EFFECTIVE
+                and existing.confirmed_binding_generation == binding_generation
+                and (
+                    effective_profile_id,
+                    effective_revision,
+                )
+                != (existing.confirmed_profile_id, existing.confirmed_revision)
+            ):
+                # One generation names one tuple: a changed tuple is a new
+                # generation, and a retry that omits the tuple cannot clear
+                # what a full confirmation recorded.
+                raise ClerkBindingGenerationConflict(
+                    f"Clerk {clerk_id}'s generation {binding_generation} confirms "
+                    f"tuple ({existing.confirmed_profile_id!r}, "
+                    f"{existing.confirmed_revision!r}); the same generation cannot "
+                    "confirm a different or partial tuple.",
+                    next_step="A changed effective tuple advances the binding "
+                    "generation; re-confirm with the clerk's current tuple.",
+                )
+            confirmed = replace(
+                existing,
+                state=AssignmentState.EFFECTIVE,
+                effective_profile_id=effective_profile_id,
+                effective_revision=effective_revision,
+                confirmed_binding_generation=binding_generation,
+                confirmed_profile_id=effective_profile_id,
+                confirmed_revision=effective_revision,
+                confirmed_at_ms=now,
+                confirmed_agent_instance_id=agent_instance_id,
+                confirmed_routing_epoch=routing_epoch,
+                updated_at_ms=now,
+            )
             accepted = self._store.cas_update_assignment(
                 conn,
                 confirmed,
                 previous_generation=existing.assignment_generation,
-                previous_state=AssignmentState.RESERVED,
+                previous_state=existing.state,
             )
-        if not accepted:
-            raise ClerkAssignmentConflict(
-                f"Account {canonical} under broker {broker!r} changed while "
-                "confirming; re-read and retry.",
-            )
-        self._record_binding_observation(
-            clerk_id=clerk_id,
-            binding_generation=binding_generation,
-            canonical_account_id=canonical,
-        )
-        logger.info(
-            "fleet account assignment effective",
-            extra={"broker": broker, "clerk_id": clerk_id},
-        )
-        return confirmed
-
-    def _record_binding_observation(
-        self, *, clerk_id: str, binding_generation: int, canonical_account_id: str
-    ) -> None:
-        """Record the worker's acknowledged binding facts on its session."""
-        session = self._require_session(clerk_id)
-        with self._store.transaction() as conn:
+            if not accepted:
+                raise ClerkAssignmentConflict(
+                    f"Account {canonical} under broker {broker!r} changed while "
+                    "confirming; re-read and retry.",
+                )
+            # The session's observed facts follow the confirmed observation,
+            # so the directory projects the acknowledged binding.
             self._store.touch_session(
                 conn,
                 clerk_id=clerk_id,
-                agent_instance_id=session.agent_instance_id,
-                last_seen_at_ms=self._clock(),
+                agent_instance_id=agent_instance_id,
+                last_seen_at_ms=now,
                 reported_binding_generation=binding_generation,
-                reported_account_id=canonical_account_id,
+                reported_account_id=canonical,
                 reported_state="binding_confirmed",
             )
+            outcome = confirmed
+        assert outcome is not None
+        logger.info(
+            "fleet account assignment confirmed",
+            extra={"broker": broker, "clerk_id": clerk_id},
+        )
+        return outcome
 
     def release_assignment(
         self,
@@ -747,15 +976,19 @@ class FleetControlService:
             state=AssignmentState.RELEASED,
             effective_profile_id=existing.effective_profile_id,
             effective_revision=existing.effective_revision,
+            confirmed_binding_generation=existing.confirmed_binding_generation,
+            confirmed_profile_id=existing.confirmed_profile_id,
+            confirmed_revision=existing.confirmed_revision,
+            confirmed_at_ms=existing.confirmed_at_ms,
+            confirmed_agent_instance_id=existing.confirmed_agent_instance_id,
+            confirmed_routing_epoch=existing.confirmed_routing_epoch,
             recorded_at_ms=existing.recorded_at_ms,
             updated_at_ms=now,
         )
         accepted = False
         with self._store.transaction() as conn:
             accepted = self._store.cas_update_assignment(
-                conn,
-                released,
-                previous_generation=existing.assignment_generation,
+                conn, released, previous_generation=existing.assignment_generation,
                 previous_state=existing.state,
             )
         if not accepted:
@@ -777,16 +1010,23 @@ class FleetControlService:
         clerk_id: str,
         expected_routing_epoch: int | None = None,
         expected_binding_generation: int | None = None,
-    ) -> tuple[ClerkRecord, ClerkSessionRecord]:
+        expected_account_id: str | None = None,
+        readiness: OperationReadiness = OperationReadiness.EXECUTION,
+    ) -> tuple[ClerkRecord, ClerkSessionRecord, AccountAssignmentRecord | None]:
         """Resolve a routed operation's clerk, verifying path identities.
 
         ``clerk_id`` is resolved first, then the path broker must equal the
         clerk's immutable broker (PRD FR-071). A retired or draining clerk and
-        a clerk with no live session are not routable. A session is
-        command-routable only once its worker has acknowledged the local
-        binding — an unacknowledged session is still ``starting`` (FR-064).
-        When the caller pins an epoch or a binding generation, a mismatch
-        refuses rather than silently retargeting (FR-073/078).
+        a clerk with no live session are not routable. When the caller pins an
+        epoch or a binding generation, a mismatch refuses rather than silently
+        retargeting (FR-073/078).
+
+        Readiness closes the admission gap (audit 2026-09-13, finding 1):
+        ``execution`` operations route only against the *confirmed* effective
+        assignment — a heartbeat carrying plausible binding facts proves
+        nothing — while ``configuration_access`` operations stay routable for
+        a provisioned lane whose binding is missing or broken, so the operator
+        can reach the configuration surface that would produce one.
         """
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
@@ -824,24 +1064,64 @@ class FleetControlService:
                 f"{clerk_id}'s current epoch {session.routing_epoch}; a retry must "
                 "not cross an epoch change automatically.",
             )
-        if session.reported_binding_generation is None:
+        if readiness == OperationReadiness.CONFIGURATION_ACCESS:
+            return clerk, session, None
+
+        effective = self._store.list_effective_assignments_for_clerk(clerk_id)
+        if not effective:
             raise ClerkUnreachable(
-                f"Clerk {clerk_id} has not acknowledged an effective binding yet; "
-                "a starting session is not command-routable.",
+                f"Clerk {clerk_id} holds no effective account assignment; "
+                "execution routing stays closed until a confirmed binding exists.",
+            )
+        if len(effective) > 1:
+            raise ClerkIdentityMismatch(
+                f"Clerk {clerk_id} holds {len(effective)} effective assignments; "
+                "one lane serves exactly one confirmed account.",
+            )
+        assignment = effective[0]
+        if assignment.confirmed_binding_generation is None:
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id}'s assignment for "
+                f"{assignment.canonical_external_account_id} has no confirmed "
+                "binding observation; a starting lane is not command-routable.",
+            )
+        if (
+            assignment.confirmed_agent_instance_id != session.agent_instance_id
+            or assignment.confirmed_routing_epoch != session.routing_epoch
+        ):
+            # A replacement session inherits nothing: until it re-confirms
+            # from the clerk's current effective binding, the lane is still
+            # starting and not command-routable (audit 2026-09-13, finding 1).
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id}'s confirmed binding was presented by session "
+                f"{assignment.confirmed_agent_instance_id}/"
+                f"{assignment.confirmed_routing_epoch}; the current session "
+                f"{session.agent_instance_id}/{session.routing_epoch} has not "
+                "re-confirmed it.",
             )
         if (
             expected_binding_generation is not None
-            and session.reported_binding_generation != expected_binding_generation
+            and assignment.confirmed_binding_generation != expected_binding_generation
         ):
             raise ClerkBindingGenerationConflict(
                 f"Expected binding generation {expected_binding_generation} is not "
-                f"clerk {clerk_id}'s current generation "
-                f"{session.reported_binding_generation}; re-prepare the command "
+                f"clerk {clerk_id}'s confirmed generation "
+                f"{assignment.confirmed_binding_generation}; re-prepare the command "
                 "against the lane's current resource.",
             )
-        return clerk, session
+        if expected_account_id is not None:
+            adapter = self._adapter(broker)
+            canonical_expected = adapter.canonical_account_id(expected_account_id)
+            if canonical_expected != assignment.canonical_external_account_id:
+                raise ClerkAccountMismatch(
+                    f"Account {canonical_expected} is not clerk {clerk_id}'s "
+                    f"confirmed account {assignment.canonical_external_account_id}.",
+                )
+        return clerk, session, assignment
 
-    def record_routing_receipt(
+    # ---- routing attempts ---------------------------------------------------
+
+    def open_routing_attempt(
         self,
         *,
         broker: str,
@@ -849,48 +1129,48 @@ class FleetControlService:
         operation_kind: str,
         nonsecret_target_ref: str,
         idempotency_key: str,
-        state: RoutingReceiptState,
-        upstream_receipt_ref: str | None = None,
-        correlation_id: str | None = None,
+        pinned_routing_epoch: int,
+        pinned_agent_instance_id: str,
+        pinned_binding_generation: int | None = None,
     ) -> RoutingReceiptRecord:
-        """Correlate one routing attempt (PRD FR-079).
+        """Persist one routing attempt's pinned context *before* dispatch.
 
-        A receipt never replaces the provider clerk's execution or custody
-        receipt; the upstream reference is carried, not interpreted. Retrying
-        the same idempotency identity updates the existing receipt — but only
-        when the retry names the same operation and target: a key reused for
-        a different target is a conflict, never a silent cross-attribution.
+        The attempt is recorded as ``not_dispatched`` with the epoch and
+        instance of the session the dispatch is fenced by — both mandatory,
+        because a receipt that cannot prove which process received the
+        command cannot stop a retry from crossing a restart — plus the
+        confirmed binding generation when the operation carries one. A crash
+        between decision and delivery leaves provable "never sent" evidence
+        (audit 2026-09-13, finding 7). Retrying the same lane-scoped
+        idempotency key returns the existing attempt — unless the retry names
+        a different operation, target or pinned context, which is a conflict,
+        never a silent cross-attribution.
         """
         now = self._clock()
         existing = self._store.find_routing_receipt_by_idempotency(
             broker=broker, clerk_id=clerk_id, idempotency_key=idempotency_key
         )
         if existing is not None:
-            self._require_receipt_identity_match(
-                existing, operation_kind=operation_kind, nonsecret_target_ref=nonsecret_target_ref
+            self._require_attempt_context_match(
+                existing,
+                operation_kind=operation_kind,
+                nonsecret_target_ref=nonsecret_target_ref,
+                pinned_routing_epoch=pinned_routing_epoch,
+                pinned_binding_generation=pinned_binding_generation,
+                pinned_agent_instance_id=pinned_agent_instance_id,
             )
-            updated = False
-            with self._store.transaction() as conn:
-                updated = self._store.update_routing_receipt_outcome(
-                    conn,
-                    correlation_id=existing.correlation_id,
-                    state=state,
-                    upstream_receipt_ref=upstream_receipt_ref,
-                    updated_at_ms=now,
-                )
-            if updated:
-                receipt = self._store.read_routing_receipt(existing.correlation_id)
-                assert receipt is not None
-                return receipt
+            return existing
         receipt = RoutingReceiptRecord(
-            correlation_id=correlation_id if correlation_id is not None else new_correlation_id(),
+            correlation_id=new_correlation_id(),
             broker=broker,
             clerk_id=clerk_id,
             operation_kind=operation_kind,
             nonsecret_target_ref=nonsecret_target_ref,
             idempotency_key=idempotency_key,
-            state=state,
-            upstream_receipt_ref=upstream_receipt_ref,
+            state=RoutingReceiptState.NOT_DISPATCHED,
+            pinned_routing_epoch=pinned_routing_epoch,
+            pinned_binding_generation=pinned_binding_generation,
+            pinned_agent_instance_id=pinned_agent_instance_id,
             created_at_ms=now,
             updated_at_ms=now,
         )
@@ -905,26 +1185,137 @@ class FleetControlService:
             )
             if winner is None:
                 raise
-            self._require_receipt_identity_match(
-                winner, operation_kind=operation_kind, nonsecret_target_ref=nonsecret_target_ref
+            self._require_attempt_context_match(
+                winner,
+                operation_kind=operation_kind,
+                nonsecret_target_ref=nonsecret_target_ref,
+                pinned_routing_epoch=pinned_routing_epoch,
+                pinned_binding_generation=pinned_binding_generation,
+                pinned_agent_instance_id=pinned_agent_instance_id,
             )
             return winner
         return receipt
 
+    def mark_routing_dispatched(self, *, correlation_id: str) -> RoutingReceiptRecord:
+        """Record that the attempt was handed to the provider clerk.
+
+        One-way: once dispatched, an attempt can never present as
+        definitively un-sent. Idempotent for a repeated marking.
+        """
+        now = self._clock()
+        with self._store.transaction() as conn:
+            updated = self._store.mark_routing_receipt_dispatched(
+                conn, correlation_id=correlation_id, dispatched_at_ms=now
+            )
+        receipt = self._store.read_routing_receipt(correlation_id)
+        if not updated or receipt is None:
+            raise ClerkRoutingAttemptConflict(
+                f"No routing attempt carries correlation {correlation_id!r}.",
+            )
+        return receipt
+
+    def settle_routing_attempt(
+        self,
+        *,
+        correlation_id: str,
+        outcome: RoutingReceiptState,
+        upstream_receipt_ref: str | None = None,
+    ) -> RoutingReceiptRecord:
+        """Settle one attempt's outcome under the terminal-outcome rules.
+
+        ``delivered`` (with the provider's durable receipt reference) is
+        terminal — a late failed retry can never erase it. ``outcome_unknown``
+        records that the attempt may have executed and must be reconciled by
+        identity. ``provider_refused`` is a definitive provider refusal.
+        Settling back to ``not_dispatched`` is not a settlement.
+        """
+        receipt = self._store.read_routing_receipt(correlation_id)
+        if receipt is None:
+            raise ClerkRoutingAttemptConflict(
+                f"No routing attempt carries correlation {correlation_id!r}.",
+            )
+        if outcome == RoutingReceiptState.NOT_DISPATCHED:
+            raise ClerkRoutingAttemptConflict(
+                "'not_dispatched' is the pre-dispatch state, not a settlement.",
+            )
+        if receipt.state == RoutingReceiptState.DELIVERED and outcome != (
+            RoutingReceiptState.DELIVERED
+        ):
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} is delivered with upstream reference "
+                f"{receipt.upstream_receipt_ref!r}; a delivered outcome is never "
+                "downgraded.",
+                next_step="Reconcile through the provider clerk's receipt, never by "
+                "rewriting the routing attempt.",
+            )
+        if (
+            receipt.state == RoutingReceiptState.DELIVERED
+            and upstream_receipt_ref is not None
+            and receipt.upstream_receipt_ref is not None
+            and upstream_receipt_ref != receipt.upstream_receipt_ref
+        ):
+            # The first delivered provider receipt is the durable one: a late
+            # or conflicting response cannot rewrite which command identity
+            # the success belongs to.
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} is delivered with upstream reference "
+                f"{receipt.upstream_receipt_ref!r}; a different reference "
+                f"{upstream_receipt_ref!r} cannot replace it.",
+                next_step="Reconcile through the provider clerk's receipt, never by "
+                "rewriting the routing attempt.",
+            )
+        now = self._clock()
+        try:
+            with self._store.transaction() as conn:
+                updated = self._store.update_routing_receipt_outcome(
+                    conn,
+                    correlation_id=correlation_id,
+                    state=outcome,
+                    upstream_receipt_ref=upstream_receipt_ref,
+                    updated_at_ms=now,
+                )
+        except sqlite3.IntegrityError as exc:
+            # A racing settlement moved the outcome between the read and this
+            # write; the schema trigger is the fence, and the loser gets the
+            # typed conflict rather than a raw constraint traceback.
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} refused by an outcome fence: {exc}",
+                next_step="Re-read the attempt and reconcile through the provider "
+                "clerk's receipt.",
+            ) from exc
+        if not updated:
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} changed while settling; re-read and retry.",
+            )
+        settled = self._store.read_routing_receipt(correlation_id)
+        assert settled is not None
+        return settled
+
     @staticmethod
-    def _require_receipt_identity_match(
-        receipt: RoutingReceiptRecord, *, operation_kind: str, nonsecret_target_ref: str
+    def _require_attempt_context_match(
+        receipt: RoutingReceiptRecord,
+        *,
+        operation_kind: str,
+        nonsecret_target_ref: str,
+        pinned_routing_epoch: int | None,
+        pinned_binding_generation: int | None,
+        pinned_agent_instance_id: str | None,
     ) -> None:
-        """Refuse an idempotency key reused for a different correlated attempt."""
+        """Refuse an idempotency key reused under a different pinned context."""
         if (
             receipt.operation_kind != operation_kind
             or receipt.nonsecret_target_ref != nonsecret_target_ref
+            or receipt.pinned_routing_epoch != pinned_routing_epoch
+            or receipt.pinned_binding_generation != pinned_binding_generation
+            or receipt.pinned_agent_instance_id != pinned_agent_instance_id
         ):
-            raise ClerkIdentityMismatch(
+            raise ClerkRoutingAttemptConflict(
                 f"Idempotency key {receipt.idempotency_key!r} on lane "
-                f"{receipt.broker}/{receipt.clerk_id} already correlates "
-                f"{receipt.operation_kind} of {receipt.nonsecret_target_ref!r}; it "
-                "cannot be reused for a different operation or target.",
+                f"{receipt.broker}/{receipt.clerk_id} already pins "
+                f"{receipt.operation_kind} of {receipt.nonsecret_target_ref!r} at "
+                f"epoch {receipt.pinned_routing_epoch}/generation "
+                f"{receipt.pinned_binding_generation}; it cannot be reused for a "
+                "different operation, target or pinned context.",
                 next_step="Mint a fresh idempotency key for the new attempt.",
             )
 
@@ -941,8 +1332,9 @@ class FleetControlService:
         entries: list[dict[str, object]] = []
         for clerk in self._store.list_clerks(include_retired=include_retired):
             session = self._store.read_session(clerk.clerk_id)
+            effective = self._store.list_effective_assignments_for_clerk(clerk.clerk_id)
             entries.append(
-                self._descriptor(clerk, session, now).public_fields()
+                self._descriptor(clerk, session, effective, now).public_fields()
             )
         return {"observed_at_ms": now, "clerks": entries}
 
@@ -950,16 +1342,51 @@ class FleetControlService:
         """The directory projection for one clerk (operator ceremony reads)."""
         clerk = self._require_clerk(clerk_id)
         session = self._store.read_session(clerk_id)
-        return self._descriptor(clerk, session, self._clock())
+        effective = self._store.list_effective_assignments_for_clerk(clerk_id)
+        return self._descriptor(clerk, session, effective, self._clock())
 
     def _descriptor(
-        self, clerk: ClerkRecord, session: ClerkSessionRecord | None, now: int
+        self,
+        clerk: ClerkRecord,
+        session: ClerkSessionRecord | None,
+        effective: Sequence[AccountAssignmentRecord],
+        now: int,
     ) -> ClerkDescriptor:
-        """Project one clerk and session into its directory entry."""
+        """Project one clerk, session and confirmed assignment into its entry."""
         adapter = self._provider_adapters.get(clerk.broker)
         capabilities: tuple[str, ...] = ()
         provider_summary: dict[str, object] | None = None
-        effective_state = _project_lifecycle(clerk, session, now, self._session_stale_after_ms)
+        confirmed_generation: int | None = None
+        confirmed_account: str | None = None
+        # A registry that says one clerk holds several effective assignments
+        # is a corrupted state: it is surfaced (degraded lifecycle, flagged
+        # observation), never averaged or silently first-row-projected.
+        multiple_effective = len(effective) > 1
+        confirmed_by_current_session = bool(
+            effective
+            and session is not None
+            and effective[0].confirmed_agent_instance_id == session.agent_instance_id
+            and effective[0].confirmed_routing_epoch == session.routing_epoch
+        )
+        if effective:
+            confirmed_generation = effective[0].confirmed_binding_generation
+            confirmed_account = effective[0].canonical_external_account_id
+        # A confirmed observation that belongs to a superseded session does
+        # not make the replacement session ready: the replacement must
+        # re-confirm, and until then the lane projects starting.
+        projected_generation = (
+            confirmed_generation
+            if (confirmed_by_current_session and not multiple_effective)
+            else None
+        )
+        effective_state = _project_lifecycle(
+            clerk,
+            session,
+            projected_generation,
+            now,
+            self._session_stale_after_ms,
+            multiple_effective_assignments=multiple_effective,
+        )
         if adapter is not None:
             capabilities = tuple(sorted(cap.value for cap in adapter.capabilities))
             if session is not None:
@@ -967,8 +1394,21 @@ class FleetControlService:
                     "reported_state": session.reported_state,
                     "reported_account_id": session.reported_account_id,
                     "reported_binding_generation": session.reported_binding_generation,
+                    "confirmed_binding_generation": confirmed_generation,
+                    "confirmed_by_current_session": confirmed_by_current_session,
+                    "confirmed_account_id": confirmed_account,
                     "lifecycle_state": str(effective_state),
+                    "multiple_effective_assignments": multiple_effective,
                 }
+                reported_summary = ProviderSummaryObservation.parse(
+                    session.reported_summary_json
+                )
+                if reported_summary is not None:
+                    observation["reported_summary"] = {
+                        "endpoint_mode": str(reported_summary.endpoint_mode),
+                        "authority_state": reported_summary.authority_state,
+                        "detail": reported_summary.detail,
+                    }
                 provider_summary = dict(adapter.provider_summary(observation))
         return ClerkDescriptor(
             broker=clerk.broker,
@@ -978,9 +1418,7 @@ class FleetControlService:
             volume_id=clerk.volume_id,
             last_seen_at_ms=None if session is None else session.last_seen_at_ms,
             routing_epoch=None if session is None else session.routing_epoch,
-            effective_binding_generation=(
-                None if session is None else session.reported_binding_generation
-            ),
+            effective_binding_generation=projected_generation,
             capabilities=capabilities,
             provider_summary=provider_summary,
             observed_at_ms=now,
@@ -1033,25 +1471,55 @@ class FleetControlService:
             raise ClerkNotFound(f"No clerk carries identity {clerk_id!r}.")
         return clerk
 
-    def _require_session(self, clerk_id: str) -> ClerkSessionRecord:
-        """Resolve the clerk's current session or refuse as unreachable."""
-        session = self._store.read_session(clerk_id)
-        if session is None:
-            raise ClerkUnreachable(f"Clerk {clerk_id} has no registered agent session.")
-        return session
+
+def _validate_internal_base_url(base_url: str) -> str:
+    """Normalize and bound one internal agent destination.
+
+    Internal destinations are plain ``http(s)://host[:port][/prefix]`` values:
+    no user info, query, fragment or parameters — a credential or injection
+    channel does not travel in a placement field.
+    """
+    if not base_url:
+        raise ValueError("an internal base URL must not be empty")
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(
+            f"internal base URL {base_url!r} must be an absolute http(s) URL with a host"
+        )
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError(
+            f"internal base URL {base_url!r} carries user info, query or fragment"
+        )
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"internal base URL {base_url!r} carries an invalid port") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"internal base URL {base_url!r} carries an out-of-range port")
+    normalized = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
+    if len(normalized) > 200:
+        raise ValueError("an internal base URL is a short placement value")
+    return normalized
 
 
 def _project_lifecycle(
     clerk: ClerkRecord,
     session: ClerkSessionRecord | None,
+    confirmed_binding_generation: int | None,
     now: int,
     stale_after_ms: int,
+    *,
+    multiple_effective_assignments: bool = False,
 ) -> ClerkLifecycleState:
     """Durable states pass through; live states project from observations.
 
     A stored flag would let a historical acknowledgement present itself as
     current liveness (PRD FR-081), so readiness is recomputed from the
-    session's freshness and the assignment state every time.
+    session's freshness and the *confirmed* assignment every time. Readiness
+    requires a confirmed binding observation — a heartbeat alone projects at
+    most ``starting`` (audit 2026-09-13, finding 1). A clerk the registry
+    says holds several effective assignments is corrupted and projects
+    ``degraded`` rather than presenting an arbitrary one as healthy.
     """
     if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
         return ClerkLifecycleState.RETIRED
@@ -1061,16 +1529,20 @@ def _project_lifecycle(
         return ClerkLifecycleState.PROVISIONED
     if now - session.last_seen_at_ms > stale_after_ms:
         return ClerkLifecycleState.UNREACHABLE
+    if multiple_effective_assignments:
+        return ClerkLifecycleState.DEGRADED
     if session.reported_state == "degraded":
         return ClerkLifecycleState.DEGRADED
-    if session.reported_binding_generation is None:
+    if confirmed_binding_generation is None:
         return ClerkLifecycleState.STARTING
     return ClerkLifecycleState.READY
 
 
 __all__ = [
     "ATTESTATION_KINDS",
+    "DEFAULT_DEPLOYMENT_NAMESPACE",
     "DEFAULT_SESSION_STALE_AFTER_MS",
+    "FLEET_PROTOCOL_VERSION",
     "RELEASE_PROOF_TOKEN",
     "FleetControlService",
     "ProvisionedClerk",

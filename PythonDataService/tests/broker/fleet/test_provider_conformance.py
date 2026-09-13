@@ -53,7 +53,9 @@ def test_n_clerks_across_two_providers_run_concurrently(
     volume_ids = set()
     attestations = set()
     for lane in lanes:
-        fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+        session = fleet_service.register_agent_session(
+            fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        )
         fleet_service.reserve_assignment(
             broker=lane.broker, clerk_id=lane.clerk_id, external_account_id=f"acct-{lane.attestation_id}"
         )
@@ -62,6 +64,8 @@ def test_n_clerks_across_two_providers_run_concurrently(
             clerk_id=lane.clerk_id,
             external_account_id=f"acct-{lane.attestation_id}",
             binding_generation=1,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
         )
         volume_ids.add(lane.attestation_id)
         attestations.add(lane.attestation_id)
@@ -111,8 +115,8 @@ def test_provider_clients_and_state_share_no_mutable_object(
         beta_lane = provision_lane(
             service, broker="fake_beta", label="iso-b", tmp_path=control_dir.parent
         )
-        service.register_agent_session(clerk_id=alpha_lane.clerk_id, worker_key=alpha_lane.worker_key)
-        service.register_agent_session(clerk_id=beta_lane.clerk_id, worker_key=beta_lane.worker_key)
+        service.register_agent_session(fleet_protocol_version=2, clerk_id=alpha_lane.clerk_id, worker_key=alpha_lane.worker_key)
+        service.register_agent_session(fleet_protocol_version=2, clerk_id=beta_lane.clerk_id, worker_key=beta_lane.worker_key)
         entries = {
             entry["clerk_id"]: entry
             for entry in service.directory()["clerks"]
@@ -137,7 +141,7 @@ def test_killing_one_clerks_volume_does_not_mutate_another(
         fleet_service, broker="fake_beta", label="casualty", tmp_path=control_dir.parent
     )
     for lane in (survivor, casualty):
-        fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+        fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
         fleet_service.reserve_assignment(
             broker=lane.broker, clerk_id=lane.clerk_id, external_account_id="acct-same"
         )
@@ -153,11 +157,15 @@ def test_killing_one_clerks_volume_does_not_mutate_another(
     fleet_service.verify_clerk_volume(
         clerk_id=survivor.clerk_id, volume_root=survivor.volume_root
     )
+    survivor_session = fleet_service._store.read_session(survivor.clerk_id)
+    assert survivor_session is not None
     fleet_service.confirm_assignment(
         broker="fake_alpha",
         clerk_id=survivor.clerk_id,
         external_account_id="acct-same",
         binding_generation=1,
+        agent_instance_id=survivor_session.agent_instance_id,
+        routing_epoch=survivor_session.routing_epoch,
     )
     fleet_service.resolve_route(broker="fake_alpha", clerk_id=survivor.clerk_id)
     survivor_assignment = fleet_service._store.read_assignment(

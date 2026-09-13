@@ -16,7 +16,6 @@ import pytest
 from app.broker.fleet.errors import (
     BrokerNotSupported,
     ClerkAssignmentConflict,
-    ClerkIdentityMismatch,
     ClerkUnreachable,
     ClerkVolumeIdentityMismatch,
 )
@@ -77,7 +76,7 @@ def test_concurrent_registrations_serialize_into_distinct_epochs(
 
     def register(index: int) -> int:
         return fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id,
+            fleet_protocol_version=2,clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             agent_instance_id=f"agnt_{index:024x}",
         ).routing_epoch
@@ -96,40 +95,62 @@ def test_concurrent_registrations_serialize_into_distinct_epochs(
 def test_an_idempotency_key_reused_for_another_target_refuses(
     control_dir: Path, fleet_service
 ) -> None:
-    """A retry naming a different operation or target is a conflict, never a
-    silent cross-attribution of the first attempt's correlation."""
+    """A retry naming a different operation, target or pinned context is a
+    conflict, never a silent cross-attribution of the first attempt's correlation."""
+    from app.broker.fleet.errors import ClerkRoutingAttemptConflict
+
     lane = provision_lane(fleet_service, broker="fake_alpha", label="idem", tmp_path=control_dir.parent)
-    fleet_service.record_routing_receipt(
+    fleet_service.open_routing_attempt(
         broker="fake_alpha",
         clerk_id=lane.clerk_id,
         operation_kind="bot_action",
         nonsecret_target_ref="strategy/sid-1",
         idempotency_key="key-1",
-        state="delivered",
+        pinned_routing_epoch=3,
+        pinned_binding_generation=2,
+        pinned_agent_instance_id="agnt_111111111111111111111111",
     )
-    with pytest.raises(ClerkIdentityMismatch, match="cannot be reused"):
-        fleet_service.record_routing_receipt(
+    with pytest.raises(ClerkRoutingAttemptConflict, match="cannot be reused"):
+        fleet_service.open_routing_attempt(
             broker="fake_alpha",
             clerk_id=lane.clerk_id,
             operation_kind="bot_action",
             nonsecret_target_ref="strategy/sid-2",
             idempotency_key="key-1",
-            state="failed",
+            pinned_routing_epoch=3,
+            pinned_binding_generation=2,
+            pinned_agent_instance_id="agnt_111111111111111111111111",
         )
-    with pytest.raises(ClerkIdentityMismatch):
-        fleet_service.record_routing_receipt(
+    with pytest.raises(ClerkRoutingAttemptConflict):
+        fleet_service.open_routing_attempt(
             broker="fake_alpha",
             clerk_id=lane.clerk_id,
             operation_kind="custody_read",
             nonsecret_target_ref="strategy/sid-1",
             idempotency_key="key-1",
-            state="failed",
+            pinned_routing_epoch=3,
+            pinned_binding_generation=2,
+            pinned_agent_instance_id="agnt_111111111111111111111111",
         )
-    # The original receipt was not overwritten by either attempt.
+    # The same key under a different pinned context refuses too: a retry
+    # crossing an epoch or generation is a new attempt, not this one.
+    with pytest.raises(ClerkRoutingAttemptConflict):
+        fleet_service.open_routing_attempt(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation_kind="bot_action",
+            nonsecret_target_ref="strategy/sid-1",
+            idempotency_key="key-1",
+            pinned_routing_epoch=4,
+            pinned_binding_generation=2,
+            pinned_agent_instance_id="agnt_111111111111111111111111",
+        )
+    # The original receipt was not overwritten by any attempt.
     kept = fleet_service._store.find_routing_receipt_by_idempotency(
         broker="fake_alpha", clerk_id=lane.clerk_id, idempotency_key="key-1"
     )
     assert kept is not None and kept.nonsecret_target_ref == "strategy/sid-1"
+    assert kept.pinned_routing_epoch == 3
 
 
 def test_an_adapter_registered_under_another_provider_id_refuses(
@@ -183,7 +204,7 @@ def test_a_stale_heartbeat_is_not_routable_even_with_a_confirmed_binding(
 ) -> None:
     """Routing checks liveness, not just history: an old heartbeat refuses."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="fading", tmp_path=control_dir.parent)
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-f"
     )
@@ -192,6 +213,8 @@ def test_a_stale_heartbeat_is_not_routable_even_with_a_confirmed_binding(
         clerk_id=lane.clerk_id,
         external_account_id="acct-f",
         binding_generation=1,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
     )
     fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
 
