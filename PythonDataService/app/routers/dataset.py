@@ -23,11 +23,13 @@ import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
-from app.models.requests import DatasetGenerationRequest
+from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.research.divergence.ingest import (
     apply_dividend_adjustment,
     dividends_from_polygon_payload,
 )
+from app.schemas.dataset_plan import DatasetPlanResponse
+from app.services.dataset_plan_service import build_dataset_plan
 from app.services.dataset_service import (
     add_previous_close_column,
     build_csv_bytes,
@@ -41,6 +43,7 @@ from app.services.dataset_service import (
     get_indicator_configs,
     list_available_indicators,
     preprocess_and_calculate,
+    project_output_columns,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -49,16 +52,18 @@ logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
 
 
-def _base_price_cols(df: pd.DataFrame) -> list[str]:
-    """Order the price-side columns for CSV export. ``PC`` (previous
-    trading day's close) sits before ``open`` when present so reviewers
-    reading the CSV left-to-right see the prior reference before the
-    current bar's prices.
+def _projection_without_indicators(
+    df: pd.DataFrame,
+    column_meta: list[dict[str, Any]],
+) -> list[str]:
+    """Price-side + extra columns from the shared projection (indicator columns stripped).
+
+    ``project_output_columns`` is the single ordering authority; metadata
+    files describe only the price-side columns, so this is that same
+    projection with the indicator tail removed.
     """
-    base = ["open", "high", "low", "close", "volume"]
-    if "PC" in df.columns:
-        return ["PC", *base]
-    return base
+    cols = project_output_columns(df, column_meta)
+    return cols[: len(cols) - len(column_meta)]
 
 
 def _fetch_and_process(
@@ -206,6 +211,27 @@ async def get_available_indicators():
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+@router.post("/plan", response_model=DatasetPlanResponse)
+async def plan_dataset(request: DatasetPlanRequest) -> DatasetPlanResponse:
+    """Resolve a dataset recipe into a fetch-free planning receipt.
+
+    Planning touches only the local NYSE calendar — it never calls
+    Polygon. Bar counts are arithmetic estimates typed with assumptions
+    and provenance; output columns come from the same projection
+    function the ZIP generation path uses (data-lab workspace redesign
+    PRD §12).
+    """
+    try:
+        return build_dataset_plan(request)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        logger.error(f"[DATASET] Plan error: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.post("/generate-csv")
 async def generate_dataset_csv(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data in chunks, calculate selected indicators,
@@ -219,10 +245,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
 
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        ohlcv_cols = _base_price_cols(df)
-        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
-        indicator_col_names = [m["column"] for m in column_meta]
-        all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
+        all_data_cols = project_output_columns(df, column_meta)
 
         csv_bytes = build_csv_bytes(df, all_data_cols)
 
@@ -231,7 +254,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
         filename = f"{request.ticker}_{ts_label}_{session_label}_{request.from_date}_to_{request.to_date}.csv"
         logger.info(
             f"[DATASET] CSV ready: {raw_count} raw bars → {len(df)} processed, "
-            f"{len(indicator_col_names)} indicator columns"
+            f"{len(column_meta)} indicator columns"
         )
 
         return StreamingResponse(
@@ -253,8 +276,7 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
     try:
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        ohlcv_cols = _base_price_cols(df)
-        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
+        ohlcv_cols = _projection_without_indicators(df, column_meta)
 
         metadata_bytes = build_metadata_json(
             ticker=request.ticker,
@@ -262,7 +284,7 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
             to_date=request.to_date,
             bar_count=raw_count,
             column_meta=column_meta,
-            ohlcv_cols=ohlcv_cols + extra_cols,
+            ohlcv_cols=ohlcv_cols,
             session=request.session,
             forward_fill=request.forward_fill,
             raw_bar_count=raw_count,
@@ -290,10 +312,7 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
     try:
         df, column_meta, _ = _fetch_and_process(request)
 
-        ohlcv_cols = _base_price_cols(df)
-        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
-
-        csv_bytes = build_metadata_csv(column_meta, ohlcv_cols + extra_cols)
+        csv_bytes = build_metadata_csv(column_meta, _projection_without_indicators(df, column_meta))
 
         session_label = "rth" if request.session == "rth" else "ext"
         filename = f"{request.ticker}_minute_{session_label}_{request.from_date}_to_{request.to_date}_columns.csv"
@@ -328,10 +347,8 @@ def _build_zip_with_events(
     between contracts, the bundler raises ``RunCancelledError``.
     Returns ``(zip_bytes, filename)``.
     """
-    ohlcv_cols = _base_price_cols(df)
-    extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
-    indicator_col_names = [m["column"] for m in column_meta]
-    all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
+    ohlcv_cols = _projection_without_indicators(df, column_meta)
+    all_data_cols = project_output_columns(df, column_meta)
 
     components: list[str] = ["dataset.csv", "metadata.csv", "columns.csv"]
     if request.include_quality_report:
@@ -472,7 +489,7 @@ def _build_zip_with_events(
         df=df,
         columns=all_data_cols,
         column_meta=column_meta,
-        ohlcv_cols=ohlcv_cols + extra_cols,
+        ohlcv_cols=ohlcv_cols,
         ticker=request.ticker,
         from_date=request.from_date,
         to_date=request.to_date,

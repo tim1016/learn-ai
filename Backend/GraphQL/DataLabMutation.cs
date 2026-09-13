@@ -9,6 +9,28 @@ namespace Backend.GraphQL;
 [ExtendObjectType(typeof(Mutation))]
 public class DataLabMutation
 {
+    // ── int64 ms UTC helpers (additive timestamp migration, PRD §13) ──
+    // Legacy DateTime/string columns remain written and read for dual-read
+    // compatibility; numeric fields are authoritative when non-null.
+
+    private static long ToEpochMsUtc(DateTime utc) =>
+        new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeMilliseconds();
+
+    /// <summary>
+    /// Interim window derivation: parse the legacy 10-char date-only string as
+    /// UTC midnight. This is a bounded interim derivation only — the
+    /// calendar-accurate window resolution lands in PythonDataService later.
+    /// Returns null when the string is not a parseable date.
+    /// </summary>
+    private static long? TryParseDateOnlyMsUtc(string? dateOnly) =>
+        DateTime.TryParse(
+            dateOnly,
+            null,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var parsed)
+            ? ToEpochMsUtc(DateTime.SpecifyKind(parsed.Date, DateTimeKind.Utc))
+            : null;
+
     /// <summary>
     /// Save a new Data Lab session (config + optional chart snapshot).
     /// </summary>
@@ -19,6 +41,7 @@ public class DataLabMutation
     {
         try
         {
+            var now = DateTime.UtcNow;
             var session = new DataLabSession
             {
                 Id = Guid.NewGuid(),
@@ -31,8 +54,14 @@ public class DataLabMutation
                 Adjusted = input.Adjusted,
                 EntriesJson = input.EntriesJson,
                 ChartSnapshotJson = input.ChartSnapshotJson,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = now,
+                UpdatedAt = now,
+                // Numeric authority: input values win when supplied, otherwise
+                // derive (interim UTC-midnight derivation for the window).
+                WindowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate),
+                WindowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate),
+                CreatedMsUtc = input.CreatedMsUtc ?? ToEpochMsUtc(now),
+                UpdatedMsUtc = ToEpochMsUtc(now),
             };
 
             context.DataLabSessions.Add(session);
@@ -85,7 +114,12 @@ public class DataLabMutation
             session.Adjusted = input.Adjusted;
             session.EntriesJson = input.EntriesJson;
             session.ChartSnapshotJson = input.ChartSnapshotJson;
-            session.UpdatedAt = DateTime.UtcNow;
+            var updatedNow = DateTime.UtcNow;
+            session.UpdatedAt = updatedNow;
+            session.WindowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate);
+            session.WindowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate);
+            session.CreatedMsUtc ??= ToEpochMsUtc(session.CreatedAt);
+            session.UpdatedMsUtc = ToEpochMsUtc(updatedNow);
 
             await context.SaveChangesAsync();
 
@@ -128,7 +162,10 @@ public class DataLabMutation
             }
 
             session.ChartSnapshotJson = chartSnapshotJson;
-            session.UpdatedAt = DateTime.UtcNow;
+            var updatedNow = DateTime.UtcNow;
+            session.UpdatedAt = updatedNow;
+            session.CreatedMsUtc ??= ToEpochMsUtc(session.CreatedAt);
+            session.UpdatedMsUtc = ToEpochMsUtc(updatedNow);
 
             await context.SaveChangesAsync();
 
@@ -171,7 +208,10 @@ public class DataLabMutation
             }
 
             session.Name = name;
-            session.UpdatedAt = DateTime.UtcNow;
+            var renamedAt = DateTime.UtcNow;
+            session.UpdatedAt = renamedAt;
+            session.CreatedMsUtc ??= ToEpochMsUtc(session.CreatedAt);
+            session.UpdatedMsUtc = ToEpochMsUtc(renamedAt);
 
             await context.SaveChangesAsync();
 
@@ -246,6 +286,18 @@ public class DataLabSessionInput
     public bool Adjusted { get; set; } = true;
     public string EntriesJson { get; set; } = "[]";
     public string? ChartSnapshotJson { get; set; }
+
+    // ── Optional int64 ms UTC overrides (additive timestamp migration, PRD §13).
+    // When null, mutations derive the values: window from the legacy date-only
+    // strings (interim UTC-midnight derivation) and created/updated from now. ──
+
+    public long? WindowStartMsUtc { get; set; }
+
+    public long? WindowEndMsUtc { get; set; }
+
+    public long? CreatedMsUtc { get; set; }
+
+    public long? UpdatedMsUtc { get; set; }
 }
 
 public class DataLabSessionResult

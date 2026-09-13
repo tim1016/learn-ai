@@ -511,3 +511,30 @@ does not change the accepted arming or custody policy.
   the Paper deploy card calls Live unimplemented; ADR 0059 and `CONTEXT.md`
   retain mandatory-Shadow wording beside the September 9 optional-rehearsal
   amendment. Current authority and operator copy need reconciliation.
+
+## 13. Data Lab workspace redesign residuals (2026-09-12)
+
+Tracked open items left by the Data Lab redesign PR
+(PRD `docs/prds/2026-09-12-data-lab-workspace-redesign.md`). Implemented:
+child routes Explore/Export/Validate, workspace store, legacy URL ingress,
+searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
+additive `DataLabSession` ms-UTC columns (dual-read).
+
+- **Chart color tokens are not yet resolved at the Lightweight Charts boundary
+  (medium).** Token IDs are stored and validated, but `data-lab-chart` still
+  consumes literal colors when rendering; token→`var(--chart-series-*)`
+  resolution at the chart boundary is the remaining §10 step.
+- **Saved-session numeric-window semantics are interim (low).** Backend derives
+  `WindowStartMsUtc`/`WindowEndMsUtc` from date-only UTC midnight until the
+  canonical exchange-calendar resolution (PRD §13 step 6 backfill) lands.
+- **Legacy `sessionId` URL param is preserved but not auto-loaded (low).** The
+  Saved setups drawer is the only session-load path; auto-load was deferred to
+  avoid URL state triggering fetches.
+- **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
+  signal defaults to false; wire a control if the legacy behavior is missed.
+- **Responsive overflow assertions need a browser pass (medium).** The §8
+  structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
+  checks and AXE scans have not been executed against a live browser.
+- **`active-indicator-card`/`active-indicator-group` are unmounted (low).** The
+  config modal still imports types from the card; delete both once the modal's
+  type imports are inlined.
