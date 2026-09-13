@@ -76,7 +76,7 @@ def test_concurrent_registrations_serialize_into_distinct_epochs(
 
     def register(index: int) -> int:
         return fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id,
+            fleet_protocol_version=2,clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             agent_instance_id=f"agnt_{index:024x}",
         ).routing_epoch
@@ -204,7 +204,7 @@ def test_a_stale_heartbeat_is_not_routable_even_with_a_confirmed_binding(
 ) -> None:
     """Routing checks liveness, not just history: an old heartbeat refuses."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="fading", tmp_path=control_dir.parent)
-    session = fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-f"
     )

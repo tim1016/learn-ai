@@ -35,7 +35,7 @@ _ALLOWED_DIRECTORY_FIELDS = {
 def _live(fleet_service, tmp_path: Path, broker: str, label: str):
     """Provision, register, reserve and confirm one lane so it projects ready."""
     lane = provision_lane(fleet_service, broker=broker, label=label, tmp_path=tmp_path)
-    session = fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker=broker, clerk_id=lane.clerk_id, external_account_id=f"acct-{label}"
     )
@@ -110,7 +110,7 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="projecting", tmp_path=control_dir.parent
     )
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
 
     def entry() -> dict:
         """The directory entry for the projecting clerk, re-read per assertion."""
@@ -215,3 +215,45 @@ def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
     assert lanes[1]["ok"] is False
     assert lanes[1]["broker"] == "fake_beta"
     assert lanes[1]["error_reason"] == "clerk_unreachable"
+
+
+def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
+    control_dir: Path, fleet_service
+) -> None:
+    """Regression (independent review): a corrupted multi-assignment state is
+    surfaced — degraded lifecycle, flagged observation — never silently
+    first-row-projected, and execution routing refuses it."""
+    from app.broker.fleet.errors import ClerkIdentityMismatch
+    from app.broker.fleet.records import AssignmentState
+    from app.broker.fleet.service import OperationReadiness
+
+    lane = _live(fleet_service, control_dir.parent, "fake_alpha", "anomalous")
+    # Corrupt the registry directly: a second effective assignment for the
+    # same clerk is a state only a broken writer could produce.
+    with fleet_service._store.transaction() as conn:
+        conn.execute(
+            "INSERT INTO account_assignments (broker, canonical_external_account_id, "
+            "clerk_id, assignment_generation, state, confirmed_binding_generation, "
+            "confirmed_at_ms, recorded_at_ms, updated_at_ms) VALUES "
+            "('fake_alpha', 'ACCT-SHADOW', ?, 1, 'effective', 9, 1, 1, 1)",
+            (lane.clerk_id,),
+        )
+    entry = next(
+        e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
+    )
+    assert entry["lifecycle_state"] == "degraded"
+    assert fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-ANOMALOUS"
+    ).state == AssignmentState.EFFECTIVE
+    with pytest.raises(ClerkIdentityMismatch, match="effective assignments"):
+        fleet_service.resolve_route(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            readiness=OperationReadiness.EXECUTION,
+        )
+    # Configuration access still routes: the repair path stays reachable.
+    fleet_service.resolve_route(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        readiness=OperationReadiness.CONFIGURATION_ACCESS,
+    )

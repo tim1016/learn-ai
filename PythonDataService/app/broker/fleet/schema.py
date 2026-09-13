@@ -659,6 +659,11 @@ FROM routing_receipts""",
     "DROP TABLE routing_receipts",
     "ALTER TABLE routing_receipts_v2 RENAME TO routing_receipts",
     "CREATE UNIQUE INDEX ux_routing_receipts_idempotency ON routing_receipts(broker, clerk_id, idempotency_key)",
+    """CREATE TRIGGER trg_routing_receipts_no_delete
+BEFORE DELETE ON routing_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'a routing receipt is never deleted');
+END""",
     """CREATE TRIGGER trg_routing_receipts_outcome_only
 BEFORE UPDATE ON routing_receipts
 FOR EACH ROW WHEN
@@ -687,6 +692,18 @@ FOR EACH ROW WHEN OLD.dispatched_at_ms IS NOT NULL AND NEW.dispatched_at_ms IS N
 BEGIN
     SELECT RAISE(ABORT, 'a dispatched routing attempt is never un-dispatched');
 END""",
+    # The attestation uniqueness moves to namespace scope (the v1 index was
+    # dropped with the column's old meaning): the same attestation name in
+    # two deployment namespaces is two volumes, not a collision. The added
+    # namespace column itself carries no CHECK parity with the fresh DDL —
+    # SQLite cannot attach one through ALTER — and the service's namespace
+    # validation remains the write-path guard.
+    "DROP INDEX ux_clerks_volume_attestation",
+    (
+        "CREATE UNIQUE INDEX ux_clerks_volume_attestation "
+        "ON clerks(deployment_namespace, volume_attestation_kind, volume_attestation_id) "
+        "WHERE lifecycle_state <> 'retired'"
+    ),
 )
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {

@@ -21,7 +21,7 @@ def _live_lane(fleet_service, tmp_path: Path, label: str):
     """Provision, register, reserve and confirm one routable lane."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label=label, tmp_path=tmp_path)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id=f"acct-{label}"
@@ -45,15 +45,15 @@ def test_registration_bumps_the_epoch_and_archives_the_previous_session(
         fleet_service, broker="fake_alpha", label="epochs", tmp_path=control_dir.parent
     )
     first = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_111111111111111111111111"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_111111111111111111111111"
     )
     again = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_111111111111111111111111"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_111111111111111111111111"
     )
     assert again.routing_epoch == first.routing_epoch  # idempotent, not a new epoch
 
     restarted = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_222222222222222222222222"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_222222222222222222222222"
     )
     assert restarted.routing_epoch == first.routing_epoch + 1
 
@@ -75,10 +75,10 @@ def test_a_stale_instance_cannot_heartbeat_over_the_current_session(
         fleet_service, broker="fake_alpha", label="stale", tmp_path=control_dir.parent
     )
     fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_aaaaaaaaaaaaaaaaaaaaaaaa"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_aaaaaaaaaaaaaaaaaaaaaaaa"
     )
     current = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_bbbbbbbbbbbbbbbbbbbbbbbb"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_bbbbbbbbbbbbbbbbbbbbbbbb"
     )
     # The superseded instance's heartbeat is a no-op, not an overwrite.
     assert (
@@ -115,7 +115,7 @@ def test_route_resolution_verifies_broker_identity_and_epoch_fencing(
 
     # A pinned stale epoch refuses instead of silently retargeting (FR-078).
     fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_cccccccccccccccccccccccc"
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_cccccccccccccccccccccccc"
     )
     with pytest.raises(ClerkIdentityMismatch):
         fleet_service.resolve_route(
@@ -148,7 +148,7 @@ def test_an_unconfirmed_assignment_is_not_command_routable(
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="unconfirmed", tmp_path=control_dir.parent
     )
-    session = fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-u"
     )
@@ -233,7 +233,7 @@ def test_configuration_access_stays_routable_without_a_confirmed_binding(
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="unbound", tmp_path=control_dir.parent
     )
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     with pytest.raises(ClerkUnreachable):
         fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
     clerk, session, assignment = fleet_service.resolve_route(

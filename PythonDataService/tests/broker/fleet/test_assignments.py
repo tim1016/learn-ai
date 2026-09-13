@@ -79,7 +79,7 @@ def test_heartbeat_loss_never_releases_ownership(
     """The load-bearing partition test: staleness projects, it never transfers."""
     owner = provision_lane(fleet_service, broker="fake_alpha", label="owner", tmp_path=control_dir.parent)
     rival = provision_lane(fleet_service, broker="fake_alpha", label="rival", tmp_path=control_dir.parent)
-    fleet_service.register_agent_session(clerk_id=owner.clerk_id, worker_key=owner.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=owner.clerk_id, worker_key=owner.worker_key)
     _reserved(fleet_service, "fake_alpha", owner.clerk_id, "acct-live")
 
     # The owner goes silent far past every staleness window.
@@ -111,7 +111,7 @@ def test_reserve_for_the_same_owner_is_idempotent(control_dir: Path, fleet_servi
     # The same-owner resume of an *effective* assignment (audit 2026-09-13,
     # finding 1): a restarted clerk re-runs its reservation step and gets its
     # confirmed facts back untouched, never a refusal.
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     session = fleet_service._store.read_session(lane.clerk_id)
     assert session is not None
     fleet_service.confirm_assignment(
@@ -133,7 +133,7 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
     """Confirmation moves the assignment to effective and records the confirmed observation."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="confirm", tmp_path=control_dir.parent)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-c")
     confirmed = fleet_service.confirm_assignment(
@@ -169,9 +169,9 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
     # Both lanes have sessions: the refusals below are about assignment
     # ownership, not about a missing worker.
     rival_session = fleet_service.register_agent_session(
-        clerk_id=rival.clerk_id, worker_key=rival.worker_key
+        fleet_protocol_version=2,clerk_id=rival.clerk_id, worker_key=rival.worker_key
     )
-    fleet_service.register_agent_session(clerk_id=owner.clerk_id, worker_key=owner.worker_key)
+    fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=owner.clerk_id, worker_key=owner.worker_key)
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.confirm_assignment(
             broker="fake_alpha",

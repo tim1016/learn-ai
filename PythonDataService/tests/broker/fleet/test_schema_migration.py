@@ -181,3 +181,67 @@ def test_an_incomplete_v1_schema_without_a_registered_path_refuses(
     except sqlite3.Error:
         return  # a hard SQL refusal is equally fail-closed
     raise AssertionError("an amputated v1 registry must refuse to open")
+
+
+def test_a_migrated_registry_carries_the_fresh_v2_fences(control_dir: Path, tmp_path: Path) -> None:
+    """Regression (independent review): the migration converges on the v2
+    schema — the no-delete trigger exists, delivered is terminal, and the
+    attestation uniqueness is namespace-scoped, exactly as in a fresh build."""
+    _build_v1_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        # Object parity: every trigger and index a fresh v2 registry has,
+        # the migrated one has too (column-level CHECK parity on an ALTERed
+        # table is not expressible in SQLite and stays service-guarded).
+        fresh_dir = tmp_path / "fresh"
+        fresh = FleetRegistryStore.open(control_dir=fresh_dir)
+        try:
+            def objects(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+                return {
+                    (str(row[0]), str(row[1]))
+                    for row in conn.execute(
+                        "SELECT type, name FROM sqlite_master "
+                        "WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'"
+                    )
+                }
+
+            assert objects(store._conn) == objects(fresh._conn)
+        finally:
+            fresh.close()
+
+        # The no-delete fence is live on the migrated registry.
+        with pytest.raises(sqlite3.IntegrityError, match="never deleted"), store.transaction() as conn:
+            conn.execute("DELETE FROM routing_receipts")
+
+        # Attestation uniqueness is namespace-scoped: the same attestation in
+        # two namespaces is two volumes, not a collision.
+        with store.transaction() as conn:
+            for suffix, namespace in (("d", "compose:prod"), ("e", "compose:staging")):
+                conn.execute(
+                    "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, "
+                    "volume_id, volume_root, deployment_namespace, "
+                    "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+                    "created_at_ms, retired_at_ms) VALUES (?, 'fake_alpha', ?, ?, ?, "
+                    "'/volumes/other', ?, 'compose_named_volume', 'shared-name', "
+                    "'provisioned', 100, NULL)",
+                    (
+                        f"clrk_{suffix * 24}",
+                        f"wkrk_{suffix * 32}",
+                        f"clerk-{suffix}",
+                        f"vol_{suffix * 24}",
+                        namespace,
+                    ),
+                )
+        # …and within one namespace it still refuses.
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute(
+                "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, "
+                "volume_id, volume_root, deployment_namespace, "
+                "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+                "created_at_ms, retired_at_ms) VALUES ('clrk_ffffffffffffffffffffffff', "
+                "'fake_alpha', 'wkrk_ffffffffffffffffffffffffffffffff', 'dupe', "
+                "'vol_ffffffffffffffffffffffff', '/volumes/dupe', 'compose:prod', "
+                "'compose_named_volume', 'shared-name', 'provisioned', 100, NULL)"
+            )
+    finally:
+        store.close()

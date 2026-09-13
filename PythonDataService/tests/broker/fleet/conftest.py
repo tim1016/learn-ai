@@ -253,7 +253,7 @@ def bind_lane(
     exactly what a real agent presents from its own registration.
     """
     session = service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     service.reserve_assignment(
         broker=lane.broker, clerk_id=lane.clerk_id, external_account_id=account

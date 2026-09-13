@@ -130,11 +130,12 @@ class ProviderOperation:
 def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None:
     """Refuse a catalog that could not be one source of routing truth.
 
-    Checks identity uniqueness (both the operation id and the public route
-    key), template shape, and that the declared idempotency and stream facts
-    agree with the HTTP method. A provider whose catalog fails this never
-    enters a registry — the checks run in adapter conformance tests and at
-    adapter registration.
+    Checks identity uniqueness (the operation id and the parameter-normalized
+    public route), template shape, parameter-set agreement between the public
+    and agent templates, and that the declared idempotency, stream and
+    readiness facts agree with each other and the HTTP method. A provider
+    whose catalog fails this never enters a registry — the checks run in
+    adapter conformance tests and at adapter registration.
     """
     seen_ids: set[str] = set()
     seen_routes: set[tuple[str, str]] = set()
@@ -147,9 +148,11 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
             "GET", "POST", "PUT", "PATCH", "DELETE"
         ):
             raise ValueError(f"operation {operation.operation_id!r} declares method {operation.method!r}")
-        for label, template in (
-            ("path_template", operation.path_template),
-            ("agent_path_template", operation.agent_path_template),
+        public_parameters: set[str] = set()
+        agent_parameters: set[str] = set()
+        for label, template, collected in (
+            ("path_template", operation.path_template, public_parameters),
+            ("agent_path_template", operation.agent_path_template, agent_parameters),
         ):
             if not template.startswith("/") or template.endswith("/") or "//" in template:
                 raise ValueError(
@@ -161,6 +164,22 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
                     raise ValueError(
                         f"operation {operation.operation_id!r} repeats path parameter {parameter}"
                     )
+                collected.add(parameter.strip("{}"))
+        if public_parameters != agent_parameters:
+            raise ValueError(
+                f"operation {operation.operation_id!r} declares different path parameters "
+                f"for its public ({sorted(public_parameters)}) and agent "
+                f"({sorted(agent_parameters)}) templates; forwarding cannot populate both"
+            )
+        if (
+            operation.readiness == OperationReadiness.CONFIGURATION_ACCESS
+            and operation.requires_effective_account
+        ):
+            raise ValueError(
+                f"configuration-access operation {operation.operation_id!r} cannot "
+                "require an effective account: configuration access exists precisely "
+                "for lanes without one"
+            )
         if operation.idempotency == OperationIdempotency.READ and operation.method in _MUTATING_METHODS:
             raise ValueError(
                 f"mutating operation {operation.operation_id!r} cannot declare read idempotency"
@@ -169,10 +188,16 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
             raise ValueError(f"streaming operation {operation.operation_id!r} must be a GET")
         if operation.operation_id in seen_ids:
             raise ValueError(f"operation id {operation.operation_id!r} is declared twice")
-        if operation.route_key() in seen_routes:
+        # Uniqueness compares the parameter-normalized shape: ``/bots/{sid}``
+        # and ``/bots/{bot_id}`` match one request space and must not both exist.
+        normalized_route = (
+            operation.method,
+            _PATH_PARAM_PATTERN.sub("{}", operation.path_template),
+        )
+        if normalized_route in seen_routes:
             raise ValueError(f"route {operation.route_key()} is declared twice")
         seen_ids.add(operation.operation_id)
-        seen_routes.add(operation.route_key())
+        seen_routes.add(normalized_route)
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,15 +318,17 @@ def require_adapter(
 def require_protocol_compatible(
     *, reported: int | None, coordinator_version: int = FLEET_PROTOCOL_VERSION
 ) -> None:
-    """Refuse an agent built against a different fleet protocol.
+    """Refuse an agent that is not provably protocol-compatible.
 
-    Registration carries the agent's protocol version; a mismatch refuses
-    explicitly instead of letting a newer coordinator advertise operations an
-    older agent cannot serve.
+    Registration carries the agent's fleet protocol version, and an agent
+    that reports none is exactly the older build this fence exists for: an
+    unversioned caller cannot be assumed to implement the operation catalog
+    or admission semantics the coordinator will advertise, so ``None``
+    refuses exactly like a mismatch would.
     """
-    if reported is not None and reported != coordinator_version:
+    if reported is None or reported != coordinator_version:
         raise FleetProtocolIncompatible(
-            f"An agent speaking fleet protocol {reported} cannot register with a "
+            f"An agent speaking fleet protocol {reported!r} cannot register with a "
             f"coordinator speaking {coordinator_version}.",
             next_step="Run coordinator and agents from compatible builds; consult the "
             "supported mixed-version matrix.",

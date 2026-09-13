@@ -240,3 +240,69 @@ def test_the_seam_module_imports_no_provider_surface() -> None:
 
     source = inspect.getsource(internal_http)
     assert "alpaca" not in source.lower()
+
+
+async def _chunks_of(payload: bytes, *, split_at: int = 1):
+    """Re-yield a payload as byte chunks of the given size."""
+    for index in range(0, len(payload), split_at):
+        yield payload[index : index + split_at]
+
+
+async def test_an_unterminated_line_cannot_grow_memory_unboundedly() -> None:
+    """Regression (independent review): the cap must count bytes that arrive
+    without a line terminator — withholding newlines is not a bypass."""
+    from app.broker.fleet.internal_http import iter_sse_events
+
+    async def poisoned():
+        yield b"data: "
+        for _ in range(80):
+            yield b"x" * 100  # 8000 bytes, never one newline
+
+    with pytest.raises(FleetStreamError, match="byte cap"):
+        async for _event in iter_sse_events(poisoned(), max_event_bytes=1024):
+            pass
+
+
+async def test_multibyte_payloads_split_across_chunks_parse() -> None:
+    """Regression (independent review): a UTF-8 sequence split at an arbitrary
+    chunk boundary decodes instead of crashing."""
+    from app.broker.fleet.internal_http import iter_sse_events
+
+    payload = "event: update\ndata: 🚀 launch ok\n\n".encode()
+    events = []
+    async for event in iter_sse_events(_chunks_of(payload, split_at=1)):
+        events.append(event)
+    assert len(events) == 1
+    assert events[0].event == "update"
+    assert events[0].data == "🚀 launch ok"
+
+
+async def test_a_leading_bom_is_stripped_and_truncated_utf8_refuses() -> None:
+    """A leading U+FEFF is not payload; a stream ending mid-sequence refuses."""
+    from app.broker.fleet.internal_http import iter_sse_events
+
+    bommed = "﻿data: clean\n\n".encode()
+    events = [event async for event in iter_sse_events(_chunks_of(bommed, split_at=3))]
+    assert events == [events[0]]
+    assert events[0].data == "clean"
+
+    async def truncated():
+        yield b"data: half"
+        yield "🚀".encode()[:1]  # first byte of a 4-byte sequence, then end
+
+    with pytest.raises(FleetStreamError, match="mid UTF-8 sequence"):
+        async for _event in iter_sse_events(truncated()):
+            pass
+
+
+async def test_empty_data_events_and_bare_cr_terminators_follow_the_spec() -> None:
+    """No dispatch without data; CR and CRLF are line terminators."""
+    from app.broker.fleet.internal_http import SseEvent, iter_sse_events
+
+    frames = b"event: ping\n\nevent: a\rdata: cr-line\r\revent: b\r\ndata: crlf-line\r\n\r\n"
+    events = [event async for event in iter_sse_events(_chunks_of(frames, split_at=5))]
+    # `event: ping` with no data buffer never dispatches (WHATWG).
+    assert events == [
+        SseEvent(event="a", data="cr-line", id=None),
+        SseEvent(event="b", data="crlf-line", id=None),
+    ]

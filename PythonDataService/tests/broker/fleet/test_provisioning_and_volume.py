@@ -175,7 +175,7 @@ def test_registration_and_reservation_verify_the_volume_before_authority(
     marker_path(lane.volume_root).unlink()
     with pytest.raises(ClerkVolumeIdentityMissing):
         fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id,
+            fleet_protocol_version=2,clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             agent_instance_id="agnt_aaaa0000aaaa0000aaaa0000",
             volume_root=lane.volume_root,
@@ -221,7 +221,7 @@ def test_retirement_is_terminal_and_refuses_outstanding_assignments(
 
     with pytest.raises(ClerkNotFound):
         fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id, worker_key=lane.worker_key
+            fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
         )
     with pytest.raises(ClerkNotFound):
         fleet_service.reserve_assignment(
@@ -240,5 +240,5 @@ def test_a_wrong_worker_key_never_registers(control_dir: Path, fleet_service) ->
 
     with pytest.raises(ClerkIdentityMismatch):
         fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id, worker_key="wkrk_00000000000000000000000000000000"
+            fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key="wkrk_00000000000000000000000000000000"
         )

@@ -115,9 +115,11 @@ def test_the_fake_providers_declare_valid_catalogs() -> None:
 
 
 def test_protocol_compatibility_refuses_mismatched_builds() -> None:
-    """An agent's protocol version must equal the coordinator's, exactly."""
-    require_protocol_compatible(reported=None)
+    """An agent's protocol version must equal the coordinator's, exactly —
+    and an unversioned caller is exactly the older build the fence exists for."""
     require_protocol_compatible(reported=FLEET_PROTOCOL_VERSION)
+    with pytest.raises(FleetProtocolIncompatible):
+        require_protocol_compatible(reported=None)
     with pytest.raises(FleetProtocolIncompatible):
         require_protocol_compatible(reported=FLEET_PROTOCOL_VERSION + 1)
     with pytest.raises(FleetProtocolIncompatible):
@@ -126,4 +128,59 @@ def test_protocol_compatibility_refuses_mismatched_builds() -> None:
         require_protocol_compatible(
             reported=FLEET_PROTOCOL_VERSION,
             coordinator_version=FLEET_PROTOCOL_VERSION + 1,
+        )
+
+
+def test_catalog_validation_refuses_ambiguous_and_incoherent_declarations() -> None:
+    """Parameter-normalized route uniqueness, public/agent parameter
+    agreement, and the configuration/account combination all refuse."""
+    with pytest.raises(ValueError, match="declared twice"):
+        validate_operation_catalog(
+            frozenset(
+                {
+                    _operation(
+                        operation_id="bots_a",
+                        path_template="/bots/{sid}",
+                        agent_path_template="/api/provider/bots/{sid}",
+                    ),
+                    _operation(
+                        operation_id="bots_b",
+                        path_template="/bots/{bot_id}",
+                        agent_path_template="/api/provider/bots/{bot_id}",
+                    ),
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="cannot populate both"):
+        validate_operation_catalog(
+            frozenset(
+                {
+                    _operation(
+                        operation_id="bot_action",
+                        method="POST",
+                        path_template="/bots/{sid}/actions",
+                        agent_path_template="/api/provider/bots/{bot_id}/actions",
+                        capability=Capability.BOT_ACTION,
+                        requires_effective_account=True,
+                        idempotency=OperationIdempotency.DURABLE_KEY,
+                    )
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="cannot require an effective account"):
+        validate_operation_catalog(
+            frozenset(
+                {
+                    _operation(
+                        operation_id="config_apply",
+                        method="POST",
+                        path_template="/configuration/apply",
+                        agent_path_template="/api/provider/configuration/apply",
+                        capability=Capability.CONFIGURATION_MANAGE,
+                        readiness=OperationReadiness.CONFIGURATION_ACCESS,
+                        requires_effective_account=True,
+                        idempotency=OperationIdempotency.ONE_SHOT,
+                    )
+                }
+            )
         )

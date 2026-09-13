@@ -304,7 +304,18 @@ class FleetControlService:
             retired_at_ms=None,
         )
         with self._store.transaction() as conn:
-            self._store.insert_clerk(conn, record)
+            try:
+                self._store.insert_clerk(conn, record)
+            except sqlite3.IntegrityError as exc:
+                # A rival provisioning committed between the pre-checks and
+                # this insert; the loser gets the typed refusal, never the
+                # constraint traceback.
+                raise ClerkVolumeAlreadyRegistered(
+                    f"Another active clerk already claims this volume's identity "
+                    f"in deployment namespace {deployment_namespace!r}.",
+                    next_step="Each clerk owns a distinct physical volume; mount a "
+                    "fresh one for the new clerk.",
+                ) from exc
         try:
             volume_module.write_volume_marker(volume_root, marker)
         except Exception:
@@ -793,6 +804,10 @@ class FleetControlService:
             raise ClerkBindingGenerationConflict(
                 "A binding generation is a positive integer.",
             )
+        if (effective_profile_id is None) != (effective_revision is None):
+            raise ValueError(
+                "an effective tuple carries both profile id and revision, or neither"
+            )
         adapter = self._adapter(broker)
         canonical = adapter.canonical_account_id(external_account_id)
         now = self._clock()
@@ -843,6 +858,26 @@ class FleetControlService:
                     "is its own ceremony.",
                     next_step="Re-read the clerk's current effective binding and "
                     "confirm that.",
+                )
+            if (
+                existing.state == AssignmentState.EFFECTIVE
+                and existing.confirmed_binding_generation == binding_generation
+                and (
+                    effective_profile_id,
+                    effective_revision,
+                )
+                != (existing.confirmed_profile_id, existing.confirmed_revision)
+            ):
+                # One generation names one tuple: a changed tuple is a new
+                # generation, and a retry that omits the tuple cannot clear
+                # what a full confirmation recorded.
+                raise ClerkBindingGenerationConflict(
+                    f"Clerk {clerk_id}'s generation {binding_generation} confirms "
+                    f"tuple ({existing.confirmed_profile_id!r}, "
+                    f"{existing.confirmed_revision!r}); the same generation cannot "
+                    "confirm a different or partial tuple.",
+                    next_step="A changed effective tuple advances the binding "
+                    "generation; re-confirm with the clerk's current tuple.",
                 )
             confirmed = replace(
                 existing,
@@ -1051,6 +1086,20 @@ class FleetControlService:
                 "binding observation; a starting lane is not command-routable.",
             )
         if (
+            assignment.confirmed_agent_instance_id != session.agent_instance_id
+            or assignment.confirmed_routing_epoch != session.routing_epoch
+        ):
+            # A replacement session inherits nothing: until it re-confirms
+            # from the clerk's current effective binding, the lane is still
+            # starting and not command-routable (audit 2026-09-13, finding 1).
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id}'s confirmed binding was presented by session "
+                f"{assignment.confirmed_agent_instance_id}/"
+                f"{assignment.confirmed_routing_epoch}; the current session "
+                f"{session.agent_instance_id}/{session.routing_epoch} has not "
+                "re-confirmed it.",
+            )
+        if (
             expected_binding_generation is not None
             and assignment.confirmed_binding_generation != expected_binding_generation
         ):
@@ -1080,19 +1129,22 @@ class FleetControlService:
         operation_kind: str,
         nonsecret_target_ref: str,
         idempotency_key: str,
-        pinned_routing_epoch: int | None = None,
+        pinned_routing_epoch: int,
+        pinned_agent_instance_id: str,
         pinned_binding_generation: int | None = None,
-        pinned_agent_instance_id: str | None = None,
     ) -> RoutingReceiptRecord:
         """Persist one routing attempt's pinned context *before* dispatch.
 
-        The attempt is recorded as ``not_dispatched`` with the epoch,
-        binding generation and instance the dispatch will be fenced by, so a
-        crash between decision and delivery leaves provable "never sent"
-        evidence (audit 2026-09-13, finding 7). Retrying the same
-        lane-scoped idempotency key returns the existing attempt — unless the
-        retry names a different operation, target or pinned context, which is
-        a conflict, never a silent cross-attribution.
+        The attempt is recorded as ``not_dispatched`` with the epoch and
+        instance of the session the dispatch is fenced by — both mandatory,
+        because a receipt that cannot prove which process received the
+        command cannot stop a retry from crossing a restart — plus the
+        confirmed binding generation when the operation carries one. A crash
+        between decision and delivery leaves provable "never sent" evidence
+        (audit 2026-09-13, finding 7). Retrying the same lane-scoped
+        idempotency key returns the existing attempt — unless the retry names
+        a different operation, target or pinned context, which is a conflict,
+        never a silent cross-attribution.
         """
         now = self._clock()
         existing = self._store.find_routing_receipt_by_idempotency(
@@ -1196,15 +1248,41 @@ class FleetControlService:
                 next_step="Reconcile through the provider clerk's receipt, never by "
                 "rewriting the routing attempt.",
             )
-        now = self._clock()
-        with self._store.transaction() as conn:
-            updated = self._store.update_routing_receipt_outcome(
-                conn,
-                correlation_id=correlation_id,
-                state=outcome,
-                upstream_receipt_ref=upstream_receipt_ref,
-                updated_at_ms=now,
+        if (
+            receipt.state == RoutingReceiptState.DELIVERED
+            and upstream_receipt_ref is not None
+            and receipt.upstream_receipt_ref is not None
+            and upstream_receipt_ref != receipt.upstream_receipt_ref
+        ):
+            # The first delivered provider receipt is the durable one: a late
+            # or conflicting response cannot rewrite which command identity
+            # the success belongs to.
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} is delivered with upstream reference "
+                f"{receipt.upstream_receipt_ref!r}; a different reference "
+                f"{upstream_receipt_ref!r} cannot replace it.",
+                next_step="Reconcile through the provider clerk's receipt, never by "
+                "rewriting the routing attempt.",
             )
+        now = self._clock()
+        try:
+            with self._store.transaction() as conn:
+                updated = self._store.update_routing_receipt_outcome(
+                    conn,
+                    correlation_id=correlation_id,
+                    state=outcome,
+                    upstream_receipt_ref=upstream_receipt_ref,
+                    updated_at_ms=now,
+                )
+        except sqlite3.IntegrityError as exc:
+            # A racing settlement moved the outcome between the read and this
+            # write; the schema trigger is the fence, and the loser gets the
+            # typed conflict rather than a raw constraint traceback.
+            raise ClerkRoutingAttemptConflict(
+                f"Attempt {correlation_id} refused by an outcome fence: {exc}",
+                next_step="Re-read the attempt and reconcile through the provider "
+                "clerk's receipt.",
+            ) from exc
         if not updated:
             raise ClerkRoutingAttemptConflict(
                 f"Attempt {correlation_id} changed while settling; re-read and retry.",
@@ -1280,13 +1358,34 @@ class FleetControlService:
         provider_summary: dict[str, object] | None = None
         confirmed_generation: int | None = None
         confirmed_account: str | None = None
+        # A registry that says one clerk holds several effective assignments
+        # is a corrupted state: it is surfaced (degraded lifecycle, flagged
+        # observation), never averaged or silently first-row-projected.
+        multiple_effective = len(effective) > 1
+        confirmed_by_current_session = bool(
+            effective
+            and session is not None
+            and effective[0].confirmed_agent_instance_id == session.agent_instance_id
+            and effective[0].confirmed_routing_epoch == session.routing_epoch
+        )
         if effective:
-            # One lane serves exactly one confirmed account; a registry that
-            # says otherwise is surfaced, not averaged.
             confirmed_generation = effective[0].confirmed_binding_generation
             confirmed_account = effective[0].canonical_external_account_id
+        # A confirmed observation that belongs to a superseded session does
+        # not make the replacement session ready: the replacement must
+        # re-confirm, and until then the lane projects starting.
+        projected_generation = (
+            confirmed_generation
+            if (confirmed_by_current_session and not multiple_effective)
+            else None
+        )
         effective_state = _project_lifecycle(
-            clerk, session, confirmed_generation, now, self._session_stale_after_ms
+            clerk,
+            session,
+            projected_generation,
+            now,
+            self._session_stale_after_ms,
+            multiple_effective_assignments=multiple_effective,
         )
         if adapter is not None:
             capabilities = tuple(sorted(cap.value for cap in adapter.capabilities))
@@ -1296,8 +1395,10 @@ class FleetControlService:
                     "reported_account_id": session.reported_account_id,
                     "reported_binding_generation": session.reported_binding_generation,
                     "confirmed_binding_generation": confirmed_generation,
+                    "confirmed_by_current_session": confirmed_by_current_session,
                     "confirmed_account_id": confirmed_account,
                     "lifecycle_state": str(effective_state),
+                    "multiple_effective_assignments": multiple_effective,
                 }
                 reported_summary = ProviderSummaryObservation.parse(
                     session.reported_summary_json
@@ -1317,7 +1418,7 @@ class FleetControlService:
             volume_id=clerk.volume_id,
             last_seen_at_ms=None if session is None else session.last_seen_at_ms,
             routing_epoch=None if session is None else session.routing_epoch,
-            effective_binding_generation=confirmed_generation,
+            effective_binding_generation=projected_generation,
             capabilities=capabilities,
             provider_summary=provider_summary,
             observed_at_ms=now,
@@ -1389,6 +1490,12 @@ def _validate_internal_base_url(base_url: str) -> str:
         raise ValueError(
             f"internal base URL {base_url!r} carries user info, query or fragment"
         )
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"internal base URL {base_url!r} carries an invalid port") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"internal base URL {base_url!r} carries an out-of-range port")
     normalized = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
     if len(normalized) > 200:
         raise ValueError("an internal base URL is a short placement value")
@@ -1401,6 +1508,8 @@ def _project_lifecycle(
     confirmed_binding_generation: int | None,
     now: int,
     stale_after_ms: int,
+    *,
+    multiple_effective_assignments: bool = False,
 ) -> ClerkLifecycleState:
     """Durable states pass through; live states project from observations.
 
@@ -1408,7 +1517,9 @@ def _project_lifecycle(
     current liveness (PRD FR-081), so readiness is recomputed from the
     session's freshness and the *confirmed* assignment every time. Readiness
     requires a confirmed binding observation — a heartbeat alone projects at
-    most ``starting`` (audit 2026-09-13, finding 1).
+    most ``starting`` (audit 2026-09-13, finding 1). A clerk the registry
+    says holds several effective assignments is corrupted and projects
+    ``degraded`` rather than presenting an arbitrary one as healthy.
     """
     if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
         return ClerkLifecycleState.RETIRED
@@ -1418,6 +1529,8 @@ def _project_lifecycle(
         return ClerkLifecycleState.PROVISIONED
     if now - session.last_seen_at_ms > stale_after_ms:
         return ClerkLifecycleState.UNREACHABLE
+    if multiple_effective_assignments:
+        return ClerkLifecycleState.DEGRADED
     if session.reported_state == "degraded":
         return ClerkLifecycleState.DEGRADED
     if confirmed_binding_generation is None:

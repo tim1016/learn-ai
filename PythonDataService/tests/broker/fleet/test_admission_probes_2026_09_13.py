@@ -37,7 +37,7 @@ def test_probe_1_a_heartbeat_with_binding_facts_never_opens_execution_routing(
     or confirming: execution routing stays closed."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="probe1", tmp_path=control_dir.parent)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     assert fleet_service.observe_session(
         clerk_id=lane.clerk_id,
@@ -63,7 +63,7 @@ def test_probe_2_same_owner_reservation_resume_succeeds_after_confirmation(
     resume returns the effective row with its confirmed facts untouched."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="probe2", tmp_path=control_dir.parent)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-resume"
@@ -98,13 +98,13 @@ def test_probe_3_a_superseded_sessions_confirmation_refuses_atomically(
     re-confirming from the current binding succeeds."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="probe3", tmp_path=control_dir.parent)
     first = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-super"
     )
     replacement = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id,
+        fleet_protocol_version=2,clerk_id=lane.clerk_id,
         worker_key=lane.worker_key,
         agent_instance_id="agnt_999999999999999999999999",
     )
@@ -144,7 +144,7 @@ def test_probe_4_a_stale_confirmed_generation_refuses_even_from_the_new_session(
     the stale evidence refuses; restoring old bindings is its own ceremony."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="probe4", tmp_path=control_dir.parent)
     first = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-stale"
@@ -158,7 +158,7 @@ def test_probe_4_a_stale_confirmed_generation_refuses_even_from_the_new_session(
         routing_epoch=first.routing_epoch,
     )
     replacement = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id,
+        fleet_protocol_version=2,clerk_id=lane.clerk_id,
         worker_key=lane.worker_key,
         agent_instance_id="agnt_888888888888888888888888",
     )
@@ -202,7 +202,7 @@ def test_registration_cannot_choose_or_move_its_endpoint(
     lane = provision_lane(fleet_service, broker="fake_alpha", label="endpoint", tmp_path=control_dir.parent)
     with pytest.raises(ClerkEndpointNotApproved, match="approved no endpoint"):
         fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id,
+            fleet_protocol_version=2,clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             endpoint_ref="agent:paper-1",
         )
@@ -213,14 +213,14 @@ def test_registration_cannot_choose_or_move_its_endpoint(
     )
     assert approved.base_url == "http://alpaca-paper-clerk:8000"
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id,
+        fleet_protocol_version=2,clerk_id=lane.clerk_id,
         worker_key=lane.worker_key,
         endpoint_ref="agent:paper-1",
     )
     assert session.endpoint_ref == "agent:paper-1"
     with pytest.raises(ClerkEndpointNotApproved):
         fleet_service.register_agent_session(
-            clerk_id=lane.clerk_id,
+            fleet_protocol_version=2,clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             agent_instance_id="agnt_777777777777777777777777",
             endpoint_ref="agent:impostor",
@@ -249,13 +249,20 @@ def test_registration_cannot_choose_or_move_its_endpoint(
 def test_an_agent_speaking_another_protocol_version_refuses(
     control_dir: Path, fleet_service
 ) -> None:
-    """Registration carries the fleet protocol version; a mismatch refuses."""
+    """Registration carries the fleet protocol version; a mismatch — or a
+    registration that omits it — refuses."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="proto", tmp_path=control_dir.parent)
     with pytest.raises(FleetProtocolIncompatible, match="protocol"):
         fleet_service.register_agent_session(
             clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
             fleet_protocol_version=99,
+        )
+    # An unversioned caller is exactly the older agent the fence exists for.
+    with pytest.raises(FleetProtocolIncompatible, match="protocol"):
+        fleet_service.register_agent_session(
+            clerk_id=lane.clerk_id,
+            worker_key=lane.worker_key,
         )
     session = fleet_service.register_agent_session(
         clerk_id=lane.clerk_id,
@@ -334,7 +341,7 @@ def test_lane_summaries_are_bounded_typed_observations(
     free-form agent JSON refuses and nothing unbounded is projected."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="summary", tmp_path=control_dir.parent)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     assert fleet_service.observe_session(
         clerk_id=lane.clerk_id,
@@ -393,7 +400,7 @@ def test_concurrent_confirmations_from_one_session_settle_atomically(
 
     lane = provision_lane(fleet_service, broker="fake_alpha", label="race-confirm", tmp_path=control_dir.parent)
     session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key
     )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-race"
@@ -430,3 +437,138 @@ def test_concurrent_confirmations_from_one_session_settle_atomically(
 
     for outcome in outcomes:
         assert isinstance(outcome, (AccountAssignmentRecord, str))
+
+
+def test_a_replacement_session_is_not_routable_until_it_reconfirms(
+    control_dir: Path, fleet_service
+) -> None:
+    """Regression (PR review): a confirmed clerk that registers a replacement
+    session is not execution-routable on the old confirmation — the new
+    instance must re-confirm from the clerk's current binding."""
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="reconf", tmp_path=control_dir.parent)
+    _first, confirmed = _confirm_lane(fleet_service, lane, account="acct-reconf", generation=4)
+    fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
+
+    replacement = fleet_service.register_agent_session(
+        clerk_id=lane.clerk_id,
+        worker_key=lane.worker_key,
+        fleet_protocol_version=2,
+        agent_instance_id="agnt_666666666666666666666666",
+    )
+    with pytest.raises(ClerkUnreachable, match="has not"):
+        fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
+    # The directory projects starting again until the re-confirmation lands.
+    entry = next(
+        e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
+    )
+    assert entry["lifecycle_state"] == "starting"
+    reconfirmed = fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-reconf",
+        binding_generation=4,
+        agent_instance_id=replacement.agent_instance_id,
+        routing_epoch=replacement.routing_epoch,
+        effective_profile_id=confirmed.effective_profile_id,
+        effective_revision=confirmed.effective_revision,
+    )
+    assert reconfirmed.confirmed_agent_instance_id == replacement.agent_instance_id
+    fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
+
+
+def _confirm_lane(fleet_service, lane, *, account: str, generation: int):
+    """Register, reserve and confirm with a full tuple; returns session+record."""
+    session = fleet_service.register_agent_session(
+        fleet_protocol_version=2,
+        clerk_id=lane.clerk_id,
+        worker_key=lane.worker_key,
+    )
+    fleet_service.reserve_assignment(
+        broker=lane.broker, clerk_id=lane.clerk_id, external_account_id=account
+    )
+    confirmed = fleet_service.confirm_assignment(
+        broker=lane.broker,
+        clerk_id=lane.clerk_id,
+        external_account_id=account,
+        binding_generation=generation,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+        effective_profile_id="prof_1",
+        effective_revision=2,
+    )
+    return session, confirmed
+
+
+def test_one_generation_confirms_one_tuple(
+    control_dir: Path, fleet_service
+) -> None:
+    """Regression (PR review): an equal-generation confirmation naming a
+    different — or missing — tuple refuses; a changed tuple is a new generation."""
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="onetuple", tmp_path=control_dir.parent)
+    session, confirmed = _confirm_lane(fleet_service, lane, account="acct-tuple", generation=6)
+
+    with pytest.raises(ClerkBindingGenerationConflict, match="cannot"):
+        fleet_service.confirm_assignment(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            external_account_id="acct-tuple",
+            binding_generation=6,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            effective_profile_id="prof_2",
+            effective_revision=2,
+        )
+    # A retry that omits the tuple cannot clear what the full confirmation recorded.
+    with pytest.raises(ClerkBindingGenerationConflict, match="partial tuple"):
+        fleet_service.confirm_assignment(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            external_account_id="acct-tuple",
+            binding_generation=6,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+        )
+    # The identical tuple re-acks cleanly.
+    reacked = fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-tuple",
+        binding_generation=6,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+        effective_profile_id=confirmed.effective_profile_id,
+        effective_revision=confirmed.effective_revision,
+    )
+    assert reacked.confirmed_binding_generation == 6
+    # A changed tuple under a new generation advances.
+    advanced = fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-tuple",
+        binding_generation=7,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+        effective_profile_id="prof_2",
+        effective_revision=5,
+    )
+    assert advanced.confirmed_binding_generation == 7
+    assert advanced.confirmed_profile_id == "prof_2"
+
+
+def test_approved_base_urls_carry_usable_ports(
+    control_dir: Path, fleet_service
+) -> None:
+    """Regression (PR review): a hostname-shaped port or an out-of-range port
+    refuses at the ceremony instead of failing at request time."""
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="ports", tmp_path=control_dir.parent)
+    for bad in ("http://agent:not-a-port", "http://agent:70000", "http://agent:0"):
+        with pytest.raises(ValueError, match="port"):
+            fleet_service.approve_endpoint(
+                clerk_id=lane.clerk_id, endpoint_ref="agent:ports", base_url=bad
+            )
+    approved = fleet_service.approve_endpoint(
+        clerk_id=lane.clerk_id,
+        endpoint_ref="agent:ports",
+        base_url="http://agent:8443",
+    )
+    assert approved.base_url == "http://agent:8443"
