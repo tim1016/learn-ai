@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { DeskLens } from './lens';
 import { LensTabsComponent } from './lens-tabs.component';
@@ -59,21 +59,25 @@ describe('LensTabsComponent', () => {
     expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-controls')).toBe('triage-lens-panel');
   });
 
-  it('emits the chosen lens on click only when it differs', async () => {
-    const instance = await renderTabs('trader');
-    const emit = vi.spyOn(instance.lensChange, 'emit');
+  it('emits the chosen lens on click only when it differs from the current one', async () => {
+    const fixture = await render(LensTabsComponent, { componentInputs: { lens: 'trader' } });
+    const emitted: DeskLens[] = [];
+    fixture.fixture.componentInstance.lensChange.subscribe((lens: DeskLens) => emitted.push(lens));
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    expect(emit).toHaveBeenCalledWith('operator');
+    expect(emitted).toEqual(['operator']);
 
-    emit.mockClear();
+    // The host feeds the adopted lens back in; a repeat click is a no-op.
+    fixture.fixture.componentRef.setInput('lens', 'operator');
+    fixture.fixture.detectChanges();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    expect(emit).not.toHaveBeenCalled();
+    expect(emitted).toEqual(['operator']);
   });
 
   it('moves focus with Arrow/Home/End keys and reports the transition', async () => {
-    const instance = await renderTabs('trader');
-    const emit = vi.spyOn(instance.lensChange, 'emit');
+    const fixture = await render(LensTabsComponent, { componentInputs: { lens: 'trader' } });
+    const emitted: DeskLens[] = [];
+    fixture.fixture.componentInstance.lensChange.subscribe((lens: DeskLens) => emitted.push(lens));
 
     const trader = screen.getByRole('tab', { name: 'Trader' });
     const operator = screen.getByRole('tab', { name: 'Operator' });
@@ -81,17 +85,21 @@ describe('LensTabsComponent', () => {
     trader.focus();
     fireEvent.keyDown(trader, { key: 'ArrowRight' });
     expect(document.activeElement).toBe(operator);
-    expect(emit).toHaveBeenCalledWith('operator');
+    expect(emitted).toEqual(['operator']);
     // The component reports the transition; the host owns the selected state,
     // so aria-selected only flips once the host feeds the new lens back in.
     expect(operator.getAttribute('aria-selected')).toBe('false');
 
+    // Host adopted 'operator'; End is now a same-lens no-op.
+    fixture.fixture.componentRef.setInput('lens', 'operator');
+    fixture.fixture.detectChanges();
     fireEvent.keyDown(operator, { key: 'End' });
     expect(document.activeElement).toBe(operator);
+    expect(emitted).toEqual(['operator']);
 
     fireEvent.keyDown(operator, { key: 'Home' });
     expect(document.activeElement).toBe(trader);
-    expect(emit).toHaveBeenCalledWith('trader');
+    expect(emitted).toEqual(['operator', 'trader']);
 
     fireEvent.keyDown(trader, { key: 'ArrowLeft' });
     expect(document.activeElement).toBe(trader);
