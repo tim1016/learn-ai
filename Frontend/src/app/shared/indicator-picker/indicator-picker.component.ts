@@ -1,5 +1,6 @@
 import {
   AfterViewChecked,
+  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
@@ -7,6 +8,7 @@ import {
   input,
   output,
   signal,
+  viewChild,
   viewChildren,
 } from '@angular/core';
 
@@ -30,7 +32,15 @@ export interface IndicatorPickerPreview {
   active: boolean;
 }
 
-interface DecoratedIndicator extends IndicatorInfo {
+/** Optional catalog metadata included in the search index when the backend
+ *  provides it. Absent fields are simply skipped — the picker never requires
+ *  them to render or filter. */
+export interface IndicatorSearchMetadata {
+  aliases?: readonly string[];
+  reference_name?: string;
+}
+
+interface DecoratedIndicator extends IndicatorInfo, IndicatorSearchMetadata {
   pane: IndicatorPane;
 }
 
@@ -41,7 +51,7 @@ interface DecoratedIndicator extends IndicatorInfo {
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { class: 'ip-root' },
 })
-export class IndicatorPickerComponent implements AfterViewChecked {
+export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit {
   // ── Inputs ──────────────────────────────────────────────────
   readonly categories = input<readonly IndicatorCategory[]>([]);
   /** Names of indicators with one or more active instances. Multiple occurrences
@@ -50,6 +60,9 @@ export class IndicatorPickerComponent implements AfterViewChecked {
   readonly presets = input<readonly IndicatorPreset[]>(INDICATOR_PRESETS);
   readonly loading = input<boolean>(false);
   readonly allowAdditionalInstances = input(true);
+  /** Opt-in searchable presentation (PRD §9). Off by default so existing
+   *  consumers keep their current presentation until migrated. */
+  readonly searchable = input(false);
 
   // ── Outputs ─────────────────────────────────────────────────
   readonly add = output<IndicatorPickerAdd>();
@@ -63,6 +76,13 @@ export class IndicatorPickerComponent implements AfterViewChecked {
   protected readonly hoveredName = signal<string | null>(null);
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Search state (PRD §9) ───────────────────────────────────
+  protected readonly searchQuery = signal('');
+  /** Flat-result index of the keyboard-highlighted option, or null. */
+  protected readonly activeIndex = signal<number | null>(null);
+
+  private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('searchInput');
+
   // ── Derived data ────────────────────────────────────────────
   protected readonly allIndicators = computed<DecoratedIndicator[]>(() =>
     this.categories().flatMap(cat =>
@@ -70,12 +90,38 @@ export class IndicatorPickerComponent implements AfterViewChecked {
     ),
   );
 
+  /** Lowercased haystack per indicator — canonical key, reference name,
+   *  display name, description, category, pane, aliases, and parameter
+   *  names. Case-insensitive substring match (PRD §9). */
+  private readonly searchHaystacks = computed<Map<string, string>>(() => {
+    const map = new Map<string, string>();
+    for (const ind of this.allIndicators()) {
+      const parts = [
+        ind.name,
+        ind.reference_name,
+        ind.description,
+        ind.category,
+        ind.pane,
+        ...(ind.aliases ?? []),
+        ...ind.configurable_params.map(p => p.name),
+      ];
+      map.set(ind.name, parts.filter(Boolean).join(' ').toLowerCase());
+    }
+    return map;
+  });
+
   protected readonly visibleIndicators = computed<DecoratedIndicator[]>(() => {
     const cats = this.catFilter();
     const panes = this.paneFilter();
+    const query = this.searchQuery().trim().toLowerCase();
+    const haystacks = this.searchHaystacks();
     return this.allIndicators().filter(i => {
       if (cats.size && !cats.has(i.category)) return false;
       if (panes.size && !panes.has(i.pane)) return false;
+      if (query) {
+        const haystack = haystacks.get(i.name) ?? '';
+        if (!haystack.includes(query)) return false;
+      }
       return true;
     });
   });
@@ -94,6 +140,49 @@ export class IndicatorPickerComponent implements AfterViewChecked {
 
   protected readonly hasFilter = computed(
     () => this.catFilter().size > 0 || this.paneFilter().size > 0,
+  );
+
+  protected readonly hasSearch = computed(() => this.searchQuery().length > 0);
+
+  /** Indicators whose rows the template actually renders — visible indicators
+   *  in categories that are open. While a search is active, categories with
+   *  matches render open automatically, so search results are always
+   *  keyboard-reachable and visibly highlighted. Arrow navigation and Enter
+   *  operate on THIS list, never the unfiltered visible set: highlighting (or
+   *  adding) an indicator in a collapsed category would be invisible. */
+  protected readonly renderedIndicators = computed<DecoratedIndicator[]>(() => {
+    const open = this.openCats();
+    if (this.hasSearch()) return this.visibleIndicators();
+    return this.visibleIndicators().filter((i) => open.has(i.category));
+  });
+
+  /** The keyboard-highlighted option in the rendered result list, or null. */
+  protected readonly activeOption = computed<DecoratedIndicator | null>(() => {
+    const idx = this.activeIndex();
+    if (idx === null) return null;
+    const results = this.renderedIndicators();
+    return idx >= 0 && idx < results.length ? results[idx] : null;
+  });
+
+  /** Whether any option rows are currently rendered (combobox aria-expanded). */
+  protected readonly hasRenderedRows = computed(() => this.renderedIndicators().length > 0);
+
+  /** Stable DOM id for a rendered option row (combobox listbox ownership). */
+  protected optionIdFor(ind: DecoratedIndicator): string {
+    return `ip-opt-${ind.name.replace(/\s+/g, '_')}`;
+  }
+
+  /** id of the row Enter will activate, for the input's aria-activedescendant. */
+  protected activeDescendantId(): string | null {
+    const option = this.activeOption();
+    return option ? this.optionIdFor(option) : null;
+  }
+
+  /** Announcement text for the polite live region (PRD §9). */
+  protected readonly searchAnnouncement = computed(() =>
+    this.hasSearch() || this.hasFilter()
+      ? `${this.totalVisible()} of ${this.totalCatalog()} indicators match`
+      : '',
   );
 
   /** Filtered view grouped by category, preserving canonical order. */
@@ -121,6 +210,78 @@ export class IndicatorPickerComponent implements AfterViewChecked {
       const kind = el.dataset['kind'];
       if (kind) drawPreview(el, kind as ReturnType<typeof previewKindFor>);
     }
+    // Keep the keyboard highlight inside the RENDERED result list (open
+    // categories only) — the list shrinks when a category collapses.
+    const idx = this.activeIndex();
+    const count = this.renderedIndicators().length;
+    if (idx !== null && idx >= count) {
+      this.activeIndex.set(count > 0 ? count - 1 : null);
+    }
+  }
+
+  ngAfterViewInit(): void {
+    // Opening the searchable presentation focuses search (PRD §9). The
+    // non-searchable presentation has no input to focus, so nothing happens.
+    if (this.searchable()) this.searchInput()?.nativeElement.focus();
+  }
+
+  // ── Search (PRD §9) ─────────────────────────────────────────
+  protected onSearchInput(event: Event): void {
+    const value = (event.target as HTMLInputElement).value;
+    this.searchQuery.set(value);
+    this.activeIndex.set(null);
+  }
+
+  protected clearSearch(): void {
+    this.searchQuery.set('');
+    this.activeIndex.set(null);
+    this.searchInput()?.nativeElement.focus();
+  }
+
+  protected onSearchKeydown(event: KeyboardEvent): void {
+    const count = this.renderedIndicators().length;
+    switch (event.key) {
+      case 'ArrowDown':
+      case 'ArrowUp': {
+        if (!count) break;
+        event.preventDefault();
+        const current = this.activeIndex() ?? -1;
+        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        // Wrap around the ends so both arrows always land on an option.
+        const next = (current + delta + count) % count;
+        this.activeIndex.set(next);
+        break;
+      }
+      case 'Home':
+        if (count) {
+          event.preventDefault();
+          this.activeIndex.set(0);
+        }
+        break;
+      case 'End':
+        if (count) {
+          event.preventDefault();
+          this.activeIndex.set(count - 1);
+        }
+        break;
+      case 'Enter': {
+        const option = this.activeOption();
+        if (option) {
+          event.preventDefault();
+          this.onAdd(option);
+        }
+        break;
+      }
+      case 'Escape':
+        // Escape clears search first; with no search text this picker has no
+        // close concept of its own (it's embedded, not a drawer), so the
+        // event is left to the host.
+        if (this.hasSearch()) {
+          event.preventDefault();
+          this.clearSearch();
+        }
+        break;
+    }
   }
 
   // ── Facet toggles ───────────────────────────────────────────
@@ -141,6 +302,12 @@ export class IndicatorPickerComponent implements AfterViewChecked {
   protected clearFilters(): void {
     this.catFilter.set(new Set());
     this.paneFilter.set(new Set());
+  }
+
+  protected clearAll(): void {
+    this.clearFilters();
+    this.activeIndex.set(null);
+    this.searchQuery.set('');
   }
 
   protected toggleCatOpen(name: string): void {

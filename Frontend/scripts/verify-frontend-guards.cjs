@@ -8,6 +8,7 @@ const guardCommands = [
   ["chart timestamp guard", "node", ["scripts/verify-chart-timestamp-guard.cjs"]],
   ["run dock space guard", "node", ["scripts/verify-run-dock-space-guard.cjs"]],
   ["chart resize loop guard", "node", ["scripts/verify-chart-resize-loop-guard.cjs"]],
+  ["chart series color token guard", "node", ["scripts/verify-chart-series-color-tokens-guard.cjs"]],
 ];
 
 for (const [label, command, args] of guardCommands) {

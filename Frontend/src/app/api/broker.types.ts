@@ -3763,6 +3763,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dataset/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Plan Dataset
+         * @description Resolve a dataset recipe into a fetch-free planning receipt.
+         *
+         *     Planning touches only the local NYSE calendar — it never calls
+         *     Polygon. Bar counts are arithmetic estimates typed with assumptions
+         *     and provenance; output columns come from the same projection
+         *     function the ZIP generation path uses (data-lab workspace redesign
+         *     PRD §12).
+         */
+        post: operations["plan_dataset_api_dataset_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dataset/validation-report": {
         parameters: {
             query?: never;
@@ -11510,6 +11536,11 @@ export interface components {
              */
             adjusted?: boolean;
             /**
+             * End Ms Utc
+             * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.
+             */
+            end_ms_utc?: number | null;
+            /**
              * Fail On Gaps
              * @description Reject intra-day gaps. Disable only together with explicit forward_fill=True.
              * @default true
@@ -11613,6 +11644,11 @@ export interface components {
              */
             sort?: string;
             /**
+             * Start Ms Utc
+             * @description Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).
+             */
+            start_ms_utc?: number | null;
+            /**
              * Ticker
              * @description Ticker symbol
              */
@@ -11634,6 +11670,239 @@ export interface components {
              * @default true
              */
             warmup?: boolean;
+        };
+        /**
+         * DatasetPlanRequest
+         * @description Request for ``POST /api/dataset/plan`` — local, fetch-free planning.
+         *
+         *     Mirrors the generation-relevant core of
+         *     :class:`DatasetGenerationRequest` so a recipe can be planned and
+         *     executed with the same fields. ``from_date``/``to_date`` remain
+         *     date-intent strings for now; the additive ``start_ms_utc``/
+         *     ``end_ms_utc`` fields are the canonical numeric form and take
+         *     precedence over the date strings when supplied (data-lab workspace
+         *     redesign PRD §12).
+         */
+        DatasetPlanRequest: {
+            /**
+             * Adjust For Dividends
+             * @description TV-style dividend adjustment; requires the dividends reference companion at generation time.
+             * @default false
+             */
+            adjust_for_dividends?: boolean;
+            /**
+             * Adjusted
+             * @description Polygon adjusted=true — adjusts for SPLITS ONLY (see docs/tv-polygon-validation-gotchas.md §1).
+             * @default true
+             */
+            adjusted?: boolean;
+            /**
+             * End Ms Utc
+             * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date.
+             */
+            end_ms_utc?: number | null;
+            /**
+             * Forward Fill
+             * @description Explicitly synthesize missing minute bars from the previous close (volume=0)
+             * @default false
+             */
+            forward_fill?: boolean;
+            /**
+             * From Date
+             * @description Start date intent (YYYY-MM-DD)
+             */
+            from_date: string;
+            /**
+             * Include Dividends
+             * @description Companion flag: bundle dividends.csv
+             * @default false
+             */
+            include_dividends?: boolean;
+            /**
+             * Include Financials
+             * @description Companion flag: bundle financials.csv
+             * @default false
+             */
+            include_financials?: boolean;
+            /**
+             * Include News
+             * @description Companion flag: bundle news.csv
+             * @default false
+             */
+            include_news?: boolean;
+            /**
+             * Include Previous Close
+             * @description Add a 'PC' prior-session-close column
+             * @default true
+             */
+            include_previous_close?: boolean;
+            /**
+             * Include Quality Report
+             * @description Companion flag: run the data-quality pipeline on the fetched bars and bundle quality_report.md — additional Polygon fetches and compute at generation time.
+             * @default false
+             */
+            include_quality_report?: boolean;
+            /**
+             * Include Quotes
+             * @description Companion flag: bundle quotes.csv (tick-level)
+             * @default false
+             */
+            include_quotes?: boolean;
+            /**
+             * Include Splits
+             * @description Companion flag: bundle splits.csv
+             * @default false
+             */
+            include_splits?: boolean;
+            /**
+             * Include Ticker Overview
+             * @description Companion flag: bundle ticker_overview.json
+             * @default false
+             */
+            include_ticker_overview?: boolean;
+            /**
+             * Include Trades
+             * @description Companion flag: bundle trades.csv (tick-level)
+             * @default false
+             */
+            include_trades?: boolean;
+            /**
+             * Indicator Entries
+             * @description List of indicator entries, each with 'name' and optional 'params' dict.
+             * @default []
+             */
+            indicator_entries?: Record<string, never>[];
+            /**
+             * Multiplier
+             * @description Bar multiplier (e.g., 5 with timespan='minute')
+             * @default 1
+             */
+            multiplier?: number;
+            /** @description Optional options companion config; planned workload is estimated, never fetched. */
+            options_companion?: components["schemas"]["OptionsCompanionConfig"] | null;
+            /**
+             * Session
+             * @description 'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours
+             * @default extended
+             */
+            session?: string;
+            /**
+             * Start Ms Utc
+             * @description Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date.
+             */
+            start_ms_utc?: number | null;
+            /**
+             * Ticker
+             * @description Ticker symbol
+             */
+            ticker: string;
+            /**
+             * Timespan
+             * @description Bar timespan: 'second', 'minute', 'hour', or 'day'+
+             * @default minute
+             */
+            timespan?: string;
+            /**
+             * To Date
+             * @description End date intent (YYYY-MM-DD)
+             */
+            to_date: string;
+        };
+        /**
+         * DatasetPlanResponse
+         * @description Fetch-free planning receipt for a dataset generation recipe.
+         */
+        DatasetPlanResponse: {
+            /**
+             * Allowed Timeframes
+             * @description Chart timeframes whose estimated bar count stays under the chart bar budget.
+             */
+            allowed_timeframes: string[];
+            /**
+             * Calendar Timezone
+             * @description Exchange calendar timezone (IANA name).
+             */
+            calendar_timezone: string;
+            /**
+             * Calendar Version
+             * @description Version of the underlying calendar library.
+             */
+            calendar_version: string;
+            /**
+             * Companion Dependencies
+             * @description Companion data sources the generation run would fetch (names, not payloads).
+             */
+            companion_dependencies: string[];
+            /**
+             * Estimate Assumptions
+             * @description Explicit assumptions behind estimated_bars; the estimate is only meaningful with these.
+             */
+            estimate_assumptions: string[];
+            /**
+             * Estimate Provenance
+             * @description Where the estimate's inputs came from (calendar source and method).
+             */
+            estimate_provenance: string;
+            /**
+             * Estimated Bars
+             * @description ESTIMATE only — arithmetic from session count and timeframe. No bars were fetched.
+             */
+            estimated_bars: number;
+            /**
+             * Exchange
+             * @description Exchange the calendar resolves against (e.g. NYSE).
+             */
+            exchange: string;
+            /**
+             * Exchange Session Opens Ms Utc
+             * @description Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.
+             */
+            exchange_session_opens_ms_utc: number[];
+            /**
+             * Exchange Sessions
+             * @description Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.
+             */
+            exchange_sessions: string[];
+            /**
+             * Output Column Count
+             * @description len(output_columns)
+             */
+            output_column_count: number;
+            /**
+             * Output Columns
+             * @description Canonical ordered output column list, projected by the same function the ZIP path uses.
+             */
+            output_columns: string[];
+            /**
+             * Recommended Timeframes
+             * @description Timeframe(s) recommended for interactive charting over this range.
+             */
+            recommended_timeframes: string[];
+            /**
+             * Session Count
+             * @description Number of scheduled exchange sessions in range
+             */
+            session_count: number;
+            /**
+             * Ticker
+             * @description Ticker the plan was resolved for
+             */
+            ticker: string;
+            /**
+             * Warnings
+             * @description Human-readable cautions (tick-level volume, options workload, …).
+             */
+            warnings: string[];
+            /**
+             * Window End Ms Utc
+             * @description Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.
+             */
+            window_end_ms_utc: number;
+            /**
+             * Window Start Ms Utc
+             * @description Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.
+             */
+            window_start_ms_utc: number;
         };
         /**
          * DatasetZipJobRequest
@@ -32130,6 +32399,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_dataset_api_dataset_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetPlanResponse"];
                 };
             };
             /** @description Validation Error */

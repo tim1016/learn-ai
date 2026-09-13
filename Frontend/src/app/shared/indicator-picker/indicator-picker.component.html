@@ -8,6 +8,30 @@
   </span>
 </div>
 
+<!-- Search (opt-in, PRD §9) -->
+@if (searchable()) {
+  <div class="ip-search">
+    <input #searchInput
+           class="ip-search-input"
+           type="search"
+           role="combobox"
+           placeholder="Search indicators…"
+           aria-label="Search indicators"
+           [attr.aria-expanded]="hasRenderedRows()"
+           aria-controls="ip-rows"
+           [attr.aria-activedescendant]="activeDescendantId()"
+           [value]="searchQuery()"
+           (input)="onSearchInput($event)"
+           (keydown)="onSearchKeydown($event)" />
+    @if (hasSearch()) {
+      <button class="ip-search-clear" type="button" (click)="clearSearch()">
+        Clear search
+      </button>
+    }
+  </div>
+  <span class="ip-sr-only" role="status" aria-live="polite">{{ searchAnnouncement() }}</span>
+}
+
 @if (loading()) {
   <div class="ip-empty"><strong>Loading indicators…</strong></div>
 } @else {
@@ -62,21 +86,23 @@
   </div>
 
   <!-- Categories / rows -->
-  <div class="ip-cats">
+  <div class="ip-cats" id="ip-rows">
     @if (totalVisible() === 0) {
       <div class="ip-empty">
         <strong>No indicators match these filters</strong>
-        Try removing a pane or category constraint.
-        @if (hasFilter()) {
+        Try removing a pane or category constraint, or clearing the search.
+        @if (hasFilter() || hasSearch()) {
           <br/>
-          <button class="ip-link" type="button" (click)="clearFilters()">
-            Clear all filters
+          <button class="ip-link" type="button" (click)="clearAll()">
+            Clear search and filters
           </button>
         }
       </div>
     } @else {
       @for (group of groupedView(); track group.name) {
-        @let open = isCatOpen(group.name);
+        <!-- Categories with search matches render open so every keyboard
+             option in renderedIndicators() is visibly highlighted. -->
+        @let open = isCatOpen(group.name) || (hasSearch() && group.indicators.length > 0);
         @let staged = stagedInCat(group.name);
         <div class="ip-cat"
              [attr.data-cat]="group.name"
@@ -98,11 +124,18 @@
           </button>
 
           @if (open) {
-            <div class="ip-cat-list">
+            <div class="ip-cat-list"
+                 role="listbox"
+                 [attr.aria-label]="group.name + ' indicators'">
               @for (ind of group.indicators; track ind.name) {
                 @let active = activeCountFor(ind.name);
                 @let isHovered = hoveredName() === ind.name;
+                @let isActiveOption = activeOption()?.name === ind.name;
                 <div class="ip-row"
+                     role="option"
+                     [id]="optionIdFor(ind)"
+                     [attr.aria-selected]="isActiveOption ? 'true' : 'false'"
+                     [class.ip-row--active-option]="isActiveOption"
                      [attr.data-name]="ind.name"
                      [attr.data-active]="active > 0"
                      (mouseenter)="onRowEnter(ind)"

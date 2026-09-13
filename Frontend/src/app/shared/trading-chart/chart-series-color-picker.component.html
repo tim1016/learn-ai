@@ -1,0 +1,20 @@
+<div class="cscp-group" role="radiogroup" [attr.aria-label]="groupLabel()">
+  @for (token of tokens; track token) {
+    <button #swatchRadio
+            class="cscp-swatch"
+            type="button"
+            role="radio"
+            [attr.data-token]="token"
+            [attr.aria-checked]="isSelected(token)"
+            [attr.aria-label]="labelFor(token)"
+            [attr.tabindex]="tabIndexFor(token)"
+            (click)="select(token)"
+            (keydown)="onRadioKeydown($event, $index)">
+      <span class="cscp-dot" [style.background]="swatchFor(token)"></span>
+      <span class="cscp-label">{{ labelFor(token) }}</span>
+      @if (isSelected(token)) {
+        <span class="cscp-check" aria-hidden="true">✓</span>
+      }
+    </button>
+  }
+</div>

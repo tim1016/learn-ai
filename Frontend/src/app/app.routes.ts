@@ -133,10 +133,13 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Data Lab shell (explore / export / validate child routes). The route
+    // config owns the component-scoped workspace store — see
+    // components/data-lab/data-lab.routes.ts (PRD 2026-09-12 §7.1).
     path: "data-lab",
-    loadComponent: () =>
-      import("./components/data-lab/data-lab.component").then(
-        (m) => m.DataLabComponent
+    loadChildren: () =>
+      import("./components/data-lab/data-lab.routes").then(
+        (m) => m.DATA_LAB_ROUTES
       ),
   },
   {
@@ -157,8 +160,11 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
+    // Legacy /data-quality bookmark → the Validate child route (PRD §7.1).
+    // Any query params pass through; the Data Lab shell normalizes legacy
+    // query state after landing.
     path: "data-quality",
-    redirectTo: "data-lab",
+    redirectTo: "data-lab/validate",
     pathMatch: "full",
   },
   {

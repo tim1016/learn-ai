@@ -1,0 +1,387 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+  viewChild,
+} from '@angular/core';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import type { TickerRange } from '../../../shared/ticker-range-picker';
+import { IndicatorCatalogService } from '../../../shared/indicator-catalog/indicator-catalog.service';
+
+import {
+  DataLabChartComponent,
+} from '../data-lab-chart/data-lab-chart.component';
+import type {
+  DataLabSessionChartSnapshot,
+} from '../../../services/data-lab-session.service';
+import { QualityModalComponent } from '../quality-modal/quality-modal.component';
+import { IndicatorConfigModalComponent } from '../indicator-config-modal/indicator-config-modal.component';
+import type { ActiveIndicatorEntry } from '../active-indicator-card/active-indicator-card.component';
+import { ExploreScopeDrawerComponent } from './explore-scope-drawer/explore-scope-drawer.component';
+import {
+  ExploreIndicatorControlsComponent,
+} from './explore-indicator-controls/explore-indicator-controls.component';
+import type { IndicatorPickerAdd } from '../../../shared/indicator-picker/indicator-picker.component';
+import type { ChartSeriesColorToken } from '../../../shared/trading-chart/chart-series-color-tokens';
+import { ExploreHeadlinesComponent } from './explore-headlines/explore-headlines.component';
+
+import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
+import {
+  buildChartRequestBody,
+  mapSessionToWire,
+  utcMsToIsoDate,
+} from '../data-lab-request-mapper';
+
+/**
+ * Data Lab Explore (PRD §7.3).
+ *
+ * Chart-first. The ONLY trigger for chart fetches is the explicit
+ * **Refresh chart** button — scope/recipe edits mark the chart stale and
+ * the last good chart stays visible behind an "Out of date" badge. The
+ * chart request body always comes from the pure mapper
+ * ({@link buildChartRequestBody}) — one path.
+ */
+@Component({
+  selector: 'app-data-lab-explore',
+  imports: [
+    AssetIdentityComponent,
+    DataLabChartComponent,
+    QualityModalComponent,
+    IndicatorConfigModalComponent,
+    ExploreScopeDrawerComponent,
+    ExploreIndicatorControlsComponent,
+    ExploreHeadlinesComponent,
+  ],
+  templateUrl: './explore.component.html',
+  styleUrls: ['./explore.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class ExploreComponent {
+  readonly store = inject(DataLabWorkspaceStore);
+  private readonly catalog = inject(IndicatorCatalogService);
+
+  readonly chartComponent = viewChild<DataLabChartComponent>('chartComponent');
+
+  /** Whether the chart has ever been requested — the canvas is hidden via
+   *  @if until the first explicit refresh (PRD §16 empty state). */
+  readonly chartRendered = signal(false);
+  readonly chartRefreshing = signal(false);
+  /** True between handing the chart component a fetch and that fetch
+   *  settling — distinguishes "not started" from "finished" when the
+   *  chart's `loading` signal is observed. */
+  private readonly chartFetchIssued = signal(false);
+  readonly computeAllIndicators = signal(false);
+
+  // ── Drawers ───────────────────────────────────────────────
+  readonly scopeDrawerOpen = signal(false);
+  readonly indicatorsDrawerOpen = signal(false);
+  readonly chipsExpanded = signal(false);
+
+  /** Two-way picker state for the Edit-scope drawer. String dates live
+   *  ONLY here and convert to int64 ms at the apply boundary. */
+  readonly scopeRange = signal<TickerRange>({
+    symbol: '',
+    from: '',
+    to: '',
+    resolution: 'minute',
+    autoFetch: false,
+  });
+
+  constructor() {
+    this.catalog.load();
+    this.syncScopeRangeFromDraft();
+
+    // A saved-session chart snapshot restored by the shell renders cached
+    // bars with no HTTP call; the chart is marked stale meanwhile.
+    effect(
+      () => {
+        const snapshot = this.store.restoredChartSnapshot() as DataLabSessionChartSnapshot | null;
+        if (!snapshot) return;
+        untracked(() => {
+          this.chartRendered.set(true);
+          this.store.clearRestoredChartSnapshot();
+          setTimeout(() => {
+            this.chartComponent()?.loadCachedData({
+              bars: snapshot.bars,
+              indicators: snapshot.indicators,
+              quality: snapshot.quality,
+              allowedTimeframes: snapshot.allowedTimeframes,
+              estimatedBarsPerTimeframe: snapshot.estimatedBarsPerTimeframe,
+              recommendedTimeframe: snapshot.recommendedTimeframe,
+              visibleIndicatorIds: snapshot.visibleIndicatorIds,
+              timeframe: snapshot.timeframe,
+              barSources: snapshot.barSources ?? null,
+            });
+          });
+        });
+      },
+      { allowSignalWrites: true },
+    );
+
+    // Settle an in-flight refresh from the chart component's own lifecycle:
+    // `loading` flips false in the fetch's finally block, on success AND on
+    // failure. Until then chartRefreshing stays true (the refresh button
+    // stays disabled, so requests can't overlap) and the store's stale flag
+    // stays set (a failed fetch must leave the old bars visibly out of
+    // date, not looking current). The fetchIssued guard keeps the freshly
+    // mounted chart (viewChild present, loading still false, no fetch
+    // started) from settling the refresh early.
+    effect(
+      () => {
+        const chart = this.chartComponent();
+        if (!chart) return;
+        const loading = chart.loading();
+        untracked(() => {
+          if (!loading && this.chartFetchIssued() && this.chartRefreshing()) {
+            this.chartFetchIssued.set(false);
+            this.chartRefreshing.set(false);
+            this.store.settleChartRequest();
+          }
+        });
+      },
+      { allowSignalWrites: true },
+    );
+  }
+
+  // ── Committed scope → chart inputs ────────────────────────
+  readonly chartTicker = computed(() => this.store.committedTicker());
+  readonly chartFromDate = computed(() => {
+    const w = this.store.committedWindow();
+    return w ? utcMsToIsoDate(w.startMsUtc) : '';
+  });
+  readonly chartToDate = computed(() => {
+    const w = this.store.committedWindow();
+    return w ? utcMsToIsoDate(w.endMsUtc) : '';
+  });
+  readonly chartTimeframe = computed(() => {
+    // Chart policy reads the COMMITTED scope — a fetch must never mix a
+    // committed ticker/window with uncommitted draft bar policy.
+    const d = this.store.committedScope();
+    if (!d) return '1D';
+    if (d.timespan === 'minute') return `${d.multiplier}m`;
+    if (d.timespan === 'hour') return `${d.multiplier}h`;
+    if (d.timespan === 'day') return d.multiplier === 1 ? '1D' : `${d.multiplier}D`;
+    if (d.timespan === 'week') return `${d.multiplier}W`;
+    if (d.timespan === 'month') return `${d.multiplier}M`;
+    return '1D';
+  });
+  readonly hasCommittedScope = computed(
+    () => !!this.store.committedTicker() && !!this.store.committedWindow(),
+  );
+
+  /** Wire-vocabulary session for the chart component's own POST body —
+   *  Python only recognizes `rth`, while the store's default is `regular`. */
+  readonly chartSession = computed(() =>
+    mapSessionToWire(this.store.committedScope()?.session ?? this.store.draft().session),
+  );
+
+  readonly canRefresh = computed(() => this.hasCommittedScope() && !this.chartRefreshing());
+
+  /** The one and only chart fetch trigger (FR-003). Bar policy comes from
+   *  the committed scope, never the draft. */
+  refreshChart(): void {
+    const scope = this.store.committedScope();
+    if (!scope) return;
+    const body = buildChartRequestBody({
+      ticker: scope.ticker,
+      window: scope.window,
+      timeframe: this.chartTimeframe(),
+      session: scope.session,
+      forwardFill: scope.forwardFill,
+      adjusted: scope.adjusted,
+      indicators: this.store.indicators(),
+      computeAllIndicators: this.computeAllIndicators(),
+    });
+    // Records the request signature WITHOUT clearing the stale flag — the
+    // settle effect above clears chartRefreshing and the stale flag when
+    // the chart component's fetch finishes (success or failure).
+    this.store.recordChartRequest(JSON.stringify(body));
+    this.chartRendered.set(true);
+    this.chartRefreshing.set(true);
+    // Defer so a first-time @if mount can populate the viewchild.
+    setTimeout(() => {
+      const chart = this.chartComponent();
+      if (!chart) {
+        this.chartRefreshing.set(false);
+        this.store.settleChartRequest();
+        return;
+      }
+      this.chartFetchIssued.set(true);
+      chart.fetchData();
+    });
+  }
+
+  onChartDataLoaded(event: DataLabSessionChartSnapshot): void {
+    this.store.setLatestChartSnapshot(event);
+    this.lastQuality.set(event.quality);
+  }
+
+  onChartTimeframeRejected(event: { requested: string; recommended: string }): void {
+    // Server-authored recovery choice (PRD §16): apply the recommendation to
+    // the draft scope AND commit it — chart fetches read the committed scope,
+    // so without the commit the next explicit refresh would resend the just
+    // rejected timeframe forever. The user still refreshes explicitly.
+    const parsed = /^(\d+)([mhDWM])$/.exec(event.recommended);
+    if (!parsed) return;
+    const multiplier = parseInt(parsed[1], 10);
+    const timespan =
+      parsed[2] === 'm' ? 'minute' :
+      parsed[2] === 'h' ? 'hour' :
+      parsed[2] === 'D' ? 'day' :
+      parsed[2] === 'W' ? 'week' : 'month';
+    this.store.patchDraft({ timespan, multiplier, timeframe: event.recommended });
+    this.store.commitScope();
+    this.store.markChartStale();
+  }
+
+  // ── Quality / provenance status row ───────────────────────
+  readonly lastQuality = signal<DataLabSessionChartSnapshot['quality'] | null>(null);
+  readonly qualityModalOpen = signal(false);
+
+  readonly qualitySummary = computed(() => {
+    const q = this.lastQuality();
+    if (!q) return 'No chart yet — refresh to load quality evidence.';
+    const issues = q.gaps_found + q.duplicates_removed + q.missing_sessions + q.synthetic_bars;
+    return issues === 0
+      ? 'Quality clean — no gaps, duplicates, or synthetic bars.'
+      : `Quality issues found: ${issues} total (gaps ${q.gaps_found}, duplicates ${q.duplicates_removed}, missing sessions ${q.missing_sessions}, synthetic ${q.synthetic_bars}).`;
+  });
+
+  // ── Edit-scope drawer ─────────────────────────────────────
+  private syncScopeRangeFromDraft(): void {
+    const draft = this.store.draft();
+    this.scopeRange.set({
+      symbol: draft.ticker,
+      from: utcMsToIsoDate(draft.window.startMsUtc),
+      to: utcMsToIsoDate(draft.window.endMsUtc),
+      resolution: draft.timespan === 'hour' ? 'hour' : draft.timespan === 'minute' ? 'minute' : 'daily',
+      autoFetch: false,
+    });
+  }
+
+  openScopeDrawer(): void {
+    this.syncScopeRangeFromDraft();
+    this.scopeDrawerOpen.set(true);
+  }
+
+  /** Apply the drawer's picker state: string dates → int64 ms at this
+   *  boundary only, then commit through the store. */
+  applyScopeDrawer(): void {
+    const range = this.scopeRange();
+    const start = new Date(`${range.from}T00:00:00Z`).getTime();
+    const end = new Date(`${range.to}T00:00:00Z`).getTime();
+    this.store.patchDraft({
+      ticker: range.symbol,
+      window: { startMsUtc: start, endMsUtc: end },
+      timespan: range.resolution === 'daily' ? 'day' : range.resolution,
+    });
+    this.store.commitScope();
+    this.scopeDrawerOpen.set(false);
+  }
+
+  // ── Indicators drawer + chips ─────────────────────────────
+  readonly catalogCategories = this.catalog.categories;
+  readonly catalogLoading = this.catalog.loading;
+
+  readonly activeIndicatorCount = computed(() => this.store.indicators().length);
+
+  readonly chipEntries = computed(() =>
+    this.store.indicators().map((i) => ({
+      instance: i,
+      label: `${i.canonicalKey}(${Object.values(i.params).join(', ')})`,
+    })),
+  );
+
+  onPickerAdd(event: IndicatorPickerAdd): void {
+    const info = this.catalog.get(event.name);
+    const params = { ...event.params };
+    if (info) {
+      for (const p of info.configurable_params) {
+        if (!(p.name in params)) params[p.name] = p.default;
+      }
+    }
+    this.store.addIndicator(event.name, params);
+  }
+
+  removeIndicator(id: string): void {
+    this.store.removeIndicator(id);
+  }
+
+  onColorTokenSelected(instanceId: string, token: ChartSeriesColorToken): void {
+    this.store.setColorToken(instanceId, token);
+  }
+
+  // ── Indicator configure modal ─────────────────────────────
+  readonly configuringInstanceId = signal<string | null>(null);
+
+  readonly configuringEntry = computed<ActiveIndicatorEntry | null>(() => {
+    const id = this.configuringInstanceId();
+    if (!id) return null;
+    const instance = this.store.indicators().find((i) => i.id === id);
+    return instance ? { name: instance.canonicalKey, params: { ...instance.params } } : null;
+  });
+
+  readonly configuringParamConfigs = computed(() => {
+    const entry = this.configuringEntry();
+    return entry ? (this.catalog.get(entry.name)?.configurable_params ?? []) : [];
+  });
+
+  readonly activeIndicatorNames = computed(() =>
+    Array.from(new Set(this.store.indicators().map((i) => i.canonicalKey))),
+  );
+
+  onModalParamChange(change: { name: string; value: number }): void {
+    const id = this.configuringInstanceId();
+    if (!id) return;
+    const instance = this.store.indicators().find((i) => i.id === id);
+    if (!instance) return;
+    // Marks the chart stale via the store on success (PRD §9). The identity
+    // is parameter-aware — follow the instance to its new id.
+    const next = this.store.updateIndicator(id, { ...instance.params, [change.name]: change.value });
+    if (next) this.configuringInstanceId.set(next);
+  }
+
+  onModalResetDefaults(): void {
+    const id = this.configuringInstanceId();
+    if (!id) return;
+    const instance = this.store.indicators().find((i) => i.id === id);
+    if (!instance) return;
+    const defaults = this.catalog.defaultParams(instance.canonicalKey);
+    const next = this.store.updateIndicator(id, defaults);
+    if (next) this.configuringInstanceId.set(next);
+  }
+
+  onModalResetParam(paramName: string): void {
+    const id = this.configuringInstanceId();
+    if (!id) return;
+    const instance = this.store.indicators().find((i) => i.id === id);
+    if (!instance) return;
+    const def = this.catalog.get(instance.canonicalKey)?.configurable_params.find(
+      (p) => p.name === paramName,
+    );
+    if (!def) return;
+    const next = this.store.updateIndicator(id, { ...instance.params, [paramName]: def.default });
+    if (next) this.configuringInstanceId.set(next);
+  }
+
+  onModalAddRelated(name: string): void {
+    this.store.addIndicator(name, this.catalog.defaultParams(name));
+  }
+
+  onModalRemoveRelated(name: string): void {
+    const match = [...this.store.indicators()].reverse().find((i) => i.canonicalKey === name);
+    if (match) this.store.removeIndicator(match.id);
+  }
+
+  onModalAddPreview(payload: { key: string; params: Record<string, number> }): void {
+    this.store.addIndicator(payload.key, payload.params);
+  }
+
+  onModalVisibleChange(open: boolean): void {
+    if (!open) this.configuringInstanceId.set(null);
+  }
+}

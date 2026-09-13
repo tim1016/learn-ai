@@ -510,3 +510,63 @@
   padding: 0;
   margin-top: 6px;
 }
+
+/* ── Search (PRD §9, opt-in) ─────────────────────────────── */
+.ip-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ip-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: var(--ip-fs, 13px);
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius, 4px);
+
+  &:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+  }
+  &::placeholder {
+    color: var(--text-muted);
+  }
+}
+.ip-search-clear {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent-text);
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+.ip-row--active-option {
+  background: var(--bg-hover);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Screen-reader-only live region for the result-count announcement. */
+.ip-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

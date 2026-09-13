@@ -1,0 +1,90 @@
+// Data Lab Explore (PRD §7.3 / §8) — document scroll, no fixed rails.
+// Drawer, indicator-control, and headline styles live with their extracted
+// components (emulated encapsulation keeps them scoped).
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.explore__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.explore__primary {
+  background: $accent;
+  color: var(--text-on-accent);
+  border-color: $accent;
+  font-weight: 600;
+}
+
+.explore__ticker {
+  min-width: 0;
+}
+
+.explore__muted {
+  color: $text-secondary;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explore__stale {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+// ── Chart canvas ──────────────────────────────────────────
+.explore__chart {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+}
+
+// ── Quality status row ────────────────────────────────────
+.explore__quality {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  p {
+    margin: 0;
+    min-width: 0;
+    flex: 1 1 16rem;
+  }
+
+  button {
+    min-height: 44px;
+    padding: 0 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-surface;
+    color: $text-primary;
+    cursor: pointer;
+  }
+}

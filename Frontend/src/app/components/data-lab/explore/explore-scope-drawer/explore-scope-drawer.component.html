@@ -1,0 +1,20 @@
+@if (open()) {
+  <section class="explore__drawer" role="region" aria-label="Edit scope">
+    <div class="explore__drawer-head">
+      <h2>Edit scope</h2>
+      <button type="button" (click)="openChange.emit(false)" aria-label="Close edit scope">Close</button>
+    </div>
+    <app-ticker-range-picker
+      [value]="range()"
+      (valueChange)="rangeChange.emit($event)"
+      [hideSampling]="true"
+      [showAutoFetch]="false"
+      presentation="card"
+      title="Data Lab scope"
+    />
+    <div class="explore__drawer-actions">
+      <button type="button" class="explore__primary" (click)="apply.emit()">Apply scope</button>
+      <button type="button" (click)="openChange.emit(false)">Cancel</button>
+    </div>
+  </section>
+}

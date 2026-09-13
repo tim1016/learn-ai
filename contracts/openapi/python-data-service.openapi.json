@@ -11622,6 +11622,20 @@
             "title": "Adjusted",
             "type": "boolean"
           },
+          "end_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.",
+            "title": "End Ms Utc"
+          },
           "fail_on_gaps": {
             "default": true,
             "description": "Reject intra-day gaps. Disable only together with explicit forward_fill=True.",
@@ -11741,6 +11755,20 @@
             "title": "Sort",
             "type": "string"
           },
+          "start_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).",
+            "title": "Start Ms Utc"
+          },
           "ticker": {
             "description": "Ticker symbol",
             "maxLength": 20,
@@ -11772,6 +11800,319 @@
           "to_date"
         ],
         "title": "DatasetGenerationRequest",
+        "type": "object"
+      },
+      "DatasetPlanRequest": {
+        "description": "Request for ``POST /api/dataset/plan`` \u2014 local, fetch-free planning.\n\nMirrors the generation-relevant core of\n:class:`DatasetGenerationRequest` so a recipe can be planned and\nexecuted with the same fields. ``from_date``/``to_date`` remain\ndate-intent strings for now; the additive ``start_ms_utc``/\n``end_ms_utc`` fields are the canonical numeric form and take\nprecedence over the date strings when supplied (data-lab workspace\nredesign PRD \u00a712).",
+        "properties": {
+          "adjust_for_dividends": {
+            "default": false,
+            "description": "TV-style dividend adjustment; requires the dividends reference companion at generation time.",
+            "title": "Adjust For Dividends",
+            "type": "boolean"
+          },
+          "adjusted": {
+            "default": true,
+            "description": "Polygon adjusted=true \u2014 adjusts for SPLITS ONLY (see docs/tv-polygon-validation-gotchas.md \u00a71).",
+            "title": "Adjusted",
+            "type": "boolean"
+          },
+          "end_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date.",
+            "title": "End Ms Utc"
+          },
+          "forward_fill": {
+            "default": false,
+            "description": "Explicitly synthesize missing minute bars from the previous close (volume=0)",
+            "title": "Forward Fill",
+            "type": "boolean"
+          },
+          "from_date": {
+            "description": "Start date intent (YYYY-MM-DD)",
+            "title": "From Date",
+            "type": "string"
+          },
+          "include_dividends": {
+            "default": false,
+            "description": "Companion flag: bundle dividends.csv",
+            "title": "Include Dividends",
+            "type": "boolean"
+          },
+          "include_financials": {
+            "default": false,
+            "description": "Companion flag: bundle financials.csv",
+            "title": "Include Financials",
+            "type": "boolean"
+          },
+          "include_news": {
+            "default": false,
+            "description": "Companion flag: bundle news.csv",
+            "title": "Include News",
+            "type": "boolean"
+          },
+          "include_previous_close": {
+            "default": true,
+            "description": "Add a 'PC' prior-session-close column",
+            "title": "Include Previous Close",
+            "type": "boolean"
+          },
+          "include_quality_report": {
+            "default": false,
+            "description": "Companion flag: run the data-quality pipeline on the fetched bars and bundle quality_report.md \u2014 additional Polygon fetches and compute at generation time.",
+            "title": "Include Quality Report",
+            "type": "boolean"
+          },
+          "include_quotes": {
+            "default": false,
+            "description": "Companion flag: bundle quotes.csv (tick-level)",
+            "title": "Include Quotes",
+            "type": "boolean"
+          },
+          "include_splits": {
+            "default": false,
+            "description": "Companion flag: bundle splits.csv",
+            "title": "Include Splits",
+            "type": "boolean"
+          },
+          "include_ticker_overview": {
+            "default": false,
+            "description": "Companion flag: bundle ticker_overview.json",
+            "title": "Include Ticker Overview",
+            "type": "boolean"
+          },
+          "include_trades": {
+            "default": false,
+            "description": "Companion flag: bundle trades.csv (tick-level)",
+            "title": "Include Trades",
+            "type": "boolean"
+          },
+          "indicator_entries": {
+            "default": [],
+            "description": "List of indicator entries, each with 'name' and optional 'params' dict.",
+            "items": {
+              "type": "object"
+            },
+            "title": "Indicator Entries",
+            "type": "array"
+          },
+          "multiplier": {
+            "default": 1,
+            "description": "Bar multiplier (e.g., 5 with timespan='minute')",
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "options_companion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsCompanionConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional options companion config; planned workload is estimated, never fetched."
+          },
+          "session": {
+            "default": "extended",
+            "description": "'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours",
+            "title": "Session",
+            "type": "string"
+          },
+          "start_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date.",
+            "title": "Start Ms Utc"
+          },
+          "ticker": {
+            "description": "Ticker symbol",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Ticker",
+            "type": "string"
+          },
+          "timespan": {
+            "default": "minute",
+            "description": "Bar timespan: 'second', 'minute', 'hour', or 'day'+",
+            "title": "Timespan",
+            "type": "string"
+          },
+          "to_date": {
+            "description": "End date intent (YYYY-MM-DD)",
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "from_date",
+          "to_date"
+        ],
+        "title": "DatasetPlanRequest",
+        "type": "object"
+      },
+      "DatasetPlanResponse": {
+        "description": "Fetch-free planning receipt for a dataset generation recipe.",
+        "properties": {
+          "allowed_timeframes": {
+            "description": "Chart timeframes whose estimated bar count stays under the chart bar budget.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Timeframes",
+            "type": "array"
+          },
+          "calendar_timezone": {
+            "description": "Exchange calendar timezone (IANA name).",
+            "title": "Calendar Timezone",
+            "type": "string"
+          },
+          "calendar_version": {
+            "description": "Version of the underlying calendar library.",
+            "title": "Calendar Version",
+            "type": "string"
+          },
+          "companion_dependencies": {
+            "description": "Companion data sources the generation run would fetch (names, not payloads).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Companion Dependencies",
+            "type": "array"
+          },
+          "estimate_assumptions": {
+            "description": "Explicit assumptions behind estimated_bars; the estimate is only meaningful with these.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Estimate Assumptions",
+            "type": "array"
+          },
+          "estimate_provenance": {
+            "description": "Where the estimate's inputs came from (calendar source and method).",
+            "title": "Estimate Provenance",
+            "type": "string"
+          },
+          "estimated_bars": {
+            "description": "ESTIMATE only \u2014 arithmetic from session count and timeframe. No bars were fetched.",
+            "minimum": 0.0,
+            "title": "Estimated Bars",
+            "type": "integer"
+          },
+          "exchange": {
+            "description": "Exchange the calendar resolves against (e.g. NYSE).",
+            "title": "Exchange",
+            "type": "string"
+          },
+          "exchange_session_opens_ms_utc": {
+            "description": "Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Exchange Session Opens Ms Utc",
+            "type": "array"
+          },
+          "exchange_sessions": {
+            "description": "Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Exchange Sessions",
+            "type": "array"
+          },
+          "output_column_count": {
+            "description": "len(output_columns)",
+            "minimum": 0.0,
+            "title": "Output Column Count",
+            "type": "integer"
+          },
+          "output_columns": {
+            "description": "Canonical ordered output column list, projected by the same function the ZIP path uses.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Columns",
+            "type": "array"
+          },
+          "recommended_timeframes": {
+            "description": "Timeframe(s) recommended for interactive charting over this range.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Recommended Timeframes",
+            "type": "array"
+          },
+          "session_count": {
+            "description": "Number of scheduled exchange sessions in range",
+            "minimum": 0.0,
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "ticker": {
+            "description": "Ticker the plan was resolved for",
+            "title": "Ticker",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "Human-readable cautions (tick-level volume, options workload, \u2026).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "window_end_ms_utc": {
+            "description": "Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.",
+            "title": "Window End Ms Utc",
+            "type": "integer"
+          },
+          "window_start_ms_utc": {
+            "description": "Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.",
+            "title": "Window Start Ms Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticker",
+          "window_start_ms_utc",
+          "window_end_ms_utc",
+          "exchange_sessions",
+          "exchange_session_opens_ms_utc",
+          "session_count",
+          "output_columns",
+          "output_column_count",
+          "estimated_bars",
+          "estimate_assumptions",
+          "estimate_provenance",
+          "companion_dependencies",
+          "warnings",
+          "allowed_timeframes",
+          "recommended_timeframes",
+          "exchange",
+          "calendar_timezone",
+          "calendar_version"
+        ],
+        "title": "DatasetPlanResponse",
         "type": "object"
       },
       "DatasetZipJobRequest": {
@@ -57167,6 +57508,48 @@
           }
         },
         "summary": "Generate Dataset Zip",
+        "tags": [
+          "dataset"
+        ]
+      }
+    },
+    "/api/dataset/plan": {
+      "post": {
+        "description": "Resolve a dataset recipe into a fetch-free planning receipt.\n\nPlanning touches only the local NYSE calendar \u2014 it never calls\nPolygon. Bar counts are arithmetic estimates typed with assumptions\nand provenance; output columns come from the same projection\nfunction the ZIP generation path uses (data-lab workspace redesign\nPRD \u00a712).",
+        "operationId": "plan_dataset_api_dataset_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Plan Dataset",
         "tags": [
           "dataset"
         ]

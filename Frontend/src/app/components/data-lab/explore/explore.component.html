@@ -1,0 +1,97 @@
+<section class="explore__bar" aria-label="Explore scope">
+  <span class="explore__ticker">
+    @if (chartTicker()) {
+      <app-asset-identity [symbol]="chartTicker()" [size]="'sm'" />
+    } @else {
+      <span class="explore__muted">No ticker committed</span>
+    }
+  </span>
+  <span class="explore__muted">{{ chartFromDate() }} → {{ chartToDate() }} · {{ chartTimeframe() }}</span>
+  <button type="button" class="explore__primary" (click)="refreshChart()" [disabled]="!canRefresh()">
+    Refresh chart
+  </button>
+  <button type="button" (click)="openScopeDrawer()">Edit scope</button>
+  <button type="button" (click)="indicatorsDrawerOpen.set(true)">Indicators</button>
+  @if (chartRendered() && store.chartStale()) {
+    <span class="explore__stale" role="status">Out of date</span>
+  }
+</section>
+
+<app-explore-scope-drawer
+  [open]="scopeDrawerOpen()"
+  [range]="scopeRange()"
+  (openChange)="scopeDrawerOpen.set($event)"
+  (rangeChange)="scopeRange.set($event)"
+  (apply)="applyScopeDrawer()"
+/>
+
+<app-explore-indicator-controls
+  [drawerOpen]="indicatorsDrawerOpen()"
+  [categories]="catalogCategories()"
+  [activeKeys]="store.indicators().map((i) => i.canonicalKey)"
+  [loading]="catalogLoading()"
+  [chips]="chipEntries()"
+  [activeCount]="activeIndicatorCount()"
+  [chipsExpanded]="chipsExpanded()"
+  [colorOverrides]="store.colorTokenOverrides()"
+  (drawerOpenChange)="indicatorsDrawerOpen.set($event)"
+  (add)="onPickerAdd($event)"
+  (chipsExpandedChange)="chipsExpanded.set($event)"
+  (configure)="configuringInstanceId.set($event)"
+  (remove)="removeIndicator($event)"
+  (colorSelected)="onColorTokenSelected($event.instanceId, $event.token)"
+/>
+
+<app-indicator-config-modal
+  [visible]="configuringInstanceId() !== null"
+  (visibleChange)="onModalVisibleChange($event)"
+  mode="configure"
+  [entry]="configuringEntry()"
+  [paramConfigs]="configuringParamConfigs()"
+  [activeIndicatorKeys]="activeIndicatorNames()"
+  (paramChange)="onModalParamChange($event)"
+  (resetDefaults)="onModalResetDefaults()"
+  (resetParam)="onModalResetParam($event)"
+  (addRelated)="onModalAddRelated($event)"
+  (removeRelated)="onModalRemoveRelated($event)"
+  (addPreview)="onModalAddPreview($event)"
+/>
+
+<section class="explore__chart" aria-label="Chart">
+  @if (!hasCommittedScope() && !chartRendered()) {
+    <p class="explore__muted">Commit a ticker and range, then press Refresh chart.</p>
+  }
+  @if (chartRendered()) {
+    <app-data-lab-chart
+      #chartComponent
+      [ticker]="chartTicker()"
+      [fromDate]="chartFromDate()"
+      [toDate]="chartToDate()"
+      [startMsUtc]="store.committedWindow()?.startMsUtc ?? null"
+      [endMsUtc]="store.committedWindow()?.endMsUtc ?? null"
+      [session]="chartSession()"
+      [forwardFill]="store.committedScope()?.forwardFill ?? store.draft().forwardFill"
+      [timeframe]="chartTimeframe()"
+      [adjusted]="store.committedScope()?.adjusted ?? store.draft().adjusted"
+      [chartIndicators]="store.indicators().map((i) => ({ name: i.canonicalKey, params: i.params }))"
+      [computeAllIndicators]="computeAllIndicators()"
+      (dataLoaded)="onChartDataLoaded($event)"
+      (timeframeRejected)="onChartTimeframeRejected($event)"
+    />
+  }
+</section>
+
+<section class="explore__quality" aria-label="Quality status">
+  <p class="explore__muted">{{ qualitySummary() }}</p>
+  @if (lastQuality()) {
+    <button type="button" (click)="qualityModalOpen.set(true)">View quality report</button>
+  }
+  @if (qualityModalOpen() && lastQuality(); as q) {
+    <app-quality-modal [quality]="q" (closed)="qualityModalOpen.set(false)" />
+  }
+</section>
+
+<app-explore-headlines
+  [ticker]="chartTicker()"
+  [window]="store.committedWindow()"
+/>

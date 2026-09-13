@@ -511,3 +511,50 @@ does not change the accepted arming or custody policy.
   the Paper deploy card calls Live unimplemented; ADR 0059 and `CONTEXT.md`
   retain mandatory-Shadow wording beside the September 9 optional-rehearsal
   amendment. Current authority and operator copy need reconciliation.
+
+## 13. Data Lab workspace redesign residuals (2026-09-12)
+
+Tracked open items left by the Data Lab redesign PR
+(PRD `docs/prds/2026-09-12-data-lab-workspace-redesign.md`). Implemented:
+child routes Explore/Export/Validate, workspace store, legacy URL ingress,
+searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
+additive `DataLabSession` ms-UTC columns (dual-read).
+
+- **Chart color tokens are not yet resolved at the Lightweight Charts boundary
+  (medium).** Token IDs are stored and validated, but `data-lab-chart` still
+  consumes literal colors when rendering; token→`var(--chart-series-*)`
+  resolution at the chart boundary is the remaining §10 step.
+- **Saved-session numeric-window semantics are interim (low).** Backend derives
+  `WindowStartMsUtc`/`WindowEndMsUtc` from date-only UTC midnight until the
+  canonical exchange-calendar resolution (PRD §13 step 6 backfill) lands.
+- **§13 steps 3–5 are not complete: legacy `DateTime` columns remain dual-written
+  (low).** Save/update still set `CreatedAt`/`UpdatedAt` (and legacy date
+  columns) alongside the numeric ms-UTC columns, and the GraphQL projection
+  still sources legacy fields for `createdAt`/`fromDate`/`toDate`. The
+  numeric-only write flip and the legacy-projection-derived-from-numeric step
+  land with the §13 step 5/6 migration.
+- **Legacy indicator recipe/param query keys are dropped by the ingress, not
+  decoded (low).** PRD §14 routes legacy recipe URLs through a bounded
+  recipe-schema validator; until that validator exists the ingress keeps
+  scope keys and drops recipe keys with a visible warning, so FR-014 is
+  partially met for recipe-carrying bookmarks.
+- **Plan↔ZIP column parity is structural (shared function), not
+  artifact-tested (low).** The plan endpoint test pins the receipt to
+  `project_output_columns` — the same function the CSV/metadata/ZIP paths
+  call — but no test yet diffs a generated ZIP manifest itself against the
+  receipt.
+- **Legacy `sessionId` URL param is preserved but not auto-loaded (low).** The
+  Saved setups drawer is the only session-load path; auto-load was deferred to
+  avoid URL state triggering fetches.
+- **`computeAllIndicators` has no UI toggle in the new Explore (low).** The
+  signal defaults to false; wire a control if the legacy behavior is missed.
+- **Export and Validate templates still exceed the ~80-line path rule
+  (low).** Explore was split into drawer/controls/headlines children; the
+  Export four-section form (~230 lines) and Validate (~115 lines) remain
+  single templates — same follow-up refactor class as the shell split.
+- **Responsive overflow assertions need a browser pass (medium).** The §8
+  structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
+  checks and AXE scans have not been executed against a live browser.
+- **`active-indicator-card`/`active-indicator-group` are unmounted (low).** The
+  config modal still imports types from the card; delete both once the modal's
+  type imports are inlined.

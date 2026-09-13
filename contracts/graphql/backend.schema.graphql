@@ -120,6 +120,10 @@ type DataLabSession {
   session: String!
   forwardFill: Boolean!
   adjusted: Boolean!
+  windowStartMsUtc: Long
+  windowEndMsUtc: Long
+  createdMsUtc: Long
+  updatedMsUtc: Long
   entriesJson: String!
   chartSnapshotJson: String
 }
@@ -1575,6 +1579,10 @@ input DataLabSessionFilterInput {
   session: StringOperationFilterInput
   forwardFill: BooleanOperationFilterInput
   adjusted: BooleanOperationFilterInput
+  windowStartMsUtc: LongOperationFilterInput
+  windowEndMsUtc: LongOperationFilterInput
+  createdMsUtc: LongOperationFilterInput
+  updatedMsUtc: LongOperationFilterInput
   entriesJson: StringOperationFilterInput
   chartSnapshotJson: StringOperationFilterInput
 }
@@ -1589,6 +1597,14 @@ input DataLabSessionInput {
   adjusted: Boolean!
   entriesJson: String!
   chartSnapshotJson: String
+  "Inclusive window start in int64 ms UTC. When null, derived from fromDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly before windowEndMsUtc when both are set."
+  windowStartMsUtc: Long
+  "Inclusive window end in int64 ms UTC. When null, derived from toDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly after windowStartMsUtc when both are set."
+  windowEndMsUtc: Long
+  "Create-only: session creation time in int64 ms UTC. Honored by saveDataLabSession when provided (within [0, 253402300799999]); ignored by updateDataLabSession, which keeps the stored value (or backfills it from the legacy createdAt)."
+  createdMsUtc: Long
+  "Server-owned: ignored on input. The server always sets updatedMsUtc to the write time."
+  updatedMsUtc: Long
 }
 
 input DataLabSessionSortInput {
@@ -1602,6 +1618,10 @@ input DataLabSessionSortInput {
   session: SortEnumType @cost(weight: "10")
   forwardFill: SortEnumType @cost(weight: "10")
   adjusted: SortEnumType @cost(weight: "10")
+  windowStartMsUtc: SortEnumType @cost(weight: "10")
+  windowEndMsUtc: SortEnumType @cost(weight: "10")
+  createdMsUtc: SortEnumType @cost(weight: "10")
+  updatedMsUtc: SortEnumType @cost(weight: "10")
   entriesJson: SortEnumType @cost(weight: "10")
   chartSnapshotJson: SortEnumType @cost(weight: "10")
 }

@@ -1,0 +1,71 @@
+// Explore headlines section (PRD §11) — collapsed by default, lazy fetch.
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.explore__news {
+  min-width: 0;
+  border-top: 1px solid $border-light;
+  padding-top: 0.5rem;
+}
+
+.explore__news-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.explore__news-toggle {
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: $text-primary;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: start;
+}
+
+.explore__muted {
+  color: $text-secondary;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explore__news-error {
+  color: var(--bear);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explore__news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.explore__news-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+
+  a {
+    color: $accent-text;
+    overflow-wrap: anywhere;
+  }
+
+  span {
+    font-size: 0.8rem;
+  }
+}

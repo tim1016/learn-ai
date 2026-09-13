@@ -1,0 +1,83 @@
+// Explore indicator controls (PRD §9 / §10) — drawer + active chips.
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.explore__drawer {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+}
+
+.explore__drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+}
+
+// ── Active-indicator chips ────────────────────────────────
+.explore__chips {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+}
+
+.explore__chips-toggle {
+  min-height: 44px;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+  background: $bg-surface;
+  color: $text-primary;
+  cursor: pointer;
+}
+
+.explore__chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.explore__chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+
+  button {
+    min-height: 44px;
+    padding: 0 0.6rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-sunken;
+    color: $text-primary;
+    cursor: pointer;
+  }
+}
+
+.explore__chip-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}

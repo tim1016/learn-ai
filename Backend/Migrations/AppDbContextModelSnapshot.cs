@@ -37,6 +37,9 @@ namespace Backend.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<long?>("CreatedMsUtc")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("EntriesJson")
                         .IsRequired()
                         .HasColumnType("jsonb");
@@ -71,6 +74,15 @@ namespace Backend.Migrations
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<long?>("UpdatedMsUtc")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("WindowEndMsUtc")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("WindowStartMsUtc")
+                        .HasColumnType("bigint");
 
                     b.HasKey("Id");
 

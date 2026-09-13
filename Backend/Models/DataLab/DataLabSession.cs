@@ -35,6 +35,19 @@ public class DataLabSession
 
     public bool Adjusted { get; set; } = true;
 
+    // ── Int64 ms UTC timestamps (additive migration gate, PRD #data-lab-workspace-redesign §13) ──
+    // Nullable until the legacy columns are backfilled and retired. On read,
+    // these are authoritative when non-null; the legacy DateTime/string
+    // columns remain populated for dual-read compatibility.
+
+    public long? WindowStartMsUtc { get; set; }
+
+    public long? WindowEndMsUtc { get; set; }
+
+    public long? CreatedMsUtc { get; set; }
+
+    public long? UpdatedMsUtc { get; set; }
+
     /// <summary>
     /// Indicator entries stored as JSON array.
     /// Each element: { "name": "ema", "params": { "length": 20 } }

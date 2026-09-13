@@ -10,6 +10,11 @@ namespace Backend.GraphQL;
 [ExtendObjectType(typeof(Query))]
 public class DataLabQuery
 {
+    // Timestamp dual-read contract (additive migration, PRD §13): the int64 ms
+    // UTC fields (windowStartMsUtc/windowEndMsUtc/createdMsUtc/updatedMsUtc)
+    // are authoritative when non-null; the legacy DateTime/date-string fields
+    // stay populated from the legacy columns until every consumer cuts over.
+
     /// <summary>
     /// List all Data Lab sessions, most recently updated first.
     /// Returns lightweight summaries (no chart snapshot payload).

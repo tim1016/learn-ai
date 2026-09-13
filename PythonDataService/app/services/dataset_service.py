@@ -956,6 +956,30 @@ def calculate_dynamic_indicators(
     return df, column_meta
 
 
+def project_output_columns(
+    df: pd.DataFrame,
+    column_meta: list[dict[str, Any]],
+) -> list[str]:
+    """Project the canonical ordered output-column list for a dataset.
+
+    This is the ONE column-projection authority shared by every export
+    surface (generate-csv, generate-zip's dataset.csv/columns.csv, and
+    the fetch-free ``POST /api/dataset/plan`` receipt) so their column
+    lists cannot drift.
+
+    ``PC`` (previous trading day's close) sits before ``open`` when
+    present so reviewers reading a CSV left-to-right see the prior
+    reference before the current bar's prices. Extra price-side columns
+    appear only when the processed frame carries them, then indicator
+    columns follow in computation order.
+    """
+    base = ["open", "high", "low", "close", "volume"]
+    price_cols = ["PC", *base] if "PC" in df.columns else base
+    extra_cols = [c for c in ("vwap", "transactions", "session") if c in df.columns]
+    indicator_cols = [m["column"] for m in column_meta]
+    return price_cols + extra_cols + indicator_cols
+
+
 def build_csv_bytes(df: pd.DataFrame, columns: list[str]) -> bytes:
     """Serialize a DataFrame with canonical ``unix_ts`` milliseconds first."""
     output = io.StringIO()
@@ -1180,6 +1204,18 @@ def build_metadata_csv(
         "transactions": "Number of transactions in the minute bar",
     }
     for col in ohlcv_cols:
+        if col == "session":
+            base.append(
+                (
+                    col,
+                    "string",
+                    "Derived from NYSE calendar",
+                    "",
+                    "",
+                    "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
+                )
+            )
+            continue
         col_type = "int" if col == "transactions" else "float"
         base.append((col, col_type, "Polygon.io", "", "", desc_map.get(col, col)))
 

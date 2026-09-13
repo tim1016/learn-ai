@@ -159,3 +159,208 @@ describe('IndicatorPickerComponent', () => {
     expect(el.querySelector('.ip-chip-clear')).toBeNull();
   });
 });
+
+describe('IndicatorPickerComponent search (opt-in)', () => {
+  function setupSearchable(): Harness {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ imports: [IndicatorPickerComponent] });
+    const fixture = TestBed.createComponent(IndicatorPickerComponent);
+    fixture.componentRef.setInput('categories', STUB_CATEGORIES);
+    fixture.componentRef.setInput('presets', TEST_PRESETS);
+    fixture.componentRef.setInput('searchable', true);
+    const add = vi.fn();
+    const addInstance = vi.fn();
+    const preview = vi.fn();
+    fixture.componentInstance.add.subscribe(add);
+    fixture.componentInstance.addInstance.subscribe(addInstance);
+    fixture.componentInstance.preview.subscribe(preview);
+    fixture.detectChanges();
+    return { fixture, el: fixture.nativeElement as HTMLElement, add, addInstance, preview };
+  }
+
+  function typeSearch(h: Harness, value: string): void {
+    const input = h.el.querySelector<HTMLInputElement>('.ip-search-input');
+    if (!input) throw new Error('search input not rendered');
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    h.fixture.detectChanges();
+  }
+
+  function pressKey(h: Harness, key: string): void {
+    const input = h.el.querySelector<HTMLInputElement>('.ip-search-input');
+    if (!input) throw new Error('search input not rendered');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    h.fixture.detectChanges();
+  }
+
+  it('renders no search input by default (existing consumers unchanged)', () => {
+    const { el } = setup();
+    expect(el.querySelector('.ip-search-input')).toBeNull();
+    expect(el.querySelector('.ip-sr-only')).toBeNull();
+  });
+
+  it('renders the search input when searchable and focuses it on init', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ imports: [IndicatorPickerComponent] });
+    const fixture = TestBed.createComponent(IndicatorPickerComponent);
+    fixture.componentRef.setInput('categories', STUB_CATEGORIES);
+    fixture.componentRef.setInput('searchable', true);
+    // Focus assertions require the element to be in the live document.
+    document.body.appendChild(fixture.nativeElement);
+    try {
+      fixture.detectChanges();
+      const input = (fixture.nativeElement as HTMLElement)
+        .querySelector<HTMLInputElement>('.ip-search-input');
+      expect(input).not.toBeNull();
+      expect(document.activeElement).toBe(input);
+    } finally {
+      (fixture.nativeElement as HTMLElement).remove();
+    }
+  });
+
+  it('filters by display name, case-insensitively', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'RSI');
+    expect(textOf(h.el, '.ip-count')).toContain('1 of 6');
+  });
+
+  it('matches description, category, and parameter-name text', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'oscillator');      // description of rsi
+    expect(textOf(h.el, '.ip-count')).toContain('1 of 6');
+    typeSearch(h, 'volatility');      // category name
+    expect(textOf(h.el, '.ip-count')).toContain('2 of 6');
+    typeSearch(h, 'length');          // configurable parameter name
+    expect(textOf(h.el, '.ip-count')).toContain('5 of 6'); // macd has no params
+  });
+
+  it('search intersects with the category facet', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'length');
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="trend"]'));
+    expect(textOf(h.el, '.ip-count')).toContain('2 of 6');
+  });
+
+  it('announces the result count in an aria-live polite region', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'rsi');
+    const live = h.el.querySelector<HTMLElement>('.ip-sr-only');
+    expect(live).not.toBeNull();
+    expect(live?.getAttribute('aria-live')).toBe('polite');
+    expect(live?.textContent).toContain('1 of 6');
+  });
+
+  it('shows an empty state with a combined clear action and clears both search and facets', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'no-such-indicator');
+    expect(textOf(h.el, '.ip-empty')).toContain('No indicators match');
+    const clearAll = h.el.querySelector<HTMLButtonElement>('.ip-link');
+    expect(clearAll).not.toBeNull();
+    clickAndFlush(h.fixture, clearAll);
+    expect(textOf(h.el, '.ip-count')).toContain('6 of 6');
+    const input = h.el.querySelector<HTMLInputElement>('.ip-search-input');
+    expect(input?.value).toBe('');
+  });
+
+  it('Clear search button removes only the query, keeping facets', () => {
+    const h = setupSearchable();
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="trend"]'));
+    typeSearch(h, 'zzz');
+    const clearBtn = h.el.querySelector<HTMLButtonElement>('.ip-search-clear');
+    expect(clearBtn).not.toBeNull();
+    clickAndFlush(h.fixture, clearBtn);
+    expect(textOf(h.el, '.ip-count')).toContain('2 of 6'); // trend facet still applied
+    expect(h.el.querySelector('.ip-search-clear')).toBeNull();
+  });
+
+  it('ArrowDown/ArrowUp/Home/End move the active option highlight through results', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'length'); // 5 results; flat order: ema, sma, rsi, bbands, atr
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="trend"] .ip-cat-head'));
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="momentum"] .ip-cat-head'));
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="volatility"] .ip-cat-head'));
+    const activeRow = () => h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    expect(activeRow()).toBeNull();
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('sma');
+    pressKey(h, 'End');
+    expect(activeRow()?.getAttribute('data-name')).toBe('atr');
+    pressKey(h, 'Home');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowUp');
+    expect(activeRow()?.getAttribute('data-name')).toBe('atr'); // wraps
+  });
+
+  it('Enter adds the active option with default params', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'bollinger');
+    pressKey(h, 'ArrowDown');
+    pressKey(h, 'Enter');
+    expect(h.add).toHaveBeenCalledWith({ name: 'bbands', params: { length: 20 } });
+  });
+
+  it('Escape clears the search first and keeps the facet state intact', () => {
+    const h = setupSearchable();
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="trend"]'));
+    typeSearch(h, 'zzz');
+    pressKey(h, 'Escape');
+    expect(h.el.querySelector<HTMLInputElement>('.ip-search-input')?.value).toBe('');
+    expect(textOf(h.el, '.ip-count')).toContain('2 of 6'); // facet survived
+  });
+
+  it('keyboard navigation only reaches rendered rows — closed categories are skipped', () => {
+    const h = setupSearchable();
+    // Open trend and volatility but leave momentum closed. Flat order of
+    // RENDERED rows: ema, sma (trend), bbands, atr (volatility) — rsi/macd
+    // are invisible and must never take the highlight.
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="trend"] .ip-cat-head'));
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="volatility"] .ip-cat-head'));
+    const activeRow = () => h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('sma');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('bbands');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('atr');
+    pressKey(h, 'ArrowDown'); // wraps within the rendered rows only
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+  });
+
+  it('search opens matching categories so every keyboard option is rendered', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'length'); // matches ema, sma, rsi, bbands, atr — no cats open
+    const activeRow = () => h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowDown');
+    pressKey(h, 'ArrowDown');
+    // rsi sits in momentum, which no one opened manually — search opened it.
+    expect(activeRow()?.getAttribute('data-name')).toBe('rsi');
+  });
+
+  it('exposes the combobox/listbox relationship — the input announces the Enter target', () => {
+    const h = setupSearchable();
+    const input = h.el.querySelector<HTMLInputElement>('.ip-search-input');
+    if (!input) throw new Error('search input not rendered');
+    expect(input.getAttribute('role')).toBe('combobox');
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    expect(input.getAttribute('aria-controls')).toBe('ip-rows');
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+
+    typeSearch(h, 'length'); // 5 matches — matching categories render open
+    expect(input.getAttribute('aria-expanded')).toBe('true');
+    pressKey(h, 'ArrowDown');
+    const row = h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    expect(row?.getAttribute('role')).toBe('option');
+    expect(row?.id).toBe('ip-opt-ema');
+    expect(row?.getAttribute('aria-selected')).toBe('true');
+    expect(input.getAttribute('aria-activedescendant')).toBe('ip-opt-ema');
+    // Non-active rows are unselected options.
+    const unselected = h.el.querySelector<HTMLElement>('.ip-row:not(.ip-row--active-option)');
+    expect(unselected?.getAttribute('aria-selected')).toBe('false');
+  });
+});

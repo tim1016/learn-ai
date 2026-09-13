@@ -1,10 +1,12 @@
 """Pydantic request schemas with validation"""
 
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.ticker_request import Session, TickerRequest
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class AggregateRequest(BaseModel):
@@ -355,6 +357,24 @@ class DatasetGenerationRequest(BaseModel):
         description="When true, run the data-quality pipeline on the fetched bars and bundle "
         "quality_report.md into the ZIP alongside the dataset.",
     )
+    # Canonical numeric window (int64 ms UTC) — additive; per-field takes
+    # precedence over the date strings so a generated dataset matches the
+    # planned half-open window (data-lab workspace redesign PRD §12).
+    start_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window start (int64 ms UTC). When supplied, takes "
+        "precedence over from_date for the fetch span (resolved via the ET calendar).",
+    )
+    end_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, "
+        "takes precedence over to_date; a window ending on the session open of day X "
+        "excludes day X's data.",
+    )
     include_previous_close: bool = Field(
         True,
         description="When true, add a 'PC' column to dataset.csv positioned before 'open'. "
@@ -405,3 +425,110 @@ class DatasetGenerationRequest(BaseModel):
         if v not in ("asc", "desc"):
             raise ValueError("sort must be 'asc' or 'desc'")
         return v
+
+    @model_validator(mode="after")
+    def validate_generation_numeric_window(self) -> "DatasetGenerationRequest":
+        if (
+            self.start_ms_utc is not None
+            and self.end_ms_utc is not None
+            and self.start_ms_utc >= self.end_ms_utc
+        ):
+            raise ValueError(
+                f"start_ms_utc {self.start_ms_utc} must be before end_ms_utc {self.end_ms_utc}"
+            )
+        return self
+
+
+class DatasetPlanRequest(BaseModel):
+    """Request for ``POST /api/dataset/plan`` — local, fetch-free planning.
+
+    Mirrors the generation-relevant core of
+    :class:`DatasetGenerationRequest` so a recipe can be planned and
+    executed with the same fields. ``from_date``/``to_date`` remain
+    date-intent strings for now; the additive ``start_ms_utc``/
+    ``end_ms_utc`` fields are the canonical numeric form and take
+    precedence over the date strings when supplied (data-lab workspace
+    redesign PRD §12).
+    """
+
+    ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
+    from_date: str = Field(..., description="Start date intent (YYYY-MM-DD)")
+    to_date: str = Field(..., description="End date intent (YYYY-MM-DD)")
+    indicator_entries: list[dict[str, Any]] = Field(
+        default=[],
+        description="List of indicator entries, each with 'name' and optional 'params' dict.",
+    )
+    session: str = Field(
+        "extended",
+        description="'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours",
+    )
+    forward_fill: bool = Field(
+        False,
+        description="Explicitly synthesize missing minute bars from the previous close (volume=0)",
+    )
+    timespan: str = Field("minute", description="Bar timespan: 'second', 'minute', 'hour', or 'day'+")
+    multiplier: int = Field(1, ge=1, le=60, description="Bar multiplier (e.g., 5 with timespan='minute')")
+    adjusted: bool = Field(
+        True,
+        description="Polygon adjusted=true — adjusts for SPLITS ONLY (see docs/tv-polygon-validation-gotchas.md §1).",
+    )
+    adjust_for_dividends: bool = Field(
+        False,
+        description="TV-style dividend adjustment; requires the dividends reference companion at generation time.",
+    )
+    include_splits: bool = Field(False, description="Companion flag: bundle splits.csv")
+    include_dividends: bool = Field(False, description="Companion flag: bundle dividends.csv")
+    include_ticker_overview: bool = Field(False, description="Companion flag: bundle ticker_overview.json")
+    include_news: bool = Field(False, description="Companion flag: bundle news.csv")
+    include_financials: bool = Field(False, description="Companion flag: bundle financials.csv")
+    include_trades: bool = Field(False, description="Companion flag: bundle trades.csv (tick-level)")
+    include_quotes: bool = Field(False, description="Companion flag: bundle quotes.csv (tick-level)")
+    include_previous_close: bool = Field(True, description="Add a 'PC' prior-session-close column")
+    options_companion: OptionsCompanionConfig | None = Field(
+        None,
+        description="Optional options companion config; planned workload is estimated, never fetched.",
+    )
+    include_quality_report: bool = Field(
+        False,
+        description="Companion flag: run the data-quality pipeline on the fetched bars and "
+        "bundle quality_report.md — additional Polygon fetches and compute at generation time.",
+    )
+    start_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date.",
+    )
+    end_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date.",
+    )
+
+    @field_validator("timespan")
+    @classmethod
+    def validate_plan_timespan(cls, v: str) -> str:
+        valid = ["second", "minute", "hour", "day", "week", "month", "quarter", "year"]
+        if v not in valid:
+            raise ValueError(f"timespan must be one of {valid}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_plan_window(self) -> "DatasetPlanRequest":
+        try:
+            start = datetime.strptime(self.from_date, "%Y-%m-%d").date()
+            end = datetime.strptime(self.to_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("from_date/to_date must be YYYY-MM-DD date-intent strings") from exc
+        if start >= end:
+            raise ValueError(f"from_date {self.from_date} must be before to_date {self.to_date}")
+        if (
+            self.start_ms_utc is not None
+            and self.end_ms_utc is not None
+            and self.start_ms_utc >= self.end_ms_utc
+        ):
+            raise ValueError(
+                f"start_ms_utc {self.start_ms_utc} must be before end_ms_utc {self.end_ms_utc}"
+            )
+        return self

@@ -1,0 +1,149 @@
+// Data Lab Validate (PRD §7.5 / §8) — one readable column, document scroll.
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+  max-width: 56rem;
+}
+
+.validate__section,
+.validate__disclosure {
+  min-width: 0;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+}
+
+.validate__section h2,
+.validate__quality h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.validate__muted {
+  margin: 0 0 0.5rem;
+  color: $text-secondary;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.validate__error {
+  color: var(--bear);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.validate__file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  margin-bottom: 0.75rem;
+
+  > span:first-child {
+    font-weight: 600;
+  }
+
+  input[type='file'] {
+    min-width: 0;
+  }
+}
+
+.validate__filename {
+  color: $text-secondary;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.validate__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.5rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+    background: $bg-sunken;
+    color: $text-primary;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    // Nested so it wins the cascade against the generic button styles above.
+    &.validate__primary {
+      background: $accent;
+      color: var(--text-on-accent);
+      border-color: $accent;
+      font-weight: 600;
+    }
+  }
+}
+
+.validate__report {
+  min-width: 0;
+}
+
+.validate__pre {
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem;
+  border-radius: 6px;
+  background: $bg-sunken;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+
+.validate__disclosure {
+  summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-weight: 600;
+  }
+}
+
+// Wide tables scroll inside a focusable, labeled region (PRD §8).
+.validate__table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+}
+
+.validate__table {
+  border-collapse: collapse;
+  min-width: min(100%, 28rem);
+
+  th,
+  td {
+    padding: 0.3rem 0.6rem;
+    text-align: end;
+    border-bottom: 1px solid $border-light;
+  }
+
+  th[scope='col'],
+  th[scope='row'] {
+    text-align: start;
+  }
+}
+
+.validate__steps {
+  min-width: 0;
+  padding-left: 1.25rem;
+
+  li {
+    margin-bottom: 0.35rem;
+    overflow-wrap: anywhere;
+  }
+}

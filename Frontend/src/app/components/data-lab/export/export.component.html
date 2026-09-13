@@ -1,0 +1,232 @@
+<section class="export__intro">
+  <p class="export__muted">{{ scopeSummary() }} · {{ indicatorSummary() }}</p>
+</section>
+
+<!-- 1. Scope and bars -->
+<section class="export__section" aria-labelledby="export-scope-h">
+  <h2 id="export-scope-h">1. Scope and bars</h2>
+  <p class="export__muted">
+    Ticker, window, timeframe, and session come from the shared workspace — edit them in the
+    shell scope bar or on <a routerLink="/data-lab/explore">Explore</a>.
+  </p>
+  <dl class="export__kv">
+    <dt>Ticker</dt>
+    <dd>
+      @if (store.committedTicker()) {
+        <app-asset-identity [symbol]="store.committedTicker()" [size]="'sm'" />
+      } @else {
+        —
+      }
+    </dd>
+    <dt>Session</dt><dd>{{ store.draft().session }}</dd>
+    <dt>Forward fill</dt><dd>{{ store.draft().forwardFill ? 'on' : 'off' }}</dd>
+    <dt>Splits adjusted</dt><dd>{{ store.draft().adjusted ? 'yes' : 'no' }}</dd>
+    <dt>Dividend adjusted</dt>
+    <dd>
+      <label class="export__inline">
+        <input type="checkbox" name="export-adj-div" [checked]="adjustForDividends()" (change)="onAdjustDividendsToggle($event)" />
+        server-side dividend adjustment (requires the dividends companion)
+      </label>
+    </dd>
+    <dt>Warmup bars</dt>
+    <dd>
+      <label class="export__inline">
+        <input type="checkbox" name="export-warmup" [checked]="warmup()" (change)="onWarmupToggle($event)" />
+        include warmup
+      </label>
+    </dd>
+    <dt>Sort</dt>
+    <dd>
+      <select (change)="onSortChange($event)" aria-label="Sort order">
+        <option value="asc" [selected]="sort() === 'asc'">Ascending</option>
+        <option value="desc" [selected]="sort() === 'desc'">Descending</option>
+      </select>
+    </dd>
+    <dt>Bar limit</dt>
+    <dd><input type="number" name="export-limit" min="1" [value]="polygonLimit()" (change)="onLimitInput($event)" /></dd>
+  </dl>
+</section>
+
+<!-- 2. Indicators and columns -->
+<section class="export__section" aria-labelledby="export-cols-h">
+  <h2 id="export-cols-h">2. Indicators and columns</h2>
+  <p class="export__muted">
+    {{ indicatorSummary() }} shared with Explore — manage them in the Explore Indicators drawer.
+  </p>
+  <div class="export__plan-actions">
+    <button type="button" class="export__secondary" (click)="loadPlan()" [disabled]="planLoading()">
+      {{ planLoading() ? 'Planning…' : 'Preview columns from server plan' }}
+    </button>
+  </div>
+  @if (planError()) {
+    <p class="export__error" role="alert">{{ planError() }}</p>
+  }
+  @if (planReceipt(); as receipt) {
+    <div class="export__receipt" role="region" aria-label="Dataset plan receipt">
+      <h3>
+        Server plan
+        @if (planReceiptStale()) {
+          <span class="export__stale" role="status">out of date — re-run the plan</span>
+        }
+      </h3>
+      <dl class="export__kv">
+        <dt>Session count</dt><dd>{{ receipt.session_count ?? '—' }}</dd>
+        <dt>Estimated bars</dt><dd>{{ receipt.estimated_bars ?? '—' }}</dd>
+        <dt>Output columns</dt><dd>{{ receipt.output_column_count ?? '—' }}</dd>
+        @if (receipt.exchange) { <dt>Exchange</dt><dd>{{ receipt.exchange }}</dd> }
+        @if (receipt.calendar_timezone) { <dt>Timezone</dt><dd>{{ receipt.calendar_timezone }}</dd> }
+        @if (receipt.calendar_version) { <dt>Calendar</dt><dd>{{ receipt.calendar_version }}</dd> }
+      </dl>
+      @if (receipt.output_columns; as cols) {
+        <p class="export__cols">{{ cols.join(', ') }}</p>
+      }
+      @if (receipt.exchange_sessions?.length) {
+        <h4>Sessions</h4>
+        <p class="export__cols">{{ sessionLabels(receipt).join(', ') }}</p>
+      }
+      @if (receipt.warnings?.length) {
+        <ul class="export__warnings">
+          @for (warning of receipt.warnings; track warning) {
+            <li role="alert">{{ warning }}</li>
+          }
+        </ul>
+      }
+      @if (receipt.allowed_timeframes?.length || receipt.recommended_timeframes?.length) {
+        <h4>Timeframe advice</h4>
+        @if (receipt.allowed_timeframes?.length) {
+          <p class="export__cols">Allowed: {{ receipt.allowed_timeframes.join(', ') }}</p>
+        }
+        @if (receipt.recommended_timeframes?.length) {
+          <p class="export__cols">Recommended: {{ receipt.recommended_timeframes.join(', ') }}</p>
+        }
+      }
+      @if (receipt.estimate_assumptions?.length) {
+        <h4>Estimate assumptions</h4>
+        <ul class="export__warnings">
+          @for (assumption of receipt.estimate_assumptions; track assumption) {
+            <li>{{ assumption }}</li>
+          }
+        </ul>
+      }
+      @if (receipt.estimate_provenance) {
+        <h4>Estimate provenance</h4>
+        <p class="export__cols">{{ receipt.estimate_provenance }}</p>
+      }
+      @if (receipt.companion_dependencies?.length) {
+        <h4>Companion dependencies</h4>
+        <p class="export__cols">{{ receipt.companion_dependencies.join(', ') }}</p>
+      }
+    </div>
+  }
+</section>
+
+<!-- 3. Companions and quality -->
+<section class="export__section" aria-labelledby="export-comp-h">
+  <h2 id="export-comp-h">3. Companions and quality</h2>
+  <details class="export__disclosure">
+    <summary>Options companion</summary>
+    <label class="export__inline">
+      <input
+        type="checkbox"
+        name="export-opt-enabled"
+        [checked]="store.companions().optionsCompanionEnabled"
+        (change)="onCompanionToggle('optionsCompanionEnabled', $event)"
+      />
+      include options companion
+    </label>
+    @if (store.companions().optionsCompanionEnabled) {
+      <div class="export__options-grid">
+        <label>Strikes each side
+          <input type="number" name="export-strikes" min="1" max="25" [value]="optionsStrikesEachSide()" (change)="onStrikesInput($event)" />
+        </label>
+        <label>DTE distance
+          <input type="number" name="export-dte" min="0" [value]="optionsDteDistance()" (change)="onDteInput($event)" />
+        </label>
+        <label>Risk-free rate
+          <input type="number" name="export-rfr" step="0.01" [value]="optRiskFreeRate()" (change)="onRateInput('riskFree', $event)" />
+        </label>
+        <label>Dividend yield
+          <input type="number" name="export-dy" step="0.01" [value]="optDividendYield()" (change)="onRateInput('dividendYield', $event)" />
+        </label>
+        @for (flag of optionsFlags; track flag.key) {
+          <label class="export__inline">
+            <input
+              type="checkbox"
+              [name]="'export-' + flag.key"
+              [checked]="flag.value()"
+              (change)="onOptionsFlagToggle(flag.key, $event)"
+            />
+            {{ flag.label }}
+          </label>
+        }
+      </div>
+      <app-past-chain-inspector
+        [ticker]="store.committedTicker()"
+        [analysisDate]="analysisDate()"
+      />
+    }
+  </details>
+
+  <details class="export__disclosure">
+    <summary>Reference companions and news</summary>
+    @for (companion of companionFlags; track companion.key) {
+      <label class="export__inline">
+        <input
+          type="checkbox"
+          [name]="'export-' + companion.key"
+          [checked]="store.companions()[companion.key]"
+          (change)="onCompanionToggle(companion.key, $event)"
+        />
+        {{ companion.label }}
+      </label>
+    }
+  </details>
+
+  <details class="export__disclosure">
+    <summary>Quality settings</summary>
+    <label class="export__inline">
+      <input
+        type="checkbox"
+        name="export-quality"
+        [checked]="store.companions().includeQualityReport"
+        (change)="onCompanionToggle('includeQualityReport', $event)"
+      />
+      include quality report in ZIP
+    </label>
+    <p class="export__muted">
+      Quality evidence lives on <a routerLink="/data-lab/validate">Validate</a>.
+    </p>
+  </details>
+</section>
+
+<!-- 4. Review and generate -->
+<section class="export__section" aria-labelledby="export-review-h">
+  <h2 id="export-review-h">4. Review and generate</h2>
+  @if (planReceipt() && planReceiptStale()) {
+    <p class="export__error" role="status">
+      The recipe changed after the plan preview ran — its counts below are out of date. Re-run
+      the preview in section 2 before generating.
+    </p>
+  }
+  <dl class="export__kv">
+    <dt>Scope</dt><dd>{{ scopeSummary() }}</dd>
+    <dt>Indicators</dt><dd>{{ indicatorSummary() }}</dd>
+    <dt>Sessions (from plan)</dt><dd>{{ planReceipt()?.session_count ?? 'run the plan preview' }}</dd>
+    <dt>Output columns (from plan)</dt><dd>{{ planReceipt()?.output_column_count ?? 'run the plan preview' }}</dd>
+  </dl>
+  @if (generateError()) {
+    <p class="export__error" role="alert">{{ generateError() }}</p>
+  }
+  <button
+    type="button"
+    class="export__primary"
+    (click)="generate()"
+    [disabled]="runActive()"
+  >
+    {{ runActive() ? 'Run in progress…' : 'Generate dataset ZIP' }}
+  </button>
+  <p class="export__muted">
+    Generation runs as a durable job; progress and cancellation stay available in the run dock
+    while you navigate Data Lab.
+  </p>
+</section>

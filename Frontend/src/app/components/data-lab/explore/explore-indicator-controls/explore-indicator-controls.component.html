@@ -1,0 +1,38 @@
+@if (drawerOpen()) {
+  <section class="explore__drawer" role="region" aria-label="Indicators">
+    <div class="explore__drawer-head">
+      <h2>Indicators</h2>
+      <button type="button" (click)="drawerOpenChange.emit(false)" aria-label="Close indicators">Close</button>
+    </div>
+    <app-indicator-picker
+      [categories]="categories()"
+      [activeKeys]="activeKeys()"
+      [loading]="loading()"
+      [searchable]="true"
+      (add)="add.emit($event)"
+      (addInstance)="add.emit($event)"
+    />
+  </section>
+}
+
+<section class="explore__chips" aria-label="Active indicators">
+  <button type="button" class="explore__chips-toggle" (click)="chipsExpandedChange.emit(!chipsExpanded())">
+    {{ activeCount() }} active
+  </button>
+  @if (chipsExpanded()) {
+    <ul class="explore__chip-list">
+      @for (chip of chips(); track chip.instance.id) {
+        <li class="explore__chip">
+          <span class="explore__chip-label">{{ chip.label }}</span>
+          <button type="button" (click)="configure.emit(chip.instance.id)">Configure</button>
+          <button type="button" (click)="remove.emit(chip.instance.id)" [attr.aria-label]="'Remove ' + chip.label">Remove</button>
+          <app-chart-series-color-picker
+            [groupLabel]="'Color for ' + chip.label"
+            [selected]="colorOverrides()[chip.instance.id]"
+            (tokenSelected)="colorSelected.emit({ instanceId: chip.instance.id, token: $event })"
+          />
+        </li>
+      }
+    </ul>
+  }
+</section>
