@@ -8,7 +8,7 @@ This runbook authorizes preparation, fake-endpoint Compose qualification, a Pape
 
 Enrollment, endpoint changes, remount, restore, reassignment, recovery, retirement, and Live arming remain host-only. Do not put a container-runtime socket in a service or use the browser or `FLEET_ROLE=combined` for a ceremony.
 
-Use exactly one of these status statements: `code complete`, `fake Compose qualified`, `Paper canary qualified`, `Live read-only qualified`, `Live command authorized`, or `operational rollout complete`. Never infer a later statement from an earlier one.
+Use exactly one of these status statements: `code complete`, `fake Compose harness exercised`, `deployment qualified`, `Paper canary qualified`, `Live read-only qualified`, `Live command authorized`, or `operational rollout complete`. Never infer a later statement from an earlier one.
 
 ## 0. Baseline and environment files
 
@@ -59,21 +59,17 @@ Approve only deployment-owned distinct endpoints, then verify both lane volumes:
 
 Any refusal stops the rollout. Do not reissue an identity, copy a marker, or release an assignment to make a service start.
 
-## 2. Render and inspect production Compose
+## 2. Use the fleet-only invocation and inspect production ingress
 
-The production fleet is `compose.yaml` plus `compose.fleet.yaml`, profile `fleet`, and the three explicit environment files. Render it before supplying a real broker credential:
+Use only the release-owned fleet invocation documented with the D Compose bundle. It must render the fleet profile and suppress the legacy `combined` service; do not add the ordinary development compose file or run a generic `up` as a shortcut. Save both the rendered configuration and `config --services` output. The latter must show the coordinator, the Paper Clerk, the Live Clerk, and only explicitly approved supporting services; it must not show a legacy combined Python service.
 
-```bash
-podman compose -f compose.yaml -f compose.fleet.yaml --profile fleet --env-file deploy/fleet/env/coordinator.env --env-file deploy/fleet/env/paper.env --env-file deploy/fleet/env/live.env config > /tmp/fleet-d-rendered.yaml
-```
-
-Inspect the redacted rendered configuration and retain it as evidence. `fleet-coordinator` is the only public service, on `127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}`. `alpaca-paper-clerk` and `alpaca-live-clerk` are private-network-only with no host ports. The coordinator is `fleet_coordinator`; each lane is `clerk_agent`; none is `combined`.
+The backend's Python base URL terminates at `fleet-coordinator`. The browser reaches the backend, then the coordinator; it never addresses an agent directly. `fleet-coordinator` is the only host-published fleet service. `alpaca-paper-clerk` and `alpaca-live-clerk` have no host port, are reachable only on the fleet network, and must have explicit `fleet_coordinator`/`clerk_agent` roles respectively.
 
 Verify three different named volume sources; no shared writable artifact tree; and lane-local `ALPACA_CLERK_DIR`, `IBKR_LIVE_RUNS_ROOT`, `IBKR_LIVE_BARS_ROOT`, and `BROKER_CAPTURE_DIR`. Verify each role has CPU, memory, PID, and tmpfs limits, each lane has its own request/SSE/queue budget, and no service mounts a Docker/Podman socket. Verify the coordinator contains no broker credentials and no feed client. Verify Paper has no Live credential slot and Live has no Paper credential slot.
 
-Both lanes use the supported retained read-only market-data feed with distinct client IDs and clerk-scoped market-status forwarding. Do not replace it with a deprecated IBKR control endpoint or a coordinator proxy. A rendered configuration is validation, not qualification.
+The fleet network permits lane egress only to the approved Alpaca API and retained read-only IBKR market-data source through the reviewed host/gateway path. Both lanes use distinct IBKR client IDs and clerk-scoped market-status forwarding. The coordinator receives neither a broker credential nor a Clerk custody mount and has no broker/feed client. Do not replace the market-data path with a deprecated IBKR control endpoint or a coordinator proxy. Rendering is validation, not qualification.
 
-## 3. Real Compose fake-endpoint fault qualification
+## 3. Fake-endpoint Compose harness exercise
 
 Run the checked-in host qualification with fake endpoints only. Its evidence path must be outside Git and access-controlled.
 
@@ -82,30 +78,51 @@ cd PythonDataService
 .venv/bin/python -m scripts.run_broker_fleet_compose_qualification --evidence-path <safe-output>/fleet-compose-qualification.json
 ```
 
-The command uses a scoped random Compose project and tears it down with volumes unless `--keep` is explicitly needed for failure investigation. Preserve the redacted transcript and evidence JSON. It must prove actual volume-source separation, coordinator custody absence, Paper kill isolation, Live read success, and Live mutation refusal. It also exercises the configured private topology; do not replace it with mocks, in-process transport, a unit test, or an unrelated full suite.
+The command uses a scoped random Compose project and tears it down with volumes unless `--keep` is explicitly needed for failure investigation. Preserve the redacted transcript and evidence JSON. It exercises fake volume/source probes, coordinator-custody absence probes, Paper kill, Live read, and Live mutation refusal through containers. Do not replace it with mocks, in-process transport, a unit test, or an unrelated full suite.
+
+Its fake/canned probes do **not** qualify production physical mounts, secret injection, a real broker or market-data upstream, host resource contention, or operator readiness. Do not write `deployment qualified` or `operational rollout complete` from this command alone.
 
 Abort on a shared writable mount, secret leakage, exposed lane port, missing/incorrect lane identity, unexpected mutation, coordinator custody data, or any Paper fault that prevents correctly identified Live reads within its own resource budget. Record capacity overloads as `fleet_lane_capacity_exhausted`; do not tune around a fault without a new reviewed capacity plan.
 
-## 4. Paper canary
+## 4. Deployment-qualification fault matrix
+
+Before Paper credentials are introduced, run and record the D fault matrix against the actual fleet invocation and actual role images. A canned harness may help choose cases; it cannot close this checklist.
+
+| Fault or boundary | Required observation | Abort condition |
+|---|---|---|
+| Legacy-role suppression | `config --services` contains no combined Python service; backend base URL is the coordinator | Any fleet invocation starts or routes through combined |
+| Ingress and agent reachability | Coordinator alone is host-published; agents are private-only; backend requests reach coordinator | Published agent port, direct agent ingress, or backend base URL to legacy Python |
+| Volumes and writable roots | Three actual named sources differ; each lane-local writable root is under its own mount; coordinator has no lane custody | Shared/mis-mounted/copyable root or coordinator custody data |
+| Credentials and transport tokens | Coordinator lacks broker credentials; Paper/Live files and two direction tokens remain separate | Cross-lane token/credential visibility or a secret in an artifact/log |
+| Market-data wiring | Each lane connects with a distinct read-only client ID and retains its own status evidence | Coordinator feed use, cross-lane client ID/state, or deprecated control route |
+| Paper process, DB/volume, credential, stream, and queue faults | Live remains readable, identity-correct, and within its own resource budget | Live restart, retarget, corruption, lost bounded capacity, or mutation |
+| Coordinator outage/restart | Existing verified same-Clerk recovery remains narrow; new authority changes and browser commands close | Assignment release/takeover, widened recovery, or implicit target |
+| Live mutation boundary | Live read-only can run, but unapproved mutation refuses | An unarmed/unapproved command reaches a broker |
+
+Only a complete, reviewed actual-deployment record can mark `deployment qualified`.
+
+## 5. Paper canary
 
 Only after the fake Compose record passes, replace only Paper's fake credential slot with the approved Paper account credential. Keep Live on fake/no-command posture. Complete existing Paper validation, program-build, exact account/program canary admission, profile/binding, custody, and market-data gates. Record the immutable Clerk/account/binding target, bounded duration, command identities, provider receipts, resource observations, and stop criteria.
 
 Stop and leave Paper stopped for missing or stale proof, route/account mismatch, unexpected command/outcome, feed-health failure, capacity breach, or inability to reconcile a command identity. A successful Paper canary is not numerical-equivalence proof and does not authorize Live.
 
-## 5. Live read-only qualification
+## 6. Live read-only qualification
 
 Only after the Paper canary record is accepted, replace only Live's fake credential with the approved read-only Live posture. Run scoped reads and streams through `fleet-coordinator`; retain exact broker/Clerk/account/binding/epoch correlation; and prove mutation remains closed absent independently satisfied existing gates. Do not arm Live.
 
 Abort on a mutation, implicit target, cross-lane response or event, stale provenance, missing market-status evidence, degraded Live capacity, or unverified legacy/combined fallback. Read-only success does not authorize a Live command.
 
-## 6. Separately authorize an eligible Live command
+## 7. Separately authorize an eligible Live command
 
 This is an operator decision, not a deployment step. The named authorizer records the existing eligible command, frozen target, idempotency identity, reconciliation plan, and proof that the unchanged Live envelope, host-only arming, custody, risk, capability, exact binding/generation, and readiness gates admit it. An `outcome_unknown` triggers read-only reconciliation by the same command identity; it never triggers automatic resubmission or a replacement-agent command.
 
 Without that separate record, stop at `Live read-only qualified`.
 
-## 7. Begin compatibility-route measurement
+## 8. Begin compatibility observation before cutover and retain it
 
-Each lane writes its compact aggregate to `$ALPACA_CLERK_DIR/compatibility/route_hits.json`. It atomically records only `method`, `route_family`, `count`, and `first`/`last` Unix-epoch milliseconds for browser-direct unpinned `GET`/`HEAD` compatibility reads. It must never contain identities, query values, headers, credentials, or request bodies.
+Before switching off the combined role, collect its retained-read usage through the approved ingress/access-log exporter. The D Clerk-agent collector does not run in combined mode and cannot measure this period. Retain only its compact aggregate: exporter version/configuration digest, combined image/commit, start/end `int64` UTC milliseconds, fixed `GET`/`HEAD` route-family and response-class counts, per-entry first/last UTC milliseconds, consumer-inventory reference, and redaction attestation. Do not retain raw URLs, parameters, headers, bodies, identities, credentials, or raw access logs in fleet evidence.
 
-Record a consumer inventory and measured start/end window. Zero hits in an idle window are not retirement proof. Delivery E may retire compatibility reads only after a representative measured window, consumer reconciliation, recovery/rollback qualification, and operator acceptance.
+After cutover, each Clerk agent writes `schema_version`, `updated_at_ms`, and sorted route-hit entries (`method`, `route_family`, `response_class`, `count`, `first_observed_at_ms`, `last_observed_at_ms`) to `$ALPACA_CLERK_DIR/compatibility/route_hits.json`. Retain the pre- and post-cutover aggregates plus consumer-inventory reference in the restricted rollout record until E closes its retirement decision.
+
+E, not D, selects whether the window is representative, reconciles consumers, and accepts or rejects route retirement. Zero traffic in an idle window is not retirement proof.

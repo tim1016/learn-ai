@@ -48,7 +48,7 @@ Assignment ownership never expires on heartbeat loss, coordinator restart, or le
 
 ## Rollback posture
 
-Choose the narrowest safe rollback. A Paper fault normally stops only `alpaca-paper-clerk`; it must not restart, retarget, or modify Live. A coordinator rollback after two lanes exist exposes each original lane only through its own independent single-Clerk fallback route after compatible-binary/schema evidence is reviewed. Keep the fleet registry and audit history intact.
+Choose the narrowest safe rollback. A Paper fault normally stops only `alpaca-paper-clerk`; it must not restart, retarget, or modify Live. A coordinator rollback after two lanes exist exposes each original lane only through its own independent single-Clerk fallback route after compatible-binary/schema evidence is reviewed. Keep the fleet registry and audit history intact. A fleet rollback invocation must still suppress the legacy combined role; starting it as an accidental fourth authority is not a rollback.
 
 Rollback must never:
 
@@ -58,7 +58,7 @@ Rollback must never:
 - return an enrolled production volume to `combined` mode;
 - bypass existing Live envelope, arming, custody, risk, capability, binding, idempotency, or outcome-reconciliation gates.
 
-An older binary is eligible only after its schema compatibility is proven. A failed rollback attempt remains an incident: leave routing closed where required, retain the artifacts, and escalate rather than attempting a destructive repair.
+The Live safety invariant survives every rollback state: the coordinator has no broker credential or lane custody, assignment ownership never expires into takeover, and a Live mutation is admitted only by the original provider-owned Live authority after its host-only arming and all existing gates. An older binary is eligible only after its schema compatibility is proven. A failed rollback attempt remains an incident: leave routing closed where required, retain the artifacts, and escalate rather than attempting a destructive repair.
 
 ## Evidence handoff to Delivery E
 
@@ -70,4 +70,4 @@ D records the backup manifests, exact stop/restore/reconciliation plan, compatib
 - coordinator and lane rollback using schema-compatible artifacts; and
 - validation that Live arming/envelope evidence remains lane-local and unchanged.
 
-Until those transcripts exist, state `recovery posture documented; not operationally qualified`.
+Until those transcripts exist, state `recovery posture documented; not operationally qualified`. D's fake Compose harness may exercise selected rollback-shaped probes but cannot replace E's actual restore, reassignment, registry-recovery, or rollback evidence.
