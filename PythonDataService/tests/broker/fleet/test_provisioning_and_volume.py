@@ -97,6 +97,39 @@ def test_a_second_clerk_cannot_reuse_an_attested_volume(control_dir: Path, fleet
         )
 
 
+def test_writable_subtrees_of_one_mounted_volume_never_host_two_clerks(
+    control_dir: Path, fleet_service
+) -> None:
+    """FR-020/021: distinct attestations do not make nested roots distinct
+    physical volumes — containment refuses in both directions."""
+    parent_root = control_dir.parent / "volumes" / "one-physical-volume"
+    parent_root.mkdir(parents=True)
+    fleet_service.provision_clerk(
+        broker="fake_alpha",
+        display_label="paper",
+        volume_root=parent_root,
+        attestation_id="vol-paper",
+    )
+    sub_root = parent_root / "live"
+    sub_root.mkdir()
+    with pytest.raises(ClerkVolumeAlreadyRegistered, match="physical volume"):
+        fleet_service.provision_clerk(
+            broker="fake_alpha",
+            display_label="live",
+            volume_root=sub_root,
+            attestation_id="vol-live",
+        )
+    # And a would-be parent around an existing clerk's root refuses too.
+    container_root = control_dir.parent / "volumes"
+    with pytest.raises(ClerkVolumeAlreadyRegistered):
+        fleet_service.provision_clerk(
+            broker="fake_beta",
+            display_label="container",
+            volume_root=container_root,
+            attestation_id="vol-container",
+        )
+
+
 def test_verify_refuses_missing_marker_wrong_identity_and_symlinked_root(
     control_dir: Path, fleet_service
 ) -> None:

@@ -130,6 +130,61 @@ def test_a_clerk_without_a_session_is_not_routable(control_dir: Path, fleet_serv
         fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
 
 
+def test_an_unacknowledged_session_is_not_command_routable(
+    control_dir: Path, fleet_service
+) -> None:
+    """FR-064: the coordinator makes a session command-routable only after the
+    worker has acknowledged the local binding and confirmed the assignment."""
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="unconfirmed", tmp_path=control_dir.parent
+    )
+    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    fleet_service.reserve_assignment(
+        broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-u"
+    )
+    # Registered but never confirmed: routing refuses.
+    with pytest.raises(ClerkUnreachable, match="effective binding"):
+        fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
+
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-u",
+        binding_generation=1,
+    )
+    clerk, session = fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
+    assert session.reported_binding_generation == 1
+    assert clerk.clerk_id == lane.clerk_id
+
+
+def test_a_stale_expected_binding_generation_refuses_instead_of_retargeting(
+    control_dir: Path, fleet_service
+) -> None:
+    """FR-073: a command carries the binding generation it was prepared
+    against; a mismatch is a typed conflict, never a silent retarget."""
+    lane, _session = _live_lane(fleet_service, control_dir.parent, "generation")
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-generation",
+        binding_generation=5,
+    )
+    from app.broker.fleet.errors import ClerkBindingGenerationConflict
+
+    with pytest.raises(ClerkBindingGenerationConflict, match="binding generation"):
+        fleet_service.resolve_route(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            expected_binding_generation=4,
+        )
+    # The current generation still routes.
+    clerk, session = fleet_service.resolve_route(
+        broker="fake_alpha", clerk_id=lane.clerk_id, expected_binding_generation=5
+    )
+    assert session.reported_binding_generation == 5
+    assert clerk.broker == "fake_alpha"
+
+
 def test_routing_receipts_correlate_and_never_replace_upstream_evidence(
     control_dir: Path, fleet_service
 ) -> None:

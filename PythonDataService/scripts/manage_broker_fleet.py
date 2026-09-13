@@ -44,7 +44,9 @@ from scripts._operator_cli import jsonable
 
 
 def _write(payload: object) -> None:
-    print(json.dumps(jsonable(payload), sort_keys=True))
+    # stdout.write, not print: the sibling operator CLIs emit machine-readable
+    # JSON lines and the repo's no-print rule binds here too.
+    sys.stdout.write(json.dumps(jsonable(payload), sort_keys=True) + "\n")
 
 
 def _service(args: argparse.Namespace) -> FleetControlService:
@@ -222,5 +224,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except FleetRegistryUnavailable as exc:  # pragma: no cover - direct-invocation path
-        print(json.dumps({"error": f"{exc.reason}: {exc.message}"}), file=sys.stderr)
+        sys.stderr.write(json.dumps({"error": f"{exc.reason}: {exc.message}"}) + "\n")
         raise SystemExit(2)

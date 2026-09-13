@@ -218,7 +218,7 @@ class FleetRegistryStore:
     # ---- clerks ---------------------------------------------------------
 
     _CLERK_COLUMNS = (
-        "clerk_id, broker, worker_key, display_label, volume_id, "
+        "clerk_id, broker, worker_key, display_label, volume_id, volume_root, "
         "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
         "created_at_ms, retired_at_ms"
     )
@@ -259,28 +259,21 @@ class FleetRegistryStore:
     def insert_clerk(self, conn: sqlite3.Connection, clerk: ClerkRecord) -> None:
         conn.execute(
             "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
-            "volume_attestation_kind, volume_attestation_id, lifecycle_state, created_at_ms, "
-            "retired_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "volume_root, volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+            "created_at_ms, retired_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 clerk.clerk_id,
                 clerk.broker,
                 clerk.worker_key,
                 clerk.display_label,
                 clerk.volume_id,
+                clerk.volume_root,
                 clerk.volume_attestation_kind,
                 clerk.volume_attestation_id,
                 str(clerk.lifecycle_state),
                 clerk.created_at_ms,
                 clerk.retired_at_ms,
             ),
-        )
-
-    def update_clerk_label(
-        self, conn: sqlite3.Connection, *, clerk_id: str, display_label: str
-    ) -> None:
-        conn.execute(
-            "UPDATE clerks SET display_label = ? WHERE clerk_id = ?",
-            (display_label, clerk_id),
         )
 
     def update_clerk_lifecycle(
@@ -551,6 +544,11 @@ class FleetRegistryStore:
         return cursor.rowcount == 1
 
 
+def _optional_int(row: sqlite3.Row, column: str) -> int | None:
+    value = row[column]
+    return None if value is None else int(value)
+
+
 def _clerk_from_row(row: sqlite3.Row) -> ClerkRecord:
     return ClerkRecord(
         clerk_id=row["clerk_id"],
@@ -558,19 +556,16 @@ def _clerk_from_row(row: sqlite3.Row) -> ClerkRecord:
         worker_key=row["worker_key"],
         display_label=row["display_label"],
         volume_id=row["volume_id"],
+        volume_root=row["volume_root"],
         volume_attestation_kind=row["volume_attestation_kind"],
         volume_attestation_id=row["volume_attestation_id"],
         lifecycle_state=StoredLifecycleState(row["lifecycle_state"]),
         created_at_ms=int(row["created_at_ms"]),
-        retired_at_ms=None if row["retired_at_ms"] is None else int(row["retired_at_ms"]),
+        retired_at_ms=_optional_int(row, "retired_at_ms"),
     )
 
 
 def _session_from_row(row: sqlite3.Row) -> ClerkSessionRecord:
-    def _optional_int(column: str) -> int | None:
-        value = row[column]
-        return None if value is None else int(value)
-
     return ClerkSessionRecord(
         broker=row["broker"],
         clerk_id=row["clerk_id"],
@@ -578,17 +573,13 @@ def _session_from_row(row: sqlite3.Row) -> ClerkSessionRecord:
         routing_epoch=int(row["routing_epoch"]),
         started_at_ms=int(row["started_at_ms"]),
         last_seen_at_ms=int(row["last_seen_at_ms"]),
-        reported_binding_generation=_optional_int("reported_binding_generation"),
+        reported_binding_generation=_optional_int(row, "reported_binding_generation"),
         reported_account_id=row["reported_account_id"],
         reported_state=row["reported_state"],
     )
 
 
 def _assignment_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
-    def _optional_int(column: str) -> int | None:
-        value = row[column]
-        return None if value is None else int(value)
-
     return AccountAssignmentRecord(
         broker=row["broker"],
         canonical_external_account_id=row["canonical_external_account_id"],
@@ -596,7 +587,7 @@ def _assignment_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
         assignment_generation=int(row["assignment_generation"]),
         state=AssignmentState(row["state"]),
         effective_profile_id=row["effective_profile_id"],
-        effective_revision=_optional_int("effective_revision"),
+        effective_revision=_optional_int(row, "effective_revision"),
         recorded_at_ms=int(row["recorded_at_ms"]),
         updated_at_ms=int(row["updated_at_ms"]),
     )

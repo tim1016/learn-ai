@@ -65,6 +65,14 @@ currently selected in the browser. The current single-clerk contract is kept
 deliberately explicit so it can become one lane in that future multi-clerk
 model without changing the meaning of “effective.”
 
+**Status 2026-09-12:** this future is now accepted as ADR 0062 (the broker
+clerk fleet control plane; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`).
+The fleet spine — opaque clerk identities, broker-qualified account-assignment
+fencing, and the provider-adapter boundary — landed as `PythonDataService/app/broker/fleet/`.
+Nothing in this desk changes yet: the explicit `{broker}/{clerk_id}` routes and
+the frontend cutover are the PRD's Phases 3–4, and this document's
+single-clerk contract remains the desk's authority until then.
+
 ## Backend interface
 
 Add a protected read beneath the existing broker-configuration router:

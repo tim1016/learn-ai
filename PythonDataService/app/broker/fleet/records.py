@@ -64,6 +64,7 @@ class ClerkRecord:
     worker_key: str
     display_label: str
     volume_id: str
+    volume_root: str
     volume_attestation_kind: str
     volume_attestation_id: str
     lifecycle_state: StoredLifecycleState

@@ -32,9 +32,11 @@ from app.broker.fleet.errors import (
     BrokerClerkCapabilityUnavailable,
     ClerkAccountMismatch,
     ClerkAssignmentConflict,
+    ClerkBindingGenerationConflict,
     ClerkBrokerMismatch,
     ClerkIdentityMismatch,
     ClerkNotFound,
+    ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
     ClerkVolumeCloneDetected,
 )
@@ -50,6 +52,7 @@ from app.broker.fleet.provider import (
     PRODUCTION_PROVIDER_ADAPTERS,
     BrokerProviderAdapter,
     Capability,
+    require_adapter,
 )
 from app.broker.fleet.records import (
     AccountAssignmentRecord,
@@ -71,6 +74,15 @@ logger = logging.getLogger(__name__)
 #: How stale a heartbeat may be before the directory projects ``unreachable``.
 #: A projection only: it never releases, downgrades or transfers anything.
 DEFAULT_SESSION_STALE_AFTER_MS = 30_000
+
+#: The release ceremony's explicit attestation token (PRD FR-055). The host
+#: operator types exactly this to release an assignment, so a release can
+#: never happen by accident or by an unattributed caller. The *proof chain*
+#: behind the attestation — the old agent and volume verifiably offline,
+#: credentials isolated, provider obligations clear — is enforced by the
+#: host ceremony checklist and gains machine-checked proof with the Phase 2
+#: agent liveness surface; the spine refuses everything weaker than the token.
+RELEASE_PROOF_TOKEN = "old-clerk-offline-and-obligations-clear"
 
 _COMPOSE_NAMED_VOLUME = "compose_named_volume"
 ATTESTATION_KINDS = frozenset({_COMPOSE_NAMED_VOLUME})
@@ -111,16 +123,7 @@ class FleetControlService:
     # ---- provider adapters ----------------------------------------------
 
     def _adapter(self, broker: str) -> BrokerProviderAdapter:
-        adapter = self._provider_adapters.get(broker)
-        if adapter is None:
-            from app.broker.fleet.errors import BrokerNotSupported
-
-            raise BrokerNotSupported(
-                f"No provider adapter is registered for {broker!r} in this deployment.",
-                next_step="Use a provider this deployment supports; adding one is a "
-                "reviewed code change, not a request parameter.",
-            )
-        return adapter
+        return require_adapter(self._provider_adapters, broker)
 
     def require_capability(self, *, broker: str, capability: Capability) -> None:
         """Refuse an operation the provider does not declare (PRD FR-006)."""
@@ -170,7 +173,7 @@ class FleetControlService:
             )
 
         now = self._clock()
-        volume_module.resolve_canonical_root(volume_root)
+        canonical_root = volume_module.resolve_canonical_root(volume_root)
         existing_marker = volume_module.read_volume_marker(volume_root)
         if existing_marker is not None:
             raise ClerkVolumeCloneDetected(
@@ -179,6 +182,23 @@ class FleetControlService:
                 "volume, never a second identity onto an existing one.",
                 next_step="Use a fresh named volume for the new clerk.",
             )
+        # FR-020/021: writable subtrees of one mounted volume never host two
+        # clerks. Distinct attestations do not make nested roots distinct
+        # physical volumes, so containment is refused in both directions.
+        # ``resolve()`` is pure normalization here — the canonical-root proof
+        # above has already excluded every symlink in the chain.
+        new_root = canonical_root.resolve()
+        for active in self._store.list_clerks():
+            existing_root = Path(active.volume_root)
+            if new_root == existing_root or new_root.is_relative_to(
+                existing_root
+            ) or existing_root.is_relative_to(new_root):
+                raise ClerkVolumeAlreadyRegistered(
+                    f"The root {volume_root} shares a mounted volume with active "
+                    f"clerk {active.clerk_id} ({existing_root}); one clerk, one "
+                    "physical volume.",
+                    next_step="Mount a separate named volume for the new clerk.",
+                )
 
         clerk_id = new_clerk_id()
         volume_id = new_volume_id()
@@ -215,6 +235,7 @@ class FleetControlService:
             worker_key=worker_key,
             display_label=display_label,
             volume_id=volume_id,
+            volume_root=str(new_root),
             volume_attestation_kind=attestation_kind,
             volume_attestation_id=attestation_id,
             lifecycle_state=StoredLifecycleState.PROVISIONED,
@@ -553,6 +574,15 @@ class FleetControlService:
                 f"clerk {clerk_id}.",
             )
         if existing.state == AssignmentState.EFFECTIVE:
+            # Already effective for this clerk: the worker is re-acknowledging
+            # after a Stage→Apply→restart (FR-060). The assignment row stands;
+            # the session still absorbs the freshly reported binding facts,
+            # because those are what routed commands are checked against.
+            self._record_binding_observation(
+                clerk_id=clerk_id,
+                binding_generation=binding_generation,
+                canonical_account_id=canonical,
+            )
             return existing
         if existing.state == AssignmentState.RELEASED:
             raise ClerkAssignmentConflict(
@@ -581,21 +611,32 @@ class FleetControlService:
                 f"Account {canonical} under broker {broker!r} changed while "
                 "confirming; re-read and retry.",
             )
-        with self._store.transaction() as conn:
-            self._store.touch_session(
-                conn,
-                clerk_id=clerk_id,
-                agent_instance_id=self._require_session(clerk_id).agent_instance_id,
-                last_seen_at_ms=now,
-                reported_binding_generation=binding_generation,
-                reported_account_id=canonical,
-                reported_state="binding_confirmed",
-            )
+        self._record_binding_observation(
+            clerk_id=clerk_id,
+            binding_generation=binding_generation,
+            canonical_account_id=canonical,
+        )
         logger.info(
             "fleet account assignment effective",
             extra={"broker": broker, "clerk_id": clerk_id},
         )
         return confirmed
+
+    def _record_binding_observation(
+        self, *, clerk_id: str, binding_generation: int, canonical_account_id: str
+    ) -> None:
+        """Record the worker's acknowledged binding facts on its session."""
+        session = self._require_session(clerk_id)
+        with self._store.transaction() as conn:
+            self._store.touch_session(
+                conn,
+                clerk_id=clerk_id,
+                agent_instance_id=session.agent_instance_id,
+                last_seen_at_ms=self._clock(),
+                reported_binding_generation=binding_generation,
+                reported_account_id=canonical_account_id,
+                reported_state="binding_confirmed",
+            )
 
     def release_assignment(
         self,
@@ -610,7 +651,7 @@ class FleetControlService:
         which is what makes "never expire into takeover" auditable. Reuse of
         the account starts a fresh reservation with a higher generation.
         """
-        if not proof or proof.strip() != "old-clerk-offline-and-obligations-clear":
+        if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
                 "The release ceremony requires the offline-and-obligations-clear proof.",
                 next_step="Prove the old agent and volume are offline and the "
@@ -655,14 +696,22 @@ class FleetControlService:
     # ---- routing -----------------------------------------------------------
 
     def resolve_route(
-        self, *, broker: str, clerk_id: str, expected_routing_epoch: int | None = None
+        self,
+        *,
+        broker: str,
+        clerk_id: str,
+        expected_routing_epoch: int | None = None,
+        expected_binding_generation: int | None = None,
     ) -> tuple[ClerkRecord, ClerkSessionRecord]:
         """Resolve a routed operation's clerk, verifying path identities.
 
         ``clerk_id`` is resolved first, then the path broker must equal the
         clerk's immutable broker (PRD FR-071). A retired or draining clerk and
-        a clerk with no live session are not routable. When the caller pins an
-        epoch, a mismatch refuses rather than silently retargeting (FR-078).
+        a clerk with no live session are not routable. A session is
+        command-routable only once its worker has acknowledged the local
+        binding — an unacknowledged session is still ``starting`` (FR-064).
+        When the caller pins an epoch or a binding generation, a mismatch
+        refuses rather than silently retargeting (FR-073/078).
         """
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
@@ -677,15 +726,11 @@ class FleetControlService:
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             raise ClerkNotFound(f"Clerk {clerk_id} is retired; its routes are gone.")
         if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
-            from app.broker.fleet.errors import ClerkUnreachable
-
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} is draining and accepts no routed operations.",
             )
         session = self._store.read_session(clerk_id)
         if session is None:
-            from app.broker.fleet.errors import ClerkUnreachable
-
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} has no registered agent session.",
             )
@@ -697,6 +742,21 @@ class FleetControlService:
                 f"Routing epoch {expected_routing_epoch} is no longer clerk "
                 f"{clerk_id}'s current epoch {session.routing_epoch}; a retry must "
                 "not cross an epoch change automatically.",
+            )
+        if session.reported_binding_generation is None:
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id} has not acknowledged an effective binding yet; "
+                "a starting session is not command-routable.",
+            )
+        if (
+            expected_binding_generation is not None
+            and session.reported_binding_generation != expected_binding_generation
+        ):
+            raise ClerkBindingGenerationConflict(
+                f"Expected binding generation {expected_binding_generation} is not "
+                f"clerk {clerk_id}'s current generation "
+                f"{session.reported_binding_generation}; re-prepare the command "
+                "against the lane's current resource.",
             )
         return clerk, session
 
@@ -858,8 +918,6 @@ class FleetControlService:
     def _require_session(self, clerk_id: str) -> ClerkSessionRecord:
         session = self._store.read_session(clerk_id)
         if session is None:
-            from app.broker.fleet.errors import ClerkUnreachable
-
             raise ClerkUnreachable(f"Clerk {clerk_id} has no registered agent session.")
         return session
 
@@ -894,6 +952,7 @@ def _project_lifecycle(
 __all__ = [
     "ATTESTATION_KINDS",
     "DEFAULT_SESSION_STALE_AFTER_MS",
+    "RELEASE_PROOF_TOKEN",
     "FleetControlService",
     "ProvisionedClerk",
 ]

@@ -108,9 +108,7 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
     control_dir: Path, fleet_service
 ) -> None:
     lane = provision_lane(fleet_service, broker="fake_alpha", label="confirm", tmp_path=control_dir.parent)
-    session = fleet_service.register_agent_session(
-        clerk_id=lane.clerk_id, worker_key=lane.worker_key
-    )
+    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-c")
     confirmed = fleet_service.confirm_assignment(
         broker="fake_alpha",
@@ -127,7 +125,6 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
     assert refreshed is not None
     assert refreshed.reported_binding_generation == 4
     assert refreshed.reported_account_id == "ACCT-C"
-    del session
 
 
 def test_confirm_refuses_a_rival_and_a_released_assignment(

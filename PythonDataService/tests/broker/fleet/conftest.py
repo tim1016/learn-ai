@@ -56,6 +56,9 @@ class FakeProviderAdapter:
     provider_id: str
     adapter_version: str = "test.1"
     capabilities: frozenset[Capability] = FAKE_ALPHA_CAPABILITIES
+    route_catalog: frozenset[str] = frozenset(
+        {"/api/brokers/{broker}/clerks/{clerk_id}/account"}
+    )
     canonical_rule: Callable[[str], str] = lambda raw: raw.strip().upper()
     refused_accounts: frozenset[str] = field(default_factory=frozenset)
     served_context_refusals: list[str] = field(default_factory=list)

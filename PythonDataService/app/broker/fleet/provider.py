@@ -74,6 +74,19 @@ class BrokerProviderAdapter(Protocol):
     @property
     def capabilities(self) -> frozenset[Capability]: ...
 
+    @property
+    def route_catalog(self) -> frozenset[str]:
+        """The route templates this provider's clerk serves (PRD FR-003).
+
+        Broker- and clerk-scoped path templates (for example
+        ``/api/brokers/{broker}/clerks/{clerk_id}/orders``), declared by the
+        provider so the coordinator can verify a routed operation names a
+        route the provider actually serves — the routing contract's analogue
+        of capability evidence. Populated per provider as its Phase 2/3
+        routes land; an empty catalog means the provider serves no routes yet.
+        """
+        ...
+
     def canonical_account_id(self, external_account_id: str) -> str:
         """Canonicalize one external account ID under this provider's rules.
 
@@ -112,16 +125,27 @@ class BrokerProviderAdapter(Protocol):
 PRODUCTION_PROVIDER_ADAPTERS: Mapping[str, BrokerProviderAdapter] = {}
 
 
-def production_adapter(provider_id: str) -> BrokerProviderAdapter:
-    """Resolve a production adapter, failing closed on any other name."""
-    adapter = PRODUCTION_PROVIDER_ADAPTERS.get(provider_id)
+def require_adapter(
+    adapters: Mapping[str, BrokerProviderAdapter], provider_id: str
+) -> BrokerProviderAdapter:
+    """Resolve one adapter from a deployment-owned mapping, failing closed.
+
+    The one refusal construction every lookup shares, so the coordinator's
+    injected set and the production registry refuse identically.
+    """
+    adapter = adapters.get(provider_id)
     if adapter is None:
         raise BrokerNotSupported(
-            f"No production provider adapter is registered for {provider_id!r}.",
+            f"No provider adapter is registered for {provider_id!r} in this deployment.",
             next_step="Use a provider this deployment supports; adding one is a "
             "reviewed code change, not a request parameter.",
         )
     return adapter
+
+
+def production_adapter(provider_id: str) -> BrokerProviderAdapter:
+    """Resolve a production adapter, failing closed on any other name."""
+    return require_adapter(PRODUCTION_PROVIDER_ADAPTERS, provider_id)
 
 
 __all__ = [
@@ -130,4 +154,5 @@ __all__ = [
     "Capability",
     "ServedContext",
     "production_adapter",
+    "require_adapter",
 ]

@@ -48,6 +48,10 @@ CREATE TABLE clerks (
     worker_key              TEXT NOT NULL,
     display_label           TEXT NOT NULL CHECK (length(display_label) > 0),
     volume_id               TEXT NOT NULL,
+    -- The canonical mounted root recorded at provisioning, used only to
+    -- refuse two clerks sharing writable subtrees of one physical volume
+    -- (FR-020/021). Deployment detail: never projected over the public API.
+    volume_root             TEXT NOT NULL CHECK (length(volume_root) > 0),
     volume_attestation_kind TEXT NOT NULL CHECK (length(volume_attestation_kind) > 0),
     volume_attestation_id   TEXT NOT NULL CHECK (length(volume_attestation_id) > 0),
     lifecycle_state         TEXT NOT NULL CHECK (lifecycle_state IN ('provisioned', 'draining', 'retired')),
@@ -151,6 +155,7 @@ FOR EACH ROW WHEN
     OR OLD.broker IS NOT NEW.broker
     OR OLD.worker_key IS NOT NEW.worker_key
     OR OLD.volume_id IS NOT NEW.volume_id
+    OR OLD.volume_root IS NOT NEW.volume_root
     OR OLD.volume_attestation_kind IS NOT NEW.volume_attestation_kind
     OR OLD.volume_attestation_id IS NOT NEW.volume_attestation_id
     OR OLD.created_at_ms IS NOT NEW.created_at_ms

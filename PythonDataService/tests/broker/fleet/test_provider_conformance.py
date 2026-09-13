@@ -151,6 +151,12 @@ def test_killing_one_clerks_volume_does_not_mutate_another(
     fleet_service.verify_clerk_volume(
         clerk_id=survivor.clerk_id, volume_root=survivor.volume_root
     )
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=survivor.clerk_id,
+        external_account_id="acct-same",
+        binding_generation=1,
+    )
     fleet_service.resolve_route(broker="fake_alpha", clerk_id=survivor.clerk_id)
     survivor_assignment = fleet_service._store.read_assignment(
         broker="fake_alpha", canonical_account_id="ACCT-SAME"
