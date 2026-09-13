@@ -335,9 +335,7 @@ def test_compatibility_evidence_removes_temporary_file_when_fsync_fails(
 
     monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_fsync)
     with pytest.raises(OSError, match="fsync refused"):
-        evidence.record(
-            method="GET", route_family="broker_bots", response_class="2xx"
-        )
+        evidence._record_batch({("broker_bots", "2xx"): 1})
     assert not list(evidence.path.parent.glob(".route_hits.json.*"))
 
 
