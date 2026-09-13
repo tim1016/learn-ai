@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-12",
+  "task_hash": "811b5512232f68c135498571a9cf99fa093f2d8f1354b794dbff3f122f341381",
+  "repository": {
+    "name": "learn-ai",
+    "commit": "a11b020ac030d4e459f0492dab32f1dca3664b43"
+  },
+  "hash_basis": "SHA-256 of normalized plan, review, and task summaries; raw losing plan content is intentionally omitted",
+  "contestants": [
+    {
+      "label": "sol",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh",
+      "plan_hash": "bf5036443c54a8dbb41447d849daf839cdc94d018d38bff997dc271377eb8f79"
+    },
+    {
+      "label": "glm",
+      "model": "GLM-5.3",
+      "reasoning_effort": "high",
+      "plan_hash": "fdfc17dfaea3fadf649e2e6432846c1fa75fb4454b1965b9f001cc39623f99da"
+    }
+  ],
+  "judging": {
+    "rubric": {
+      "correctness_and_coverage": 40,
+      "dependencies_and_repository_fit": 25,
+      "feasibility": 15,
+      "verification": 10,
+      "simplicity_and_cost": 10
+    },
+    "matches": [
+      {
+        "judge": "gpt-5.6-sol",
+        "labels": { "A": "glm", "B": "sol" },
+        "scores": { "A": 84, "B": 95 },
+        "winner": "B",
+        "rationale": "Plan B had stronger correctness and coverage: it migrated Python, GraphQL, Backend persistence, and frontend temporal contracts to int64 milliseconds UTC; preserved instant-mode news timestamps; assigned numerical projections to Python; and defined stronger repository reuse, state, migration, and single-execution-path verification."
+      },
+      {
+        "judge": "GLM-5.3",
+        "labels": { "A": "sol", "B": "glm" },
+        "scores": { "A": 92, "B": 86 },
+        "winner": "A",
+        "rationale": "Plan A was stronger on temporal correctness, canonical multi-output identity, the Python dataset-plan preflight, int64-millisecond migration sequencing, duplicate request consolidation, and state-versioning detail, while remaining implementation-feasible."
+      }
+    ],
+    "aggregate": {
+      "sol": {
+        "points": 2,
+        "average_score": 93.5
+      },
+      "glm": {
+        "points": 0,
+        "average_score": 85.0
+      }
+    },
+    "winner": "sol"
+  },
+  "adversarial_review": {
+    "reviewer": "GLM-5.3",
+    "review_hash": "152e9eb59cd3ecd595af756dd0ffa7a03ee725339e77334b556497982eac1174",
+    "verdict": "ready_after_corrections",
+    "accepted_corrections": [
+      "Gate Alpaca V2 helper reuse on an exact export/caller/fixture inventory, with a shared-catalog and server-result-plan fallback.",
+      "Inventory every DataLabSession persistence and GraphQL consumer before additive dual-read/single-write timestamp migration and gate cutover on per-consumer snapshots.",
+      "Programmatically test every eligible series token against chart surfaces in light and dark themes and fail below 3:1 contrast.",
+      "Define and test an explicit legacy Data Lab URL/query-to-child-route normalization map before removing the monolith."
+    ]
+  },
+  "final_plan_hash": "01e1e8010bdb6565c61485d38e01b8aaebbbe0e6c8abbbd6c831816e440557cf"
+}
