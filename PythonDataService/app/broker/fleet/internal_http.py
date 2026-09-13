@@ -21,8 +21,8 @@ from __future__ import annotations
 import codecs
 import ipaddress
 import socket
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import httpx
@@ -118,11 +118,19 @@ def enforce_private_http_target(url: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SseEvent:
-    """One complete server-sent event frame."""
+    """One complete server-sent event frame.
+
+    ``identity`` carries the per-event provenance fields a serving agent
+    injects as ``x-fleet-*`` field lines (FR-076): broker, clerk, routing
+    epoch, binding generation. Unknown fields stay ignored per the WHATWG
+    framing; these are collected so the delivery layer can validate every
+    event against the pinned attempt, not just the response headers.
+    """
 
     event: str
     data: str
     id: str | None
+    identity: Mapping[str, str] = field(default_factory=dict)
 
 
 def build_internal_client(
@@ -193,6 +201,7 @@ async def iter_sse_events(
     event_name = "message"
     last_event_id: str | None = None
     data_lines: list[str] = []
+    identity_fields: dict[str, str] = {}
     buffered = 0
     buffer = ""
     async for chunk in byte_chunks:
@@ -218,9 +227,11 @@ async def iter_sse_events(
                         event=event_name,
                         data="\n".join(data_lines),
                         id=last_event_id,
+                        identity=dict(identity_fields),
                     )
                 event_name = "message"
                 data_lines = []
+                identity_fields = {}
                 buffered = 0
                 continue
             if line.startswith(":"):
@@ -231,6 +242,8 @@ async def iter_sse_events(
                 event_name = value
             elif field == "data":
                 data_lines.append(value)
+            elif field.startswith("x-fleet-"):
+                identity_fields[field] = value
             elif field == "id" and "\x00" not in value:
                 # The last-event-id buffer persists across events, per the
                 # WHATWG framing: a following event without an id field still

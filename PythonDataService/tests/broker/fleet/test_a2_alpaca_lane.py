@@ -167,8 +167,18 @@ def _build_agent_app() -> FastAPI:
     @agent.get("/api/brokers/alpaca/accounts/{account_id}/gallery/stream")
     async def gallery_stream(account_id: str, request: FastAPIRequest) -> StreamingResponse:
         async def events():
+            # Delivery B: every frame carries the runtime's own provenance as
+            # x-fleet-* fields, the way the identity middleware stamps them.
+            provenance = "".join(
+                f"{name.lower()}: {value}\n"
+                for name, value in _agent_identity_headers().items()
+                if name.lower().startswith("x-fleet-")
+            )
             for index in range(3):
-                yield f"event: update\ndata: {{\"i\": {index}, \"account\": \"{account_id}\"}}\n\n".encode()
+                yield (
+                    f"event: update\ndata: {{\"i\": {index}, "
+                    f"\"account\": \"{account_id}\"}}\n{provenance}\n"
+                ).encode()
                 await asyncio.sleep(0.01)
 
         return StreamingResponse(
@@ -619,20 +629,37 @@ def _route_paths_for_role(role: str) -> set[str]:
 
 
 @pytest.mark.parametrize(
-    ("role", "expect_brokers", "expect_internal"),
+    ("role", "expect_unscoped_brokers", "expect_internal"),
     [
         ("combined", True, False),
         ("fleet_coordinator", False, False),
         ("clerk_agent", True, False),
     ],
 )
-def test_the_router_surface_follows_the_role(role: str, expect_brokers: bool, expect_internal: bool) -> None:
-    """Combined keeps today's surface; the coordinator mounts no clerk routes."""
+def test_the_router_surface_follows_the_role(
+    role: str, expect_unscoped_brokers: bool, expect_internal: bool
+) -> None:
+    """Combined keeps today's surface; the coordinator mounts only routing.
+
+    Delivery B gives the coordinator the clerk-scoped routing surface under
+    ``/api/brokers/{broker}/clerks/…`` — never the unscoped agent families,
+    which stay on the clerk-agent processes (combined serves both).
+    """
     paths = _route_paths_for_role(role)
-    has_brokers = any(path.startswith("/api/brokers") for path in paths)
-    assert has_brokers is expect_brokers, (role, sorted(paths)[:5])
+    unscoped_brokers = any(
+        path.startswith("/api/brokers")
+        and not path.startswith("/api/brokers/{broker}/clerks")
+        for path in paths
+    )
+    assert unscoped_brokers is expect_unscoped_brokers, (role, sorted(paths)[:5])
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
+    if role == "fleet_coordinator":
+        # The control directory gates the whole coordinator surface; the
+        # routing mount rides the same gate.
+        assert any(
+            path.startswith("/api/brokers/{broker}/clerks") for path in paths
+        ) is False  # no control dir in this probe: nothing mounts
     # The data-plane core is the coordinator's: an agent serves none of it
     # (review finding 1 — the gate exists and the probe proves it).
     has_core = any(path.startswith("/api/engine") or path.startswith("/api/research") for path in paths)
@@ -674,7 +701,18 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         assert completed.returncode == 0, completed.stderr[-2000:]
         paths = set(json.loads(completed.stdout.strip().splitlines()[-1]))
         assert any(path.startswith("/internal/fleet") for path in paths)
-        assert not any(path.startswith("/api/brokers") for path in paths)
+        # Delivery B: the coordinator owns the clerk-scoped ROUTING surface
+        # under /api/brokers/{broker}/clerks/…, and nothing else under
+        # /api/brokers — the agent families stay on the agent processes.
+        brokers_paths = {
+            path for path in paths if path.startswith("/api/brokers")
+        }
+        assert brokers_paths, "the clerk-scoped routing surface must mount"
+        assert all(
+            path.startswith("/api/brokers/{broker}/clerks")
+            or path == "/api/brokers/{broker}/clerks"
+            for path in brokers_paths
+        ), sorted(brokers_paths)[:5]
 
 
 def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:
