@@ -33,6 +33,7 @@ _A_STAGED_SELECTION = InstallationSelection(
     apply_requested_at_ms=1_757_000_000_000,
     apply_requested_generation=4,
     selection_generation=5,
+    effective_binding_generation=0,
     effective_profile_id="profile_effective",
     effective_revision=2,
     effective_account_id="PA000PAPER",
@@ -448,3 +449,39 @@ def test_arming_cli_cannot_resolve_or_append_during_worker_handover(
     assert result == 2
     assert resolved_calls == []
     assert json.loads(capsys.readouterr().out)["error"] == "selection_generation_conflict"
+
+
+def test_the_binding_generation_advances_only_on_a_changed_effective_tuple() -> None:
+    """D9 (audit 2026-09-13, finding 9): one clerk-local rule decides the
+    fleet's binding generation — the tuple changed or it did not."""
+    base = _A_STAGED_SELECTION
+    acknowledged = selection.effective_acknowledged(
+        base, profile_id="profile_effective", revision=2, account_id="PA000PAPER", at_ms=2
+    )
+    # Acknowledging the tuple the row already holds — the fixture's effective
+    # tuple — leaves the generation where it is.
+    assert acknowledged.effective_binding_generation == base.effective_binding_generation
+    reacknowledged = selection.effective_acknowledged(
+        acknowledged,
+        profile_id="profile_effective",
+        revision=2,
+        account_id="PA000PAPER",
+        at_ms=3,
+    )
+    assert reacknowledged.effective_binding_generation == acknowledged.effective_binding_generation
+
+    # A changed tuple advances; a change away and back advances twice.
+    changed = selection.effective_acknowledged(
+        reacknowledged, profile_id="profile_other", revision=1, account_id="PA000PAPER", at_ms=4
+    )
+    assert changed.effective_binding_generation == reacknowledged.effective_binding_generation + 1
+    back = selection.effective_acknowledged(
+        changed, profile_id="profile_effective", revision=2, account_id="PA000PAPER", at_ms=5
+    )
+    assert back.effective_binding_generation == changed.effective_binding_generation + 1
+
+    # A stage and a refusal never touch it.
+    staged_again = selection.staged(back, profile_id="profile_effective", revision=3)
+    assert staged_again.effective_binding_generation == back.effective_binding_generation
+    refused = selection.apply_refused(staged_again, reason="obligations")
+    assert refused.effective_binding_generation == back.effective_binding_generation

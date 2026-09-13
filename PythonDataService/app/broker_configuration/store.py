@@ -188,9 +188,10 @@ class ProfilesStore:
                     "INSERT INTO installation_selection "
                     "(id, staged_profile_id, staged_revision, apply_requested, "
                     "apply_requested_at_ms, apply_requested_generation, selection_generation, "
-                    "effective_profile_id, effective_revision, effective_account_id, "
-                    "effective_acknowledged_at_ms, last_apply_outcome, last_apply_refusal_reason) "
-                    "VALUES (1, NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL)"
+                    "effective_binding_generation, effective_profile_id, effective_revision, "
+                    "effective_account_id, effective_acknowledged_at_ms, last_apply_outcome, "
+                    "last_apply_refusal_reason) "
+                    "VALUES (1, NULL, NULL, 0, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL)"
                 )
             except Exception:
                 conn.rollback()
@@ -486,9 +487,10 @@ class ProfilesStore:
     def read_selection(self) -> InstallationSelection:
         row = self._query_one(
             "SELECT staged_profile_id, staged_revision, apply_requested, apply_requested_at_ms, "
-            "apply_requested_generation, selection_generation, effective_profile_id, "
-            "effective_revision, effective_account_id, effective_acknowledged_at_ms, "
-            "last_apply_outcome, last_apply_refusal_reason FROM installation_selection WHERE id = 1"
+            "apply_requested_generation, selection_generation, effective_binding_generation, "
+            "effective_profile_id, effective_revision, effective_account_id, "
+            "effective_acknowledged_at_ms, last_apply_outcome, last_apply_refusal_reason "
+            "FROM installation_selection WHERE id = 1"
         )
         if row is None:
             raise ProfilesDatabaseUnavailable(
@@ -515,7 +517,8 @@ class ProfilesStore:
         cursor = conn.execute(
             "UPDATE installation_selection SET staged_profile_id = ?, staged_revision = ?, "
             "apply_requested = ?, apply_requested_at_ms = ?, apply_requested_generation = ?, "
-            "selection_generation = ?, effective_profile_id = ?, effective_revision = ?, "
+            "selection_generation = ?, effective_binding_generation = ?, "
+            "effective_profile_id = ?, effective_revision = ?, "
             "effective_account_id = ?, effective_acknowledged_at_ms = ?, last_apply_outcome = ?, "
             "last_apply_refusal_reason = ? WHERE id = 1 AND selection_generation = ?",
             (
@@ -525,6 +528,7 @@ class ProfilesStore:
                 selection.apply_requested_at_ms,
                 selection.apply_requested_generation,
                 selection.selection_generation,
+                selection.effective_binding_generation,
                 selection.effective_profile_id,
                 selection.effective_revision,
                 selection.effective_account_id,
@@ -637,6 +641,7 @@ def _selection_from_row(row: sqlite3.Row) -> InstallationSelection:
         apply_requested_at_ms=_optional_int("apply_requested_at_ms"),
         apply_requested_generation=_optional_int("apply_requested_generation"),
         selection_generation=int(row["selection_generation"]),
+        effective_binding_generation=int(row["effective_binding_generation"]),
         effective_profile_id=row["effective_profile_id"],
         effective_revision=_optional_int("effective_revision"),
         effective_account_id=row["effective_account_id"],

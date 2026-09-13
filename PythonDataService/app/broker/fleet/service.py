@@ -30,6 +30,7 @@ The load-bearing invariants, each with a test:
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 import re
 import sqlite3
@@ -63,6 +64,7 @@ from app.broker.fleet.identity import (
     new_volume_id,
     new_worker_key,
 )
+from app.broker.fleet.internal_http import address_is_private
 from app.broker.fleet.provider import (
     FLEET_PROTOCOL_VERSION,
     PRODUCTION_PROVIDER_ADAPTERS,
@@ -358,6 +360,23 @@ class FleetControlService:
         """Re-run the fail-before-authority gate against the registry."""
         clerk = self._require_clerk(clerk_id)
         return self._verify_volume(clerk, volume_root)
+
+    def clerk_volume_expectation(self, clerk_id: str) -> dict[str, object]:
+        """The nonsecret marker facts an agent proves its mounted root against.
+
+        Served by the coordinator's internal surface so a remote agent can
+        run the volume gate locally — the coordinator never inspects an
+        agent-local path (audit 2026-09-13, finding 4).
+        """
+        clerk = self._require_clerk(clerk_id)
+        return {
+            "registry_id": self._store.registry_id,
+            "broker": clerk.broker,
+            "clerk_id": clerk.clerk_id,
+            "volume_id": clerk.volume_id,
+            "attestation_kind": clerk.volume_attestation_kind,
+            "attestation_id": clerk.volume_attestation_id,
+        }
 
     def _verify_volume(self, clerk: ClerkRecord, volume_root: Path) -> VolumeMarker:
         """Verify the mounted root against the clerk's registry identity."""
@@ -1496,6 +1515,19 @@ def _validate_internal_base_url(base_url: str) -> str:
         raise ValueError(f"internal base URL {base_url!r} carries an invalid port") from exc
     if port is not None and not 1 <= port <= 65535:
         raise ValueError(f"internal base URL {base_url!r} carries an out-of-range port")
+    if parts.scheme == "http":
+        # Host names are boundary-checked again where they are dialed (the
+        # transport seam resolves them); an explicit public IP literal is
+        # refused at approval time, when the deployment owns the row.
+        try:
+            literal = ipaddress.ip_address(parts.hostname)
+        except ValueError:
+            literal = None
+        if literal is not None and not address_is_private(literal):
+            raise ValueError(
+                f"internal base URL {base_url!r} names a public address; "
+                "cleartext fleet traffic never leaves the private network"
+            )
     normalized = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
     if len(normalized) > 200:
         raise ValueError("an internal base URL is a short placement value")

@@ -38,10 +38,15 @@ import json
 import sys
 from pathlib import Path
 
-from app.broker.fleet.errors import FleetControlError, FleetRegistryUnavailable
+from app.broker.fleet.errors import (
+    ClerkVolumeCloneDetected,
+    FleetControlError,
+    FleetRegistryUnavailable,
+)
 from app.broker.fleet.identity import new_service_token
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
+from app.broker.fleet_composition import production_provider_adapters
 from scripts._operator_cli import jsonable
 
 
@@ -55,7 +60,10 @@ def _write(payload: object) -> None:
 def _service(args: argparse.Namespace) -> FleetControlService:
     """Open the registry and build the control service for a command."""
     store = FleetRegistryStore.open(control_dir=Path(args.control_dir))
-    return FleetControlService(store=store)
+    return FleetControlService(
+        store=store,
+        provider_adapters=production_provider_adapters(),
+    )
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -212,8 +220,254 @@ def _release(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_existing(args: argparse.Namespace) -> int:
+    """Handle ``migrate-existing``: enrol the existing Alpaca lane, resumably.
+
+    An offline ceremony (the agent must be stopped). Each step is idempotent
+    and derives its resume point from the durable artifacts themselves — the
+    registry row, the volume marker, the seeded binding generation, the
+    imported assignment and the confirmation evidence — so an interrupted
+    run converges on rerun and identities are never reminted to get past a
+    partial failure (audit 2026-09-13, finding 10).
+    """
+
+    from app.broker_configuration.worker_lifecycle import installation_worker
+
+    # The ceremony is offline by contract: holding the installation worker
+    # lock both proves it and refuses to supersede a live agent's session.
+    with installation_worker() as worker_refusal:
+        if worker_refusal is not None:
+            raise ClerkVolumeCloneDetected(
+                "The installation worker lock is held — a clerk agent appears to "
+                "be running on this volume; migrate-existing is an offline "
+                "ceremony.",
+                next_step="Stop the agent, then re-run the ceremony.",
+            )
+        return _migrate_existing_locked(args)
+
+
+def _migrate_existing_locked(args: argparse.Namespace) -> int:
+    """The ceremony body, run under the installation worker lock."""
+    from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
+    from app.broker.fleet import volume as volume_module
+    from app.broker.fleet.confirmation import (
+        ConfirmationEvidence,
+        read_confirmation_evidence,
+        write_confirmation_evidence,
+    )
+    from app.utils.timestamps import now_ms_utc
+
+    service = _service(args)
+    volume_root = Path(args.volume_root)
+    try:
+        attestation_id = args.attestation_id or volume_root.name
+        marker = volume_module.read_volume_marker(volume_root)
+        if marker is None:
+            # Resume rule: a registry row for this attestation without a
+            # marker is a partially completed run. Identities are reused,
+            # never reminted — the marker is written for the registered row.
+            resumed = service._store.find_clerk_by_attestation(
+                deployment_namespace=args.deployment_namespace,
+                attestation_kind="compose_named_volume",
+                attestation_id=attestation_id,
+            )
+            if resumed is not None:
+                if Path(resumed.volume_root) != volume_root.resolve():
+                    raise ClerkVolumeCloneDetected(
+                        f"A partial enrolment registered attestation "
+                        f"{attestation_id!r} with root {resumed.volume_root}, not "
+                        f"{volume_root}; an interrupted migration never remints "
+                        "identities.",
+                        next_step="Restore the registry from the control volume's "
+                        "backup, or complete the enrolment on the original root.",
+                    )
+                marker = volume_module.write_volume_marker(
+                    volume_root,
+                    volume_module.VolumeMarker(
+                        marker_version=volume_module.MARKER_SCHEMA_VERSION,
+                        broker=resumed.broker,
+                        clerk_id=resumed.clerk_id,
+                        volume_id=resumed.volume_id,
+                        attestation_kind=resumed.volume_attestation_kind,
+                        attestation_id=resumed.volume_attestation_id,
+                        created_at_ms=resumed.created_at_ms,
+                    ),
+                )
+                _write({"step": "marker-resumed", "clerk_id": resumed.clerk_id})
+                clerk_id = resumed.clerk_id
+            else:
+                provisioned = service.provision_clerk(
+                    broker=args.broker,
+                    display_label=args.label,
+                    volume_root=volume_root,
+                    attestation_id=args.attestation_id,
+                    deployment_namespace=args.deployment_namespace,
+                )
+                _write(
+                    {
+                        "step": "identities-issued",
+                        "clerk_id": provisioned.clerk.clerk_id,
+                        "worker_key": provisioned.clerk.worker_key,
+                        "agent_service_token": provisioned.agent_service_token,
+                        "coordinator_service_token": provisioned.coordinator_service_token,
+                        "note": "Persist these now in the operator's uncommitted "
+                        "environment files; a resumed run never reprints them.",
+                    }
+                )
+                clerk_id = provisioned.clerk.clerk_id
+        else:
+            clerk_id = marker.clerk_id
+            if service._store.read_clerk(clerk_id) is None:
+                raise ClerkVolumeCloneDetected(
+                    f"The volume carries the marker of clerk {clerk_id}, which this "
+                    "registry does not know; identities are never reminted over a "
+                    "marked volume.",
+                    next_step="Restore the registry from the control volume's backup "
+                    "so it knows this clerk again.",
+                )
+            service.verify_clerk_volume(clerk_id=clerk_id, volume_root=volume_root)
+        clerk_row = service._store.read_clerk(clerk_id)
+        assert clerk_row is not None
+
+        seeded, generation = _seed_effective_binding_generation(volume_root)
+        account, profile_id, revision = _effective_tuple(volume_root)
+
+        imported = None
+        if account is not None:
+            canonical = AlpacaProviderAdapter().canonical_account_id(account)
+            # The ceremony registers its synthetic session first — a
+            # confirmation is only ever fenced by a real registration's
+            # instance and epoch, even a migration's.
+            from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
+
+            migration_session = service.register_agent_session(
+                clerk_id=clerk_id,
+                worker_key=clerk_row.worker_key,
+                agent_instance_id=_MIGRATION_INSTANCE,
+                fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+            )
+            service.reserve_assignment(
+                broker=clerk_row.broker, clerk_id=clerk_id, external_account_id=account
+            )
+            imported = service.confirm_assignment(
+                broker=clerk_row.broker,
+                clerk_id=clerk_id,
+                external_account_id=account,
+                binding_generation=generation,
+                agent_instance_id=_MIGRATION_INSTANCE,
+                routing_epoch=migration_session.routing_epoch,
+                effective_profile_id=profile_id,
+                effective_revision=revision,
+            )
+            evidence = read_confirmation_evidence(volume_root)
+            if evidence is None or evidence.binding_generation != generation:
+                write_confirmation_evidence(
+                    volume_root,
+                    ConfirmationEvidence(
+                        clerk_id=clerk_id,
+                        volume_id=clerk_row.volume_id,
+                        registry_id=service._store.registry_id,
+                        assignment_generation=imported.assignment_generation,
+                        canonical_account_id=canonical,
+                        binding_generation=generation,
+                        effective_profile_id=profile_id,
+                        effective_revision=revision,
+                        confirmed_at_ms=now_ms_utc(),
+                        agent_instance_id=_MIGRATION_INSTANCE,
+                        routing_epoch=migration_session.routing_epoch,
+                    ),
+                )
+
+        _write(
+            {
+                "step": "complete",
+                "clerk_id": clerk_id,
+                "broker": clerk_row.broker,
+                "volume_id": clerk_row.volume_id,
+                "deployment_namespace": clerk_row.deployment_namespace,
+                "binding_generation_seeded": seeded,
+                "binding_generation": generation,
+                "assignment": (
+                    None
+                    if imported is None
+                    else {
+                        "canonical_account_id": imported.canonical_external_account_id,
+                        "assignment_generation": imported.assignment_generation,
+                        "state": str(imported.state),
+                    }
+                ),
+                "next": "approve-endpoint, then start the agent with FLEET_CLERK_ID, "
+                "FLEET_WORKER_KEY and the agent service token.",
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+#: The migration's synthetic confirming session: a reserved instance identity
+#: no live registration can present, so migrated confirmations are auditable
+#: as ceremony writes and every real agent re-confirms under its own session
+#: on first boot.
+_MIGRATION_INSTANCE = "agnt_migrationceremony000000"
+_MIGRATION_EPOCH = 1
+
+
+def _effective_tuple(volume_root: Path) -> tuple[str | None, str | None, int | None]:
+    """Read the existing effective tuple from the volume's profiles database."""
+    from app.broker_configuration.store import ProfilesStore, profiles_database_path
+
+    if not profiles_database_path(volume_root).exists():
+        return None, None, None
+    store = ProfilesStore.open(clerk_dir=volume_root)
+    try:
+        selection = store.read_selection()
+    finally:
+        store.close()
+    return (
+        selection.effective_account_id,
+        selection.effective_profile_id,
+        selection.effective_revision,
+    )
+
+
+def _seed_effective_binding_generation(volume_root: Path) -> tuple[bool, int]:
+    """Seed generation 1 for an existing effective tuple, once, under the lock.
+
+    Returns whether this run performed the seed and the effective generation
+    the volume now carries. A volume that already advanced past 1 through
+    Apply cycles keeps its generation, and the imported confirmation cites
+    the volume's value — a hardcoded 1 would leave the registry's confirmed
+    observation disagreeing with the clerk's own selection until the next
+    re-confirmation.
+    """
+    from app.broker_configuration.runtime import build_service
+    from app.broker_configuration.store import ProfilesStore, profiles_database_path
+    from app.broker_configuration.worker_lifecycle import selection_handover
+
+    if not profiles_database_path(volume_root).exists():
+        return False, 0
+    with selection_handover(service_factory=lambda: build_service(clerk_dir=volume_root)):
+        store = ProfilesStore.open(clerk_dir=volume_root)
+        try:
+            with store.transaction() as conn:
+                cursor = conn.execute(
+                    "UPDATE installation_selection SET effective_binding_generation = 1 "
+                    "WHERE id = 1 AND effective_binding_generation = 0 "
+                    "AND effective_profile_id IS NOT NULL"
+                )
+                seeded = cursor.rowcount == 1
+                row = conn.execute(
+                    "SELECT effective_binding_generation FROM installation_selection "
+                    "WHERE id = 1"
+                ).fetchone()
+                generation = int(row[0]) if row is not None else 0
+                return seeded, generation
+        finally:
+            store.close()
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    """Assemble the CLI's subcommand parser."""
     parser = argparse.ArgumentParser(
         prog="manage_broker_fleet",
         description="Host ceremonies for the broker clerk fleet control plane.",
@@ -241,6 +495,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Deployment namespace qualifying volume roots (for example compose:prod)",
     )
     provision.set_defaults(func=_provision)
+
+    migrate = subparsers.add_parser(
+        "migrate-existing",
+        help="Enrol the existing Alpaca lane's volume into the fleet (offline, resumable)",
+    )
+    _with_control(migrate)
+    migrate.add_argument("--broker", default="alpaca")
+    migrate.add_argument("--label", default="Migrated Alpaca lane")
+    migrate.add_argument("--volume-root", required=True)
+    migrate.add_argument("--attestation-id", default=None)
+    migrate.add_argument("--deployment-namespace", default="host:local")
+    migrate.set_defaults(func=_migrate_existing)
 
     rotate = subparsers.add_parser(
         "rotate-credentials",

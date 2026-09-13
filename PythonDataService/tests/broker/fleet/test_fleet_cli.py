@@ -13,8 +13,9 @@ from pathlib import Path
 
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
+from app.broker.fleet_composition import production_provider_adapters
 from scripts.manage_broker_fleet import main
-from tests.broker.fleet.conftest import FakeProviderAdapter, FrozenClock, fake_alpha
+from tests.broker.fleet.conftest import FrozenClock
 
 
 def _argv(*args: str) -> list[str]:
@@ -23,16 +24,14 @@ def _argv(*args: str) -> list[str]:
 
 
 def test_init_provision_verify_show_and_retire_round_trip(
-    tmp_path: Path, capsys, monkeypatch
+    tmp_path: Path, capsys
 ) -> None:
-    # The CLI talks to the production adapter set; a test adapter is injected
-    # by patching the production mapping — proving injection exists at the
-    # seam without the fake ever being *registered* in code.
-    """The full ceremony round trip answers with pinned exit codes and JSON shapes."""
-    monkeypatch.setattr(
-        "app.broker.fleet.service.PRODUCTION_PROVIDER_ADAPTERS",
-        {"fake_alpha": fake_alpha()},
-    )
+    """The full ceremony round trip answers with pinned exit codes and JSON shapes.
+
+    Since delivery A2 the CLI talks to the real composition registry, whose
+    one production provider is Alpaca — this round trip exercises the actual
+    production adapter, not an injected fake."""
+
     control_dir = tmp_path / "control"
     volume_root = tmp_path / "volumes" / "paper"
     volume_root.mkdir(parents=True)
@@ -47,7 +46,7 @@ def test_init_provision_verify_show_and_retire_round_trip(
                 "--control-dir",
                 str(control_dir),
                 "--broker",
-                "fake_alpha",
+                "alpaca",
                 "--label",
                 "Paper research",
                 "--volume-root",
@@ -168,12 +167,8 @@ def test_the_ceremony_refusals_exit_two_and_the_unknown_provider_refuses(
     assert payload["error"].startswith("clerk_not_found:")
 
 
-def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
     """Release demands the proof token and reports the released generation."""
-    monkeypatch.setattr(
-        "app.broker.fleet.service.PRODUCTION_PROVIDER_ADAPTERS",
-        {"fake_alpha": fake_alpha()},
-    )
     control_dir = tmp_path / "control"
     volume_root = tmp_path / "volumes" / "p"
     volume_root.mkdir(parents=True)
@@ -185,7 +180,7 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
                 "--control-dir",
                 str(control_dir),
                 "--broker",
-                "fake_alpha",
+                "alpaca",
                 "--label",
                 "p",
                 "--volume-root",
@@ -199,13 +194,13 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
     clock = FrozenClock()
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
-        provider_adapters={"fake_alpha": FakeProviderAdapter("fake_alpha")},
+        provider_adapters=production_provider_adapters(),
         clock=clock,
     )
     try:
         clerk_id = service._store.list_clerks()[0].clerk_id
         service.reserve_assignment(
-            broker="fake_alpha", clerk_id=clerk_id, external_account_id="acct-cli"
+            broker="alpaca", clerk_id=clerk_id, external_account_id="acct-cli"
         )
     finally:
         service.close()
@@ -217,7 +212,7 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
                 "--control-dir",
                 str(control_dir),
                 "--broker",
-                "fake_alpha",
+                "alpaca",
                 "--account-id",
                 "acct-cli",
                 "--expected-generation",
@@ -236,7 +231,7 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys, monkeypatch) -
                 "--control-dir",
                 str(control_dir),
                 "--broker",
-                "fake_alpha",
+                "alpaca",
                 "--account-id",
                 "acct-cli",
                 "--expected-generation",

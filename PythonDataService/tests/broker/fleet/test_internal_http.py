@@ -306,3 +306,35 @@ async def test_empty_data_events_and_bare_cr_terminators_follow_the_spec() -> No
         SseEvent(event="a", data="cr-line", id=None),
         SseEvent(event="b", data="crlf-line", id=None),
     ]
+
+
+def test_cleartext_fleet_traffic_stays_inside_the_private_boundary() -> None:
+    """http:// is loopback/private only; https goes anywhere; garbage refuses.
+
+    The agent service token and worker key ride internal calls, so a public
+    cleartext destination is refused before any byte is sent (audit
+    2026-09-13, finding 4). IP literals are judged directly; an unresolvable
+    host name cannot be verified and refuses rather than being trusted.
+    """
+    from app.broker.fleet.internal_http import (
+        FleetTransportRefused,
+        enforce_private_http_target,
+    )
+
+    # https is accepted anywhere, http only inside the boundary.
+    enforce_private_http_target("https://fleet.example.com:8443")
+    enforce_private_http_target("http://127.0.0.1:9001")
+    enforce_private_http_target("http://[::1]:9001")
+    enforce_private_http_target("http://192.168.1.20:8000")
+    enforce_private_http_target("http://10.0.0.5:8000")
+    enforce_private_http_target("http://[fd00::5]:8000")
+    enforce_private_http_target("http://localhost:9001")
+
+    with pytest.raises(FleetTransportRefused, match="public address"):
+        enforce_private_http_target("http://93.184.216.34:8000")
+    with pytest.raises(FleetTransportRefused, match="public address"):
+        enforce_private_http_target("http://[2606:2800:220:1:248:1893:25c8:1946]:80")
+    with pytest.raises(FleetTransportRefused, match="must be an http"):
+        enforce_private_http_target("ftp://127.0.0.1:9001")
+    with pytest.raises(FleetTransportRefused, match="does not resolve"):
+        enforce_private_http_target("http://no-such-fleet-host.invalid:9001")

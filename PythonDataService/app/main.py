@@ -28,7 +28,7 @@ from app.broker.ibkr.client import (
 )
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
-from app.config import settings
+from app.config import fleet_settings, settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
 from app.routers import (
@@ -101,6 +101,28 @@ from app.utils.error_handlers import (
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# Fleet composition roles (ADR 0062, delivery A2). ``combined`` is the
+# legacy/development posture; a fleet deployment names each process's role
+# explicitly, and the gates below are what the name owns.
+_FLEET_ROLE = fleet_settings.ROLE
+_ROLE_RUNS_CLERK = _FLEET_ROLE in ("combined", "clerk_agent")
+_ROLE_RUNS_COORDINATOR = _FLEET_ROLE in ("combined", "fleet_coordinator")
+_ROLE_RUNS_DATA_PLANE_CORE = _FLEET_ROLE in ("combined", "fleet_coordinator")
+_FLEET_COORDINATOR_SURFACE = (
+    _ROLE_RUNS_COORDINATOR and fleet_settings.CONTROL_DIR is not None
+)
+
+
+def _effective_binding_generation_now() -> int | None:
+    """The selection's current binding generation, or none when unbound."""
+    from app.broker_configuration.runtime import get_broker_configuration_service
+
+    try:
+        return get_broker_configuration_service().selection().effective_binding_generation
+    except Exception:
+        return None
+
 
 def _validate_data_root_identity() -> None:
     """Fail closed if the configured lake root's identity marker is missing,
@@ -181,7 +203,18 @@ async def _install_alpaca_binding(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Retain the installation writer lock until every custody handle closes."""
+    """Retain the installation writer lock until every custody handle closes.
+
+    The dedicated coordinator role takes no installation lock at all: it owns
+    no clerk volume, opens no profile or custody database, and its registry
+    serializes through its own control-volume advisory lock (ADR 0062
+    addendum; audit 2026-09-13, finding 5's lock-scoping revision).
+    """
+    if _FLEET_ROLE == "fleet_coordinator":
+        async with _service_lifespan(app, worker_refusal=None):
+            yield
+        return
+
     from app.broker_configuration.worker_lifecycle import installation_worker
 
     with installation_worker() as refusal:
@@ -216,32 +249,64 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     broker endpoints return 503.
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
+    if _FLEET_ROLE == "fleet_coordinator" and fleet_settings.CONTROL_DIR is None:
+        raise RuntimeError(
+            "FLEET_ROLE=fleet_coordinator requires FLEET_CONTROL_DIR; a "
+            "coordinator without its registry volume refuses to start."
+        )
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
 
     # Root identity (#1876) — validated first, before any other subsystem
     # touches the lake: a LakeRootIdentityError here aborts startup (see
     # _validate_data_root_identity's docstring for why this is not
-    # best-effort like the IBKR connect below).
-    _validate_data_root_identity()
+    # best-effort like the IBKR connect below). The lake is the
+    # coordinator's artifact (fleet A2 inventory): a clerk agent serves no
+    # lake route and must not abort on the coordinator-owned root.
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        _validate_data_root_identity()
 
     # Every job runs on a thread of this process, so whatever the active set
     # still calls queued or running belonged to the previous process and has
     # no worker (a crash, an out-of-memory kill, a restart). Close those records
     # before the listener opens, so nothing reads as live for a day and the
     # research record behind each can be Finished.
-    fail_jobs_without_a_worker()
+    # Job ownership is the coordinator's: a clerk agent restarting (every
+    # Apply) must not fail the coordinator's queued research jobs.
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        fail_jobs_without_a_worker()
+
+    # The coordinator's fleet state: the registry on its own control volume
+    # plus the internal agent-token mapping the /internal/fleet surface
+    # authenticates against. Installed wherever the coordinator surface runs
+    # (the combined role with a control directory, or the dedicated role).
+    if _FLEET_COORDINATOR_SURFACE:
+        from app.broker.fleet.service import FleetControlService
+        from app.broker.fleet.store import FleetRegistryStore
+        from app.broker.fleet_composition import production_provider_adapters
+
+        app.state.fleet_service = FleetControlService(
+            store=FleetRegistryStore.open(control_dir=fleet_settings.CONTROL_DIR),
+            provider_adapters=production_provider_adapters(),
+        )
+        app.state.fleet_agent_tokens_text = fleet_settings.AGENT_SERVICE_TOKENS_JSON
+        logger.info(
+            "Fleet coordinator surface installed (registry on %s).",
+            fleet_settings.CONTROL_DIR,
+        )
 
     # Broker System v2 — register the phase-1 read brokers (Alpaca only) so
     # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client
     # builds credentials and network lazily on first call. Independent of the
-    # IBKR (v1) lifecycle below.
-    from app.broker.alpaca.broker import register_default_brokers
-    from app.broker.contract.registry import get_broker_registry
+    # IBKR (v1) lifecycle below. The coordinator role constructs no broker
+    # surface at all (FR-041).
+    if _ROLE_RUNS_CLERK:
+        from app.broker.alpaca.broker import register_default_brokers
+        from app.broker.contract.registry import get_broker_registry
 
-    register_default_brokers()
-    logger.info(
-        "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
-    )
+        register_default_brokers()
+        logger.info(
+            "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
+        )
 
     # Alpaca Clerk (phase 2) — the in-process single-writer for order
     # submission. Installed only when Alpaca keys are present, independent of
@@ -261,14 +326,33 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
+    fleet_lane = None
+    fleet_heartbeat_task = None
     # The selection cannot move between preflight, lease acquisition and the
     # effective acknowledgement, including writes by another process.
     handover = (
-        contextlib.nullcontext(None) if worker_refusal is not None else selection_handover()
+        contextlib.nullcontext(None)
+        if worker_refusal is not None or not _ROLE_RUNS_CLERK
+        else selection_handover()
     )
     with handover as handover_refusal:
-        alpaca_binding = await _install_alpaca_binding(
-            refusal=worker_refusal or handover_refusal
+        # The fleet lane opens BEFORE any profile or custody database: the
+        # volume identity gate, then session registration (ADR 0062
+        # addendum). A coordinator that is down opens the lane offline only
+        # against confirmed evidence; a never-enrolled lane refuses.
+        if _ROLE_RUNS_CLERK:
+            from app.broker.alpaca.clerk.fleet_boot import open_fleet_lane
+            from app.broker_configuration.runtime import resolve_clerk_dir
+
+            fleet_lane = await open_fleet_lane(
+                settings=fleet_settings, volume_root=resolve_clerk_dir()
+            )
+        alpaca_binding = (
+            await _install_alpaca_binding(
+                refusal=worker_refusal or handover_refusal
+            )
+            if _ROLE_RUNS_CLERK
+            else None
         )
         if alpaca_binding is not None:
             from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
@@ -350,6 +434,39 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
             # that could disagree with the one the binding sealed.
             live_envelope_values = alpaca_binding.context.live_envelope
 
+            if fleet_lane is not None:
+                from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
+                from app.broker.alpaca.clerk.fleet_boot import (
+                    offline_boot_matches,
+                    reserve_account,
+                )
+
+                bound_account = alpaca_binding.context.account_pin
+                if bound_account:
+                    canonical_account = AlpacaProviderAdapter().canonical_account_id(
+                        bound_account
+                    )
+                    if fleet_lane.online:
+                        # FR-063: the reservation precedes custody and the
+                        # execution lease; the loser refuses to open authority.
+                        await reserve_account(
+                            fleet_lane, external_account_id=bound_account
+                        )
+                    elif not offline_boot_matches(
+                        fleet_lane,
+                        canonical_account_id=canonical_account,
+                        effective_profile_id=alpaca_binding.context.profile_id,
+                        effective_revision=alpaca_binding.context.revision,
+                        binding_generation=_effective_binding_generation_now(),
+                    ):
+                        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused
+
+                        raise FleetBootRefused(
+                            "The recovered binding does not match the confirmed "
+                            "evidence and the coordinator is unreachable; a "
+                            "changed binding waits for the coordinator (FR-066).",
+                        )
+
             alpaca_clerk_runtime = await select_active_clerk_runtime(
                 read=alpaca_broker,
                 trade=alpaca_broker,
@@ -369,6 +486,56 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
             alpaca_clerk_runtime = await acknowledge_runtime_binding(
                 bound=alpaca_binding, runtime=alpaca_clerk_runtime,
             )
+            if fleet_lane is not None and fleet_lane.online:
+                from app.broker.alpaca.clerk.fleet_boot import (
+                    confirm_binding,
+                    start_heartbeat,
+                )
+                from app.broker_configuration.runtime import (
+                    get_broker_configuration_service,
+                )
+
+                selection_row = get_broker_configuration_service().selection()
+                if (
+                    alpaca_binding.context.account_pin
+                    and selection_row.effective_binding_generation >= 1
+                ):
+                    await confirm_binding(
+                        fleet_lane,
+                        external_account_id=alpaca_binding.context.account_pin,
+                        binding_generation=selection_row.effective_binding_generation,
+                        effective_profile_id=selection_row.effective_profile_id,
+                        effective_revision=selection_row.effective_revision,
+                    )
+                    runtime_for_facts = alpaca_clerk_runtime
+
+                    def _fleet_heartbeat_facts() -> dict[str, object]:
+                        mode = (
+                            "paper"
+                            if alpaca_settings.is_paper
+                            else "live"
+                        )
+                        authority_state = {
+                            "sqlite": "real_paper" if alpaca_settings.is_paper else "real_live",
+                            "shadow": "shadow",
+                            "synthetic": "synthetic",
+                            "unavailable": "unavailable",
+                        }.get(runtime_for_facts.authority_kind, "unavailable")
+                        return {
+                            "reported_binding_generation": selection_row.effective_binding_generation,
+                            "reported_account_id": alpaca_binding.context.account_pin,
+                            "reported_state": "binding_confirmed",
+                            "reported_summary": {
+                                "endpoint_mode": mode,
+                                "authority_state": authority_state,
+                            },
+                        }
+
+                    fleet_heartbeat_task = start_heartbeat(
+                        fleet_lane,
+                        interval_s=fleet_settings.HEARTBEAT_INTERVAL_S,
+                        facts=_fleet_heartbeat_facts,
+                    )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()
                 set_market_liveness_consumer(alpaca_market_liveness)
@@ -443,7 +610,7 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
 
     monitor: AutoReconnectMonitor | None = None
 
-    if ibkr_settings.broker_enabled:
+    if _ROLE_RUNS_CLERK and ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
         # Install the client immediately so /health reports the
         # disconnected-but-available state and POST /api/broker/connect can
@@ -505,10 +672,14 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
 
         set_market_data_feed(IbkrMarketDataFeed(ibkr_client))
         logger.info("Shared MarketDataFeed installed (ibkr, in-process fan-out).")
-    else:
+    elif _ROLE_RUNS_CLERK:
         set_client(None)
         set_monitor(None)
         logger.info("IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled.")
+    else:
+        set_client(None)
+        set_monitor(None)
+        logger.info("IBKR broker wiring skipped for the %s role.", _FLEET_ROLE)
 
     # ── Alpaca Bot Control v2, S2 (#1260) — in-container bot runner ────
     # The task registry is installed regardless of broker_enabled so the
@@ -519,14 +690,16 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
     from app.services.strategy_validation_admission import current_deployment_strategy_validation_fact
 
-    bot_task_registry = BotTaskRegistry(
-        artifacts_root=Path(ibkr_settings.live_runs_root).parent,
-        feed_resolver=get_market_data_feed,
-        supported_broker_ids=frozenset({"alpaca"}),
-        validation_fact=current_deployment_strategy_validation_fact,
-    )
-    set_bot_task_registry(bot_task_registry)
-    logger.info("In-container bot runner installed (task registry, daemon-free).")
+    bot_task_registry = None
+    if _ROLE_RUNS_CLERK:
+        bot_task_registry = BotTaskRegistry(
+            artifacts_root=Path(ibkr_settings.live_runs_root).parent,
+            feed_resolver=get_market_data_feed,
+            supported_broker_ids=frozenset({"alpaca"}),
+            validation_fact=current_deployment_strategy_validation_fact,
+        )
+        set_bot_task_registry(bot_task_registry)
+        logger.info("In-container bot runner installed (task registry, daemon-free).")
 
     # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
     # closed): the Clerk recovers and reconciles SQLite authority first; runner
@@ -537,7 +710,7 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         if alpaca_clerk_runtime is not None
         else None
     )
-    if _boot_clerk is not None:
+    if _boot_clerk is not None and bot_task_registry is not None:
         from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 
         async def _unresolved_intents(subject_id: str | None) -> int:
@@ -560,7 +733,8 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         # No Clerk (invalid ALPACA_* settings): the sweep leaves any
         # pre-existing Alpaca binding unprojected and keeps the start gate
         # closed, instead of aborting the lifespan into a restart loop.
-        await bot_task_registry.run_boot_recovery()
+        if bot_task_registry is not None:
+            await bot_task_registry.run_boot_recovery()
 
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
     # sweep cannot race the boot reconciliation pass (both call reconcile_once).
@@ -570,7 +744,7 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         else None
     )
     if _pending_sweep is not None:
-        if _boot_clerk is not None:
+        if _boot_clerk is not None and bot_task_registry is not None:
             # ADR 0050: after a supervised lease revival, re-run the boot
             # scan's repair pass in-process so terminal STOP evidence for
             # bots that crashed on the dead handle commits without waiting
@@ -606,12 +780,21 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
+        if fleet_heartbeat_task is not None:
+            fleet_heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await fleet_heartbeat_task
+        if fleet_lane is not None:
+            from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane
+
+            await close_fleet_lane(fleet_lane)
         if sovereign_equity_snapshot_scheduler is not None:
             await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
         # MarketDataFeed, which is torn down later in this block. Operator
         # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
-        await bot_task_registry.stop_all()
+        if bot_task_registry is not None:
+            await bot_task_registry.stop_all()
         set_bot_task_registry(None)
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
@@ -661,6 +844,10 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         from app.marketdata.ibkr_feed import set_market_data_feed as _clear_feed
 
         _clear_feed(None)
+        fleet_service = getattr(app.state, "fleet_service", None)
+        if fleet_service is not None:
+            fleet_service.close()
+            app.state.fleet_service = None
         logger.info("Shutting down Polygon Data Service")
 
 
@@ -690,115 +877,124 @@ app.add_middleware(
 DATA_PLANE_CONTROL_DEPENDENCIES = [Depends(require_data_plane_control_secret)]
 PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
 
-app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
-app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
-app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
-app.include_router(options.router, prefix="/api/options", tags=["options"])
-app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
-app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
-app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
-app.include_router(news.router, prefix="/api/news", tags=["news"])
-app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
-app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
-app.include_router(research.router, prefix="/api/research", tags=["research"])
-app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
-app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
-app.include_router(
-    golden_validation.router,
-    prefix="/api/research/golden-validations",
-    tags=["research-golden-validation"],
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
-)
-# Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
-app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
-app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-# Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
-app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
-app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
-# Research-pipeline walk-forward (Phase C). Registered BEFORE
-# ``research_runs`` so the literal ``/walk-forward`` segment wins
-# against the ``GET /{run_id}`` route on the parent router.
-app.include_router(
-    walk_forward.router,
-    prefix="/api/research/strategy-runs/walk-forward",
-    tags=["research-walk-forward"],
-)
-# Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
-# placement so the literal ``/monte-carlo`` segment wins.
-app.include_router(
-    monte_carlo.router,
-    prefix="/api/research/strategy-runs/monte-carlo",
-    tags=["research-monte-carlo"],
-)
-# Research-pipeline null baselines (Phase E1). Same pre-research_runs
-# placement so the literal ``/baselines`` segment wins.
-app.include_router(
-    baselines.router,
-    prefix="/api/research/strategy-runs/baselines",
-    tags=["research-baselines"],
-)
-# Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
-app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
-# Trading-calendar preview — sibling endpoint under ``/api/research`` so
-# the date-picker UI can surface skipped sessions before a run is
-# submitted. Lives in a separate ``APIRouter`` instance from the
-# strategy-runs router because their prefixes differ.
-app.include_router(
-    research_runs.calendar_router,
-    prefix="/api/research",
-    tags=["research-trading-calendar"],
-)
-app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
-app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
-app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
-app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
-# LEAN Sidecar Lab — data-plane API in front of the launcher service.
-# Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
-# algorithm source. See docs/architecture/lean-sidecar-lab.md.
-app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
-app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
-# Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
-# Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
-app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
-# QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
-# Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
-# the four endpoints silently 404'd until pricing-lab surfaced it.
-app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
-# Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
-# the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
-app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-# Edge router carries its own /api/edge prefix.
-app.include_router(edge.router)
-# Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
-# Router carries its own /api/edge/iv30 prefix.
-app.include_router(iv30.router)
-# IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
-# Step D of IV-ownership plan. Driven by .NET cron; not in-process.
-app.include_router(iv_recorder.router)
-# /research/data-divergence/* — dashboard + matrix endpoints. The router
-# carries its own prefix so we mount it bare.
-app.include_router(research_divergence.router)
+# Data-plane core part 1 (research, engine, aggregates, jobs): the
+# coordinator and combined roles own it; a clerk agent serves none of
+# it (fleet A2 inventory router table).
+if _ROLE_RUNS_DATA_PLANE_CORE:
+    app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
+    app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
+    app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
+    app.include_router(options.router, prefix="/api/options", tags=["options"])
+    app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+    app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
+    app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
+    app.include_router(news.router, prefix="/api/news", tags=["news"])
+    app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
+    app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
+    app.include_router(research.router, prefix="/api/research", tags=["research"])
+    app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
+    app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+    app.include_router(
+        golden_validation.router,
+        prefix="/api/research/golden-validations",
+        tags=["research-golden-validation"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
+    # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
+    app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
+    app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
+    app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
+    app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
+    # Research-pipeline walk-forward (Phase C). Registered BEFORE
+    # ``research_runs`` so the literal ``/walk-forward`` segment wins
+    # against the ``GET /{run_id}`` route on the parent router.
+    app.include_router(
+        walk_forward.router,
+        prefix="/api/research/strategy-runs/walk-forward",
+        tags=["research-walk-forward"],
+    )
+    # Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
+    # placement so the literal ``/monte-carlo`` segment wins.
+    app.include_router(
+        monte_carlo.router,
+        prefix="/api/research/strategy-runs/monte-carlo",
+        tags=["research-monte-carlo"],
+    )
+    # Research-pipeline null baselines (Phase E1). Same pre-research_runs
+    # placement so the literal ``/baselines`` segment wins.
+    app.include_router(
+        baselines.router,
+        prefix="/api/research/strategy-runs/baselines",
+        tags=["research-baselines"],
+    )
+    # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
+    app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
+    # Trading-calendar preview — sibling endpoint under ``/api/research`` so
+    # the date-picker UI can surface skipped sessions before a run is
+    # submitted. Lives in a separate ``APIRouter`` instance from the
+    # strategy-runs router because their prefixes differ.
+    app.include_router(
+        research_runs.calendar_router,
+        prefix="/api/research",
+        tags=["research-trading-calendar"],
+    )
+    app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
+    app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
+    app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
+    app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
+    # LEAN Sidecar Lab — data-plane API in front of the launcher service.
+    # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
+    # algorithm source. See docs/architecture/lean-sidecar-lab.md.
+    app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
+    app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
+    # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
+    # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
+    app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
+    # QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
+    # Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
+    # the four endpoints silently 404'd until pricing-lab surfaced it.
+    app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
+    # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
+    # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
+    app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Edge router carries its own /api/edge prefix.
+    app.include_router(edge.router)
+    # Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
+    # Router carries its own /api/edge/iv30 prefix.
+    app.include_router(iv30.router)
+    # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
+    # Step D of IV-ownership plan. Driven by .NET cron; not in-process.
+    app.include_router(iv_recorder.router)
+    # /research/data-divergence/* — dashboard + matrix endpoints. The router
+    # carries its own prefix so we mount it bare.
+    app.include_router(research_divergence.router)
+
 # Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
 # subscription count. Requires the always-on control secret (GET exposes live
 # broker state: connection status, last bar watermark, subscription count).
-app.include_router(
-    market_data_feed.router,
-    prefix="/api/market-data-feed",
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        market_data_feed.router,
+        prefix="/api/market-data-feed",
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
-app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+if _FLEET_ROLE == "combined":
+    app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # IBKR account/session capability probe (issue #1005 Slice 0).
-app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+if _FLEET_ROLE == "combined":
+    app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
 # position, order, activity, asset, and clock evidence is sensitive operator
 # data, so every v2 read requires the always-on data-plane control secret.
-app.include_router(
-    brokers.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        brokers.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # User-owned broker configuration profiles (ADR 0060). Storage and API only:
 # the router carries its own literal /api/brokers/alpaca/configuration prefix
 # and its own per-route auth dependencies (always-on secret on reads, the
@@ -806,39 +1002,45 @@ app.include_router(
 # it is registered without additional dependencies here. Registering it does
 # not change broker or worker startup — resolving an effective selection into a
 # running worker is a separate change.
-app.include_router(broker_configuration.router)
+if _ROLE_RUNS_CLERK:
+    app.include_router(broker_configuration.router)
 # Broker-parameterized bot runner (Alpaca Bot Control v2, S2 — #1260).
 # Deploy/stop/list for in-container log-only bots; broker-tagged bindings.
 # Control actions on live broker state — always-on data-plane secret.
-app.include_router(
-    broker_bots.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        broker_bots.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Per-run replay-parity receipts (Direction 2). Reads + recompute over live
 # broker evidence — always-on data-plane control secret, like broker_bots.
-app.include_router(
-    run_replay.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        run_replay.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Broker-v2 bot control panel contracts + projections (S1 — #1297).
 # panel-profile / catalog / panel / presented-actions / chart (live + bounded
 # history). Account-scoped reads and control actions on live broker state, so
 # every route requires the always-on data-plane control secret.
-app.include_router(
-    broker_v2_panel.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        broker_v2_panel.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Aggregated bot gallery wall (S4 — snapshot + SSE stream across every
 # running bot's tiles and shared per-symbol bars). Same sensitivity as
 # broker_v2_panel: always-on data-plane control secret required.
-app.include_router(
-    broker_v2_gallery.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        broker_v2_gallery.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 # Static fixture-envelope contract for the unlinked Clerk diagnostic gallery.
 # The Angular example imports these committed documents locally and never calls
 # this read-only OpenAPI anchor.
-app.include_router(alpaca_bot_control_examples.router)
+if _ROLE_RUNS_CLERK:
+    app.include_router(alpaca_bot_control_examples.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
@@ -848,8 +1050,9 @@ app.include_router(
     tags=["strategy-validation"],
     dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
 )
-app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+if _ROLE_RUNS_CLERK:
+    app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+    app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
 # The active-authority selector fails closed instead of falling back to JSONL.
 # PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
@@ -857,7 +1060,8 @@ app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_P
 # (positions, holds, operation/order identities, recovery tokens, DB
 # identity, timeline proof refs) — the GET routes need the secret checked
 # unconditionally, like clerk_transactions.router's comparable reads.
-app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+if _ROLE_RUNS_CLERK:
+    app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 
 # Data lake (Slice 1a). Registered unconditionally since #1893 retired
 # DATA_LAKE_ENABLED — the lake is the only market-data store, so there is
@@ -879,7 +1083,9 @@ app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE
 # dependency and there is no argument for these two being the exception.
 # Decided at the flag flip (#1839, carry-forward A6) rather than inherited
 # from the flag-dark slice that first registered the router.
-app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+if _ROLE_RUNS_DATA_PLANE_CORE:
+    app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+
 
 # Dev-only broker fault-injection seam (PRD #1354) — gated by
 # ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered
@@ -897,6 +1103,11 @@ if settings.ALPACA_FAULT_INJECTION_ENABLED:
         "ALPACA FAULT INJECTION seam ENABLED (dev only, paper-only). "
         "Never enable this in a live/production path."
     )
+
+if _FLEET_COORDINATOR_SURFACE:
+    from app.routers import internal_fleet as internal_fleet_router
+
+    app.include_router(internal_fleet_router.router)
 
 # Exception handlers. Register request validation separately so rejected
 # non-finite JSON numbers cannot make FastAPI's own 422 body non-serializable.
