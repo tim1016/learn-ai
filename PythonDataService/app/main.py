@@ -114,6 +114,16 @@ _FLEET_COORDINATOR_SURFACE = (
 )
 
 
+def _effective_binding_generation_now() -> int | None:
+    """The selection's current binding generation, or none when unbound."""
+    from app.broker_configuration.runtime import get_broker_configuration_service
+
+    try:
+        return get_broker_configuration_service().selection().effective_binding_generation
+    except Exception:
+        return None
+
+
 def _validate_data_root_identity() -> None:
     """Fail closed if the configured lake root's identity marker is missing,
     malformed, or doesn't match (#1876).
@@ -447,6 +457,7 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
                         canonical_account_id=canonical_account,
                         effective_profile_id=alpaca_binding.context.profile_id,
                         effective_revision=alpaca_binding.context.revision,
+                        binding_generation=_effective_binding_generation_now(),
                     ):
                         from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused
 

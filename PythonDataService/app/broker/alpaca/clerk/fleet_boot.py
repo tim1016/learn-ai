@@ -279,8 +279,9 @@ def offline_boot_matches(
     canonical_account_id: str,
     effective_profile_id: str | None,
     effective_revision: int | None,
+    binding_generation: int | None = None,
 ) -> bool:
-    """FR-066: only the evidence-confirmed exact tuple may boot offline."""
+    """FR-066: only the evidence-confirmed exact grant may boot offline."""
     evidence = read_confirmation_evidence(boot.volume_root)
     if evidence is not None and boot.registry_id == "":
         boot.registry_id = evidence.registry_id
@@ -290,6 +291,7 @@ def offline_boot_matches(
         canonical_account_id=canonical_account_id,
         effective_profile_id=effective_profile_id,
         effective_revision=effective_revision,
+        binding_generation=binding_generation,
     )
 
 

@@ -199,16 +199,26 @@ def evidence_vouches_for(
     canonical_account_id: str,
     effective_profile_id: str | None,
     effective_revision: int | None,
+    binding_generation: int | None = None,
 ) -> bool:
-    """Whether a recovered binding is the exact tuple the evidence confirms.
+    """Whether a recovered binding is the exact grant the evidence confirms.
 
     This is the FR-066 test: only the already-confirmed exact last-effective
     tuple may boot with the coordinator unavailable. Anything else — a
-    changed account, profile or revision — waits for the coordinator.
+    changed account, profile or revision — waits for the coordinator. When
+    the caller pins the current binding generation, it must equal the
+    evidence's: a tuple that changed away and back carries a newer
+    generation, and that grant has not been confirmed.
     """
     if evidence is None:
         return False
-    return evidence.tuple_key() == (effective_profile_id, effective_revision, canonical_account_id)
+    if evidence.tuple_key() != (
+        effective_profile_id,
+        effective_revision,
+        canonical_account_id,
+    ):
+        return False
+    return binding_generation is None or evidence.binding_generation == binding_generation
 
 
 __all__ = [

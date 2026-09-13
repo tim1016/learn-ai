@@ -25,8 +25,6 @@ from app.broker.fleet.provider import (
 
 _ADAPTER_VERSION = "alpaca-fleet.2"
 
-ALPACA_CAPABILITIES = frozenset({capability for capability in Capability})
-
 _ALPACA_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -133,8 +131,14 @@ class AlpacaProviderAdapter:
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """Every capability the Alpaca clerk's surface declares today."""
-        return ALPACA_CAPABILITIES
+        """Exactly the capabilities the operation catalog backs today.
+
+        Advertised equals served: a capability without a declared operation
+        is evidence of nothing, and the directory must not promise behavior
+        no route delivers. The set grows as delivery B's operation families
+        land.
+        """
+        return frozenset(operation.capability for operation in ALPACA_OPERATIONS)
 
     def operations(self) -> frozenset[ProviderOperation]:
         """The typed operation catalog the Alpaca clerk serves."""
@@ -199,7 +203,6 @@ class AlpacaProviderAdapter:
 
 
 __all__ = [
-    "ALPACA_CAPABILITIES",
     "ALPACA_OPERATIONS",
     "AlpacaProviderAdapter",
 ]

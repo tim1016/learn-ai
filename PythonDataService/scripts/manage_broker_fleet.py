@@ -230,6 +230,24 @@ def _migrate_existing(args: argparse.Namespace) -> int:
     run converges on rerun and identities are never reminted to get past a
     partial failure (audit 2026-09-13, finding 10).
     """
+
+    from app.broker_configuration.worker_lifecycle import installation_worker
+
+    # The ceremony is offline by contract: holding the installation worker
+    # lock both proves it and refuses to supersede a live agent's session.
+    with installation_worker() as worker_refusal:
+        if worker_refusal is not None:
+            raise ClerkVolumeCloneDetected(
+                "The installation worker lock is held — a clerk agent appears to "
+                "be running on this volume; migrate-existing is an offline "
+                "ceremony.",
+                next_step="Stop the agent, then re-run the ceremony.",
+            )
+        return _migrate_existing_locked(args)
+
+
+def _migrate_existing_locked(args: argparse.Namespace) -> int:
+    """The ceremony body, run under the installation worker lock."""
     from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
     from app.broker.fleet import volume as volume_module
     from app.broker.fleet.confirmation import (
