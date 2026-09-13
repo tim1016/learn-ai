@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 import { GalleryLiveStore } from './gallery-live-store.service';
 import type { GalleryBotView, GalleryLiveSnapshot, GalleryLiveUpdate } from './gallery.types';
+import { provideFleetDirectory } from '../../../../../fleet/fleet-directory-testing';
 
 /** Mirrors ``bot-panel-live-store.service.spec.ts``'s stub — jsdom has no ``EventSource``. */
 class StubEventSource {
@@ -101,7 +102,8 @@ describe('GalleryLiveStore', () => {
     StubEventSource.instances = [];
     (globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
     TestBed.configureTestingModule({
-      providers: [GalleryLiveStore, provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+      provideFleetDirectory(),GalleryLiveStore, provideHttpClient(), provideHttpClientTesting()],
     });
   });
 
@@ -218,13 +220,13 @@ describe('GalleryLiveStore', () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
-      const starting = store.start('alpaca', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
       await starting;
 
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-1', 'sid-2']);
       const source = StubEventSource.instances[0];
-      expect(source.url).toContain('/api/brokers/alpaca/accounts/PA-1/gallery/stream');
+      expect(source.url).toContain('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/stream');
 
       source.emit('open');
       expect(store.status()).toBe('live');
@@ -250,8 +252,8 @@ describe('GalleryLiveStore', () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
-      const starting = store.start('alpaca', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
       await starting;
 
       const source = StubEventSource.instances[0];
@@ -289,8 +291,8 @@ describe('GalleryLiveStore', () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
-      const starting = store.start('alpaca', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
       await starting;
 
       StubEventSource.instances[0].emit('error');
@@ -298,47 +300,87 @@ describe('GalleryLiveStore', () => {
 
       await vi.advanceTimersByTimeAsync(5_000);
       http
-        .expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot')
+        .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot')
         .flush(snapshot({ surface_version: 2 }));
 
       StubEventSource.instances.at(-1)?.emit('open');
       expect(store.status()).toBe('live');
 
       await vi.advanceTimersByTimeAsync(10_000);
-      http.expectNone('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot');
+      http.expectNone('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
     });
 
     it('clears prior state when starting against a different account, but not on a same-identity restart', async () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
-      const first = store.start('alpaca', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      const first = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
       await first;
       expect(store.bots().length).toBe(2);
 
-      const second = store.start('alpaca', 'PA-2');
+      const second = store.start('alpaca', 'clrk_spec', 'PA-2');
       // The identity change clears state synchronously, before the new
       // account's bootstrap resolves.
       expect(store.bots()).toEqual([]);
       http
-        .expectOne('/api/brokers/alpaca/accounts/PA-2/gallery/snapshot')
+        .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-2/gallery/snapshot')
         .flush(snapshot({ stream_epoch: 'epoch-b', bots: [bot('sid-only')] }));
       await second;
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-only']);
+    });
+
+    it('isolates same-account Clerks and ignores a queued frame from the prior lane', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const first = store.start('alpaca', 'clrk-a', 'PA-1', 1, 1);
+      http.expectOne('/api/brokers/alpaca/clerks/clrk-a/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await first;
+      const oldSource = StubEventSource.instances[0];
+
+      const second = store.start('alpaca', 'clrk-b', 'PA-1', 1, 1);
+      expect(store.bots()).toEqual([]);
+      oldSource.emit('snapshot', JSON.stringify(snapshot({ bots: [bot('stale-lane-bot')] })));
+      expect(store.bots()).toEqual([]);
+
+      http
+        .expectOne('/api/brokers/alpaca/clerks/clrk-b/accounts/PA-1/gallery/snapshot')
+        .flush(snapshot({ stream_epoch: 'epoch-b', bots: [bot('clrk-b-bot')] }));
+      await second;
+      expect(store.bots().map((entry) => entry.sid)).toEqual(['clrk-b-bot']);
+    });
+
+    it('clears state and scopes the reconnect cursor when lane provenance changes', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const first = store.start('alpaca', 'clrk_spec', 'PA-1', 1, 1);
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await first;
+
+      const rebound = store.start('alpaca', 'clrk_spec', 'PA-1', 2, 2);
+      expect(store.bots()).toEqual([]);
+      http
+        .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot')
+        .flush(snapshot({ stream_epoch: 'epoch-b', bots: [bot('rebound-bot')] }));
+      await rebound;
+      const source = StubEventSource.instances.at(-1);
+      expect(source?.url).not.toContain('cursor=epoch-a');
+      expect(store.bots().map((entry) => entry.sid)).toEqual(['rebound-bot']);
     });
 
     it('preserves state across a same-identity restart instead of clearing it', async () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
-      const first = store.start('alpaca', 'PA3');
-      http.expectOne('/api/brokers/alpaca/accounts/PA3/gallery/snapshot').flush(snapshot());
+      const first = store.start('alpaca', 'clrk_spec', 'PA3');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA3/gallery/snapshot').flush(snapshot());
       await first;
       expect(store.bots().length).toBe(2);
       expect(store.barsBySymbol().get('SPY')?.length).toBe(2);
 
-      const second = store.start('alpaca', 'PA3');
+      const second = store.start('alpaca', 'clrk_spec', 'PA3');
       // Unlike the identity-change case above, restarting against the
       // *same* (broker, accountId) must not blank the wall while the
       // restart's bootstrap is in flight.
@@ -346,7 +388,7 @@ describe('GalleryLiveStore', () => {
       expect(store.barsBySymbol().get('SPY')?.length).toBe(2);
 
       http
-        .expectOne('/api/brokers/alpaca/accounts/PA3/gallery/snapshot')
+        .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA3/gallery/snapshot')
         .flush(snapshot({ surface_version: 2 }));
       await second;
       expect(store.bots().length).toBe(2);

@@ -27,7 +27,9 @@ import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
+import { AlpacaLaneDirectoryComponent } from './lane-directory/alpaca-lane-directory.component';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
+import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   BrokersService,
   type SqliteTimelineQuery,
@@ -59,6 +61,7 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AlpacaLaneDirectoryComponent,
     AlpacaDeployDrawerComponent,
     AlpacaCustodyResolutionComponent,
     AlpacaDeskAccountStateComponent,
@@ -79,6 +82,7 @@ export class AlpacaDeskComponent {
   private readonly router = inject(Router);
   private readonly operatorData = inject(AlpacaOperatorLensDataService);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly brokers = inject(BrokersService);
   private readonly configuration = inject(BrokerConfigurationService);
   private readonly lensPreference = inject(LensPreferenceService);
@@ -86,8 +90,15 @@ export class AlpacaDeskComponent {
     initialValue: this.route.snapshot.queryParamMap,
   });
 
+  /** Null at `/brokers/alpaca`: that root is the directory only. */
+  protected readonly contextTarget = this.accountData.target;
+
   private readonly configurationState = resource({
-    loader: () => this.configuration.readDeskState(),
+    params: () => this.contextTarget(),
+    loader: ({ params }) =>
+      params === null
+        ? Promise.resolve(null)
+        : this.configuration.readDeskState(params.clerkId),
   });
   protected readonly deskState = computed(() =>
     this.configurationState.hasValue() ? this.configurationState.value() : null,
@@ -97,6 +108,11 @@ export class AlpacaDeskComponent {
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
+  protected readonly directorySurface = computed<'deploy' | 'bots' | 'gallery' | null>(() => {
+    if (this.queryParams().has('deploy')) return 'deploy';
+    const surface = this.queryParams().get('surface');
+    return surface === 'bots' || surface === 'gallery' ? surface : null;
+  });
   protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
   private readonly routedOrderPrefill = computed(() =>
     parseManualOrderTicketQuery(this.queryParams()),
@@ -107,9 +123,16 @@ export class AlpacaDeskComponent {
   protected readonly accountSnapshot = computed(() =>
     this.accountData.account.hasValue() ? this.accountData.account.value() : null,
   );
-  protected readonly operatingDeskVisible = computed(
-    () => this.accountData.account.hasValue(),
+  protected readonly operatingDeskVisible = computed(() =>
+    this.contextTarget() !== null && this.accountData.account.hasValue(),
   );
+  protected readonly deployAvailable = computed(() => {
+    const target = this.contextTarget();
+    if (target === null || !this.operatingDeskVisible()) return false;
+    return this.fleetDirectory
+      .lane(target.broker, target.clerkId)
+      ?.capabilities.includes('deploy') === true;
+  });
   protected readonly accountFailed = computed(
     () => this.accountData.account.error() !== undefined,
   );
@@ -125,8 +148,13 @@ export class AlpacaDeskComponent {
       : null;
   });
   private readonly manualOrderCapability = resource({
-    params: () => this.orderPrefill()?.accountId,
-    loader: ({ params }) => this.brokers.getSqliteManualOrderCapability(params),
+    params: () => {
+      const accountId = this.orderPrefill()?.accountId;
+      const target = this.contextTarget();
+      return accountId === undefined || target === null ? undefined : { target, accountId };
+    },
+    loader: ({ params }) =>
+      this.brokers.getSqliteManualOrderCapability(params.target.clerkId, params.accountId),
   });
   protected readonly manualTicketCapability = computed(
     () => this.manualOrderCapability.hasValue()
@@ -168,7 +196,7 @@ export class AlpacaDeskComponent {
   }
 
   protected openDeploy(): void {
-    if (!this.operatingDeskVisible()) return;
+    if (!this.deployAvailable()) return;
     this.deployOpen.set(true);
     void this.router.navigate([], {
       relativeTo: this.route,
@@ -192,12 +220,20 @@ export class AlpacaDeskComponent {
   }
 
   protected reviewAccount(choice: AlpacaDeskSelectionSummary | null): void {
+    const target = this.contextTarget();
+    if (target === null) return;
+    const commands = ['/brokers', 'alpaca', 'clerks', target.clerkId, 'configuration'];
     if (choice === null) {
-      void this.router.navigate(['/brokers/alpaca/configuration']);
+      void this.router.navigate(commands);
       return;
     }
-    void this.router.navigate(['/brokers/alpaca/configuration'], {
+    void this.router.navigate(commands, {
       queryParams: { profileId: choice.profile_id, revision: choice.revision },
     });
+  }
+
+  protected configurationRoute(): readonly string[] | null {
+    const target = this.contextTarget();
+    return target === null ? null : ['/brokers', 'alpaca', 'clerks', target.clerkId, 'configuration'];
   }
 }

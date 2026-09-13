@@ -1,14 +1,11 @@
-import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction } from "@angular/router";
-import {
-  brokerBotsRedirectGuard,
-  brokerGalleryRedirectGuard,
-} from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
+import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
-// Nominal component target for the brokerBotsRedirectGuard route.
-// The guard always returns a UrlTree so this component never renders.
-@Component({ template: '', changeDetection: ChangeDetectionStrategy.OnPush })
-class NeverRendersComponent {}
+const loadBrokerLaneUnavailable = () =>
+  import('./fleet/broker-lane-unavailable.component').then(
+    (module) => module.BrokerLaneUnavailableComponent,
+  );
 
 // Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
 // older engine/runs/:id bookmark). Both must redirect straight to this same
@@ -33,14 +30,14 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
   { path: "broker/reconciliation", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/orders", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/session-mirror", redirectTo: "brokers/alpaca", pathMatch: "full" },
-  { path: "broker/paper-run", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
-  { path: "broker/instances", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
-  { path: "broker/instances/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
-  { path: "broker/bots", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
-  { path: "broker/bots/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/paper-run", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/instances", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/instances/:id", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/bots", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/bots/:id", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/offline-replay", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/bot-manual", redirectTo: "brokers/alpaca/manual", pathMatch: "full" },
-  { path: "broker/deploy", redirectTo: "brokers/alpaca?deploy", pathMatch: "full" },
+  { path: "broker/deploy", redirectTo: "brokers/alpaca", pathMatch: "full" },
 ];
 
 export const routes: Routes = [
@@ -290,27 +287,76 @@ export const routes: Routes = [
         "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
       ).then((m) => m.AlpacaBotControlExampleComponent),
   },
-  // Preserve deploy bookmarks while the desk owns the right-side workflow.
+  // Deploy bookmarks lack a clerk identity. They stay visible as an explicit
+  // failure rather than silently opening the newly selected lane's drawer.
   {
     path: "brokers/alpaca/accounts/:accountId/deploy",
-    redirectTo: "brokers/alpaca?deploy",
-    pathMatch: "full",
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
     path: "brokers/alpaca/deploy",
-    redirectTo: "brokers/alpaca?deploy",
-    pathMatch: "full",
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
     // User-owned broker configuration profiles (ADR 0060). Declared before the
     // desk so the intent of the deeper path is readable next to it; Angular
     // would backtrack to it either way, since the desk route consumes no
     // trailing segments.
+    //
+    // Delivery C: configuration is canonical only under an explicit clerk.
     path: "brokers/alpaca/configuration",
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    // ── Fleet clerk-scoped canonical routes (PRD §13/FR-092) ────────────────
+    // The lane's configuration surface — repair stays reachable without a
+    // confirmed binding (configuration-access readiness).
+    path: "brokers/alpaca/clerks/:clerkId/configuration",
     loadComponent: () =>
       import(
         "./components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component"
       ).then((m) => m.AlpacaConfigurationPageComponent),
+  },
+  {
+    // A lane deep link without a surface: its configuration is the lane's
+    // own home (the desk directory is the broker-level surface).
+    path: "brokers/alpaca/clerks/:clerkId",
+    redirectTo: "configuration",
+    pathMatch: "full",
+  },
+  {
+    // The bot panel, addressed by broker + clerk + account + bot identity.
+    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid",
+    data: { fullBleed: true, broker: 'alpaca' },
+    loadComponent: () =>
+      import(
+        "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"
+      ).then((m) => m.BotPanelShellComponent),
+  },
+  {
+    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots",
+    data: { broker: 'alpaca' },
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+      ).then((m) => m.BotsListPageComponent),
+  },
+  {
+    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery",
+    data: { fullBleed: true, broker: 'alpaca' },
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
+      ).then((m) => m.BotGalleryPageComponent),
+  },
+  {
+    // The operating desk is addressed by a fully explicit lane and account.
+    // `/brokers/alpaca` remains the broker directory/root surface.
+    path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
+    loadComponent: () =>
+      import('./components/brokers/alpaca-desk/alpaca-desk.component').then(
+        (m) => m.AlpacaDeskComponent,
+      ),
   },
   {
     // Broker System v2 read-only desk — separate from every v1 broker page.
@@ -321,21 +367,17 @@ export const routes: Routes = [
       ),
   },
   {
-    // Broker-v2 bot control panel — trader lens (S3); operator lens adds in S4.
-    // Route binds broker, accountId, sid as component inputs.
+    // Broker-v2 bot control panel — the canonical panel route is
+    // clerk-scoped above; this unscoped URL redirects through lane
+    // resolution (FR-096: an unresolvable account fails to the directory,
+    // never to another lane).
     path: "brokers/:broker/accounts/:accountId/bots/:sid",
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import(
-        "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"
-      ).then((m) => m.BotPanelShellComponent),
+    canActivate: [brokerClerkRedirectGuard('/bots/:sid')],
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
     path: "brokers/:broker/manual",
-    loadComponent: () =>
-      import(
-        "./components/broker/v2-panel/manual-page/broker-v2-manual-page.component"
-      ).then((m) => m.BrokerV2ManualPageComponent),
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
     path: "broker/options-chain",
@@ -395,35 +437,54 @@ export const routes: Routes = [
       ).then((m) => m.IdeSandboxComponent),
   },
   {
-    // Broker v2 panel — account-scoped bots list
+    // Broker v2 panel — account-scoped bots list: the canonical roster route
+    // is clerk-scoped above; this unscoped URL redirects through the lane.
     path: 'brokers/:broker/accounts/:accountId/bots',
-    loadComponent: () =>
-      import(
-        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
-      ).then((m) => m.BotsListPageComponent),
+    canActivate: [brokerClerkRedirectGuard('/bots')],
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // Broker v2 panel — live gallery wall for every shown bot in the account.
+    // Broker v2 panel — live gallery wall: the canonical gallery route is
+    // clerk-scoped above; this unscoped URL redirects through the lane.
     path: 'brokers/:broker/accounts/:accountId/gallery',
-    data: { fullBleed: true },
-    loadComponent: () =>
-      import(
-        './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
-      ).then((m) => m.BotGalleryPageComponent),
+    canActivate: [brokerClerkRedirectGuard('/gallery')],
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  // A canonical-looking route for another provider is still the same URL
+  // after refusal. Literal Alpaca routes above win first; these parametric
+  // fallbacks prevent wrong-provider links from reaching the app wildcard.
+  {
+    path: 'brokers/:broker/clerks/:clerkId/configuration',
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // Broker v2 panel — unscoped bots entry point: resolves account then
-    // redirects to /brokers/:broker/accounts/:accountId/bots.
+    path: 'brokers/:broker/clerks/:clerkId/accounts/:accountId/bots/:sid',
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    path: 'brokers/:broker/clerks/:clerkId/accounts/:accountId/bots',
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    path: 'brokers/:broker/clerks/:clerkId/accounts/:accountId/gallery',
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    path: 'brokers/:broker/clerks/:clerkId/accounts/:accountId',
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    path: 'brokers/:broker/clerks/:clerkId',
+    loadComponent: loadBrokerLaneUnavailable,
+  },
+  {
+    // Unscoped operational compatibility URLs cannot prove an account lane.
     path: 'brokers/:broker/bots',
-    canActivate: [brokerBotsRedirectGuard],
-    component: NeverRendersComponent,
+    loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // Gallery is a peer of Bots: resolve the account before loading its
-    // account-scoped live-wall route.
     path: 'brokers/:broker/gallery',
-    canActivate: [brokerGalleryRedirectGuard],
-    component: NeverRendersComponent,
+    loadComponent: loadBrokerLaneUnavailable,
   },
   { path: "**", redirectTo: "/data-lab" },
 ];

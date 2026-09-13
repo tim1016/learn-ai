@@ -118,6 +118,35 @@ def test_the_fake_providers_declare_valid_catalogs() -> None:
             assert operation.agent_path_template.startswith("/api/")
 
 
+def test_alpaca_catalog_covers_every_canonical_desk_read() -> None:
+    """C's desk has no operational fallback to a broker-global route."""
+    from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
+
+    operations = {
+        operation.operation_id: operation
+        for operation in AlpacaProviderAdapter().operations()
+    }
+    expected = {
+        "activities_read": ("GET", "/activities"),
+        "portfolio_history_read": ("GET", "/portfolio-history"),
+        "portfolio_history_proof_read": ("GET", "/portfolio-history-proof"),
+        "clerk_status_read": ("GET", "/clerk/status"),
+        "custody_diagnosis_read": ("GET", "/clerk/custody-diagnosis"),
+        "bot_run_current_read": (
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/runs/current",
+        ),
+        "bot_run_history_read": (
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/runs/history",
+        ),
+    }
+    assert {
+        operation_id: (operations[operation_id].method, operations[operation_id].path_template)
+        for operation_id in expected
+    } == expected
+
+
 def test_protocol_compatibility_refuses_mismatched_builds() -> None:
     """An agent's protocol version must equal the coordinator's, exactly —
     and an unversioned caller is exactly the older build the fence exists for."""

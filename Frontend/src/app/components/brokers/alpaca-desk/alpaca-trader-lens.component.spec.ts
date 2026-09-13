@@ -11,6 +11,10 @@ import type {
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
 
 vi.mock('lightweight-charts', () => {
   const chart = {
@@ -208,7 +212,11 @@ async function renderLens(
 ) {
   await render(AlpacaTraderLensComponent, {
     providers: [
-      AlpacaDeskAccountDataService,
+      provideFleetDirectory(),
+      {
+        provide: AlpacaDeskAccountDataService,
+        useValue: { target: () => TARGET, account: { hasValue: () => true, value: () => account() } },
+      },
       { provide: BrokersService, useValue: { ...broker, ...clerk } },
     ],
   });
@@ -228,7 +236,7 @@ describe('AlpacaTraderLensComponent', () => {
     expect(screen.getByRole('searchbox', { name: "Search today's activity" })).toBeTruthy();
     expect(screen.getAllByTitle('NVDA')).not.toHaveLength(0);
     expect(broker.listActivities).toHaveBeenCalledWith(
-      'alpaca',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA1' }),
       expect.objectContaining({ currentSession: true, limit: 100 }),
     );
   });
@@ -242,7 +250,10 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findByRole('heading', { name: '30D equity curve' })).toBeTruthy();
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Transaction history' })).toBeTruthy();
-    expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith('alpaca', '30D');
+    expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith(
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA1' }),
+      '30D',
+    );
     expect(await screen.findByText(/Alpaca's account change matches the recorded activity within \$0\.000001\./)).toBeTruthy();
     fireEvent.click(screen.getByText('Calculation details and supporting trades'));
     expect(screen.getByRole('table', { name: 'Trades supporting this period' })).toBeTruthy();
@@ -250,7 +261,7 @@ describe('AlpacaTraderLensComponent', () => {
     expect(screen.getByText('bot:bot-qqq')).toBeTruthy();
     expect(screen.getAllByTitle('SPY')).not.toHaveLength(0);
     await vi.waitFor(() => expect(clerk.accountTransactions).toHaveBeenCalled());
-    const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
+    const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[4];
     expect(thirtyDayFilters).toMatchObject({
       fromMs: 1_700_000_000_000,
       toMs: 1_700_086_400_000,
@@ -261,9 +272,12 @@ describe('AlpacaTraderLensComponent', () => {
 
     expect(await screen.findByRole('heading', { name: '60D equity curve' })).toBeTruthy();
     expect(await screen.findByRole('img', { name: '60D broker equity curve' })).toBeTruthy();
-    expect(broker.getPortfolioHistoryProof).toHaveBeenLastCalledWith('alpaca', '60D');
+    expect(broker.getPortfolioHistoryProof).toHaveBeenLastCalledWith(
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA1' }),
+      '60D',
+    );
     await vi.waitFor(() => {
-      const sixtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
+      const sixtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[4];
       expect(sixtyDayFilters).toMatchObject({
         fromMs: 1_700_000_000_000,
         toMs: 1_700_086_400_000,

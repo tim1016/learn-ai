@@ -8,6 +8,14 @@ import {
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 import { DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget, withAccount } from '../../../fleet/resource-target';
+
+const DEPLOY_TARGET = resourceTarget('alpaca', 'clrk_spec', {
+  accountId: 'PA9',
+  bindingGeneration: 3,
+  routingEpoch: 4,
+});
 
 const ADMISSION_STUB = { allowed: true };
 
@@ -76,10 +84,11 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
+      provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
     ],
-    componentInputs: { accountId: 'PA9' },
+    componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
   });
   await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
@@ -120,7 +129,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await typeSymbol('QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
     } finally {
       vi.useRealTimers();
     }
@@ -144,7 +153,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
 
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       expect(service.getDeployView).toHaveBeenCalledTimes(1);
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'SPY');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'SPY');
 
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS * 5);
       expect(service.getDeployView).toHaveBeenCalledTimes(1);
@@ -170,7 +179,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('QQQ');
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
     } finally {
       vi.useRealTimers();
     }
@@ -181,7 +190,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     try {
       const qqqOnlyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [QQQ_STRATEGY] };
       const service = mockService();
-      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+      service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'QQQ' ? qqqOnlyView : DEPLOY_VIEW),
       );
       await renderWorkflow(service);
@@ -207,7 +216,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       const tslaView: DeployBotView = { ...DEPLOY_VIEW, strategies: [TSLA_GOLDEN_STRATEGY] };
       const spyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [SPY_GOLDEN_STRATEGY] };
       const service = mockService(tslaView);
-      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+      service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'SPY' ? spyView : tslaView),
       );
       await renderWorkflow(service);
@@ -220,7 +229,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.55');
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'SPY');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'SPY');
     } finally {
       vi.useRealTimers();
     }
@@ -232,7 +241,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       const legacyView: DeployBotView = { ...DEPLOY_VIEW, strategies: [LEGACY_EMA_STRATEGY] };
       const goldenView: DeployBotView = { ...DEPLOY_VIEW, strategies: [TSLA_GOLDEN_STRATEGY] };
       const service = mockService(legacyView);
-      service.getDeployView.mockImplementation((_broker, _account, symbol) =>
+      service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'TSLA' ? goldenView : legacyView),
       );
       await renderWorkflow(service);
@@ -269,7 +278,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(service.getDeployView).toHaveBeenCalledTimes(1);
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
     } finally {
       vi.useRealTimers();
     }
@@ -412,7 +421,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       inFlight.resolve(DEPLOY_VIEW);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'IWM');
+      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'IWM');
     } finally {
       vi.useRealTimers();
     }
@@ -436,7 +445,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       // Switching account supersedes the in-flight PA9 request.
-      await rerender({ componentInputs: { accountId: 'PA7' } });
+      await rerender({ componentInputs: { target: withAccount(DEPLOY_TARGET, 'PA7'), accountId: 'PA7' } });
       await vi.advanceTimersByTimeAsync(10);
       pa9Scoped.resolve(labelledView('PA9 readiness'));
       await vi.advanceTimersByTimeAsync(10);

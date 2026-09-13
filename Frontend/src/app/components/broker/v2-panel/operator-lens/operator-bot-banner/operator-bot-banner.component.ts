@@ -57,6 +57,8 @@ const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
 })
 export class OperatorBotBannerComponent {
   readonly panel = input.required<BotPanelView>();
+  /** Routed by the enclosing lens; empty only in isolated banner previews. */
+  readonly clerkId = input('');
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
@@ -64,6 +66,8 @@ export class OperatorBotBannerComponent {
   protected readonly backLink = computed(() => [
     '/brokers',
     this.panel().broker,
+    'clerks',
+    this.clerkId(),
     'accounts',
     this.panel().account_id,
     'bots',

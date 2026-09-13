@@ -41,6 +41,7 @@ export class TransactionRailComponent {
   readonly rail = input.required<TransactionRail>();
   readonly profile = input<PanelProfile | null>(null);
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
 

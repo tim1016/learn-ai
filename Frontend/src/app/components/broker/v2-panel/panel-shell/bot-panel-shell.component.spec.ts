@@ -22,6 +22,7 @@ import type {
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 const messageService = { add: vi.fn() };
 const chartMocks = vi.hoisted(() => {
@@ -50,6 +51,7 @@ vi.mock('lightweight-charts', () => {
 beforeEach(() => {
   TestBed.configureTestingModule({
     providers: [
+      provideFleetDirectory(),
       { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
       { provide: MarketDataService, useValue: marketDataMock },
     ],
@@ -145,7 +147,7 @@ const PANEL: BotPanelView = {
     channels: [],
   },
   rail: { transaction_ref: null, stations: [] },
-  journal_tail_ref: '/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/journal',
+  journal_tail_ref: '/api/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
   primary_action_by_lens: { trader: null, operator: null },
@@ -516,7 +518,7 @@ describe('BotPanelShellComponent', () => {
 
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -528,8 +530,9 @@ describe('BotPanelShellComponent', () => {
     // The loaded panel drives the chart's instrument context.
     expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
     expect(mockService.getLiveSnapshot).toHaveBeenCalledWith(
-      'alpaca',
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       '5s',
     );
@@ -550,7 +553,7 @@ describe('BotPanelShellComponent', () => {
   it('refreshes and renders the safe-flatten plan without posting a panel mutation', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -577,6 +580,7 @@ describe('BotPanelShellComponent', () => {
     expect(within(planRegion).getByText('Qqq')).toBeTruthy();
     expect(within(planRegion).getByText('2.5')).toBeTruthy();
     expect(brokersMock.checkSqliteRecoveryAction).toHaveBeenCalledWith(
+      'clrk_spec',
       'DUM284968',
       { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
       'sid-001',
@@ -594,7 +598,7 @@ describe('BotPanelShellComponent', () => {
   it('prepares and explicitly confirms historical exact-execution recovery', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(historicalRecoverySnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -613,7 +617,9 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.prepareHistoricalExecutionRecovery).toHaveBeenCalledWith(
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       'historical-token-17',
     );
@@ -631,14 +637,19 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.confirmHistoricalExecutionRecovery).toHaveBeenCalledWith(
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       HISTORICAL_RECOVERY_PLAN,
     );
+    expect(mockService.confirmHistoricalExecutionRecovery.mock.calls[0][0])
+      .toBe(mockService.prepareHistoricalExecutionRecovery.mock.calls[0][0]);
     expect(screen.getByText(/recorded exact evidence without changing economic totals/i)).toBeTruthy();
     expect(mockService.runBotAction).not.toHaveBeenCalledWith(
-      'alpaca',
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       HISTORICAL_RECOVERY_ACTION,
       null,
@@ -648,7 +659,7 @@ describe('BotPanelShellComponent', () => {
   it('deep-links the Account Desk with one exact, non-cross-correlated evidence identity', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(custodyTimelineSnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -665,13 +676,15 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
-    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca'], {
+    expect(navigate).toHaveBeenLastCalledWith(
+      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'DUM284968'], {
       queryParams: {
         lens: 'operator',
         timelineBot: 'sid-001',
         timelineUncertaintyId: 'uncertainty:17',
       },
-    });
+      },
+    );
   });
 
   it('renders the server-authored stale-plan refusal and refreshes without confirmation', async () => {
@@ -688,7 +701,7 @@ describe('BotPanelShellComponent', () => {
       }),
     );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -717,7 +730,7 @@ describe('BotPanelShellComponent', () => {
       pendingCapability.promise,
     );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -751,7 +764,7 @@ describe('BotPanelShellComponent', () => {
 
   it('keeps lens navigation above the active lens header and run evidence out of Trader', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -779,7 +792,7 @@ describe('BotPanelShellComponent', () => {
 
   it('keeps the market snapshot mounted while switching lenses', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -804,7 +817,7 @@ describe('BotPanelShellComponent', () => {
 
   it('loads previous runs only while the operator lens is mounted', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -827,7 +840,9 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).toHaveBeenCalledWith(
-      'alpaca',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       undefined,
     );
@@ -887,7 +902,7 @@ describe('BotPanelShellComponent', () => {
         next_cursor: null,
       });
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -911,7 +926,9 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).toHaveBeenLastCalledWith(
-      'alpaca',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       'run-newest-previous',
     );
@@ -937,7 +954,7 @@ describe('BotPanelShellComponent', () => {
       primary_action_by_lens: { trader: 'resume', operator: 'resume' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -963,8 +980,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
 
     expect(mockService.runBotAction).toHaveBeenCalledWith(
-      'alpaca',
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       expect.objectContaining({ action_id: 'resume' }),
       null,
@@ -981,7 +999,7 @@ describe('BotPanelShellComponent', () => {
 
     try {
       const { fixture } = await render(BotPanelShellComponent, {
-        inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
         providers: [
           provideRouter([]),
           { provide: BrokerV2PanelService, useValue: slowService },
@@ -1015,7 +1033,7 @@ describe('BotPanelShellComponent', () => {
         }),
       );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -1055,7 +1073,7 @@ describe('BotPanelShellComponent', () => {
     }));
 
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
@@ -1082,7 +1100,7 @@ describe('BotPanelShellComponent', () => {
 
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1099,7 +1117,7 @@ describe('BotPanelShellComponent', () => {
     mockService.getLiveSnapshot.mockRejectedValueOnce(new Error('Network error'));
 
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1112,7 +1130,7 @@ describe('BotPanelShellComponent', () => {
 
   it('persists keyboard lens changes in the query string', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1131,7 +1149,7 @@ describe('BotPanelShellComponent', () => {
 
   it('fetches a new server projection for a selected transaction', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1148,8 +1166,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
 
     expect(mockService.getPanel).toHaveBeenLastCalledWith(
-      'alpaca',
-      'DUM284968',
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
+      }),
       'sid-001',
       'tx-001',
     );
@@ -1174,7 +1193,7 @@ describe('BotPanelShellComponent', () => {
       primary_action_by_lens: { trader: 'resume', operator: 'resume' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1226,7 +1245,7 @@ describe('BotPanelShellComponent', () => {
       }),
     );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1292,7 +1311,7 @@ describe('BotPanelShellComponent', () => {
       }),
     );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });
@@ -1345,7 +1364,7 @@ describe('BotPanelShellComponent', () => {
       }),
     );
     const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService }],
     });

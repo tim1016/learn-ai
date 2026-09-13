@@ -50,6 +50,8 @@ export class TraderLensComponent {
   // ── Inputs ────────────────────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
+  /** The routed Clerk; the panel payload deliberately does not infer it. */
+  readonly clerkId = input('');
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly liveChart = input<ChartLiveResponse | null>(null);

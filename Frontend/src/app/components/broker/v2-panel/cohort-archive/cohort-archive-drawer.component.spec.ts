@@ -9,6 +9,7 @@ import type {
   CohortArchiveView,
 } from '../lib/broker-v2-panel.types';
 import { CohortArchiveDrawerComponent } from './cohort-archive-drawer.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 function leg(overrides: Partial<CohortArchiveLeg> = {}): CohortArchiveLeg {
   return {
@@ -62,8 +63,9 @@ function fakeService(legs: CohortArchiveLeg[], batch = result()) {
 
 async function open(service: ReturnType<typeof fakeService>) {
   await render(CohortArchiveDrawerComponent, {
-    inputs: { visible: true, broker: 'alpaca', accountId: 'PA1' },
-    providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    inputs: { clerkId: 'clrk_spec', visible: true, broker: 'alpaca', accountId: 'PA1' },
+    providers: [
+      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: service }],
   });
 }
 
@@ -127,7 +129,8 @@ describe('CohortArchiveDrawerComponent', () => {
     await user.click(screen.getByRole('button', { name: /Archive 1/ }));
 
     expect(service.runCohortArchive).toHaveBeenCalledTimes(1);
-    const [, , request] = service.runCohortArchive.mock.calls[0];
+    const [target, request] = service.runCohortArchive.mock.calls[0];
+    expect(target).toMatchObject({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA1' });
     expect(request.legs).toEqual([
       { strategy_instance_id: 'spy-done-2', revision: 4, concurrency_token: 'token-2' },
     ]);
@@ -214,6 +217,27 @@ describe('CohortArchiveDrawerComponent', () => {
     );
     // Selection preserved, so a retry is deliberate rather than re-selected.
     expect(screen.getByRole('button', { name: /Archive 1/ })).toBeTruthy();
+  });
+
+  it('reuses the drawer-presentation target and durable key for a deliberate retry', async () => {
+    const service = fakeService([leg()]);
+    service.runCohortArchive = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(result());
+    await open(service);
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+    await screen.findByRole('alert');
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+
+    expect(service.runCohortArchive).toHaveBeenCalledTimes(2);
+    const [firstTarget, firstRequest] = service.runCohortArchive.mock.calls[0];
+    const [retryTarget, retryRequest] = service.runCohortArchive.mock.calls[1];
+    expect(retryTarget).toBe(firstTarget);
+    expect(retryRequest.idempotency_key).toBe(firstRequest.idempotency_key);
   });
 
   it('drops a selection that no longer names a present, armed leg', async () => {

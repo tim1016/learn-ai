@@ -56,12 +56,14 @@ describe('OperatorBotBannerComponent', () => {
     await render(OperatorBotBannerComponent, {
       inputs: {
         panel: PANEL,
+        clerkId: 'clrk_spec',
         tickerQuote: { ticker: 'SPY', price: 512.3, changePercent: 0.6 },
       },
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('link', { name: /alpaca bots/i })).toBeTruthy();
+    const back = screen.getByRole('link', { name: /alpaca bots/i }) as HTMLAnchorElement;
+    expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/acc-1/bots');
     expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByText('SPY')).toBeTruthy();

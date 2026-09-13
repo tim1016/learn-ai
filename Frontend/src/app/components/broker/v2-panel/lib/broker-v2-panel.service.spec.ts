@@ -7,8 +7,21 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerV2PanelService } from './broker-v2-panel.service';
+import { resourceTarget } from '../../../../fleet/resource-target';
 import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
 import type { PanelAction } from './broker-v2-panel.types';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+
+const CLERK = 'clrk_spec';
+const target = (accountId: string, entityId?: string) =>
+  resourceTarget('alpaca', CLERK, {
+    accountId,
+    entityId,
+    capability: 'bot_action',
+    idempotencyKey: 'command-key-1',
+    bindingGeneration: 3,
+    routingEpoch: 4,
+  });
 
 describe('BrokerV2PanelService run evidence', () => {
   let service: BrokerV2PanelService;
@@ -16,7 +29,8 @@ describe('BrokerV2PanelService run evidence', () => {
 
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+      provideFleetDirectory(),provideHttpClient(), provideHttpClientTesting()],
     });
     service = TestBed.inject(BrokerV2PanelService);
     http = TestBed.inject(HttpTestingController);
@@ -24,10 +38,13 @@ describe('BrokerV2PanelService run evidence', () => {
 
   afterEach(() => http.verify());
 
-  it('loads the current run from the account-independent run endpoint', async () => {
-    const response = service.getCurrentRun('alpaca paper', 'sid/001');
+  it('loads the current run from the clerk-scoped run endpoint', async () => {
+    const response = service.getCurrentRun(
+      resourceTarget('alpaca paper', CLERK, { accountId: 'account/1', entityId: 'sid/001' }),
+      'sid/001',
+    );
     const request = http.expectOne(
-      '/api/brokers/alpaca%20paper/bots/sid%2F001/runs/current',
+      '/api/brokers/alpaca%20paper/clerks/clrk_spec/accounts/account%2F1/bots/sid%2F001/runs/current',
     );
     expect(request.request.method).toBe('GET');
     request.flush({
@@ -45,10 +62,14 @@ describe('BrokerV2PanelService run evidence', () => {
   });
 
   it('loads exactly one previous run using the opaque server cursor', async () => {
-    const response = service.getRunHistory('alpaca', 'sid-001', 'run/newest');
+    const response = service.getRunHistory(
+      resourceTarget('alpaca', CLERK, { accountId: 'account/1', entityId: 'sid-001' }),
+      'sid-001',
+      'run/newest',
+    );
     const request = http.expectOne(
       (candidate) =>
-        candidate.url === '/api/brokers/alpaca/bots/sid-001/runs/history' &&
+        candidate.url === '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/bots/sid-001/runs/history' &&
         candidate.params.get('limit') === '1' &&
         candidate.params.get('cursor') === 'run/newest',
     );
@@ -59,11 +80,17 @@ describe('BrokerV2PanelService run evidence', () => {
   });
 
   it('keeps historical exact-execution recovery outside the generic panel-action endpoint', async () => {
-    const prepared = service.prepareHistoricalExecutionRecovery('account/1', 'bot/1', 'token-1');
+    const prepared = service.prepareHistoricalExecutionRecovery(target('account/1', 'bot/1'), 'bot/1', 'token-1');
     const prepareRequest = http.expectOne(
-      '/api/alpaca-clerk-sqlite/accounts/account%2F1/bots/bot%2F1/historical-execution-recovery/prepare',
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/custody/bots/bot%2F1/historical-execution-recovery/prepare',
     );
-    expect(prepareRequest.request.body).toEqual({ concurrency_token: 'token-1' });
+    expect(prepareRequest.request.body).toMatchObject({
+      concurrency_token: 'token-1',
+      command_context: expect.objectContaining({
+        capability: 'custody_command',
+        expected_effective_binding_generation: 3,
+      }),
+    });
     prepareRequest.flush({
       account_id: 'account/1', strategy_instance_id: 'bot/1', uncertainty_id: 'u-1',
       order_ref: 'order-1', broker_order_id: 'broker-order-1', execution_id: 'execution-1',
@@ -75,11 +102,15 @@ describe('BrokerV2PanelService run evidence', () => {
     });
     const plan = await prepared;
 
-    const confirmed = service.confirmHistoricalExecutionRecovery('account/1', 'bot/1', plan);
+    const confirmed = service.confirmHistoricalExecutionRecovery(target('account/1', 'bot/1'), 'bot/1', plan);
     const confirmRequest = http.expectOne(
-      '/api/alpaca-clerk-sqlite/accounts/account%2F1/bots/bot%2F1/historical-execution-recovery/confirm',
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/custody/bots/bot%2F1/historical-execution-recovery/confirm',
     );
-    expect(confirmRequest.request.body).toEqual({ plan, confirmation_token: 'confirm-1' });
+    expect(confirmRequest.request.body).toMatchObject({
+      plan,
+      confirmation_token: 'confirm-1',
+      command_context: expect.objectContaining({ capability: 'custody_command' }),
+    });
     confirmRequest.flush({
       uncertainty_id: 'u-1', order_ref: 'order-1', execution_id: 'execution-1',
       receipt_id: 'coverage-resolution:2', recorded_at_ms: 2, applied: true,
@@ -90,13 +121,15 @@ describe('BrokerV2PanelService run evidence', () => {
 
   it('prepares and confirms one exact strategy/account Paper-access pairing', async () => {
     const prepared = service.preparePaperAccess(
-      'alpaca paper',
-      'account/1',
+      resourceTarget('alpaca paper', CLERK, {
+        accountId: 'account/1',
+        idempotencyKey: 'paper-access-key-1',
+      }),
       'ema/crossover',
       'Review this exact strategy and account.',
     );
     const prepareRequest = http.expectOne(
-      '/api/brokers/alpaca%20paper/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/plan',
+      '/api/brokers/alpaca%20paper/clerks/clrk_spec/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/plan',
     );
     expect(prepareRequest.request.body).toEqual({
       reason: 'Review this exact strategy and account.',
@@ -127,18 +160,21 @@ describe('BrokerV2PanelService run evidence', () => {
     const plan = await prepared;
 
     const confirmed = service.confirmPaperAccess(
-      'alpaca paper',
-      'account/1',
+      resourceTarget('alpaca paper', CLERK, {
+        accountId: 'account/1',
+        idempotencyKey: 'paper-access-key-1',
+      }),
       'ema/crossover',
       plan,
     );
     const confirmRequest = http.expectOne(
-      '/api/brokers/alpaca%20paper/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/confirm',
+      '/api/brokers/alpaca%20paper/clerks/clrk_spec/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/confirm',
     );
-    expect(confirmRequest.request.body).toEqual({
+    expect(confirmRequest.request.body).toMatchObject({
       plan,
       confirmation_token: 'a'.repeat(64),
     });
+    expect((confirmRequest.request.body as { command_context: { capability: string } }).command_context.capability).toBe('deploy');
     confirmRequest.flush({
       schema_version: 1,
       sequence: 1,
@@ -224,18 +260,20 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     },
   };
 
-  const ACTIONS_URL = '/api/brokers/alpaca/accounts/acct-1/bots/sid-1/actions';
-  const PANEL_URL = '/api/brokers/alpaca/accounts/acct-1/bots/sid-1/panel';
+  const ACTIONS_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/actions';
+  const PANEL_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/panel';
 
   const conflict = () =>
     ({ detail: { message: 'stale' } });
 
   it('refetches a fresh token and retries once when a transient 409 clears (unconfirmed action)', async () => {
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleResume);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleResume);
 
-    http
-      .expectOne(ACTIONS_URL)
-      .flush(conflict(), { status: 409, statusText: 'Conflict' });
+    const first = http.expectOne(ACTIONS_URL);
+    const firstIdempotencyKey = (first.request.body as {
+      idempotency_key: string;
+    }).idempotency_key;
+    first.flush(conflict(), { status: 409, statusText: 'Conflict' });
     await tick();
 
     http.expectOne(PANEL_URL).flush({
@@ -246,6 +284,9 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     const retry = http.expectOne(ACTIONS_URL);
     // The retry carries the CURRENT token, not the stale one.
     expect(retry.request.body.concurrency_token).toBe('tok-fresh');
+    // It remains the same durable command despite its refreshed concurrency
+    // token, so a transport retry cannot execute a second lifecycle action.
+    expect(retry.request.body.idempotency_key).toBe(firstIdempotencyKey);
     retry.flush({
       action_id: 'resume',
       receipt_id: 'r-1',
@@ -260,7 +301,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry when the action is disabled after the 409 (state truly changed)', async () => {
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -275,7 +316,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry when the fresh token is unchanged (an availability 409)', async () => {
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -293,7 +334,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     // silent retry after a 409 could flatten a materially different position
     // than the one the operator confirmed — so confirmed actions always
     // re-throw and let the operator re-confirm explicitly.
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleFlattenStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleFlattenStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -304,7 +345,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('re-throws a non-409 error without refetching the panel', async () => {
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -312,6 +353,19 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
     await expect(promise).rejects.toMatchObject({ status: 500 });
     http.expectNone(PANEL_URL);
+  });
+
+  it('rejects a bot action whose interaction owner did not freeze a durable key', async () => {
+    const unkeyed = resourceTarget('alpaca', CLERK, {
+      accountId: 'acct-1',
+      entityId: 'sid-1',
+      bindingGeneration: 3,
+      routingEpoch: 4,
+    });
+
+    await expect(service.runBotAction(unkeyed, 'sid-1', staleResume))
+      .rejects.toThrow(/interaction owner/i);
+    http.expectNone(ACTIONS_URL);
   });
 });
 
@@ -335,9 +389,9 @@ describe('BrokerV2PanelService polled reads', () => {
     // into a rejection the existing error affordance already handles.
     vi.useFakeTimers();
     try {
-      const pending = service.getCatalog('alpaca', 'acct-1');
+      const pending = service.getCatalog(resourceTarget('alpaca', CLERK, { accountId: 'acct-1' }));
       const rejection = expect(pending).rejects.toBeTruthy();
-      http.expectOne('/api/brokers/alpaca/accounts/acct-1/bots/catalog');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/catalog');
 
       await vi.advanceTimersByTimeAsync(POLL_REQUEST_TIMEOUT_MS + 1);
 

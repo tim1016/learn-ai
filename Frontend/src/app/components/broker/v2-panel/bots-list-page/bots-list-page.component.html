@@ -26,7 +26,7 @@
       </button>
       <a
         class="command-button command-button--quiet"
-        [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'gallery']"
+        [routerLink]="['/brokers', broker(), 'clerks', clerkId(), 'accounts', accountId(), 'gallery']"
       >
         <span aria-hidden="true">⊞</span>
         Gallery
@@ -94,6 +94,7 @@
     <app-bot-triage-detail
       class="bots-page__detail"
       [broker]="broker()"
+      [clerkId]="clerkId()"
       [accountId]="accountId()"
       [sid]="selectedSid()"
       [pending]="selectionPending()"
@@ -106,12 +107,14 @@
 <app-alpaca-deploy-drawer
   [visible]="deployOpen()"
   [accountId]="accountId()"
+  [target]="target()"
   (closed)="closeDeploy()"
 />
 
 <app-cohort-archive-drawer
   [visible]="archiveOpen()"
   [broker]="broker()"
+  [clerkId]="clerkId()"
   [accountId]="accountId()"
   (closed)="closeArchive()"
   (archived)="catalog.reload()"

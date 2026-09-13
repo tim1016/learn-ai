@@ -5,6 +5,8 @@ import type {
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
+import type { ResourceTarget } from '../../../fleet/resource-target';
+import { laneKey } from '../../../fleet/resource-target';
 import { BrokersService } from '../../../services/brokers.service';
 import { extractServerMessage } from '../operation-error';
 
@@ -16,6 +18,20 @@ const MAX_CLIENT_PAGES = MAX_CLIENT_ROWS / PAGE_SIZE;
 @Injectable()
 export class AccountDeskTransactionHistoryStore {
   private readonly brokers = inject(BrokersService);
+  private readonly targetState = signal<ResourceTarget | null>(null);
+  private readonly targetKeyState = signal<string | null>(null);
+
+  setTarget(target: ResourceTarget | null): void {
+    const targetKey = target === null ? null : targetIdentity(target);
+    if (targetKey === this.targetKeyState()) return;
+    this.targetState.set(target);
+    this.targetKeyState.set(targetKey);
+    // The same account can move to a different clerk, binding or epoch. That
+    // is a new request identity even when the table's visible filters match.
+    this.requestGeneration += 1;
+    this.refreshPending = false;
+    this.resetVisibleState();
+  }
   private readonly accountKey = signal<string | null>(null);
   private readonly rowsState = signal<readonly ClerkTransactionSummary[]>([]);
   private readonly feedState = signal<ClerkTransactionHistoryResponse | null>(null);
@@ -51,13 +67,7 @@ export class AccountDeskTransactionHistoryStore {
       this.refreshPending = false;
       this.accountKey.set(accountId);
       this.filtersState.set(normalizedFilters);
-      this.rowsState.set([]);
-      this.feedState.set(null);
-      this.loadingState.set(false);
-      this.loadedCountState.set(0);
-      this.loadedPagesState.set(0);
-      this.rowLimitReachedState.set(false);
-      this.errorState.set(null);
+      this.resetVisibleState();
     }
     if (this.loadingState()) {
       this.refreshPending = true;
@@ -76,8 +86,10 @@ export class AccountDeskTransactionHistoryStore {
 
   private async fetchAllPages(): Promise<void> {
     const accountId = this.accountKey();
-    if (accountId === null || this.loadingState()) return;
+    const target = this.targetState();
+    if (accountId === null || target === null || this.loadingState()) return;
     const requestGeneration = this.requestGeneration;
+    const targetKey = this.targetKeyState();
     this.loadingState.set(true);
     this.loadedCountState.set(0);
     this.loadedPagesState.set(0);
@@ -91,12 +103,13 @@ export class AccountDeskTransactionHistoryStore {
 
       do {
         const page = await this.brokers.accountTransactions(
+          target.clerkId,
           accountId,
           cursor,
           PAGE_SIZE,
           this.filtersState(),
         );
-        if (!this.isCurrentRequest(accountId, requestGeneration)) return;
+        if (!this.isCurrentRequest(accountId, targetKey, requestGeneration)) return;
 
         latestPage = page;
         rows = mergeRows(rows, page.rows).slice(0, MAX_CLIENT_ROWS);
@@ -115,16 +128,16 @@ export class AccountDeskTransactionHistoryStore {
         cursor = nextCursor;
       } while (rows.length < MAX_CLIENT_ROWS && this.loadedPagesState() < MAX_CLIENT_PAGES);
 
-      if (!this.isCurrentRequest(accountId, requestGeneration) || latestPage === null) return;
+      if (!this.isCurrentRequest(accountId, targetKey, requestGeneration) || latestPage === null) return;
       this.feedState.set(latestPage);
       this.rowsState.set(rows);
       this.rowLimitReachedState.set(cursor !== null);
     } catch (error) {
-      if (this.isCurrentRequest(accountId, requestGeneration)) {
+      if (this.isCurrentRequest(accountId, targetKey, requestGeneration)) {
         this.errorState.set(extractServerMessage(error, 'Transaction history is unavailable. Retry to request it again.'));
       }
     } finally {
-      if (this.isCurrentRequest(accountId, requestGeneration)) {
+      if (this.isCurrentRequest(accountId, targetKey, requestGeneration)) {
         this.loadingState.set(false);
         if (this.refreshPending) {
           this.refreshPending = false;
@@ -134,9 +147,35 @@ export class AccountDeskTransactionHistoryStore {
     }
   }
 
-  private isCurrentRequest(accountId: string, requestGeneration: number): boolean {
-    return this.accountKey() === accountId && this.requestGeneration === requestGeneration;
+  private resetVisibleState(): void {
+    this.rowsState.set([]);
+    this.feedState.set(null);
+    this.loadingState.set(false);
+    this.loadedCountState.set(0);
+    this.loadedPagesState.set(0);
+    this.rowLimitReachedState.set(false);
+    this.errorState.set(null);
   }
+
+  private isCurrentRequest(
+    accountId: string,
+    targetKey: string | null,
+    requestGeneration: number,
+  ): boolean {
+    return this.accountKey() === accountId
+      && this.targetKeyState() === targetKey
+      && this.requestGeneration === requestGeneration;
+  }
+}
+
+function targetIdentity(target: ResourceTarget): string {
+  return laneKey(
+    target.broker,
+    target.clerkId,
+    target.routingEpoch,
+    target.bindingGeneration,
+    target.accountId,
+  );
 }
 
 function normalizeFilters(filters: ClerkTransactionFilters): ClerkTransactionFilters {

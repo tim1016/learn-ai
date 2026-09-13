@@ -35,6 +35,8 @@ import type {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { MarketDataService } from '../../../../services/market-data.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
@@ -54,6 +56,9 @@ type PanelLens = DeskLens;
 interface HistoricalExecutionRecoveryDraft {
   readonly action: PanelAction;
   readonly plan: HistoricalExecutionRecoveryPlan;
+  /** The lane shown when the operator opened this confirmation. */
+  readonly target: ResourceTarget;
+  readonly sid: string;
 }
 
 /**
@@ -95,6 +100,7 @@ export class BotPanelShellComponent {
   // ── Route inputs (Angular route input binding) ────────────────────────────
 
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
 
@@ -109,6 +115,7 @@ export class BotPanelShellComponent {
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
   private readonly lensPreference = inject(LensPreferenceService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   // ── Active lens ──────────────────────────────────────────────────────────
   // Precedence: the `?lens=` query param, then the stored preference the
@@ -122,6 +129,19 @@ export class BotPanelShellComponent {
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
 
+  /** The frozen lane context (FR-094): every request and command this shell
+   * issues carries broker, clerk and account identity, and commands pin the
+   * lane's binding generation from the rendered directory resource. */
+  protected readonly target = computed(() => {
+    const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
+    return resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      entityId: this.sid(),
+      bindingGeneration: lane?.effective_binding_generation ?? null,
+      routingEpoch: lane?.routing_epoch ?? null,
+    });
+  });
+
   // ── Internal state ────────────────────────────────────────────────────────
 
   protected readonly selectedHistoryTimeframe = signal<ChartHistoryTimeframe>('1m');
@@ -129,7 +149,8 @@ export class BotPanelShellComponent {
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
-  private readonly routeIdentity = computed(() => this.routeParams());
+  /** Changes for route reuse and for a rebinding of the same visible lane. */
+  private readonly routeIdentity = computed(() => this.target());
   protected readonly reductionPlan = linkedSignal({
     source: this.routeIdentity,
     computation: (): SqliteSafeFlattenPlan | null => null,
@@ -174,12 +195,15 @@ export class BotPanelShellComponent {
   protected readonly histChart = resource({
     params: () =>
       this.activeLens() === 'trader'
-        ? { ...this.routeParams(), timeframe: this.selectedHistoryTimeframe() }
+        ? {
+            target: this.target(),
+            sid: this.sid(),
+            timeframe: this.selectedHistoryTimeframe(),
+          }
         : undefined,
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
-        params.broker,
-        params.accountId,
+        params.target,
         params.sid,
         params.timeframe,
       ),
@@ -201,9 +225,12 @@ export class BotPanelShellComponent {
 
   constructor() {
     effect(() => {
+      const target = this.target();
       void this.liveStore.start({
         ...this.routeParams(),
         resolution: this.liveResolution(),
+        bindingGeneration: target.bindingGeneration,
+        routingEpoch: target.routingEpoch,
       });
     });
     this.destroyRef.onDestroy(() => {
@@ -229,11 +256,13 @@ export class BotPanelShellComponent {
 
   private routeParams(): {
     broker: string;
+    clerkId: string;
     accountId: string;
     sid: string;
   } {
     return {
       broker: this.broker(),
+      clerkId: this.clerkId(),
       accountId: this.accountId(),
       sid: this.sid(),
     };
@@ -260,18 +289,24 @@ export class BotPanelShellComponent {
 
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
+    // An action is bound to the rendered lane, not the reactive route. Capture
+    // both before any branch can await or display a confirmation.
+    const target = this.target();
+    const sid = this.sid();
     if (action.action_id === 'open_custody_timeline') {
-      void this.router.navigate(['/brokers/alpaca'], {
-        queryParams: this.custodyTimelineQuery(action),
+      void this.router.navigate([
+        '/brokers', target.broker, 'clerks', target.clerkId, 'accounts', this.requiredAccountId(target),
+      ], {
+        queryParams: this.custodyTimelineQuery(action, sid),
       });
       return;
     }
     if (action.action_id === 'prepare_safe_flatten') {
-      await this.prepareSafeFlatten(action);
+      await this.prepareSafeFlatten(action, target, sid);
       return;
     }
     if (action.action_id === 'recover_exact_execution_evidence') {
-      await this.prepareHistoricalExecutionRecovery(action);
+      await this.prepareHistoricalExecutionRecovery(action, this.commandTarget(target), sid);
       return;
     }
     this.actionPending.set(true);
@@ -280,9 +315,8 @@ export class BotPanelShellComponent {
       // runBotAction is resilient: a Stop-409 (transient token flip) is retried
       // once with a fresh token instead of dead-ending the operator (defect #10).
       const result = await this.panelSvc.runBotAction(
-        this.broker(),
-        this.accountId(),
-        this.sid(),
+        this.commandTarget(target),
+        sid,
         action,
         reason,
       );
@@ -304,7 +338,11 @@ export class BotPanelShellComponent {
     }
   }
 
-  private async prepareSafeFlatten(action: PanelAction): Promise<void> {
+  private async prepareSafeFlatten(
+    action: PanelAction,
+    target: ResourceTarget,
+    sid: string,
+  ): Promise<void> {
     this.selectLens('operator');
     const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
@@ -312,9 +350,10 @@ export class BotPanelShellComponent {
     this.reductionPlan.set(null);
     try {
       const capability = await this.brokers.checkSqliteRecoveryAction(
-        this.accountId(),
+        target.clerkId,
+        this.requiredAccountId(target),
         { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
-        this.sid(),
+        sid,
       );
       if (requestIdentity !== this.routeIdentity()) return;
       this.reductionPlan.set(capability.reduction_plan);
@@ -336,6 +375,10 @@ export class BotPanelShellComponent {
     }
   }
 
+  private commandTarget(target: ResourceTarget): ResourceTarget {
+    return withCommand(target, 'bot_action', crypto.randomUUID());
+  }
+
   protected cancelHistoricalExecutionRecovery(): void {
     this.historicalRecoveryDraft.set(null);
   }
@@ -352,8 +395,8 @@ export class BotPanelShellComponent {
     this.actionReceipt.set(null);
     try {
       const receipt = await this.panelSvc.confirmHistoricalExecutionRecovery(
-        this.accountId(),
-        this.sid(),
+        draft.target,
+        draft.sid,
         draft.plan,
       );
       if (requestIdentity !== this.routeIdentity()) return;
@@ -384,19 +427,23 @@ export class BotPanelShellComponent {
     }
   }
 
-  private async prepareHistoricalExecutionRecovery(action: PanelAction): Promise<void> {
+  private async prepareHistoricalExecutionRecovery(
+    action: PanelAction,
+    target: ResourceTarget,
+    sid: string,
+  ): Promise<void> {
     const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     this.historicalRecoveryDraft.set(null);
     try {
       const plan = await this.panelSvc.prepareHistoricalExecutionRecovery(
-        this.accountId(),
-        this.sid(),
+        target,
+        sid,
         action.concurrency_token,
       );
       if (requestIdentity !== this.routeIdentity()) return;
-      this.historicalRecoveryDraft.set({ action, plan });
+      this.historicalRecoveryDraft.set({ action, plan, target, sid });
     } catch (error) {
       if (requestIdentity !== this.routeIdentity()) return;
       const receipt = this.errorReceipt(error, action);
@@ -408,10 +455,10 @@ export class BotPanelShellComponent {
     }
   }
 
-  private custodyTimelineQuery(action: PanelAction): Record<string, string> {
+  private custodyTimelineQuery(action: PanelAction, sid: string): Record<string, string> {
     const query: Record<string, string> = {
       lens: 'operator',
-      timelineBot: this.sid(),
+      timelineBot: sid,
     };
     for (const reference of action.evidence_refs ?? []) {
       const separator = reference.indexOf(':');
@@ -440,6 +487,13 @@ export class BotPanelShellComponent {
       message: result.message,
       remediation: null,
     };
+  }
+
+  private requiredAccountId(target: ResourceTarget): string {
+    if (target.accountId === null) {
+      throw new Error('This action requires the account that was shown to the operator.');
+    }
+    return target.accountId;
   }
 
   private errorReceipt(error: unknown, action: PanelAction): ActionReceiptView {

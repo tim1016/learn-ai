@@ -210,9 +210,12 @@
   </section>
 }
 
-<app-clerk-transaction-evidence-drawer
-  [accountId]="store.accountId()"
-  [transaction]="selectedTransaction()"
-  [openerElement]="receiptOpener()"
-  (closed)="onReceiptClosed()"
-/>
+@if (selectedTarget(); as selectedTarget) {
+  <app-clerk-transaction-evidence-drawer
+    [target]="selectedTarget"
+    [accountId]="store.accountId()"
+    [transaction]="selectedTransaction()"
+    [openerElement]="receiptOpener()"
+    (closed)="onReceiptClosed()"
+  />
+}

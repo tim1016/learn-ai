@@ -5,6 +5,11 @@ import type { ClerkStatus, SqliteClerkProjection } from '../../../api/alpaca.typ
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
 
 function clerkStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
   return {
@@ -44,6 +49,8 @@ describe('AlpacaOperatorLensDataService', () => {
 
     TestBed.configureTestingModule({
       providers: [
+      provideFleetDirectory(),
+        { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
         AlpacaOperatorLensDataService,
         { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
       ],
@@ -53,7 +60,7 @@ describe('AlpacaOperatorLensDataService', () => {
     service.loadOnce();
     await vi.waitFor(() => expect(getClerkStatus).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(1));
-    expect(getClerkStatus).toHaveBeenCalledWith('alpaca');
+    expect(getClerkStatus).toHaveBeenCalledWith(TARGET);
 
     service.refreshProjection();
 
@@ -71,6 +78,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     TestBed.configureTestingModule({
       providers: [
+        { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
         AlpacaOperatorLensDataService,
         { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
       ],
@@ -79,7 +87,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     service.loadOnce();
 
-    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('shadow:9LIVE0001'));
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', 'shadow:9LIVE0001'));
   });
 
   it('reads the SQLite projection for a real_live authority too', async () => {
@@ -92,6 +100,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     TestBed.configureTestingModule({
       providers: [
+        { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
         AlpacaOperatorLensDataService,
         { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
       ],
@@ -100,7 +109,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     service.loadOnce();
 
-    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('9LIVE0001'));
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', '9LIVE0001'));
   });
 
   it('never reads the SQLite projection for an authority outside the projection set', async () => {
@@ -116,6 +125,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     TestBed.configureTestingModule({
       providers: [
+        { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
         AlpacaOperatorLensDataService,
         { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
       ],
@@ -135,6 +145,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     TestBed.configureTestingModule({
       providers: [
+        { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
         AlpacaOperatorLensDataService,
         { provide: BrokersService, useValue: { getClerkStatus, getSqliteClerkProjection } },
       ],

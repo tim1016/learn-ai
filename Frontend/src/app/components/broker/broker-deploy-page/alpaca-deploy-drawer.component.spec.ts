@@ -7,6 +7,11 @@ import { BrokersService } from '../../../services/brokers.service';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployDrawerComponent } from './alpaca-deploy-drawer.component';
 import { DEPLOY_VIEW, SHADOW_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_drawer', {
+  accountId: 'PA9', bindingGeneration: 3, routingEpoch: 7,
+});
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
   return {
@@ -52,7 +57,7 @@ async function renderDrawer(
         },
       },
     ],
-    inputs: { visible: true },
+    inputs: { visible: true, target: TARGET },
   });
 }
 

@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
+  computed,
   effect,
   inject,
   input,
@@ -18,6 +19,7 @@ import {
   BrokersService,
   type SqliteTimelineQuery,
 } from '../../../services/brokers.service';
+import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
 import type {
   SqliteRecoveryAction,
   SqliteSafeFlattenPlan,
@@ -89,25 +91,35 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
 })
 export class AlpacaSqliteCustodyComponent {
   readonly accountId = input.required<string>();
+  readonly target = input.required<ResourceTarget>();
   protected readonly operatorLensQuery = { lens: 'operator' } as const;
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   readonly projectionInvalidated = output();
   private readonly brokers = inject(BrokersService);
+  private requireClerkId(): string { return this.target().clerkId; }
 
   protected readonly projection = resource({
     params: () => ({
+      target: this.target(),
       accountId: this.accountId(),
       refreshVersion: this.projectionRefreshVersion(),
     }),
-    loader: ({ params }) => this.brokers.getSqliteClerkProjection(params.accountId),
+    loader: ({ params }) => this.brokers.getSqliteClerkProjection(params.target.clerkId, params.accountId),
   });
   protected readonly timeline = signal<readonly SqliteTimelineEntry[]>([]);
   protected readonly timelineFilters = signal<SqliteTimelineQuery>({});
   private readonly timelineAppliedFilters = signal<SqliteTimelineQuery>({});
   protected readonly timelineOpen = signal(false);
-  protected readonly timelineLoading = signal(false);
-  protected readonly timelineLoadingMore = signal(false);
+  /** A loading indicator belongs to the lane that started its request. */
+  private readonly timelineLoadingProvenance = signal<string | null>(null);
+  private readonly timelineLoadingMoreProvenance = signal<string | null>(null);
+  protected readonly timelineLoading = computed(
+    () => this.timelineLoadingProvenance() === this.currentProvenance(),
+  );
+  protected readonly timelineLoadingMore = computed(
+    () => this.timelineLoadingMoreProvenance() === this.currentProvenance(),
+  );
   private readonly queuedTimelineQuery = signal<SqliteTimelineQuery | null>(null);
   protected readonly timelineNextCursor = signal<string | null>(null);
   protected readonly timelineTotalEntries = signal(0);
@@ -115,6 +127,8 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly actionNotice = signal<string | null>(null);
   protected readonly actionProblem = signal<ActionProblem | null>(null);
   protected readonly confirmationAction = signal<SqliteRecoveryAction | null>(null);
+  /** Captured when the confirmation opens, never re-read at submit time. */
+  private readonly confirmationTarget = signal<ResourceTarget | null>(null);
   protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
   protected readonly receipt = signal<ActionReceiptView | null>(null);
   protected readonly selectedTimelineEntry = signal<SqliteTimelineEntry | null>(null);
@@ -180,28 +194,31 @@ export class AlpacaSqliteCustodyComponent {
     }
     if (action.confirmation !== null) {
       this.confirmationAction.set(action);
+      this.confirmationTarget.set(this.newCommandTarget());
       return;
     }
-    await this.executeAction(action);
+    await this.executeAction(action, this.newCommandTarget());
   }
 
   protected confirmAction(): void {
     const action = this.confirmationAction();
+    const target = this.confirmationTarget();
     this.confirmationAction.set(null);
-    if (action !== null) void this.executeAction(action);
+    this.confirmationTarget.set(null);
+    if (action !== null && target !== null) void this.executeAction(action, target);
   }
 
   protected dismissReceipt(): void {
     this.receipt.set(null);
   }
 
-  private async executeAction(action: SqliteRecoveryAction): Promise<void> {
+  private async executeAction(action: SqliteRecoveryAction, target: ResourceTarget): Promise<void> {
     this.busyActionId.set(action.action_id);
     this.actionNotice.set(null);
     this.actionProblem.set(null);
     try {
       const receipt = await this.brokers.executeSqliteRecoveryAction(
-        this.accountId(),
+        target,
         action,
       );
       this.receipt.set({
@@ -225,21 +242,29 @@ export class AlpacaSqliteCustodyComponent {
   }
 
   private async prepareSafeFlatten(action: SqliteRecoveryAction): Promise<void> {
+    const target = this.target();
+    const accountId = this.accountId();
+    const provenance = this.provenanceKey(target, accountId);
     this.busyActionId.set(action.action_id);
     this.actionNotice.set(null);
     this.actionProblem.set(null);
     this.reductionPlan.set(null);
     try {
       const refreshed = await this.brokers.checkSqliteRecoveryAction(
-        this.accountId(),
+        target.clerkId,
+        accountId,
         action,
       );
-      this.reductionPlan.set(refreshed.reduction_plan);
-      this.actionNotice.set(refreshed.next_step);
+      if (this.isCurrentProvenance(provenance)) {
+        this.reductionPlan.set(refreshed.reduction_plan);
+        this.actionNotice.set(refreshed.next_step);
+      }
     } catch (error) {
-      this.actionProblem.set(
-        actionProblem(error, 'The Account Clerk could not prepare a safe-flatten plan.'),
-      );
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionProblem.set(
+          actionProblem(error, 'The Account Clerk could not prepare a safe-flatten plan.'),
+        );
+      }
     } finally {
       this.refreshVisibleProjection();
       this.busyActionId.set(null);
@@ -249,20 +274,29 @@ export class AlpacaSqliteCustodyComponent {
   protected async loadMoreTimeline(): Promise<void> {
     const cursor = this.timelineNextCursor();
     if (cursor === null || this.timelineLoadingMore()) return;
-    this.timelineLoadingMore.set(true);
+    const target = this.target();
+    const accountId = this.accountId();
+    const provenance = this.provenanceKey(target, accountId);
+    this.timelineLoadingMoreProvenance.set(provenance);
     try {
-      const page = await this.brokers.getSqliteClerkTimeline(this.accountId(), {
+      const page = await this.brokers.getSqliteClerkTimeline(target.clerkId, accountId, {
         ...this.timelineAppliedFilters(),
         cursor,
       });
-      this.timeline.update((current) => [...current, ...page.entries]);
-      this.timelineNextCursor.set(page.next_cursor);
-      this.timelineTotalEntries.set(page.total_entries);
-      this.actionNotice.set(null);
+      if (this.isCurrentProvenance(provenance)) {
+        this.timeline.update((current) => [...current, ...page.entries]);
+        this.timelineNextCursor.set(page.next_cursor);
+        this.timelineTotalEntries.set(page.total_entries);
+        this.actionNotice.set(null);
+      }
     } catch {
-      this.actionNotice.set('The custody timeline is temporarily unavailable.');
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionNotice.set('The custody timeline is temporarily unavailable.');
+      }
     } finally {
-      this.timelineLoadingMore.set(false);
+      if (this.isCurrentProvenance(provenance)) {
+        this.timelineLoadingMoreProvenance.set(null);
+      }
     }
   }
 
@@ -277,31 +311,67 @@ export class AlpacaSqliteCustodyComponent {
     const query = this.queuedTimelineQuery();
     if (query === null) return;
     this.queuedTimelineQuery.set(null);
-    this.timelineLoading.set(true);
+    const target = this.target();
+    const accountId = this.accountId();
+    const provenance = this.provenanceKey(target, accountId);
+    this.timelineLoadingProvenance.set(provenance);
     const { cursor: _cursor, pageSize: _pageSize, ...filters } = query;
     this.timelineFilters.set(filters);
     this.timelineAppliedFilters.set(filters);
     this.selectedTimelineEntry.set(null);
     try {
       const page = await this.brokers.getSqliteClerkTimeline(
-        this.accountId(),
+        target.clerkId,
+        accountId,
         filters,
       );
-      this.timeline.set(page.entries);
-      this.timelineNextCursor.set(page.next_cursor);
-      this.timelineTotalEntries.set(page.total_entries);
-      this.selectedTimelineEntry.set(page.entries[0] ?? null);
-      this.actionNotice.set(null);
+      if (this.isCurrentProvenance(provenance)) {
+        this.timeline.set(page.entries);
+        this.timelineNextCursor.set(page.next_cursor);
+        this.timelineTotalEntries.set(page.total_entries);
+        this.selectedTimelineEntry.set(page.entries[0] ?? null);
+        this.actionNotice.set(null);
+      }
     } catch {
-      this.actionNotice.set('The custody timeline is temporarily unavailable.');
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionNotice.set('The custody timeline is temporarily unavailable.');
+      }
     } finally {
-      this.timelineLoading.set(false);
-      if (this.queuedTimelineQuery() !== null) void this.loadQueuedTimeline();
+      if (this.isCurrentProvenance(provenance)) {
+        this.timelineLoadingProvenance.set(null);
+        if (this.queuedTimelineQuery() !== null) void this.loadQueuedTimeline();
+      }
     }
   }
 
   private refreshVisibleProjection(): void {
     this.projection.reload();
     this.projectionInvalidated.emit();
+  }
+
+  private newCommandTarget(): ResourceTarget {
+    const target = this.target();
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+      throw new Error('This browser cannot create a durable request identity.');
+    }
+    return withCommand(
+      withAccount(target, this.accountId()),
+      'custody_command',
+      globalThis.crypto.randomUUID(),
+    );
+  }
+
+  private provenanceKey(target: ResourceTarget, accountId: string): string {
+    return laneKey(
+      target.broker, target.clerkId, target.routingEpoch, target.bindingGeneration, accountId,
+    );
+  }
+
+  private isCurrentProvenance(provenance: string): boolean {
+    return this.currentProvenance() === provenance;
+  }
+
+  private currentProvenance(): string {
+    return this.provenanceKey(this.target(), this.accountId());
   }
 }

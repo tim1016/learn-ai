@@ -18,6 +18,8 @@ import type {
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
 import { BrokersService } from '../../../services/brokers.service';
+import type { ResourceTarget } from '../../../fleet/resource-target';
+import { laneKey } from '../../../fleet/resource-target';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -32,6 +34,7 @@ interface TimelineClock {
 interface ReceiptSelection {
   readonly accountId: string;
   readonly transactionId: string;
+  readonly targetKey: string;
 }
 
 /** Shared, on-demand reader for one immutable projected Clerk receipt. */
@@ -56,6 +59,7 @@ export class ClerkTransactionEvidenceDrawerComponent {
   private restoreTarget: HTMLElement | null = null;
 
   readonly accountId = input<string | null>(null);
+  readonly target = input.required<ResourceTarget>();
   readonly transaction = input<ClerkTransactionSummary | null>(null);
   /** Caller-owned launch target so native-dialog close reliably restores focus. */
   readonly openerElement = input<HTMLElement | null>(null);
@@ -70,15 +74,17 @@ export class ClerkTransactionEvidenceDrawerComponent {
     effect(() => {
       const accountId = this.accountId();
       const transaction = this.transaction();
+      const target = this.target();
       const nextSelection = accountId !== null && transaction !== null
-        ? { accountId, transactionId: transaction.transaction_id }
+        ? { accountId, transactionId: transaction.transaction_id, targetKey: targetIdentity(target) }
         : null;
       if (
         nextSelection?.accountId === this.activeSelection?.accountId
         && nextSelection?.transactionId === this.activeSelection?.transactionId
+        && nextSelection?.targetKey === this.activeSelection?.targetKey
       ) return;
       this.activeSelection = nextSelection;
-      untracked(() => void this.load(accountId, transaction));
+      untracked(() => void this.load(accountId, transaction, target));
     });
   }
 
@@ -99,6 +105,7 @@ export class ClerkTransactionEvidenceDrawerComponent {
   private async load(
     accountId: string | null,
     transaction: ClerkTransactionSummary | null,
+    target: ResourceTarget,
   ): Promise<void> {
     const generation = this.requestGeneration() + 1;
     this.requestGeneration.set(generation);
@@ -117,12 +124,20 @@ export class ClerkTransactionEvidenceDrawerComponent {
     this.loading.set(true);
     this.openNativeDrawer();
     try {
-      const detail = await this.brokers.accountTransaction(accountId, transaction.transaction_id);
-      if (this.requestGeneration() === generation && this.transaction()?.transaction_id === transaction.transaction_id) {
+      const detail = await this.brokers.accountTransaction(
+        target.clerkId,
+        accountId,
+        transaction.transaction_id,
+      );
+      if (this.requestGeneration() === generation
+        && this.transaction()?.transaction_id === transaction.transaction_id
+        && targetIdentity(this.target()) === targetIdentity(target)) {
         this.detail.set(detail);
       }
     } catch {
-      if (this.requestGeneration() === generation && this.transaction()?.transaction_id === transaction.transaction_id) {
+      if (this.requestGeneration() === generation
+        && this.transaction()?.transaction_id === transaction.transaction_id
+        && targetIdentity(this.target()) === targetIdentity(target)) {
         this.error.set('The selected receipt is unavailable. Close the drawer and try again.');
       }
     } finally {
@@ -143,6 +158,16 @@ export class ClerkTransactionEvidenceDrawerComponent {
     const dialog = this.drawer()?.nativeElement;
     if (dialog?.open && typeof dialog.close === 'function') dialog.close();
   }
+}
+
+function targetIdentity(target: ResourceTarget): string {
+  return laneKey(
+    target.broker,
+    target.clerkId,
+    target.routingEpoch,
+    target.bindingGeneration,
+    target.accountId,
+  );
 }
 
 function custodyClocks(timeline: ClerkCustodyTimeline | null): readonly TimelineClock[] {

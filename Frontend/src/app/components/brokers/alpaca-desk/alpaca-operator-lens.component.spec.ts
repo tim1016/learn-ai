@@ -7,7 +7,12 @@ import { ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR, type AccountOperatorPosture } from 
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture, operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
 
 function clerkStatus(posture: AccountOperatorPosture = healthyAccountOperatorPostureFixture()): ClerkStatus {
   return {
@@ -107,7 +112,7 @@ function lensDataProvider(
   refreshProjection = vi.fn(),
   clerkStatusValue: ClerkStatus = clerkStatus(),
 ) {
-  return {
+  return [{
     provide: AlpacaOperatorLensDataService,
     useValue: {
       status: resourceValue(clerkStatusValue),
@@ -115,7 +120,7 @@ function lensDataProvider(
       projectionRefreshVersion: signal(0),
       refreshProjection,
     },
-  };
+  }, { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } }];
 }
 
 describe('AlpacaOperatorLensComponent', () => {
@@ -156,6 +161,7 @@ describe('AlpacaOperatorLensComponent', () => {
 
     await render(AlpacaOperatorLensComponent, {
       providers: [
+      provideFleetDirectory(),
         lensDataProvider(activeProjection, refreshProjection, clerkStatus(fixHereAccountDeskPosture())),
         {
           provide: BrokersService,
@@ -178,7 +184,9 @@ describe('AlpacaOperatorLensComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     await waitFor(() => {
-      expect(executeSqliteRecoveryAction).toHaveBeenCalledWith('PA1', repair);
+      expect(executeSqliteRecoveryAction).toHaveBeenCalledWith(
+        expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'PA1', capability: 'custody_command' }), repair,
+      );
     });
     expect(refreshProjection).toHaveBeenCalledOnce();
   });
@@ -247,7 +255,7 @@ describe('AlpacaOperatorLensComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Account Clerk custody is healthy' })).toBeTruthy();
-    await waitFor(() => expect(accountTransactions).toHaveBeenCalledWith('PA1', null, 100, {
+    await waitFor(() => expect(accountTransactions).toHaveBeenCalledWith('clrk_spec', 'PA1', null, 100, {
       fromMs: 1_700_000_000_000,
       toMs: 1_700_086_400_000,
     }));
@@ -260,10 +268,10 @@ describe('AlpacaOperatorLensComponent', () => {
     expect(screen.getByText('Fees')).toBeTruthy();
     expect(screen.getByText('Evidence')).toBeTruthy();
     expect(screen.getByPlaceholderText(/Search symbols, status, strategy/)).toBeTruthy();
-    expect(document.querySelector('app-clerk-transaction-evidence-drawer')).toBeTruthy();
+    expect(document.querySelector('app-clerk-transaction-evidence-drawer')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'View evidence for order-1' }));
-    await waitFor(() => expect(accountTransaction).toHaveBeenCalledWith('PA1', 'txn-1'));
+    await waitFor(() => expect(accountTransaction).toHaveBeenCalledWith('clrk_spec', 'PA1', 'txn-1'));
   });
 
   it('keeps all deep system panels collapsed until the operator opens one', async () => {

@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
 
 async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
   fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
@@ -59,6 +61,7 @@ describe('AlpacaOrderEntryComponent', () => {
     });
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
@@ -68,7 +71,8 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+      provideFleetDirectory(),{
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -92,7 +96,7 @@ describe('AlpacaOrderEntryComponent', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
 
     await vi.waitFor(() => expect(submitSqliteManualOrder).toHaveBeenCalledTimes(1));
-    expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+    expect(previewSqliteManualOrder).toHaveBeenCalledWith('clrk_spec', 'PA1', {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       legs: [
         {
@@ -104,7 +108,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
     expect(submitSqliteManualOrder).toHaveBeenCalledWith(
-      'PA1',
+      expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'PA1', capability: 'manual_orders' }),
       '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       expect.objectContaining({ preview_token: 'a'.repeat(64) }),
     );
@@ -124,6 +128,7 @@ describe('AlpacaOrderEntryComponent', () => {
     });
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
@@ -146,7 +151,7 @@ describe('AlpacaOrderEntryComponent', () => {
     selectOption('Leg 1 side', 'sell');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
-    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('clrk_spec', 'PA1', {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       legs: [
         {
@@ -205,6 +210,7 @@ describe('AlpacaOrderEntryComponent', () => {
     });
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -224,7 +230,7 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(firstLeg?.textContent).toContain('Buy 1 Market Day');
     expect(firstLeg?.textContent).not.toContain('Buy 1 Market Day at');
 
-    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('clrk_spec', 'PA1', {
       ticket_id: ticket.ticket_id,
       legs: [
         { leg_id: ticket.legs[0].leg_id, instruction: ticket.legs[0].instruction },
@@ -232,7 +238,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     }));
     expect(continueSqliteManualOrderTicket).toHaveBeenCalledWith(
-      'PA1',
+      expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'PA1', capability: 'manual_orders' }),
       ticket.ticket_id,
       expect.objectContaining({ preview_token: 'c'.repeat(64) }),
     );
@@ -274,6 +280,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const continueSqliteManualOrderTicket = vi.fn();
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -331,6 +338,7 @@ describe('AlpacaOrderEntryComponent', () => {
     });
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -343,7 +351,7 @@ describe('AlpacaOrderEntryComponent', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Cancel manual ticket 7de3a77c/i }));
 
     await vi.waitFor(() => expect(cancelSqliteManualOrderTicket).toHaveBeenCalledWith(
-      'PA1',
+      expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'PA1', capability: 'manual_orders' }),
       ticket.ticket_id,
       { cancel_request_id: expect.any(String) },
     ));
@@ -380,17 +388,18 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     };
     const getSqliteManualOrderTicket = vi.fn(
-      (_accountId: string, ticketId: string) => Promise.resolve(
+      (_clerkId: string, _accountId: string, ticketId: string) => Promise.resolve(
         ticketId === firstTicket.ticket_id ? firstTicket : secondTicket,
       ),
     );
     const cancelSqliteManualOrderTicket = vi.fn(
-      (_accountId: string, ticketId: string, _request: { cancel_request_id: string }) => Promise.resolve(
+      (_target: unknown, ticketId: string, _request: { cancel_request_id: string }) => Promise.resolve(
         ticketId === firstTicket.ticket_id ? firstTicket : secondTicket,
       ),
     );
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: firstTicket.ticket_id,
         manualLegId: firstTicket.legs[0].leg_id,
@@ -428,6 +437,7 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: activeTicket.ticket_id,
       },
@@ -465,6 +475,7 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: pausedTicket.ticket_id,
       },
@@ -501,6 +512,7 @@ describe('AlpacaOrderEntryComponent', () => {
       .mockRejectedValueOnce(new HttpErrorResponse({ status: 404 }));
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
+        target: TARGET,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       },
@@ -511,13 +523,13 @@ describe('AlpacaOrderEntryComponent', () => {
     });
 
     await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledWith(
-      'PA1',
+      'clrk_spec', 'PA1',
       '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
     ));
     view.fixture.componentRef.setInput('expectedAccountId', 'PA2');
     view.fixture.detectChanges();
     await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledWith(
-      'PA2',
+      'clrk_spec', 'PA2',
       '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
     ));
     if (resolveInitialTicket === undefined) throw new Error('expected initial ticket resolver');
@@ -532,4 +544,101 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await vi.waitFor(() => expect(screen.queryByLabelText('Manual ticket status')).toBeNull());
   });
+
+  it('discards a preview that returns after the desk target changes', async () => {
+    let resolvePreview: ((preview: {
+      capability: { available: boolean; unavailable: null; supported_order_shape: string };
+      preview_token: string;
+      authority_generation: number;
+      db_identity_token: string;
+      control_revision: number;
+      subject_id: string;
+    }) => void) | undefined;
+    const previewSqliteManualOrder = vi.fn().mockReturnValue(new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          previewSqliteManualOrder,
+          getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+        },
+      }],
+    });
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA1', bindingGeneration: 8, routingEpoch: 5,
+    }));
+    view.fixture.detectChanges();
+    if (resolvePreview === undefined) throw new Error('expected preview resolver');
+    resolvePreview({
+      capability: {
+        available: true,
+        unavailable: null,
+        supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+      },
+      preview_token: 'd'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: /Confirm & submit/i })).toBeNull());
+  });
+
+  it('does not publish an old target preview failure after navigation', async () => {
+    let rejectPreview: ((error: Error) => void) | undefined;
+    const previewSqliteManualOrder = vi.fn().mockReturnValue(new Promise((_, reject) => {
+      rejectPreview = reject;
+    }));
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          previewSqliteManualOrder,
+          getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+        },
+      }],
+    });
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA1', bindingGeneration: 8, routingEpoch: 5,
+    }));
+    view.fixture.detectChanges();
+    if (rejectPreview === undefined) throw new Error('expected preview rejecter');
+    rejectPreview(new Error('old preview failed'));
+
+    await vi.waitFor(() => expect(screen.queryByText(/submission outcome is uncertain/i)).toBeNull());
+  });
+});
+const TARGET = resourceTarget('alpaca', 'clrk_spec', {
+  accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,
 });

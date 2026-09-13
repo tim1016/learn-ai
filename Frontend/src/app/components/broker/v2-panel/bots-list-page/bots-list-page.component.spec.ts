@@ -15,6 +15,8 @@ import {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import type { ResourceTarget } from '../../../../fleet/resource-target';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
   return {
@@ -55,7 +57,7 @@ async function renderPage(
   overrides: {
     account?: BrokerAccountSnapshot;
     clerk?: ClerkStatus;
-    getCatalog?: (broker: string, accountId: string) => Promise<BotCatalogView[]>;
+    getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
     panelActions?: PanelAction[];
   } = {},
 ) {
@@ -70,12 +72,12 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
-    getPanel: vi.fn((_b: string, _a: string, sid: string) =>
+    getPanel: vi.fn((_target: ResourceTarget, sid: string) =>
       Promise.resolve(
         fakeBotPanelView({ strategy_instance_id: sid, actions: overrides.panelActions ?? [] }),
       ),
     ),
-    getEvidence: vi.fn((_b: string, _a: string, _sid: string) =>
+    getEvidence: vi.fn((_target: ResourceTarget, _sid: string) =>
       Promise.resolve({ entries: [], next_cursor: null }),
     ),
     runBotAction: vi.fn(() =>
@@ -93,12 +95,13 @@ async function renderPage(
 
   const view = await render(BotsListPageComponent, {
     providers: [
+      provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
       { provide: MessageService, useValue: mockMessageService },
     ],
-    componentInputs: { broker: 'alpaca', accountId: 'PA9' },
+    componentInputs: { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' },
   });
   return { ...view, mockPanelService, mockMessageService };
 }
@@ -227,6 +230,13 @@ describe('BotsListPageComponent', () => {
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
   });
 
+  it('links to the same Clerk gallery rather than the compatibility account route', async () => {
+    await renderPage();
+
+    const gallery = screen.getByRole('link', { name: /gallery/i }) as HTMLAnchorElement;
+    expect(gallery.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery');
+  });
+
   it('opens and closes Deploy strategy over the Bots list', async () => {
     await renderPage([]);
 
@@ -253,12 +263,12 @@ describe('BotsListPageComponent', () => {
     const pa10Catalog = new Promise<BotCatalogView[]>((resolve) => {
       resolvePa10 = resolve;
     });
-    const getCatalog = vi.fn((_broker: string, accountId: string) => {
-      if (accountId === 'PA10') return pa10Catalog;
+    const getCatalog = vi.fn((target: ResourceTarget) => {
+      if (target.accountId === 'PA10') return pa10Catalog;
       return Promise.resolve([
         fakeCatalogBot({
           strategy_instance_id: 'pa9-bot',
-          account_id: accountId,
+          account_id: target.accountId ?? '',
         }),
       ]);
     });
@@ -268,13 +278,85 @@ describe('BotsListPageComponent', () => {
     view.fixture.componentRef.setInput('accountId', 'PA10');
     view.fixture.detectChanges();
 
-    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledWith('alpaca', 'PA10'));
+    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA10' }),
+    ));
     expect(screen.queryByText('pa9-bot')).toBeNull();
 
     resolvePa10([
       fakeCatalogBot({ strategy_instance_id: 'pa10-bot', account_id: 'PA10' }),
     ]);
     expect(await screen.findByText('pa10-bot')).toBeTruthy();
+  });
+
+  it('does not carry a same-account roster across a Clerk route change', async () => {
+    let resolveSecond!: (bots: BotCatalogView[]) => void;
+    const delayedSecond = new Promise<BotCatalogView[]>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const getCatalog = vi.fn((target: ResourceTarget) =>
+      target.clerkId === 'clrk-b'
+        ? delayedSecond
+        : Promise.resolve([fakeCatalogBot({ strategy_instance_id: 'clrk-a-bot' })]),
+    );
+    const view = await renderPage([], { getCatalog });
+    expect(await screen.findByText('clrk-a-bot')).toBeTruthy();
+
+    view.fixture.componentRef.setInput('clerkId', 'clrk-b');
+    view.fixture.detectChanges();
+    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ clerkId: 'clrk-b', accountId: 'PA9' }),
+    ));
+    expect(screen.queryByText('clrk-a-bot')).toBeNull();
+
+    resolveSecond([fakeCatalogBot({ strategy_instance_id: 'clrk-b-bot' })]);
+    expect(await screen.findByText('clrk-b-bot')).toBeTruthy();
+  });
+
+  it('does not publish an old Clerk catalog after its late response settles', async () => {
+    let resolveOld!: (bots: BotCatalogView[]) => void;
+    const oldCatalog = new Promise<BotCatalogView[]>((resolve) => { resolveOld = resolve; });
+    const getCatalog = vi.fn((target: ResourceTarget) =>
+      target.clerkId === 'clrk_spec'
+        ? oldCatalog
+        : Promise.resolve([fakeCatalogBot({ strategy_instance_id: 'clrk-b-current' })]),
+    );
+    const view = await renderPage([], { getCatalog });
+
+    view.fixture.componentRef.setInput('clerkId', 'clrk-b');
+    view.fixture.detectChanges();
+    expect(await screen.findByText('clrk-b-current')).toBeTruthy();
+
+    resolveOld([fakeCatalogBot({ strategy_instance_id: 'clrk-a-late' })]);
+    await view.fixture.whenStable();
+
+    expect(screen.queryByText('clrk-a-late')).toBeNull();
+    expect(screen.getAllByText('clrk-b-current').length).toBeGreaterThan(0);
+  });
+
+  it('does not toast or reload the new Clerk when an old-lane action settles', async () => {
+    let settleAction!: () => void;
+    const getCatalog = vi.fn(() => Promise.resolve([fakeCatalogBot()]));
+    const view = await renderPage([fakeCatalogBot()], {
+      getCatalog,
+      panelActions: [fakePanelAction('stop')],
+    });
+    view.mockPanelService.runBotAction.mockImplementationOnce(() =>
+      new Promise((resolve) => { settleAction = () => resolve({ message: 'old result' } as never); }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('clerkId', 'clrk-b');
+    view.fixture.detectChanges();
+    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledTimes(2));
+    const readsBeforeSettlement = getCatalog.mock.calls.length;
+
+    settleAction();
+    await view.fixture.whenStable();
+
+    expect(view.mockMessageService.add).not.toHaveBeenCalled();
+    expect(getCatalog).toHaveBeenCalledTimes(readsBeforeSettlement);
   });
 
   /**
@@ -291,8 +373,7 @@ describe('BotsListPageComponent', () => {
 
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
     expect(view.mockPanelService.runBotAction).toHaveBeenCalledWith(
-      'alpaca',
-      'PA9',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }),
       'spy-momentum-01',
       expect.objectContaining({ action_id: 'stop', concurrency_token: 'stop-token' }),
       null,
@@ -336,21 +417,20 @@ describe('BotsListPageComponent', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
     await vi.waitFor(() =>
       expect(view.mockPanelService.getEvidence).toHaveBeenCalledWith(
-        'alpaca',
-        'PA9',
+        expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }),
         'bot-b',
         expect.anything(),
       ),
     );
     const readsOfB = view.mockPanelService.getEvidence.mock.calls.filter(
-      (call) => call[2] === 'bot-b',
+      (call) => call[1] === 'bot-b',
     ).length;
 
     settleAction();
     await vi.waitFor(() => expect(view.mockMessageService.add).toHaveBeenCalled());
 
     const readsOfBAfter = view.mockPanelService.getEvidence.mock.calls.filter(
-      (call) => call[2] === 'bot-b',
+      (call) => call[1] === 'bot-b',
     ).length;
     expect(readsOfBAfter).toBe(readsOfB);
   });

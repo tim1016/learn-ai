@@ -13,6 +13,8 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import type { EvidenceEntry } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 
 /** On-demand, paged transaction evidence rendered inside a station disclosure. */
 @Component({
@@ -24,11 +26,13 @@ import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 })
 export class TransactionEvidenceTimelineComponent {
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
   readonly transactionRef = input.required<string>();
 
   private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private requestGeneration = 0;
 
   protected readonly entries = signal<readonly EvidenceEntry[]>([]);
@@ -41,9 +45,11 @@ export class TransactionEvidenceTimelineComponent {
   constructor() {
     effect(() => {
       this.broker();
+      this.clerkId();
       this.accountId();
       this.sid();
       this.transactionRef();
+      this.fleetDirectory.lane(this.broker(), this.clerkId());
       untracked(() => void this.resetAndLoad());
     });
   }
@@ -78,9 +84,14 @@ export class TransactionEvidenceTimelineComponent {
     this.loading.set(true);
     this.loadError.set(null);
     try {
+      const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
       const page = await this.panelSvc.getEvidence(
-        this.broker(),
-        this.accountId(),
+        resourceTarget(this.broker(), this.clerkId(), {
+          accountId: this.accountId(),
+          entityId: this.sid(),
+          bindingGeneration: lane?.effective_binding_generation ?? null,
+          routingEpoch: lane?.routing_epoch ?? null,
+        }),
         this.sid(),
         {
           transactionRef: this.transactionRef(),

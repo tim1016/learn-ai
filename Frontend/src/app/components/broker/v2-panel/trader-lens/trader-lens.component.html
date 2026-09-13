@@ -1,5 +1,6 @@
 <app-trader-bot-banner
   [panel]="panel()"
+  [clerkId]="clerkId()"
   [actionPending]="actionPending()"
   (actionRequested)="actionRequested.emit($event)"
 />

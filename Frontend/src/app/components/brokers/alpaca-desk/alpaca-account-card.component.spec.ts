@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 4, routingEpoch: 1 });
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
   return {
@@ -29,7 +34,10 @@ function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAcco
 
 async function renderCard(getAccount: () => Promise<BrokerAccountSnapshot>) {
   return render(AlpacaAccountCardComponent, {
-    providers: [{ provide: BrokersService, useValue: { getAccount } }],
+    providers: [
+      provideFleetDirectory(),
+      { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
+      { provide: BrokersService, useValue: { getAccount } }],
   });
 }
 

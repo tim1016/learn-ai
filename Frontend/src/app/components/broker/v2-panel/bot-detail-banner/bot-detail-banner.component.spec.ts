@@ -24,7 +24,7 @@ import { BotDetailBannerComponent } from './bot-detail-banner.component';
   `,
 })
 class BotDetailBannerHarnessComponent {
-  readonly backLink = ['/brokers', 'alpaca', 'accounts', 'acc-1', 'bots'];
+  readonly backLink = ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'acc-1', 'bots'];
   readonly updatedAtMs = 1_753_800_000_000;
 }
 

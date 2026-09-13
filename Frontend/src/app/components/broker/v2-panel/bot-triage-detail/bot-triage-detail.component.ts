@@ -30,6 +30,8 @@ import { TriageActivityComponent } from './triage-activity.component';
 import { TriageEvidenceComponent } from './triage-evidence.component';
 import { TriageTapeComponent } from './triage-tape.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import type {
   BotPanelView,
   ChartBar,
@@ -112,6 +114,7 @@ function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
 })
 export class BotTriageDetailComponent {
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input<string | null>(null);
   readonly pending = input(false);
@@ -120,6 +123,7 @@ export class BotTriageDetailComponent {
   readonly actionTriggered = output<PanelActionTrigger>();
 
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
 
@@ -144,13 +148,24 @@ export class BotTriageDetailComponent {
     const sid = this.sid();
     return sid === null
       ? undefined
-      : { broker: this.broker(), accountId: this.accountId(), sid };
+      : {
+          target: resourceTarget(this.broker(), this.clerkId(), {
+            accountId: this.accountId(),
+            entityId: sid,
+            bindingGeneration:
+              this.fleetDirectory.lane(this.broker(), this.clerkId())
+                ?.effective_binding_generation ?? null,
+            routingEpoch:
+              this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+          }),
+          sid,
+        };
   });
 
   protected readonly panel = resource({
     params: this.selection,
     loader: ({ params }) =>
-      this.panelService.getPanel(params.broker, params.accountId, params.sid),
+      this.panelService.getPanel(params.target, params.sid),
   });
 
   /**
@@ -169,7 +184,7 @@ export class BotTriageDetailComponent {
   protected readonly journal = resource({
     params: this.journalSelection,
     loader: ({ params }) =>
-      this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
+      this.panelService.getEvidence(params.target, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
       }),
   });
@@ -183,8 +198,15 @@ export class BotTriageDetailComponent {
     const sid = this.settledSid();
     if (sid === null || this.lens() !== 'trader') return undefined;
     return {
-      broker: this.broker(),
-      accountId: this.accountId(),
+      target: resourceTarget(this.broker(), this.clerkId(), {
+        accountId: this.accountId(),
+        entityId: sid,
+        bindingGeneration:
+          this.fleetDirectory.lane(this.broker(), this.clerkId())
+            ?.effective_binding_generation ?? null,
+        routingEpoch:
+          this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+      }),
       sid,
       resolution: this.tapeResolution(),
     };
@@ -193,12 +215,7 @@ export class BotTriageDetailComponent {
   protected readonly tape = resource({
     params: this.tapeSelection,
     loader: ({ params }) =>
-      this.panelService.getLiveChart(
-        params.broker,
-        params.accountId,
-        params.sid,
-        params.resolution,
-      ),
+      this.panelService.getLiveChart(params.target, params.sid, params.resolution),
   });
 
   constructor() {
@@ -259,6 +276,8 @@ export class BotTriageDetailComponent {
   protected readonly botLink = computed(() => [
     '/brokers',
     this.broker(),
+    'clerks',
+    this.clerkId(),
     'accounts',
     this.accountId(),
     'bots',

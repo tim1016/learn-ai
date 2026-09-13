@@ -71,6 +71,7 @@ export class BotTileComponent {
   readonly bars = input.required<readonly ChartBar[]>();
   readonly markers = input<readonly ChartFillMarker[]>([]);
   readonly broker = input.required<string>();
+  readonly clerkId = input('');
   readonly accountId = input.required<string>();
   /** Set by the dock while this tile's confirmed quick action is in flight — disables the button and marks it `aria-busy` without restyling the rest of the tile. */
   readonly pending = input<boolean>(false);
@@ -190,7 +191,8 @@ export class BotTileComponent {
 
   protected onBodyClick(): void {
     void this.router.navigate([
-      '/brokers', this.broker(), 'accounts', this.accountId(), 'bots', this.bot().sid,
+      '/brokers', this.broker(), 'clerks', this.clerkId(), 'accounts', this.accountId(), 'bots',
+      this.bot().sid,
     ]);
   }
 

@@ -2,14 +2,17 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  input,
   inject,
   linkedSignal,
   resource,
-  signal,
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+
+import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 
 import type {
   BrokerInstallationSelection,
@@ -41,6 +44,10 @@ interface RevisionRef {
   readonly revision: number;
 }
 
+interface ClerkRevisionRef extends RevisionRef {
+  readonly clerkId: string;
+}
+
 function reviewRef(params: { get(name: string): string | null }): RevisionRef | null {
   const profileId = params.get('profileId');
   const revision = Number(params.get('revision'));
@@ -61,6 +68,13 @@ function revisionRef(
 /** Two refs naming the same revision are the same ref, whatever their identity. */
 function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined): boolean {
   return a?.profileId === b?.profileId && a?.revision === b?.revision;
+}
+
+function sameClerkRevisionRef(
+  a: ClerkRevisionRef | undefined,
+  b: ClerkRevisionRef | undefined,
+): boolean {
+  return a?.clerkId === b?.clerkId && sameRevisionRef(a, b);
 }
 
 /**
@@ -102,17 +116,30 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
 })
 export class AlpacaConfigurationPageComponent {
   private readonly service = inject(BrokerConfigurationService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly route = inject(ActivatedRoute);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
+  /** The lane this configuration surface addresses (FR-092). */
+  readonly clerkId = input.required<string>();
   private readonly requestedReview = computed(() => reviewRef(this.queryParams()));
   private readonly createForm = viewChild(ConfigurationProfileCreateComponent);
+  private readonly selectionContext = computed(() => ({
+    clerkId: this.clerkId(),
+    request: this.requestedReview(),
+  }));
 
-  protected readonly includeArchived = signal(false);
-  protected readonly selectedProfileId = linkedSignal<RevisionRef | null, string | null>({
-    source: this.requestedReview,
-    computation: (request) => request?.profileId ?? null,
+  protected readonly includeArchived = linkedSignal<string, boolean>({
+    source: () => this.clerkId(),
+    computation: () => false,
+  });
+  protected readonly selectedProfileId = linkedSignal<
+    { readonly clerkId: string; readonly request: RevisionRef | null },
+    string | null
+  >({
+    source: this.selectionContext,
+    computation: ({ request }) => request?.profileId ?? null,
   });
   protected readonly reviewRevision = computed(() => {
     const request = this.requestedReview();
@@ -130,36 +157,62 @@ export class AlpacaConfigurationPageComponent {
    * revision now on screen. Every path that could leave the two out of step is
    * then covered by construction, including the ones that forget to clear.
    */
-  private readonly observation = signal<
-    { readonly ref: RevisionRef; readonly accounts: readonly BrokerObservedAccount[] } | null
-  >(null);
-  protected readonly refusal = signal<ConfigurationRefusal | null>(null);
-  protected readonly busy = signal(false);
+  private readonly observation = linkedSignal<string, {
+    readonly ref: RevisionRef;
+    readonly accounts: readonly BrokerObservedAccount[];
+  } | null>({
+    source: () => this.clerkId(),
+    computation: () => null,
+  });
+  protected readonly refusal = linkedSignal<string, ConfigurationRefusal | null>({
+    source: () => this.clerkId(),
+    computation: () => null,
+  });
+  protected readonly busy = linkedSignal<string, boolean>({
+    source: () => this.clerkId(),
+    computation: () => false,
+  });
 
   protected readonly slots = resource({
-    loader: () => this.service.listCredentialSlots(),
+    params: () => this.clerkId(),
+    loader: ({ params }) => this.service.listCredentialSlots(params),
     defaultValue: [],
   });
   protected readonly profiles = resource({
-    params: () => this.includeArchived(),
-    loader: ({ params }) => this.service.listProfiles({ includeArchived: params }),
+    params: () => ({ clerkId: this.clerkId(), includeArchived: this.includeArchived() }),
+    loader: ({ params }) => this.service.listProfiles(params.clerkId, {
+      includeArchived: params.includeArchived,
+    }),
     defaultValue: [],
   });
   protected readonly nicknames = resource({
-    loader: () => this.service.listNicknames(),
+    params: () => this.clerkId(),
+    loader: ({ params }) => this.service.listNicknames(params),
     defaultValue: [],
   });
-  protected readonly deskState = resource({ loader: () => this.service.readDeskState() });
-  protected readonly selection = resource({ loader: () => this.service.readSelection() });
+  protected readonly deskState = resource({
+    params: () => this.clerkId(),
+    loader: ({ params }) => this.service.readDeskState(params),
+  });
+  protected readonly selection = resource({
+    params: () => this.clerkId(),
+    loader: ({ params }) => this.service.readSelection(params),
+  });
   protected readonly detail = resource({
-    params: () => this.selectedProfileId() ?? undefined,
-    loader: ({ params }) => this.service.readProfile(params),
+    params: () => {
+      const profileId = this.selectedProfileId();
+      return profileId === null ? undefined : { clerkId: this.clerkId(), profileId };
+    },
+    loader: ({ params }) => this.service.readProfile(params.clerkId, params.profileId),
   });
   // No `defaultValue`: a revision list that failed to load must not render as
   // "Revision history (0)", which states a fact about a read that never landed.
   protected readonly revisions = resource({
-    params: () => this.selectedProfileId() ?? undefined,
-    loader: ({ params }) => this.service.listRevisions(params),
+    params: () => {
+      const profileId = this.selectedProfileId();
+      return profileId === null ? undefined : { clerkId: this.clerkId(), profileId };
+    },
+    loader: ({ params }) => this.service.listRevisions(params.clerkId, params.profileId),
   });
   // `GET /selection` names the staged and effective revisions but not what
   // they *are*, and paper-versus-live is the fact an operator most needs from
@@ -172,20 +225,29 @@ export class AlpacaConfigurationPageComponent {
   // Every write replaces the selection object, so without this an Apply — which
   // changes neither side — would restart both reads and blank the panel to
   // "endpoint unread" at exactly the moment the operator pressed the button.
-  private readonly stagedRef = computed(() => revisionRef(this.currentSelection(), 'staged'), {
-    equal: sameRevisionRef,
-  });
-  private readonly effectiveRef = computed(
-    () => revisionRef(this.currentSelection(), 'effective'),
-    { equal: sameRevisionRef },
-  );
+  private readonly stagedRef = computed<ClerkRevisionRef | undefined>(() => {
+    const ref = revisionRef(this.currentSelection(), 'staged');
+    return ref === undefined ? undefined : { clerkId: this.clerkId(), ...ref };
+  }, { equal: sameClerkRevisionRef });
+  private readonly effectiveRef = computed<ClerkRevisionRef | undefined>(() => {
+    const ref = revisionRef(this.currentSelection(), 'effective');
+    return ref === undefined ? undefined : { clerkId: this.clerkId(), ...ref };
+  }, { equal: sameClerkRevisionRef });
   private readonly stagedRevision = resource({
     params: () => this.stagedRef(),
-    loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
+    loader: ({ params }) => this.service.readRevision(
+      params.clerkId,
+      params.profileId,
+      params.revision,
+    ),
   });
   private readonly effectiveRevision = resource({
     params: () => this.effectiveRef(),
-    loader: ({ params }) => this.service.readRevision(params.profileId, params.revision),
+    loader: ({ params }) => this.service.readRevision(
+      params.clerkId,
+      params.profileId,
+      params.revision,
+    ),
   });
 
   protected readonly stagedEndpointMode = computed(
@@ -310,8 +372,10 @@ export class AlpacaConfigurationPageComponent {
   }
 
   protected createProfile(request: { displayName: string; content: RevisionContent }): void {
-    void this.run(async () => {
-      const created = await this.service.createProfile(request.displayName, request.content);
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      const created = await this.service.createProfile(actionTarget, request.displayName, request.content);
+      if (!this.isCurrent(actionTarget)) return;
       this.createForm()?.reset();
       this.selectedProfileId.set(created.profile.profile_id);
       this.profiles.reload();
@@ -320,8 +384,10 @@ export class AlpacaConfigurationPageComponent {
   }
 
   protected stageProfile(profile: BrokerProfile): void {
-    void this.run(async () => {
-      const detail = await this.service.readProfile(profile.profile_id);
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      const detail = await this.service.readProfile(actionTarget.clerkId, profile.profile_id);
+      if (!this.isCurrent(actionTarget)) return;
       const revision = detail.latest_revision;
       if (revision === null) {
         this.refusal.set(
@@ -332,15 +398,16 @@ export class AlpacaConfigurationPageComponent {
         );
         return;
       }
-      await this.stageExactRevision(revision);
+      await this.stageExactRevision(revision, actionTarget);
     });
   }
 
   protected stageRevision(revision: BrokerProfileRevision): void {
-    void this.run(() => this.stageExactRevision(revision));
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, () => this.stageExactRevision(revision, actionTarget));
   }
 
-  private async stageExactRevision(revision: BrokerProfileRevision): Promise<void> {
+  private async stageExactRevision(revision: BrokerProfileRevision, actionTarget: ResourceTarget): Promise<void> {
     const current = this.currentSelection();
     if (current === null) {
       this.refusal.set(
@@ -351,28 +418,37 @@ export class AlpacaConfigurationPageComponent {
       );
       return;
     }
-    this.selection.set(
-      await this.service.stageSelection(
-        revision.profile_id,
-        revision.revision,
-        current.selection_generation,
-      ),
+    const updated = await this.service.stageSelection(
+      actionTarget,
+      revision.profile_id,
+      revision.revision,
+      current.selection_generation,
     );
+    if (!this.isCurrent(actionTarget)) return;
+    this.selection.set(updated);
     this.deskState.reload();
   }
 
   protected applySelection(): void {
-    void this.run(async () => {
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
       const current = this.currentSelection();
       if (current === null) return;
-      this.selection.set(await this.service.applySelection(current.selection_generation));
+      const updated = await this.service.applySelection(
+        actionTarget,
+        current.selection_generation,
+      );
+      if (!this.isCurrent(actionTarget)) return;
+      this.selection.set(updated);
       this.deskState.reload();
     });
   }
 
   protected setArchived(request: { profileId: string; archived: boolean }): void {
-    void this.run(async () => {
-      await this.service.updateProfile(request.profileId, { archived: request.archived });
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      await this.service.updateProfile(actionTarget, request.profileId, { archived: request.archived });
+      if (!this.isCurrent(actionTarget)) return;
       this.profiles.reload();
       this.detail.reload();
       this.deskState.reload();
@@ -382,8 +458,10 @@ export class AlpacaConfigurationPageComponent {
   protected renameProfile(displayName: string): void {
     const open = this.openProfileContext();
     if (open === null) return;
-    void this.run(async () => {
-      await this.service.updateProfile(open.profileId, { displayName });
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      await this.service.updateProfile(actionTarget, open.profileId, { displayName });
+      if (!this.isCurrent(actionTarget)) return;
       this.profiles.reload();
       this.detail.reload();
       this.deskState.reload();
@@ -393,8 +471,10 @@ export class AlpacaConfigurationPageComponent {
   protected cloneProfile(displayName: string): void {
     const open = this.openProfileContext();
     if (open === null) return;
-    void this.run(async () => {
-      const cloned = await this.service.cloneProfile(open.profileId, displayName);
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      const cloned = await this.service.cloneProfile(actionTarget, open.profileId, displayName);
+      if (!this.isCurrent(actionTarget)) return;
       this.selectedProfileId.set(cloned.profile.profile_id);
       this.profiles.reload();
       this.deskState.reload();
@@ -404,12 +484,15 @@ export class AlpacaConfigurationPageComponent {
   protected saveRevision(submission: RevisionSubmission): void {
     const open = this.openProfileContext();
     if (open === null) return;
-    void this.run(async () => {
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
       await this.service.createRevision(
+        actionTarget,
         open.profileId,
         submission.expectedRevision,
         submission.content,
       );
+      if (!this.isCurrent(actionTarget)) return;
       this.detail.reload();
       this.revisions.reload();
     });
@@ -418,12 +501,18 @@ export class AlpacaConfigurationPageComponent {
   protected verifyAccount(): void {
     const target = this.verificationTarget();
     if (target === null) return;
-    void this.run(async () => {
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
       // Dropped before the call, not after it: a refused verification that left
       // the previous run's accounts on screen would show a refusal banner over
       // a list of still-approvable accounts, which reads as "those are current".
       this.observation.set(null);
-      const accounts = await this.service.verifyAccount(target.profileId, target.revision);
+      const accounts = await this.service.verifyAccount(
+        actionTarget,
+        target.profileId,
+        target.revision,
+      );
+      if (!this.isCurrent(actionTarget)) return;
       this.observation.set({ ref: target, accounts });
     });
   }
@@ -431,8 +520,10 @@ export class AlpacaConfigurationPageComponent {
   protected pinAccount(accountId: string): void {
     const target = this.verificationTarget();
     if (target === null) return;
-    void this.run(async () => {
-      await this.service.pinAccount(target.profileId, target.revision, accountId);
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      await this.service.pinAccount(actionTarget, target.profileId, target.revision, accountId);
+      if (!this.isCurrent(actionTarget)) return;
       this.detail.reload();
       this.revisions.reload();
       this.deskState.reload();
@@ -442,8 +533,10 @@ export class AlpacaConfigurationPageComponent {
   protected saveNickname(nickname: string): void {
     const accountId = this.openProfileContext()?.latestRevision?.account_pin ?? null;
     if (accountId === null) return;
-    void this.run(async () => {
-      await this.service.putNickname(accountId, nickname);
+    const actionTarget = this.commandTarget();
+    void this.run(actionTarget, async () => {
+      await this.service.putNickname(actionTarget, accountId, nickname);
+      if (!this.isCurrent(actionTarget)) return;
       this.nicknames.reload();
       this.deskState.reload();
     });
@@ -456,9 +549,28 @@ export class AlpacaConfigurationPageComponent {
       : { profileId: open.profileId, revision: open.latestRevision.revision };
   }
 
+  /** Freeze the explicit route's rendered lane at the point an action opens. */
+  private commandTarget(): ResourceTarget {
+    const clerkId = this.clerkId();
+    const lane = this.fleetDirectory.lane('alpaca', clerkId);
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+      throw new Error('This browser cannot create a durable request identity.');
+    }
+    return resourceTarget('alpaca', clerkId, {
+      capability: 'configuration_manage',
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      bindingGeneration: lane?.effective_binding_generation ?? null,
+      routingEpoch: lane?.routing_epoch ?? null,
+    });
+  }
+
   private nicknameFor(accountId: string | null): string | null {
     if (accountId === null || !this.nicknames.hasValue()) return null;
     return this.nicknames.value().find((entry) => entry.account_id === accountId)?.nickname ?? null;
+  }
+
+  private isCurrent(target: ResourceTarget): boolean {
+    return this.clerkId() === target.clerkId;
   }
 
   /**
@@ -467,16 +579,16 @@ export class AlpacaConfigurationPageComponent {
    * write here carries a fence and a retry would either be a no-op or clobber
    * whatever moved the fence.
    */
-  private async run(action: () => Promise<void>): Promise<void> {
+  private async run(target: ResourceTarget, action: () => Promise<void>): Promise<void> {
     if (this.busy()) return;
     this.busy.set(true);
     this.refusal.set(null);
     try {
       await action();
     } catch (error) {
-      this.refusal.set(toConfigurationRefusal(error));
+      if (this.isCurrent(target)) this.refusal.set(toConfigurationRefusal(error));
     } finally {
-      this.busy.set(false);
+      if (this.isCurrent(target)) this.busy.set(false);
     }
   }
 }

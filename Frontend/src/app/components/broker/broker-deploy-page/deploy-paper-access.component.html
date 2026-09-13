@@ -205,7 +205,7 @@
               <div class="flex flex-wrap gap-2 max-[520px]:grid">
                 <p-button
                   [label]="enableLabel()"
-                  (onClick)="confirm(state.plan)"
+                  (onClick)="confirm()"
                 />
                 <p-button
                   label="Cancel"
@@ -239,11 +239,11 @@
               }
             </div>
             <p-button
-              label="Try review again"
+              [label]="state.retry === null ? 'Try review again' : 'Try enable again'"
               severity="secondary"
               [outlined]="true"
               class="justify-self-start"
-              (onClick)="prepare()"
+              (onClick)="retry()"
             />
           }
         }

@@ -1453,6 +1453,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account-scoped alias of the current bot run
+         * @description Validate the durable account binding before reading the current run.
+         */
+        get: operations["get_current_run_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account-scoped alias of the bot run history
+         * @description Validate the durable account binding before reading run history.
+         */
+        get: operations["get_run_history_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/gallery/snapshot": {
         parameters: {
             query?: never;
@@ -2169,6 +2209,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/runs/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Run Current Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/runs/current (bot_panel_read).
+         */
+        get: operations["fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/runs/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Run History Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/runs/history (bot_panel_read).
+         */
+        get: operations["fleet_bot_run_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm": {
         parameters: {
             query?: never;
@@ -2733,6 +2813,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Activities Read
+         * @description Fleet-routed GET /activities (account_read).
+         */
+        get: operations["fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/clerk/custody-diagnosis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Diagnosis Read
+         * @description Fleet-routed GET /clerk/custody-diagnosis (custody_read).
+         */
+        get: operations["fleet_custody_diagnosis_read_api_brokers__broker__clerks__clerk_id__clerk_custody_diagnosis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/clerk/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Clerk Status Read
+         * @description Fleet-routed GET /clerk/status (custody_read).
+         */
+        get: operations["fleet_clerk_status_read_api_brokers__broker__clerks__clerk_id__clerk_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/account-nicknames": {
         parameters: {
             query?: never;
@@ -3085,6 +3225,46 @@ export interface paths {
          * @description Fleet-routed GET /orders (orders_read).
          */
         get: operations["fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/portfolio-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Portfolio History Read
+         * @description Fleet-routed GET /portfolio-history (account_read).
+         */
+        get: operations["fleet_portfolio_history_read_api_brokers__broker__clerks__clerk_id__portfolio_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/portfolio-history-proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Portfolio History Proof Read
+         * @description Fleet-routed GET /portfolio-history-proof (account_read).
+         */
+        get: operations["fleet_portfolio_history_proof_read_api_brokers__broker__clerks__clerk_id__portfolio_history_proof_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -28008,6 +28188,79 @@ export interface operations {
             };
         };
     };
+    get_current_run_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_current_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_history_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_history_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_gallery_snapshot_api_brokers__broker__accounts__account_id__gallery_snapshot_get: {
         parameters: {
             query?: never;
@@ -29560,6 +29813,78 @@ export interface operations {
             };
         };
     };
+    fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_run_history_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_history_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_custody_historical_recovery_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_confirm_post: {
         parameters: {
             query?: never;
@@ -30661,6 +30986,108 @@ export interface operations {
             };
         };
     };
+    fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_diagnosis_read_api_brokers__broker__clerks__clerk_id__clerk_custody_diagnosis_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_clerk_status_read_api_brokers__broker__clerks__clerk_id__clerk_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_configuration_nicknames_read_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames_get: {
         parameters: {
             query?: never;
@@ -31428,6 +31855,74 @@ export interface operations {
         };
     };
     fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_portfolio_history_read_api_brokers__broker__clerks__clerk_id__portfolio_history_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_portfolio_history_proof_read_api_brokers__broker__clerks__clerk_id__portfolio_history_proof_get: {
         parameters: {
             query?: never;
             header?: {

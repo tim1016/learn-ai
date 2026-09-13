@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 import type { BrokerPosition } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 4, routingEpoch: 1 });
 
 function fakePosition(overrides: Partial<BrokerPosition> = {}): BrokerPosition {
   return {
@@ -26,7 +31,10 @@ function fakePosition(overrides: Partial<BrokerPosition> = {}): BrokerPosition {
 
 async function renderTable(listPositions: () => Promise<BrokerPosition[]>) {
   return render(AlpacaPositionsTableComponent, {
-    providers: [{ provide: BrokersService, useValue: { listPositions } }],
+    providers: [
+      provideFleetDirectory(),
+      { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } },
+      { provide: BrokersService, useValue: { listPositions } }],
   });
 }
 

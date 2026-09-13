@@ -126,6 +126,7 @@ export class BotGalleryDockComponent {
   readonly barsBySymbol = input.required<ReadonlyMap<string, readonly ChartBar[]>>();
   readonly markersBySid = input.required<ReadonlyMap<string, readonly ChartFillMarker[]>>();
   readonly broker = input.required<string>();
+  readonly clerkId = input('');
   readonly accountId = input.required<string>();
   /** Sids with a confirmed quick action in flight — forwarded to each tile's `pending` input (mirrors `bots-roster`'s `pendingBotIds`). */
   readonly pendingSids = input<ReadonlySet<string>>(new Set());

@@ -1,6 +1,7 @@
 import { Injectable, computed, inject, resource, signal } from '@angular/core';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /**
  * Caches the operator-only evidence for the lifetime of the desk shell.
@@ -32,12 +33,18 @@ const SQLITE_PROJECTION_AUTHORITIES: ReadonlySet<string> = new Set(['real_paper'
 @Injectable()
 export class AlpacaOperatorLensDataService {
   private readonly brokers = inject(BrokersService);
+  private readonly deskAccount = inject(AlpacaDeskAccountDataService);
   private readonly requested = signal(false);
   readonly projectionRefreshVersion = signal(0);
 
   readonly status = resource({
-    params: () => (this.requested() ? this.projectionRefreshVersion() : undefined),
-    loader: () => this.brokers.getClerkStatus('alpaca'),
+    params: () => {
+      const target = this.deskAccount.target();
+      return this.requested() && target !== null
+        ? { target, refreshVersion: this.projectionRefreshVersion() }
+        : undefined;
+    },
+    loader: ({ params }) => this.brokers.getClerkStatus(params.target),
   });
 
   private readonly sqliteAccountId = computed(() => {
@@ -51,11 +58,13 @@ export class AlpacaOperatorLensDataService {
   readonly projection = resource({
     params: () => {
       const accountId = this.sqliteAccountId();
-      return accountId === undefined
+      const target = this.deskAccount.target();
+      return accountId === undefined || target === null
         ? undefined
-        : { accountId, refreshVersion: this.projectionRefreshVersion() };
+        : { accountId, target, refreshVersion: this.projectionRefreshVersion() };
     },
-    loader: ({ params }) => this.brokers.getSqliteClerkProjection(params.accountId),
+    loader: ({ params }) =>
+      this.brokers.getSqliteClerkProjection(params.target.clerkId, params.accountId),
   });
 
   loadOnce(): void {

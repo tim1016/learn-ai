@@ -27,6 +27,7 @@ import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 const chartMocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
@@ -78,6 +79,7 @@ class StubEventSource {
     @if (mounted()) {
       <app-bot-panel-shell
         broker="alpaca"
+        clerkId="clrk_spec"
         [accountId]="accountId"
         [sid]="strategyInstanceId"
       />
@@ -100,7 +102,8 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
   beforeEach(() => {
     StubEventSource.instances = [];
     TestBed.configureTestingModule({
-      providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+      providers: [
+      provideFleetDirectory(),{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
     });
     chartMocks.createChart.mockClear();
   });
@@ -248,8 +251,9 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
     );
     expect(campaignService.getEvidence).toHaveBeenNthCalledWith(
       EXPECTED_OBSERVATION_COUNT,
-      'alpaca',
-      ACCOUNT_ID,
+      expect.objectContaining({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: ACCOUNT_ID, entityId: STRATEGY_INSTANCE_ID,
+      }),
       STRATEGY_INSTANCE_ID,
       expect.objectContaining({ transactionRef: TRANSACTION_REF }),
     );

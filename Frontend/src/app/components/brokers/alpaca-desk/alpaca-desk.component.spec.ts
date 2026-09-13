@@ -10,6 +10,7 @@ import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
+import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
@@ -168,16 +169,20 @@ async function renderDesk(
   query: Record<string, string> = {},
   brokers = brokerService(),
   deskState: AlpacaDeskState = accountActivation,
+  fleetDirectory = provideFleetDirectory(),
 ) {
   const queryParamMap = convertToParamMap(query);
+  const paramMap = convertToParamMap({ clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA1' });
   const view = await render(AlpacaDeskComponent, {
     providers: [
+      fleetDirectory,
       provideRouter([]),
       {
         provide: ActivatedRoute,
         useValue: {
           queryParamMap: of(queryParamMap),
-          snapshot: { queryParamMap },
+          paramMap: of(paramMap),
+          snapshot: { queryParamMap, paramMap },
         },
       },
       {
@@ -269,7 +274,7 @@ describe('AlpacaDeskComponent', () => {
     await fireEvent.click(screen.getByRole('radio', { name: /Strategy lab · PA-123/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Select Paper account' }));
 
-    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca/configuration'], {
+    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
       queryParams: { profileId: 'paper-profile', revision: 3 },
     });
   });
@@ -280,6 +285,21 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('tab', { name: 'Trader' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
+  });
+
+  it('keeps Deploy visible but unavailable when the clerk does not declare that capability', async () => {
+    const fleetDirectory = provideFleetDirectory({
+      observed_at_ms: 1,
+      clerks: [testLane({ capabilities: ['account_read'] })],
+    });
+    const { router } = await renderDesk({}, brokerService(), accountActivation, fleetDirectory);
+    const deploy = await screen.findByRole('button', { name: 'Deploy strategy' });
+
+    expect(deploy.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(deploy);
+
+    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
+    expect(router.url).not.toContain('deploy');
   });
 
   it('keeps the connectivity failure distinct when activation guidance is unavailable', async () => {
@@ -297,6 +317,20 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('button', { name: 'Review account configuration' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
+  });
+
+  it('fails closed when the Account Clerk returns a different account than the route', async () => {
+    const brokers = brokerService();
+    brokers.getAccount.mockResolvedValue({
+      ...(await brokers.getAccount()),
+      account_id: 'PA-OTHER',
+    });
+
+    await renderDesk({}, brokers, effectiveSelection);
+
+    expect(await screen.findByText(/Couldn't reach Alpaca/)).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
+    expect(screen.queryByText('PA-OTHER')).toBeNull();
   });
 
   it('keeps a connected account usable while showing the exact pending configuration', async () => {
@@ -334,7 +368,7 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: pending.action.label }));
-    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca/configuration'], {
+    expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
       queryParams: { profileId: 'live-profile', revision: 1 },
     });
   });
@@ -389,7 +423,7 @@ describe('AlpacaDeskComponent', () => {
       await screen.findByText(/Manual SQLite trading remains disabled until paper qualification is complete/),
     ).toBeTruthy();
     expect(await screen.findByText('Create Alpaca order')).toBeTruthy();
-    expect(brokers.getSqliteManualOrderCapability).toHaveBeenCalledWith('PA1');
+    expect(brokers.getSqliteManualOrderCapability).toHaveBeenCalledWith('clrk_spec0000000000000000aa', 'PA1');
   });
 
   it('restores the last selected lens when no query parameter is present', async () => {

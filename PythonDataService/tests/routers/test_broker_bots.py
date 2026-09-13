@@ -205,6 +205,20 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
             f"/api/brokers/alpaca/bots/{_SID}/runs/history",
             params={"limit": 1},
         )
+        scoped_current = await client.get(
+            f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/current"
+        )
+        scoped_history = await client.get(
+            f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/history",
+            params={"limit": 1},
+        )
+        wrong_account_current = await client.get(
+            f"/api/brokers/alpaca/accounts/account-1/bots/{_SID}/runs/current"
+        )
+        wrong_account_history = await client.get(
+            f"/api/brokers/alpaca/accounts/account-1/bots/{_SID}/runs/history",
+            params={"limit": 1},
+        )
 
     assert current.status_code == 200
     assert current.json()["run_id"] == resumed.active_run_id
@@ -215,6 +229,14 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     assert [run["run_id"] for run in history.json()["runs"]] == [first_run_id]
     assert history.json()["runs"][0]["terminal_outcome"]["kind"] == "STOPPED"
     assert history.json()["next_cursor"] is None
+    assert scoped_current.status_code == 200
+    assert scoped_current.json()["run_id"] == resumed.active_run_id
+    assert scoped_history.status_code == 200
+    assert [run["run_id"] for run in scoped_history.json()["runs"]] == [first_run_id]
+    assert wrong_account_current.status_code == 404
+    assert wrong_account_history.status_code == 404
+    assert "account-1" in wrong_account_current.json()["detail"]["message"]
+    assert "account-1" in wrong_account_history.json()["detail"]["message"]
     await registry.stop("alpaca", _SID)
 
 

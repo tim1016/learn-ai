@@ -26,6 +26,8 @@ import {
   type RosterRowActionEvent,
 } from '../bots-roster/bots-roster.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget, withCommand, withEntity } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
@@ -70,15 +72,16 @@ interface ScopedSnapshot<T> {
 })
 export class BotsListPageComponent {
   readonly broker = input('alpaca');
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
 
   private readonly brokersService = inject(BrokersService);
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
   private readonly document = inject(DOCUMENT);
   private readonly messageService = inject(MessageService);
-  private readonly fleetScope = computed(() => `${this.broker()}:${this.accountId()}`);
   private readonly catalogSnapshot = signal<ScopedSnapshot<BotCatalogView[]> | null>(null);
   private readonly accountSnapshot = signal<ScopedSnapshot<BrokerAccountSnapshot> | null>(null);
   private readonly clerkSnapshot = signal<ScopedSnapshot<ClerkStatus> | null>(null);
@@ -93,12 +96,40 @@ export class BotsListPageComponent {
   /** Bumped after an action lands so the detail pane refetches its panel. */
   protected readonly detailRefreshToken = signal(0);
 
+  /** Frozen lane context for every roster request and command. */
+  protected readonly target = computed(() =>
+    resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      bindingGeneration:
+        this.fleetDirectory.lane(this.broker(), this.clerkId())
+          ?.effective_binding_generation ?? null,
+      routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+    }),
+  );
+
+  /**
+   * Values may only be rendered for the exact routed lane that produced them.
+   * Account ids are provider-local, so an account id alone cannot distinguish
+   * two Clerks (nor can it distinguish a binding replacement for one Clerk).
+   */
+  private readonly fleetScope = computed(() => {
+    const target = this.target();
+    return [
+      target.broker,
+      target.clerkId,
+      target.accountId ?? '',
+      target.bindingGeneration ?? '',
+      target.routingEpoch ?? '',
+    ].join(':');
+  });
+
   protected readonly catalog = resource({
-    params: () => ({ broker: this.broker(), accountId: this.accountId() }),
+    params: () => ({ target: this.target(), scope: this.fleetScope() }),
     loader: async ({ params }) => {
       const startedAt = this.performanceNow();
-      const bots = await this.panelService.getCatalog(params.broker, params.accountId);
-      const scope = `${params.broker}:${params.accountId}`;
+      const bots = await this.panelService.getCatalog(params.target);
+      const scope = params.scope;
+      if (scope !== this.fleetScope()) return bots;
       const firstUsefulPaint = this.catalogSnapshot()?.scope !== scope;
       this.catalogSnapshot.set({
         scope,
@@ -114,16 +145,23 @@ export class BotsListPageComponent {
   });
 
   protected readonly account = resource({
-    params: () => ({ broker: this.broker(), accountId: this.accountId() }),
+    params: () => ({
+      broker: this.broker(),
+      clerkId: this.clerkId(),
+      accountId: this.accountId(),
+      target: this.target(),
+      scope: this.fleetScope(),
+    }),
     loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getAccount(params.broker);
+      const snapshot = await this.brokersService.getAccount(params.target);
+      if (params.scope !== this.fleetScope()) return snapshot;
       if (snapshot.account_id !== params.accountId) {
         throw new Error(
           `Alpaca confirmed account ${snapshot.account_id}, not routed account ${params.accountId}.`,
         );
       }
       this.accountSnapshot.set({
-        scope: `${params.broker}:${params.accountId}`,
+        scope: params.scope,
         updatedAtMs: snapshot.observed_at_ms,
         value: snapshot,
       });
@@ -132,16 +170,23 @@ export class BotsListPageComponent {
   });
 
   protected readonly clerkStatus = resource({
-    params: () => ({ broker: this.broker(), accountId: this.accountId() }),
+    params: () => ({
+      broker: this.broker(),
+      clerkId: this.clerkId(),
+      accountId: this.accountId(),
+      target: this.target(),
+      scope: this.fleetScope(),
+    }),
     loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getClerkStatus(params.broker);
+      const snapshot = await this.brokersService.getClerkStatus(params.target);
+      if (params.scope !== this.fleetScope()) return snapshot;
       if (snapshot.account_id !== params.accountId) {
         throw new Error(
           `The Clerk is observing account ${snapshot.account_id}, not routed account ${params.accountId}.`,
         );
       }
       this.clerkSnapshot.set({
-        scope: `${params.broker}:${params.accountId}`,
+        scope: params.scope,
         updatedAtMs: snapshot.observed_at_ms,
         value: snapshot,
       });
@@ -302,6 +347,12 @@ export class BotsListPageComponent {
     if (this.pendingBotIds().has(sid)) return;
 
     const action = trigger.action;
+    // Freeze the lane before any await. A roster action may outlive a route
+    // reuse or a binding replacement; it must conflict rather than following
+    // the operator to whatever lane happens to be current at submission time.
+    const laneTarget = withEntity(this.target(), sid);
+    const target = withCommand(laneTarget, 'bot_action', crypto.randomUUID());
+    const scope = this.fleetScope();
     const startedAt = this.performanceNow();
     this.actionNotice.set(null);
     this.pendingBotIds.update((current) => new Set([...current, sid]));
@@ -315,15 +366,16 @@ export class BotsListPageComponent {
       }
 
       const result = await this.panelService.runBotAction(
-        this.broker(),
-        this.accountId(),
+        target,
         sid,
         action,
         trigger.reason,
       );
+      if (scope !== this.fleetScope()) return;
       this.actionNotice.set({ tone: 'success', message: result.message });
       this.messageService.add(actionOutcomeToast('success', result.message));
     } catch (error) {
+      if (scope !== this.fleetScope()) return;
       const rejection = deriveActionRejection(
         error,
         `Could not ${action.label.toLowerCase()} ${sid}.`,
@@ -336,16 +388,18 @@ export class BotsListPageComponent {
         next.delete(sid);
         return next;
       });
-      this.catalog.reload();
-      // Only refresh the detail pane when the acted-on bot is still the one on
-      // screen. The token is page-global, and the detail pane's journal read is
-      // audit-logged: bumping it after the operator has moved on to another bot
-      // would append an `EvidenceAuditEntry` asserting they read *that* bot's
-      // evidence, which they did not.
-      if (this.selectedSid() === sid) {
-        this.detailRefreshToken.update((token) => token + 1);
+      if (scope === this.fleetScope()) {
+        this.catalog.reload();
+        // Only refresh the detail pane when the acted-on bot is still the one on
+        // screen. The token is page-global, and the detail pane's journal read is
+        // audit-logged: bumping it after the operator has moved on to another bot
+        // would append an `EvidenceAuditEntry` asserting they read *that* bot's
+        // evidence, which they did not.
+        if (this.selectedSid() === sid) {
+          this.detailRefreshToken.update((token) => token + 1);
+        }
+        this.measure('alpaca-bots-action-round-trip', startedAt);
       }
-      this.measure('alpaca-bots-action-round-trip', startedAt);
     }
   }
 

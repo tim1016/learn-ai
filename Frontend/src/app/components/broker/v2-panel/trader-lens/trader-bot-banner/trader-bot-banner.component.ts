@@ -39,12 +39,15 @@ import {
 })
 export class TraderBotBannerComponent {
   readonly panel = input.required<BotPanelView>();
+  readonly clerkId = input.required<string>();
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
 
   protected readonly backLink = computed(() => [
     '/brokers',
     this.panel().broker,
+    'clerks',
+    this.clerkId(),
     'accounts',
     this.panel().account_id,
     'bots',
@@ -54,6 +57,7 @@ export class TraderBotBannerComponent {
   protected readonly manualOrderNavigation = computed(() =>
     buildManualOrderTicketNavigation(
       this.panel().broker,
+      this.clerkId(),
       this.panel().account_id,
       this.panel().symbol,
     ),

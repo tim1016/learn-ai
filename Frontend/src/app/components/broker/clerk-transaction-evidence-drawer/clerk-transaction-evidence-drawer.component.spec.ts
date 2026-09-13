@@ -9,6 +9,16 @@ import type {
 } from '../../../api/clerk-transaction-history.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { ClerkTransactionEvidenceDrawerComponent } from './clerk-transaction-evidence-drawer.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+function target(accountId: string) {
+  return resourceTarget('alpaca', 'clrk_spec', {
+    accountId,
+    bindingGeneration: 3,
+    routingEpoch: 4,
+  });
+}
 
 function summary(accountId: string, transactionId: string): ClerkTransactionSummary {
   return {
@@ -63,23 +73,26 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     };
     TestBed.configureTestingModule({
       providers: [
+      provideFleetDirectory(),
         provideZonelessChangeDetection(),
         { provide: BrokersService, useValue: broker },
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('target', target('acct'));
     fixture.componentRef.setInput('accountId', 'acct');
     fixture.componentRef.setInput('transaction', summary('acct', 'a:b'));
     fixture.detectChanges();
     await Promise.resolve();
 
+    fixture.componentRef.setInput('target', target('acct:a'));
     fixture.componentRef.setInput('accountId', 'acct:a');
     fixture.componentRef.setInput('transaction', summary('acct:a', 'b'));
     fixture.detectChanges();
     await Promise.resolve();
 
-    expect(broker.accountTransaction).toHaveBeenNthCalledWith(1, 'acct', 'a:b');
-    expect(broker.accountTransaction).toHaveBeenNthCalledWith(2, 'acct:a', 'b');
+    expect(broker.accountTransaction).toHaveBeenNthCalledWith(1, 'clrk_spec', 'acct', 'a:b');
+    expect(broker.accountTransaction).toHaveBeenNthCalledWith(2, 'clrk_spec', 'acct:a', 'b');
 
     second.resolve(detail('acct:a', 'b', { receipt_hash: 'current-evidence' }));
     await Promise.resolve();
@@ -142,6 +155,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('target', target('DU1234567'));
     fixture.componentRef.setInput('accountId', 'DU1234567');
     fixture.componentRef.setInput('transaction', summary('DU1234567', 'ctxn_1'));
     fixture.detectChanges();
@@ -190,6 +204,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('target', target('DU1234567'));
     fixture.componentRef.setInput('accountId', 'DU1234567');
     fixture.componentRef.setInput('transaction', summary('DU1234567', 'ctxn_2'));
     fixture.detectChanges();
@@ -232,6 +247,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('target', target('PA1'));
     fixture.componentRef.setInput('accountId', 'PA1');
     fixture.componentRef.setInput('transaction', summary('PA1', 'manual-effect'));
     fixture.detectChanges();
