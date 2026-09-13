@@ -63,7 +63,12 @@
   }
   @if (planReceipt(); as receipt) {
     <div class="export__receipt" role="region" aria-label="Dataset plan receipt">
-      <h3>Server plan</h3>
+      <h3>
+        Server plan
+        @if (planReceiptStale()) {
+          <span class="export__stale" role="status">out of date — re-run the plan</span>
+        }
+      </h3>
       <dl class="export__kv">
         <dt>Session count</dt><dd>{{ receipt.session_count ?? '—' }}</dd>
         <dt>Estimated bars</dt><dd>{{ receipt.estimated_bars ?? '—' }}</dd>
@@ -197,6 +202,12 @@
 <!-- 4. Review and generate -->
 <section class="export__section" aria-labelledby="export-review-h">
   <h2 id="export-review-h">4. Review and generate</h2>
+  @if (planReceipt() && planReceiptStale()) {
+    <p class="export__error" role="status">
+      The recipe changed after the plan preview ran — its counts below are out of date. Re-run
+      the preview in section 2 before generating.
+    </p>
+  }
   <dl class="export__kv">
     <dt>Scope</dt><dd>{{ scopeSummary() }}</dd>
     <dt>Indicators</dt><dd>{{ indicatorSummary() }}</dd>

@@ -78,14 +78,15 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
-  }
-}
 
-.validate__primary {
-  background: $accent;
-  color: var(--text-on-accent);
-  border-color: $accent;
-  font-weight: 600;
+    // Nested so it wins the cascade against the generic button styles above.
+    &.validate__primary {
+      background: $accent;
+      color: var(--text-on-accent);
+      border-color: $accent;
+      font-weight: 600;
+    }
+  }
 }
 
 .validate__report {

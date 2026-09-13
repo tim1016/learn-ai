@@ -72,6 +72,16 @@ export class ExportComponent {
     this.store.datasetPlanReceipt() as DataLabPlanReceipt | null,
   );
 
+  /** The stored receipt describes a recipe that no longer matches the live
+   *  workspace (ticker/window/timeframe/indicators/options changed after the
+   *  plan ran). Its counts must not read as current in §4 — the template
+   *  labels the receipt stale until it is re-run. */
+  readonly planReceiptStale = computed(() => {
+    if (!this.planReceipt()) return false;
+    const stored = this.store.datasetPlanReceiptSignature();
+    return stored !== null && stored !== JSON.stringify(this.buildPayload());
+  });
+
   readonly generateStarting = signal(false);
   readonly generateError = signal('');
 
@@ -155,7 +165,10 @@ export class ExportComponent {
     this.planError.set('');
     try {
       const receipt = await this.planService.plan(payload);
-      this.store.setDatasetPlanReceipt(receipt as Record<string, unknown>);
+      this.store.setDatasetPlanReceipt(
+        receipt as Record<string, unknown>,
+        JSON.stringify(payload),
+      );
     } catch (e: unknown) {
       this.planError.set(e instanceof Error ? e.message : String(e));
     } finally {

@@ -74,33 +74,37 @@ describe('ChartSeriesColorPickerComponent', () => {
     expect(radioFor(tealSel.el, 'series-blue').tabIndex).toBe(-1);
   });
 
-  it('arrow keys move focus between radios and wrap around the ends', () => {
-    document.body.appendChild(
-      (() => {
-        const { el } = setup('series-blue');
-        return el;
-      })(),
-    );
-    const host = document.querySelector<HTMLElement>('.cscp-root');
-    if (!host) throw new Error('picker not attached');
+  it('arrow keys move selection and focus together, wrapping around the ends', () => {
+    let host: HTMLElement | null = null;
+    let harness: Harness;
     try {
+      harness = setup('series-blue');
+      host = harness.el;
+      document.body.appendChild(host);
       const first = radioFor(host, 'series-blue');
       first.focus();
       expect(document.activeElement).toBe(first);
       pressKey(first, 'ArrowRight');
       const sky = radioFor(host, 'series-sky');
       expect(document.activeElement).toBe(sky);
+      // Selection follows focus: the emitted token updates aria-checked and
+      // the roving tab stop along with the focus move.
+      expect(harness.tokenSelected).toHaveBeenCalledWith('series-sky');
       pressKey(sky, 'ArrowLeft');
       expect(document.activeElement).toBe(first);
+      expect(harness.tokenSelected).toHaveBeenCalledWith('series-blue');
       pressKey(first, 'ArrowUp'); // wraps to the last option
       const last = radioFor(host, 'series-violet');
       expect(document.activeElement).toBe(last);
+      expect(harness.tokenSelected).toHaveBeenCalledWith('series-violet');
       pressKey(last, 'Home');
       expect(document.activeElement).toBe(first);
+      expect(harness.tokenSelected).toHaveBeenCalledWith('series-blue');
       pressKey(first, 'End');
       expect(document.activeElement).toBe(last);
+      expect(harness.tokenSelected).toHaveBeenCalledWith('series-violet');
     } finally {
-      host.remove();
+      host?.remove();
     }
   });
 });

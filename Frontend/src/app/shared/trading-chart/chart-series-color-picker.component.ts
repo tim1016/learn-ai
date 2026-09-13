@@ -54,7 +54,10 @@ export class ChartSeriesColorPickerComponent {
     this.tokenSelected.emit(token);
   }
 
-  /** Focus is kept on one roving radio; arrows move between options. */
+  /** Focus is kept on one roving radio; arrows move between options.
+   *  Per the radio-group pattern, selection follows focus — emitting before
+   *  the focus move keeps aria-checked/tabindex in sync with the focused
+   *  radio for keyboard users. */
   protected onRadioKeydown(event: KeyboardEvent, index: number): void {
     const count = this.tokens.length;
     let next: number | null = null;
@@ -76,6 +79,7 @@ export class ChartSeriesColorPickerComponent {
     }
     if (next !== null) {
       event.preventDefault();
+      this.select(this.tokens[next]);
       this.radios()[next]?.nativeElement.focus();
     }
   }

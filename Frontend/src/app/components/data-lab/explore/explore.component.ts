@@ -8,26 +8,9 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { firstValueFrom } from 'rxjs';
-
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
-import {
-  IndicatorPickerAdd,
-  IndicatorPickerComponent,
-} from '../../../shared/indicator-picker/indicator-picker.component';
-import {
-  ChartSeriesColorPickerComponent,
-} from '../../../shared/trading-chart/chart-series-color-picker.component';
-import type { ChartSeriesColorToken } from '../../../shared/trading-chart/chart-series-color-tokens';
-import {
-  TickerRangePickerComponent,
-  type TickerRange,
-} from '../../../shared/ticker-range-picker';
+import type { TickerRange } from '../../../shared/ticker-range-picker';
 import { IndicatorCatalogService } from '../../../shared/indicator-catalog/indicator-catalog.service';
-import { NewsService } from '../../../services/news.service';
-import type { NewsArticle } from '../../../services/news.service';
 
 import {
   DataLabChartComponent,
@@ -38,6 +21,13 @@ import type {
 import { QualityModalComponent } from '../quality-modal/quality-modal.component';
 import { IndicatorConfigModalComponent } from '../indicator-config-modal/indicator-config-modal.component';
 import type { ActiveIndicatorEntry } from '../active-indicator-card/active-indicator-card.component';
+import { ExploreScopeDrawerComponent } from './explore-scope-drawer/explore-scope-drawer.component';
+import {
+  ExploreIndicatorControlsComponent,
+} from './explore-indicator-controls/explore-indicator-controls.component';
+import type { IndicatorPickerAdd } from '../../../shared/indicator-picker/indicator-picker.component';
+import type { ChartSeriesColorToken } from '../../../shared/trading-chart/chart-series-color-tokens';
+import { ExploreHeadlinesComponent } from './explore-headlines/explore-headlines.component';
 
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
 import {
@@ -45,10 +35,6 @@ import {
   mapSessionToWire,
   utcMsToIsoDate,
 } from '../data-lab-request-mapper';
-import { windowToNewsQuery, NEWS_MAX_HEADLINES } from './news-window-adapter';
-
-/** Local news-section state beyond the store's coarse newsState. */
-type NewsSectionState = 'idle' | 'loading' | 'ready' | 'stale' | 'error' | 'rate-limited';
 
 /**
  * Data Lab Explore (PRD §7.3).
@@ -62,15 +48,13 @@ type NewsSectionState = 'idle' | 'loading' | 'ready' | 'stale' | 'error' | 'rate
 @Component({
   selector: 'app-data-lab-explore',
   imports: [
-    RouterLink,
     AssetIdentityComponent,
-    TimestampDisplayComponent,
-    IndicatorPickerComponent,
-    ChartSeriesColorPickerComponent,
-    TickerRangePickerComponent,
     DataLabChartComponent,
     QualityModalComponent,
     IndicatorConfigModalComponent,
+    ExploreScopeDrawerComponent,
+    ExploreIndicatorControlsComponent,
+    ExploreHeadlinesComponent,
   ],
   templateUrl: './explore.component.html',
   styleUrls: ['./explore.component.scss'],
@@ -79,7 +63,6 @@ type NewsSectionState = 'idle' | 'loading' | 'ready' | 'stale' | 'error' | 'rate
 export class ExploreComponent {
   readonly store = inject(DataLabWorkspaceStore);
   private readonly catalog = inject(IndicatorCatalogService);
-  private readonly newsService = inject(NewsService);
 
   readonly chartComponent = viewChild<DataLabChartComponent>('chartComponent');
 
@@ -111,21 +94,6 @@ export class ExploreComponent {
   constructor() {
     this.catalog.load();
     this.syncScopeRangeFromDraft();
-
-    // A committed-window change invalidates already-loaded headlines —
-    // mark the section stale instead of silently refetching (PRD §11).
-    effect(
-      () => {
-        this.store.committedWindow();
-        untracked(() => {
-          if (this.newsArticles().length > 0 && this.newsState() === 'ready') {
-            this.newsState.set('stale');
-            this.store.setNewsState('stale');
-          }
-        });
-      },
-      { allowSignalWrites: true },
-    );
 
     // A saved-session chart snapshot restored by the shell renders cached
     // bars with no HTTP call; the chart is marked stale meanwhile.
@@ -415,70 +383,5 @@ export class ExploreComponent {
 
   onModalVisibleChange(open: boolean): void {
     if (!open) this.configuringInstanceId.set(null);
-  }
-
-  // ── Collapsed headlines section (PRD §11) ─────────────────
-  readonly newsExpanded = signal(false);
-  readonly newsState = signal<NewsSectionState>('idle');
-  readonly newsArticles = signal<readonly NewsArticle[]>([]);
-  readonly newsError = signal('');
-
-  readonly newsHeadlines = computed(() => this.newsArticles().slice(0, NEWS_MAX_HEADLINES));
-
-  toggleNews(): void {
-    this.newsExpanded.update((v) => !v);
-    // Lazy: fetch only when expanded (PRD §11 / FR-010).
-    if (this.newsExpanded() && this.newsState() === 'idle') this.fetchNews();
-  }
-
-  refreshNews(): void {
-    this.fetchNews();
-  }
-
-  private async fetchNews(): Promise<void> {
-    const ticker = this.store.committedTicker();
-    const window = this.store.committedWindow();
-    if (!ticker || !window) {
-      this.newsState.set('idle');
-      return;
-    }
-    this.newsState.set('loading');
-    this.store.setNewsState('loading');
-    this.newsError.set('');
-    try {
-      const result = await firstValueFrom(
-        this.newsService.news(windowToNewsQuery(ticker, window)),
-      );
-      // The committed scope may have changed while the request was pending —
-      // a late response for the old scope must not overwrite the section.
-      if (this.isStaleNewsScope(ticker, window)) return;
-      this.newsArticles.set(result.articles);
-      this.newsState.set('ready');
-      this.store.setNewsState('ready');
-    } catch (e: unknown) {
-      if (this.isStaleNewsScope(ticker, window)) return;
-      const status = (e as { status?: number }).status;
-      if (status === 429) {
-        this.newsState.set('rate-limited');
-        this.store.setNewsState('rate-limited');
-        this.newsError.set('News vendor rate limit reached. Try again shortly.');
-      } else {
-        this.newsState.set('error');
-        this.store.setNewsState('error');
-        this.newsError.set(e instanceof Error ? e.message : String(e));
-      }
-    }
-  }
-
-  /** True when the scope a pending news request captured no longer matches
-   *  the current committed scope (ticker or window changed mid-flight). */
-  private isStaleNewsScope(ticker: string, window: { startMsUtc: number; endMsUtc: number }): boolean {
-    const current = this.store.committedWindow();
-    return (
-      this.store.committedTicker() !== ticker ||
-      !current ||
-      current.startMsUtc !== window.startMsUtc ||
-      current.endMsUtc !== window.endMsUtc
-    );
   }
 }

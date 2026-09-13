@@ -1,0 +1,55 @@
+<section class="explore__news" aria-label="Headlines">
+  <h3 class="explore__news-head">
+    <button type="button" class="explore__news-toggle" (click)="toggleNews()" [attr.aria-expanded]="newsExpanded()">
+      Headlines for {{ ticker() || '—' }}
+    </button>
+    @if (newsExpanded()) {
+      <button type="button" (click)="refreshNews()" [disabled]="!hasCommittedScope()">Refresh</button>
+    }
+  </h3>
+  @if (newsExpanded()) {
+    @switch (newsState()) {
+      @case ('loading') {
+        <p class="explore__muted" role="status">Loading headlines…</p>
+      }
+      @case ('error') {
+        <p class="explore__news-error" role="alert">Could not load headlines: {{ newsError() }}</p>
+      }
+      @case ('rate-limited') {
+        <p class="explore__news-error" role="alert">{{ newsError() }}</p>
+      }
+      @case ('stale') {
+        <p class="explore__muted" role="status">Headlines out of date — refresh to reload.</p>
+      }
+      @default {
+        @if (newsHeadlines().length === 0) {
+          <p class="explore__muted">No headlines in this window.</p>
+        } @else {
+          <ul class="explore__news-list">
+            @for (article of newsHeadlines(); track article.id ?? article.title) {
+              <li class="explore__news-item">
+                @if (article.article_url) {
+                  <a [href]="article.article_url" target="_blank" rel="noopener">{{ article.title }}</a>
+                } @else {
+                  <span>{{ article.title }}</span>
+                }
+                <span class="explore__muted">
+                  <app-timestamp-display [value]="article.published_utc_ms ?? null" mode="local" />
+                  @if (article.publisher?.name) {
+                    · {{ article.publisher.name }}
+                  }
+                  @for (insight of article.insights ?? []; track insight.ticker) {
+                    @if (insight.ticker === ticker() && insight.sentiment) {
+                      · vendor sentiment: {{ insight.sentiment }} (Polygon-asserted)
+                    }
+                  }
+                </span>
+              </li>
+            }
+          </ul>
+        }
+      }
+    }
+    <a routerLink="/research-lab/market/news">View all</a>
+  }
+</section>

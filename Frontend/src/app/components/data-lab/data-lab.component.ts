@@ -241,9 +241,9 @@ export class DataLabComponent {
 
     const resolution = resolveLegacyDataLabUrl(url);
     this.applyLegacyScope(resolution.params);
-    if (resolution.warnings.length > 0) {
-      this.ingressWarnings.set(resolution.warnings);
-    }
+    // Set unconditionally: a valid legacy URL must clear warnings left by an
+    // earlier invalid one, not layer over them.
+    this.ingressWarnings.set(resolution.warnings);
     this.router.navigate([resolution.route], {
       queryParams: resolution.params,
       replaceUrl: true,

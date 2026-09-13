@@ -309,4 +309,58 @@ describe('IndicatorPickerComponent search (opt-in)', () => {
     expect(h.el.querySelector<HTMLInputElement>('.ip-search-input')?.value).toBe('');
     expect(textOf(h.el, '.ip-count')).toContain('2 of 6'); // facet survived
   });
+
+  it('keyboard navigation only reaches rendered rows — closed categories are skipped', () => {
+    const h = setupSearchable();
+    // Open trend and volatility but leave momentum closed. Flat order of
+    // RENDERED rows: ema, sma (trend), bbands, atr (volatility) — rsi/macd
+    // are invisible and must never take the highlight.
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="trend"] .ip-cat-head'));
+    clickAndFlush(h.fixture, h.el.querySelector<HTMLButtonElement>('.ip-cat[data-cat="volatility"] .ip-cat-head'));
+    const activeRow = () => h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('sma');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('bbands');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('atr');
+    pressKey(h, 'ArrowDown'); // wraps within the rendered rows only
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+  });
+
+  it('search opens matching categories so every keyboard option is rendered', () => {
+    const h = setupSearchable();
+    typeSearch(h, 'length'); // matches ema, sma, rsi, bbands, atr — no cats open
+    const activeRow = () => h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    pressKey(h, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-name')).toBe('ema');
+    pressKey(h, 'ArrowDown');
+    pressKey(h, 'ArrowDown');
+    // rsi sits in momentum, which no one opened manually — search opened it.
+    expect(activeRow()?.getAttribute('data-name')).toBe('rsi');
+  });
+
+  it('exposes the combobox/listbox relationship — the input announces the Enter target', () => {
+    const h = setupSearchable();
+    const input = h.el.querySelector<HTMLInputElement>('.ip-search-input');
+    if (!input) throw new Error('search input not rendered');
+    expect(input.getAttribute('role')).toBe('combobox');
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    expect(input.getAttribute('aria-controls')).toBe('ip-rows');
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+
+    typeSearch(h, 'length'); // 5 matches — matching categories render open
+    expect(input.getAttribute('aria-expanded')).toBe('true');
+    pressKey(h, 'ArrowDown');
+    const row = h.el.querySelector<HTMLElement>('.ip-row--active-option');
+    expect(row?.getAttribute('role')).toBe('option');
+    expect(row?.id).toBe('ip-opt-ema');
+    expect(row?.getAttribute('aria-selected')).toBe('true');
+    expect(input.getAttribute('aria-activedescendant')).toBe('ip-opt-ema');
+    // Non-active rows are unselected options.
+    const unselected = h.el.querySelector<HTMLElement>('.ip-row:not(.ip-row--active-option)');
+    expect(unselected?.getAttribute('aria-selected')).toBe('false');
+  });
 });

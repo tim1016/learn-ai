@@ -1,0 +1,49 @@
+// Explore edit-scope drawer (PRD §7.3).
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.explore__drawer {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+}
+
+.explore__drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+}
+
+.explore__drawer-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.35rem 0.9rem;
+    border: 1px solid $border-light;
+    border-radius: 6px;
+  }
+}
+
+.explore__primary {
+  background: $accent;
+  color: var(--text-on-accent);
+  border-color: $accent;
+  font-weight: 600;
+}

@@ -20,6 +20,17 @@
   overflow-wrap: anywhere;
 }
 
+.export__stale {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: $warn;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
 .export__section {
   min-width: 0;
   margin-bottom: 1rem;

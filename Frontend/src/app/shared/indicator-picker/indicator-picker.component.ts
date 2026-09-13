@@ -144,13 +144,39 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
 
   protected readonly hasSearch = computed(() => this.searchQuery().length > 0);
 
-  /** The keyboard-highlighted option in the flat result list, or null. */
+  /** Indicators whose rows the template actually renders — visible indicators
+   *  in categories that are open. While a search is active, categories with
+   *  matches render open automatically, so search results are always
+   *  keyboard-reachable and visibly highlighted. Arrow navigation and Enter
+   *  operate on THIS list, never the unfiltered visible set: highlighting (or
+   *  adding) an indicator in a collapsed category would be invisible. */
+  protected readonly renderedIndicators = computed<DecoratedIndicator[]>(() => {
+    const open = this.openCats();
+    if (this.hasSearch()) return this.visibleIndicators();
+    return this.visibleIndicators().filter((i) => open.has(i.category));
+  });
+
+  /** The keyboard-highlighted option in the rendered result list, or null. */
   protected readonly activeOption = computed<DecoratedIndicator | null>(() => {
     const idx = this.activeIndex();
     if (idx === null) return null;
-    const results = this.visibleIndicators();
+    const results = this.renderedIndicators();
     return idx >= 0 && idx < results.length ? results[idx] : null;
   });
+
+  /** Whether any option rows are currently rendered (combobox aria-expanded). */
+  protected readonly hasRenderedRows = computed(() => this.renderedIndicators().length > 0);
+
+  /** Stable DOM id for a rendered option row (combobox listbox ownership). */
+  protected optionIdFor(ind: DecoratedIndicator): string {
+    return `ip-opt-${ind.name.replace(/\s+/g, '_')}`;
+  }
+
+  /** id of the row Enter will activate, for the input's aria-activedescendant. */
+  protected activeDescendantId(): string | null {
+    const option = this.activeOption();
+    return option ? this.optionIdFor(option) : null;
+  }
 
   /** Announcement text for the polite live region (PRD §9). */
   protected readonly searchAnnouncement = computed(() =>
@@ -184,9 +210,10 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
       const kind = el.dataset['kind'];
       if (kind) drawPreview(el, kind as ReturnType<typeof previewKindFor>);
     }
-    // Keep the keyboard highlight inside the (possibly filtered) result list.
+    // Keep the keyboard highlight inside the RENDERED result list (open
+    // categories only) — the list shrinks when a category collapses.
     const idx = this.activeIndex();
-    const count = this.visibleIndicators().length;
+    const count = this.renderedIndicators().length;
     if (idx !== null && idx >= count) {
       this.activeIndex.set(count > 0 ? count - 1 : null);
     }
@@ -212,7 +239,7 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
   }
 
   protected onSearchKeydown(event: KeyboardEvent): void {
-    const count = this.visibleIndicators().length;
+    const count = this.renderedIndicators().length;
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp': {

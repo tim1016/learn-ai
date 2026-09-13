@@ -179,6 +179,10 @@ export class DataLabWorkspaceStore {
   private readonly _lastChartRequestSignature = signal<string | null>(null);
   private readonly _chartStale = signal(false);
   private readonly _datasetPlanReceipt = signal<Readonly<Record<string, unknown>> | null>(null);
+  /** Serialized request payload the current receipt describes. A receipt whose
+   *  signature no longer matches the live recipe is stale and must not be
+   *  presented as current plan data (PRD §7.4 review finding). */
+  private readonly _datasetPlanSignature = signal<string | null>(null);
   private readonly _newsState = signal<DataLabNewsState>('idle');
   private readonly _generationRun = signal<DataLabGenerationRunRef | null>(null);
   /** Chart snapshot restored from a saved session — a reference the shell
@@ -201,6 +205,7 @@ export class DataLabWorkspaceStore {
   readonly lastChartRequestSignature = this._lastChartRequestSignature.asReadonly();
   readonly chartStale = this._chartStale.asReadonly();
   readonly datasetPlanReceipt = this._datasetPlanReceipt.asReadonly();
+  readonly datasetPlanReceiptSignature = this._datasetPlanSignature.asReadonly();
   readonly newsState = this._newsState.asReadonly();
   readonly generationRun = this._generationRun.asReadonly();
   readonly restoredChartSnapshot = this._restoredChartSnapshot.asReadonly();
@@ -364,8 +369,12 @@ export class DataLabWorkspaceStore {
     this._savedSession.set(ref ? { ...ref } : null);
   }
 
-  setDatasetPlanReceipt(receipt: Readonly<Record<string, unknown>> | null): void {
+  setDatasetPlanReceipt(
+    receipt: Readonly<Record<string, unknown>> | null,
+    planSignature: string | null = null,
+  ): void {
     this._datasetPlanReceipt.set(receipt ? { ...receipt } : null);
+    this._datasetPlanSignature.set(receipt ? planSignature : null);
   }
 
   setNewsState(state: DataLabNewsState): void {

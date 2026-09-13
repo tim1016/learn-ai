@@ -139,4 +139,33 @@ describe('ExportComponent', () => {
     const payload = runSession.start.mock.calls[0][0] as Record<string, unknown>;
     expect(payload['adjust_for_dividends']).toBe(true);
   });
+
+  it('marks the plan receipt stale when the recipe changes after the plan ran', async () => {
+    const { http, store, fixture } = await renderExport();
+    await userEvent.click(screen.getByRole('button', { name: /Preview columns/ }));
+    const plan = await waitFor(() =>
+      http.expectOne(`${environment.pythonServiceUrl}/api/dataset/plan`),
+    );
+    plan.flush({ session_count: 20, output_column_count: 7 });
+    await waitFor(() => expect(store.datasetPlanReceipt()).not.toBeNull());
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+
+    // Any recipe mutation (indicator set here) invalidates the receipt: the
+    // section must be labeled stale instead of presenting old counts as
+    // current plan data.
+    store.addIndicator('atr', { length: 14 });
+    fixture.detectChanges();
+    expect(screen.getAllByText(/out of date/i).length).toBeGreaterThan(0);
+
+    // Re-running the plan for the current recipe clears the staleness.
+    await userEvent.click(screen.getByRole('button', { name: /Preview columns/ }));
+    const replan = await waitFor(() =>
+      http.expectOne(`${environment.pythonServiceUrl}/api/dataset/plan`),
+    );
+    replan.flush({ session_count: 20, output_column_count: 9 });
+    await waitFor(() =>
+      expect(screen.queryByText(/out of date/i)).toBeNull(),
+    );
+    http.verify();
+  });
 });

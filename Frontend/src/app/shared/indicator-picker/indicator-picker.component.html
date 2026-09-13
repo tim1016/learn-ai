@@ -14,8 +14,12 @@
     <input #searchInput
            class="ip-search-input"
            type="search"
+           role="combobox"
            placeholder="Search indicators…"
            aria-label="Search indicators"
+           [attr.aria-expanded]="hasRenderedRows()"
+           aria-controls="ip-rows"
+           [attr.aria-activedescendant]="activeDescendantId()"
            [value]="searchQuery()"
            (input)="onSearchInput($event)"
            (keydown)="onSearchKeydown($event)" />
@@ -82,7 +86,7 @@
   </div>
 
   <!-- Categories / rows -->
-  <div class="ip-cats">
+  <div class="ip-cats" id="ip-rows">
     @if (totalVisible() === 0) {
       <div class="ip-empty">
         <strong>No indicators match these filters</strong>
@@ -96,7 +100,9 @@
       </div>
     } @else {
       @for (group of groupedView(); track group.name) {
-        @let open = isCatOpen(group.name);
+        <!-- Categories with search matches render open so every keyboard
+             option in renderedIndicators() is visibly highlighted. -->
+        @let open = isCatOpen(group.name) || (hasSearch() && group.indicators.length > 0);
         @let staged = stagedInCat(group.name);
         <div class="ip-cat"
              [attr.data-cat]="group.name"
@@ -118,12 +124,17 @@
           </button>
 
           @if (open) {
-            <div class="ip-cat-list">
+            <div class="ip-cat-list"
+                 role="listbox"
+                 [attr.aria-label]="group.name + ' indicators'">
               @for (ind of group.indicators; track ind.name) {
                 @let active = activeCountFor(ind.name);
                 @let isHovered = hoveredName() === ind.name;
                 @let isActiveOption = activeOption()?.name === ind.name;
                 <div class="ip-row"
+                     role="option"
+                     [id]="optionIdFor(ind)"
+                     [attr.aria-selected]="isActiveOption ? 'true' : 'false'"
                      [class.ip-row--active-option]="isActiveOption"
                      [attr.data-name]="ind.name"
                      [attr.data-active]="active > 0"
