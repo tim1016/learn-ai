@@ -1,9 +1,37 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AlpacaDeskAccountChoice, AlpacaDeskState } from '../../../api/alpaca.types';
+import type {
+  AlpacaDeskAccountChoice,
+  AlpacaDeskState,
+  BrokerAccountSnapshot,
+} from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
+
+function snapshot(
+  overrides: Partial<BrokerAccountSnapshot> = {},
+): BrokerAccountSnapshot {
+  return {
+    broker: 'alpaca',
+    account_id: 'PA-123',
+    account_mode: 'paper',
+    account_status: 'ACTIVE',
+    currency: 'USD',
+    cash: 1_000,
+    equity: 1_000,
+    buying_power: 2_000,
+    portfolio_value: 1_000,
+    long_market_value: 0,
+    short_market_value: 0,
+    pattern_day_trader: false,
+    trading_blocked: false,
+    account_blocked: false,
+    created_at_ms: null,
+    observed_at_ms: 1,
+    ...overrides,
+  };
+}
 
 function choice(
   overrides: Partial<AlpacaDeskAccountChoice> = {},
@@ -217,6 +245,96 @@ describe('AlpacaDeskAccountStateComponent', () => {
       on: { reviewRequested },
       providers: [{ provide: BrokersService, useValue: brokersService() }],
     });
+
+    const action = screen.getByRole('button', { name: current.action.label });
+    expect(action).toHaveProperty('disabled', true);
+    await fireEvent.click(action);
+    expect(reviewRequested).not.toHaveBeenCalled();
+  });
+
+  it('shows the effective identity from effective_choice, never from staged state', async () => {
+    const effective = choice();
+    const staged = choice({
+      profile_id: 'live-profile',
+      revision: 2,
+      profile_label: 'Alpaca Live',
+      endpoint_mode: 'live',
+      badge_label: 'Live',
+      is_staged: true,
+      is_effective: false,
+    });
+    const current = state({
+      activation_state: 'staged_not_applied',
+      effective_choice: effective,
+      staged_choice: staged,
+      action: { kind: 'review_staged_configuration', label: 'Review & apply Alpaca Live', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: {
+        state: current,
+        accountAvailable: true,
+        accountFailed: false,
+        snapshot: snapshot(),
+      },
+      providers: [{ provide: BrokersService, useValue: brokersService() }],
+    });
+
+    const strip = screen.getByLabelText('Effective broker identity');
+    expect(within(strip).getByText(effective.profile_label)).toBeTruthy();
+    expect(within(strip).getByText('Revision 3')).toBeTruthy();
+    expect(within(strip).getByText(effective.account_label)).toBeTruthy();
+    expect(within(strip).getByText('Paper')).toBeTruthy();
+    expect(within(strip).queryByText('Alpaca Live')).toBeNull();
+    expect(within(strip).queryByText('Live')).toBeNull();
+  });
+
+  it('falls back to the observed snapshot without fabricating a revision', async () => {
+    const current = state({
+      activation_state: 'staged_not_applied',
+      effective_choice: null,
+      staged_choice: choice({ is_staged: true, is_effective: false }),
+      action: { kind: 'review_staged_configuration', label: 'Review pending change', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: {
+        state: current,
+        accountAvailable: true,
+        accountFailed: false,
+        snapshot: snapshot({ account_mode: 'live', account_id: 'LIVE-9' }),
+      },
+      providers: [{ provide: BrokersService, useValue: brokersService() }],
+    });
+
+    const strip = screen.getByLabelText('Effective broker identity');
+    expect(within(strip).getByText('LIVE-9')).toBeTruthy();
+    expect(within(strip).getByText('Live')).toBeTruthy();
+    expect(within(strip).queryByText(/^Revision/)).toBeNull();
+    expect(within(strip).getByText(/no revision yet/)).toBeTruthy();
+  });
+
+  it('warns and gates identity-dependent actions when account ids disagree', async () => {
+    const reviewRequested = vi.fn();
+    const effective = choice({ account_id: 'PA-DECLARED' });
+    const current = state({
+      activation_state: 'staged_not_applied',
+      effective_choice: effective,
+      staged_choice: choice({ is_staged: true, is_effective: false }),
+      action: { kind: 'review_staged_configuration', label: 'Review pending change', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: {
+        state: current,
+        accountAvailable: true,
+        accountFailed: false,
+        snapshot: snapshot({ account_id: 'PA-OBSERVED' }),
+      },
+      on: { reviewRequested },
+      providers: [{ provide: BrokersService, useValue: brokersService() }],
+    });
+
+    const warning = screen.getByRole('alert');
+    expect(warning.textContent).toContain('PA-DECLARED');
+    expect(warning.textContent).toContain('PA-OBSERVED');
 
     const action = screen.getByRole('button', { name: current.action.label });
     expect(action).toHaveProperty('disabled', true);

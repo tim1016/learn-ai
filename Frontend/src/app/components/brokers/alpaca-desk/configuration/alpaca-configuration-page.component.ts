@@ -24,6 +24,7 @@ import {
 } from './broker-configuration-refusal';
 import { BrokerConfigurationService, type RevisionContent } from './broker-configuration.service';
 import { ConfigurationHandoffScriptComponent } from './configuration-handoff-script.component';
+import { ConfigurationLifecycleTrackerComponent } from './configuration-lifecycle-tracker.component';
 import { ConfigurationProfileCreateComponent } from './configuration-profile-create.component';
 import {
   ConfigurationProfileDetailComponent,
@@ -90,6 +91,7 @@ function sameRevisionRef(a: RevisionRef | undefined, b: RevisionRef | undefined)
     ConfigurationProfileDetailComponent,
     ConfigurationProfileListComponent,
     ConfigurationHandoffScriptComponent,
+    ConfigurationLifecycleTrackerComponent,
     ConfigurationRefusalComponent,
     ConfigurationStatusPanelComponent,
     ConfigurationSwitchGuideComponent,
@@ -147,7 +149,7 @@ export class AlpacaConfigurationPageComponent {
     loader: () => this.service.listNicknames(),
     defaultValue: [],
   });
-  private readonly deskState = resource({ loader: () => this.service.readDeskState() });
+  protected readonly deskState = resource({ loader: () => this.service.readDeskState() });
   protected readonly selection = resource({ loader: () => this.service.readSelection() });
   protected readonly detail = resource({
     params: () => this.selectedProfileId() ?? undefined,
@@ -207,6 +209,23 @@ export class AlpacaConfigurationPageComponent {
   protected readonly currentSelection = computed(() =>
     this.selection.hasValue() ? this.selection.value() : null,
   );
+
+  /**
+   * The desk lifecycle and the adopted selection disagree on the selection
+   * generation: another writer moved the fence between the two reads. Every
+   * write (Stage and Apply) stays disabled until a newly adopted response and
+   * a fresh desk state agree again — the tracker shows the refreshing note in
+   * the meantime.
+   */
+  protected readonly writesBlocked = computed(() => {
+    const state = this.deskState.hasValue() ? this.deskState.value() : null;
+    const selection = this.currentSelection();
+    return state !== null && selection !== null
+      && state.selection_generation !== selection.selection_generation;
+  });
+
+  /** One disable signal for every write surface: busy, or generations disagree. */
+  protected readonly writesDisabled = computed(() => this.busy() || this.writesBlocked());
   protected readonly reviewContext = computed(() => {
     const request = this.requestedReview();
     const revisionNumber = this.reviewRevision();

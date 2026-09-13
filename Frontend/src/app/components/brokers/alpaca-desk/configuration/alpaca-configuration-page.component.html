@@ -45,13 +45,17 @@
       <button type="button" (click)="reloadAll()">Retry</button>
     </p>
   } @else if (currentSelection(); as current) {
+    <app-configuration-lifecycle-tracker
+      [selection]="current"
+      [deskState]="deskState.hasValue() ? deskState.value() : null"
+    />
     <app-configuration-status-panel
       [selection]="current"
       [profiles]="profiles.hasValue() ? profiles.value() : []"
       [effectiveNickname]="effectiveNickname()"
       [stagedEndpointMode]="stagedEndpointMode()"
       [effectiveEndpointMode]="effectiveEndpointMode()"
-      [busy]="busy()"
+      [busy]="writesDisabled()"
       (applyRequested)="applySelection()"
     />
   } @else {
@@ -87,7 +91,7 @@
         [profiles]="profiles.value()"
         [selection]="currentSelection()"
         [selectedProfileId]="selectedProfileId()"
-        [busy]="busy()"
+        [busy]="writesDisabled()"
         (opened)="openProfile($event)"
         (staged)="stageProfile($event)"
         (archiveToggled)="setArchived($event)"
@@ -121,7 +125,7 @@
       [observed]="observedAccounts()"
       [nickname]="detailNickname()"
       [reviewRevision]="reviewRevision()"
-      [busy]="busy()"
+      [busy]="writesDisabled()"
       (renamed)="renameProfile($event)"
       (cloned)="cloneProfile($event)"
       (revisionSaved)="saveRevision($event)"

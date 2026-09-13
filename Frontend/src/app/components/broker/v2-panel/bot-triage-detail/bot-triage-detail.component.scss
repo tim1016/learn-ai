@@ -163,32 +163,31 @@
   gap: var(--space-2);
 }
 
-.triage-lens {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-}
+// The shared tab widget, compacted to the lens bar's dense row.
+.triage-lensbar__tabs {
+  ::ng-deep .lens-tabs {
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
 
-.triage-lens__tab {
-  padding: 0.2rem 0.75rem;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-subtle);
-  font: inherit;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  cursor: pointer;
+  ::ng-deep .lens-tabs__tab {
+    min-height: auto;
+    padding: 0.2rem 0.75rem;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
 
-  &:hover { color: var(--text-primary); }
-  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    &:hover { background: transparent; color: var(--text-primary); }
 
-  &--active {
-    background: var(--border-strong);
-    color: var(--text-primary);
+    &--active,
+    &--active:hover {
+      background: var(--border-strong);
+      color: var(--text-primary);
+    }
   }
 }
 

@@ -195,6 +195,9 @@ class FakeConfigurationService {
       staged_revision: rev,
       selection_generation: generation + 1,
     };
+    // The backend reports the desk projection from the same generation as the
+    // selection it just wrote; the fake mirrors that so the two reads agree.
+    this.desk = { ...this.desk, selection_generation: generation + 1 };
     return this.current;
   });
 
@@ -206,6 +209,7 @@ class FakeConfigurationService {
       apply_requested_at_ms: 1_757_000_500_000,
       selection_generation: generation + 1,
     };
+    this.desk = { ...this.desk, selection_generation: generation + 1 };
     return this.current;
   });
 }
@@ -467,6 +471,9 @@ describe('AlpacaConfigurationPageComponent', () => {
       last_apply_outcome: 'refused',
       last_apply_refusal_reason: 'The prior account has outstanding obligations.',
     });
+    // Same generation as the selection read, or the page's stale-generation
+    // gating correctly disables Stage.
+    service.desk = deskState({ selection_generation: 8 });
     if (conflict) {
       service.stageRefusal = new HttpErrorResponse({
         status: 409,
@@ -518,6 +525,35 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.getByText('The selection changed while this page was open.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Reload configuration' })).toBeTruthy();
     expect(service.stageSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Stage and Apply while the desk lifecycle and selection generations disagree', async () => {
+    const service = new FakeConfigurationService();
+    service.profiles.push(profile({ profile_id: 'profile-1' }));
+    service.revisions.push(revision({ profile_id: 'profile-1' }));
+    service.current = selection({
+      staged_profile_id: 'profile-1',
+      staged_revision: 1,
+      selection_generation: 4,
+    });
+    // The desk projection was read before another writer moved the fence.
+    service.readDeskState = vi.fn(async () => ({
+      ...service.desk,
+      lifecycle: [
+        { key: 'effective_configuration', label: 'Paper is active', status: 'complete', status_label: 'Complete' },
+        { key: 'selected_configuration', label: 'Select configuration', status: 'current', status_label: 'Current step' },
+        { key: 'worker_handoff', label: 'Restart worker', status: 'pending', status_label: 'Pending' },
+      ],
+      selection_generation: 3,
+    }));
+    await renderPage(service);
+
+    expect(await screen.findByText('Refreshing / state unknown')).toBeTruthy();
+    expect(screen.queryByText('Restart worker')).toBeNull();
+    expect((await screen.findByRole('button', { name: 'Stage' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Apply staged revision' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(service.stageSelection).not.toHaveBeenCalled();
+    expect(service.applySelection).not.toHaveBeenCalled();
   });
 
   it('renames durably rather than only in the row it was typed in', async () => {

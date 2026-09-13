@@ -4,6 +4,28 @@
     (reviewRequested)="reviewRequested.emit($event)"
   />
 } @else {
+  @if (identity(); as effective) {
+    <section class="identity-strip" aria-label="Effective broker identity">
+      <span class="identity-strip__eyebrow">Effective account</span>
+      <strong class="identity-strip__profile">{{ effective.profileLabel }}</strong>
+      @if (effective.revision !== null) {
+        <span class="identity-strip__revision">Revision {{ effective.revision }}</span>
+      }
+      <span class="identity-strip__account">{{ effective.accountLabel }}</span>
+      <span
+        class="identity-strip__mode"
+        [class.identity-strip__mode--live]="effective.endpointMode === 'live'"
+      >{{ effective.endpointMode | receiptLabel }}</span>
+      @if (effective.source === 'snapshot-fallback') {
+        <small class="identity-strip__observed">observed · no revision yet</small>
+      }
+    </section>
+  }
+
+  @if (accountIdMismatch(); as mismatch) {
+    <p class="identity-mismatch" role="alert">{{ mismatch }}</p>
+  }
+
   @if (showConnectivityContext() && state(); as current) {
     <section class="selection-change selection-change--unavailable" aria-live="polite">
       <div>
@@ -18,7 +40,7 @@
       @if (current.activation_state === 'effective_selection') {
         <button
           type="button"
-          [disabled]="!current.action.enabled"
+          [disabled]="!actionEnabled(current)"
           (click)="requestReview(current, actionTarget(current))"
         >
           {{ current.action.label }}
@@ -39,7 +61,7 @@
     </div>
     <button
       type="button"
-      [disabled]="!current.action.enabled"
+      [disabled]="!actionEnabled(current)"
       (click)="requestReview(current, current.staged_choice)"
     >
       {{ current.action.label }}

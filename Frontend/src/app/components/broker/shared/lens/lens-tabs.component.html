@@ -1,0 +1,17 @@
+<div class="lens-tabs" role="tablist" [attr.aria-label]="ariaLabel()">
+  @for (item of lenses; track item) {
+    <button
+      #tab
+      [id]="tabId(item)"
+      type="button"
+      role="tab"
+      class="lens-tabs__tab"
+      [class.lens-tabs__tab--active]="isActive(item)"
+      [attr.aria-selected]="isActive(item)"
+      [attr.tabindex]="isActive(item) ? 0 : -1"
+      [attr.aria-controls]="controls(item)"
+      (click)="select(item)"
+      (keydown)="onKeydown($event)"
+    >{{ label(item) }}</button>
+  }
+</div>

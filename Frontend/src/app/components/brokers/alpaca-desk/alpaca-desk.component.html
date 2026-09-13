@@ -19,6 +19,7 @@
     [state]="deskState()"
     [accountAvailable]="operatingDeskVisible()"
     [accountFailed]="accountFailed()"
+    [snapshot]="accountSnapshot()"
     (reviewRequested)="reviewAccount($event)"
   />
 
@@ -33,32 +34,12 @@
 
     <app-alpaca-custody-resolution />
 
-    <div class="lens-toggle" role="tablist" aria-label="Desk perspective">
-      <button
-        id="alpaca-trader-tab"
-        data-lens="trader"
-        type="button"
-        role="tab"
-        [class.lens-toggle__tab--active]="lens() === 'trader'"
-        [attr.aria-selected]="lens() === 'trader'"
-        [attr.tabindex]="lens() === 'trader' ? 0 : -1"
-        aria-controls="alpaca-trader-panel"
-        (click)="selectLens('trader')"
-        (keydown)="onLensKeydown($event)"
-      >Trader</button>
-      <button
-        id="alpaca-operator-tab"
-        data-lens="operator"
-        type="button"
-        role="tab"
-        [class.lens-toggle__tab--active]="lens() === 'operator'"
-        [attr.aria-selected]="lens() === 'operator'"
-        [attr.tabindex]="lens() === 'operator' ? 0 : -1"
-        aria-controls="alpaca-operator-panel"
-        (click)="selectLens('operator')"
-        (keydown)="onLensKeydown($event)"
-      >Operator</button>
-    </div>
+    <app-lens-tabs
+      idPrefix="alpaca"
+      ariaLabel="Desk perspective"
+      [lens]="lens()"
+      (lensChange)="selectLens($event)"
+    />
 
     @if (lens() === 'trader') {
       <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
