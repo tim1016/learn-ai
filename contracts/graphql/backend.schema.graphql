@@ -120,12 +120,12 @@ type DataLabSession {
   session: String!
   forwardFill: Boolean!
   adjusted: Boolean!
-  entriesJson: String!
-  chartSnapshotJson: String
   windowStartMsUtc: Long
   windowEndMsUtc: Long
   createdMsUtc: Long
   updatedMsUtc: Long
+  entriesJson: String!
+  chartSnapshotJson: String
 }
 
 type DataLabSessionResult {
@@ -1579,12 +1579,12 @@ input DataLabSessionFilterInput {
   session: StringOperationFilterInput
   forwardFill: BooleanOperationFilterInput
   adjusted: BooleanOperationFilterInput
-  entriesJson: StringOperationFilterInput
-  chartSnapshotJson: StringOperationFilterInput
   windowStartMsUtc: LongOperationFilterInput
   windowEndMsUtc: LongOperationFilterInput
   createdMsUtc: LongOperationFilterInput
   updatedMsUtc: LongOperationFilterInput
+  entriesJson: StringOperationFilterInput
+  chartSnapshotJson: StringOperationFilterInput
 }
 
 input DataLabSessionInput {
@@ -1595,12 +1595,12 @@ input DataLabSessionInput {
   session: String!
   forwardFill: Boolean!
   adjusted: Boolean!
-  entriesJson: String!
-  chartSnapshotJson: String
   windowStartMsUtc: Long
   windowEndMsUtc: Long
   createdMsUtc: Long
   updatedMsUtc: Long
+  entriesJson: String!
+  chartSnapshotJson: String
 }
 
 input DataLabSessionSortInput {
@@ -1614,12 +1614,12 @@ input DataLabSessionSortInput {
   session: SortEnumType @cost(weight: "10")
   forwardFill: SortEnumType @cost(weight: "10")
   adjusted: SortEnumType @cost(weight: "10")
-  entriesJson: SortEnumType @cost(weight: "10")
-  chartSnapshotJson: SortEnumType @cost(weight: "10")
   windowStartMsUtc: SortEnumType @cost(weight: "10")
   windowEndMsUtc: SortEnumType @cost(weight: "10")
   createdMsUtc: SortEnumType @cost(weight: "10")
   updatedMsUtc: SortEnumType @cost(weight: "10")
+  entriesJson: SortEnumType @cost(weight: "10")
+  chartSnapshotJson: SortEnumType @cost(weight: "10")
 }
 
 input DateRangeInput {
