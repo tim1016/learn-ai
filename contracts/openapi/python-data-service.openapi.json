@@ -43316,6 +43316,54 @@
         ]
       }
     },
+    "/api/broker-clerks": {
+      "get": {
+        "description": "Every lane across production providers, from the registry projection.",
+        "operationId": "list_broker_clerks_api_broker_clerks_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Broker-neutral clerk fleet directory (\u00a710.1)",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/broker/bars-5s/snapshot": {
       "get": {
         "description": "Return the live raw 5-sec OHLCV buffer for ``symbol``.\n\nMirror of ``/bars/snapshot`` for the high-resolution chart. It owns an\nindependent 5-second buffer, but same-symbol 5-second and 1-minute\nconsumers multiplex onto one public-client ``reqRealTimeBars`` request.\nEach bar's ``end_ms - start_ms`` window is 5 000.",
@@ -49461,6 +49509,4895 @@
         "summary": "Get Clerk Status",
         "tags": [
           "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks": {
+      "get": {
+        "description": "The same projection filtered to one provider.",
+        "operationId": "list_broker_clerks_for_broker_api_brokers__broker__clerks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One broker's clerk lanes (\u00a710.2)",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}": {
+      "get": {
+        "description": "Lifecycle, session, capabilities and provider summary for one lane.",
+        "operationId": "describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One clerk lane's directory entry",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/account": {
+      "get": {
+        "description": "Fleet-routed GET /account (account_read).",
+        "operationId": "fleet_account_read_api_brokers__broker__clerks__clerk_id__account_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Account Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots (bot_action).",
+        "operationId": "fleet_bot_create_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Create",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/admission": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/admission (deploy).",
+        "operationId": "fleet_bot_admission_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_admission_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Admission Plan",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/catalog (bot_panel_read).",
+        "operationId": "fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bots Catalog Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-archive": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/cohort-archive (bot_panel_read).",
+        "operationId": "fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Cohort Archive Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/cohort-archive (bot_action).",
+        "operationId": "fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Cohort Archive",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-flatten": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/cohort-flatten (bot_panel_read).",
+        "operationId": "fleet_bot_cohort_flatten_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Cohort Flatten Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/cohort-flatten (bot_action).",
+        "operationId": "fleet_bot_cohort_flatten_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Cohort Flatten",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/deploy": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/deploy (deploy).",
+        "operationId": "fleet_bots_deploy_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bots Deploy Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/deploy (deploy).",
+        "operationId": "fleet_bots_deploy_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bots Deploy Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions (bot_action).",
+        "operationId": "fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Panel Action",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).",
+        "operationId": "fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Authority Facts",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/history": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/history (bot_panel_read).",
+        "operationId": "fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Chart History",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/live": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/live (bot_panel_read).",
+        "operationId": "fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Chart Live",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/evidence": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/evidence (bot_panel_read).",
+        "operationId": "fleet_bot_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Evidence",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/live-snapshot": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/live-snapshot (bot_panel_read).",
+        "operationId": "fleet_bot_live_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Live Snapshot",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/live-stream": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/live-stream (bot_panel_read).",
+        "operationId": "fleet_bot_live_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Live Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/panel": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/panel (bot_panel_read).",
+        "operationId": "fleet_bot_panel_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__panel_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Panel Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm (custody_command).",
+        "operationId": "fleet_custody_historical_recovery_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Historical Recovery Confirm",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare (custody_command).",
+        "operationId": "fleet_custody_historical_recovery_prepare_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Historical Recovery Prepare",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/check (custody_command).",
+        "operationId": "fleet_custody_bot_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Recovery Check",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute (custody_command).",
+        "operationId": "fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Recovery Execute",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).",
+        "operationId": "fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Runs Start",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/stop": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).",
+        "operationId": "fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Runs Stop",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/snapshot": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/snapshot (custody_read).",
+        "operationId": "fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Snapshot",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/timeline": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/timeline (custody_read).",
+        "operationId": "fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Timeline",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/commands/{command_id}": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/commands/{command_id} (custody_read).",
+        "operationId": "fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Command Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/pnl-attribution": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/pnl-attribution (custody_read).",
+        "operationId": "fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Pnl Attribution",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/reconcile": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/reconcile (custody_command).",
+        "operationId": "fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Reconcile",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/recovery-actions/check": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/recovery-actions/check (custody_command).",
+        "operationId": "fleet_custody_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Recovery Check",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/recovery-actions/execute": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/recovery-actions/execute (custody_command).",
+        "operationId": "fleet_custody_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Recovery Execute",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/snapshot": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/snapshot (custody_read).",
+        "operationId": "fleet_custody_account_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Account Snapshot",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/timeline": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/timeline (custody_read).",
+        "operationId": "fleet_custody_account_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Account Timeline",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/transactions (custody_read).",
+        "operationId": "fleet_custody_transactions_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Transactions",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions/external-orders/{external_order_id}/acknowledge": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/transactions/external-orders/{external_order_id}/acknowledge (custody_command).",
+        "operationId": "fleet_custody_external_order_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_external_orders__external_order_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "external_order_id",
+            "required": true,
+            "schema": {
+              "title": "External Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody External Order Ack",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions/{transaction_id}": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/custody/transactions/{transaction_id} (custody_read).",
+        "operationId": "fleet_custody_transaction_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Transaction Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/gallery/snapshot": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/gallery/snapshot (gallery_read).",
+        "operationId": "fleet_gallery_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Gallery Snapshot",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/gallery/stream": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/gallery/stream (gallery_read).",
+        "operationId": "fleet_gallery_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Gallery Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/manual-order-tickets/{ticket_id} (manual_orders).",
+        "operationId": "fleet_manual_order_ticket_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Order Ticket Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "put": {
+        "description": "Fleet-routed PUT /accounts/{account_id}/manual-order-tickets/{ticket_id} (manual_orders).",
+        "operationId": "fleet_manual_order_ticket_put_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Order Ticket Put",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel (manual_orders).",
+        "operationId": "fleet_manual_order_ticket_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Order Ticket Cancel",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/manual-order-tickets/{ticket_id}/continue (manual_orders).",
+        "operationId": "fleet_manual_order_ticket_continue_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Order Ticket Continue",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/capability": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/manual-orders/capability (manual_orders).",
+        "operationId": "fleet_manual_orders_capability_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Orders Capability",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/preview": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/manual-orders/preview (manual_orders).",
+        "operationId": "fleet_manual_orders_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Orders Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/{order_ref}/cancel": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/manual-orders/{order_ref:path}/cancel (manual_orders).",
+        "operationId": "fleet_manual_order_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders__order_ref__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "order_ref",
+            "required": true,
+            "schema": {
+              "title": "Order Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Manual Order Cancel",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/strategies/{program_key}/paper-access/confirm (deploy).",
+        "operationId": "fleet_paper_access_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "program_key",
+            "required": true,
+            "schema": {
+              "title": "Program Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Paper Access Confirm",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/strategies/{program_key}/paper-access/plan": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/strategies/{program_key}/paper-access/plan (deploy).",
+        "operationId": "fleet_paper_access_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "program_key",
+            "required": true,
+            "schema": {
+              "title": "Program Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Paper Access Plan",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/account-nicknames": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/account-nicknames (configuration_manage).",
+        "operationId": "fleet_configuration_nicknames_read_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Nicknames Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/account-nicknames/{account_id}": {
+      "put": {
+        "description": "Fleet-routed PUT /configuration/account-nicknames/{account_id} (configuration_manage).",
+        "operationId": "fleet_configuration_nicknames_set_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames__account_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Nicknames Set",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/credential-slots": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/credential-slots (configuration_manage).",
+        "operationId": "fleet_configuration_credential_slots_api_brokers__broker__clerks__clerk_id__configuration_credential_slots_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Credential Slots",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/desk-state": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/desk-state (configuration_manage).",
+        "operationId": "fleet_configuration_desk_state_api_brokers__broker__clerks__clerk_id__configuration_desk_state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Desk State",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/events": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/events (configuration_manage).",
+        "operationId": "fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Events",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/owner": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/owner (configuration_manage).",
+        "operationId": "fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Owner Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "patch": {
+        "description": "Fleet-routed PATCH /configuration/owner (configuration_manage).",
+        "operationId": "fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Owner Update",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/profiles (configuration_manage).",
+        "operationId": "fleet_configuration_profiles_list_api_brokers__broker__clerks__clerk_id__configuration_profiles_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Profiles List",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "post": {
+        "description": "Fleet-routed POST /configuration/profiles (configuration_manage).",
+        "operationId": "fleet_configuration_profile_create_api_brokers__broker__clerks__clerk_id__configuration_profiles_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Profile Create",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/profiles/{profile_id} (configuration_manage).",
+        "operationId": "fleet_configuration_profile_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Profile Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "patch": {
+        "description": "Fleet-routed PATCH /configuration/profiles/{profile_id} (configuration_manage).",
+        "operationId": "fleet_configuration_profile_update_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Profile Update",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/clone": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/profiles/{profile_id}/clone (configuration_manage).",
+        "operationId": "fleet_configuration_profile_clone_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__clone_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Profile Clone",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/profiles/{profile_id}/revisions (configuration_manage).",
+        "operationId": "fleet_configuration_revisions_list_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Revisions List",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "post": {
+        "description": "Fleet-routed POST /configuration/profiles/{profile_id}/revisions (configuration_manage).",
+        "operationId": "fleet_configuration_revision_create_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Revision Create",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/profiles/{profile_id}/revisions/{revision} (configuration_manage).",
+        "operationId": "fleet_configuration_revision_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Revision Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}/account-pin": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/profiles/{profile_id}/revisions/{revision}/account-pin (configuration_manage).",
+        "operationId": "fleet_configuration_account_pin_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__account_pin_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Account Pin",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}/verify-account": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/profiles/{profile_id}/revisions/{revision}/verify-account (configuration_manage).",
+        "operationId": "fleet_configuration_verify_account_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__verify_account_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Verify Account",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/selection (configuration_manage).",
+        "operationId": "fleet_configuration_selection_read_api_brokers__broker__clerks__clerk_id__configuration_selection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Selection Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      },
+      "put": {
+        "description": "Fleet-routed PUT /configuration/selection (configuration_manage).",
+        "operationId": "fleet_configuration_selection_write_api_brokers__broker__clerks__clerk_id__configuration_selection_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Selection Write",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection/apply": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/selection/apply (configuration_manage).",
+        "operationId": "fleet_configuration_selection_apply_api_brokers__broker__clerks__clerk_id__configuration_selection_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Selection Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
+      "get": {
+        "description": "Fleet-routed GET /market-status-snapshot (market_status_read).",
+        "operationId": "fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Market Status Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/orders": {
+      "get": {
+        "description": "Fleet-routed GET /orders (orders_read).",
+        "operationId": "fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Orders Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/positions": {
+      "get": {
+        "description": "Fleet-routed GET /positions (positions_read).",
+        "operationId": "fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Positions Read",
+        "tags": [
+          "broker-clerks"
         ]
       }
     },

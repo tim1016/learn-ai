@@ -94,8 +94,12 @@ def test_ambiguous_or_malformed_catalogs_refuse() -> None:
         )
     with pytest.raises(ValueError, match="cannot declare read idempotency"):
         validate_operation_catalog(
-            frozenset({_operation(method="POST")})
+            frozenset({_operation(method="PUT")})
         )
+    # Delivery B: a POST may be a query over a body (plan and diagnostic
+    # shapes) — read idempotency on POST is legal; PUT/PATCH/DELETE stay
+    # refused above.
+    validate_operation_catalog(frozenset({_operation(method="POST")}))
     with pytest.raises(ValueError, match="streaming operation"):
         validate_operation_catalog(
             frozenset({_operation(method="POST", idempotency=OperationIdempotency.ONE_SHOT, stream=OperationStream.SSE)})

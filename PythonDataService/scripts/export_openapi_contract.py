@@ -50,6 +50,11 @@ def _schema_text() -> str:
     # so inheriting a developer's enabled environment makes generation
     # nondeterministic and produces a contract CI cannot reproduce.
     os.environ["ALPACA_FAULT_INJECTION_ENABLED"] = "false"
+    # Same reasoning for the fleet coordinator surface: the clerk-scoped
+    # routing surface mounts only with a control directory, and the committed
+    # contract must describe it. The schema path never opens a registry, so a
+    # placeholder path pins the mount deterministically.
+    os.environ.setdefault("FLEET_CONTROL_DIR", "contract-schema-fleet")
     sys.path.insert(0, str(SERVICE_ROOT))
 
     from app.main import app

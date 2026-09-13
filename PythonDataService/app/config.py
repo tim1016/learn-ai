@@ -44,6 +44,15 @@ class FleetSettings(BaseSettings):
     # The agent→coordinator transport token (env-only, minted by the host
     # ceremony; the coordinator holds the same value per clerk).
     AGENT_SERVICE_TOKEN: str | None = None
+    # The coordinator→agent transport token this process accepts on its
+    # served surface (env-only; the coordinator presents the same per-clerk
+    # value when forwarding). The second minted direction of the same
+    # provisioning ceremony — never stored, never logged.
+    COORDINATOR_SERVICE_TOKEN: str | None = None
+    # The coordinator's per-clerk coordinator-token mapping, as JSON text —
+    # ``{"clrk_…": "svct_…"}`` (coordinator role only). Env-only credential
+    # material; never stored in a registry and never logged.
+    COORDINATOR_SERVICE_TOKENS_JSON: str = ""
     # The coordinator's per-clerk agent token mapping, as JSON text —
     # ``{"clrk_…": "svct_…"}``. Env-only credential material; never stored
     # in a registry and never logged.

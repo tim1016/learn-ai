@@ -395,6 +395,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/broker-clerks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Broker-neutral clerk fleet directory (§10.1)
+         * @description Every lane across production providers, from the registry projection.
+         */
+        get: operations["list_broker_clerks_api_broker_clerks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker/bars-5s/snapshot": {
         parameters: {
             query?: never;
@@ -1789,6 +1809,1302 @@ export interface paths {
          *     silently passing.
          */
         get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One broker's clerk lanes (§10.2)
+         * @description The same projection filtered to one provider.
+         */
+        get: operations["list_broker_clerks_for_broker_api_brokers__broker__clerks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One clerk lane's directory entry
+         * @description Lifecycle, session, capabilities and provider summary for one lane.
+         */
+        get: operations["describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Account Read
+         * @description Fleet-routed GET /account (account_read).
+         */
+        get: operations["fleet_account_read_api_brokers__broker__clerks__clerk_id__account_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Create
+         * @description Fleet-routed POST /accounts/{account_id}/bots (bot_action).
+         */
+        post: operations["fleet_bot_create_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/admission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Admission Plan
+         * @description Fleet-routed POST /accounts/{account_id}/bots/admission (deploy).
+         */
+        post: operations["fleet_bot_admission_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_admission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bots Catalog Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/catalog (bot_panel_read).
+         */
+        get: operations["fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Cohort Archive Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/cohort-archive (bot_panel_read).
+         */
+        get: operations["fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get"];
+        put?: never;
+        /**
+         * Fleet Bot Cohort Archive
+         * @description Fleet-routed POST /accounts/{account_id}/bots/cohort-archive (bot_action).
+         */
+        post: operations["fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/cohort-flatten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Cohort Flatten Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/cohort-flatten (bot_panel_read).
+         */
+        get: operations["fleet_bot_cohort_flatten_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_get"];
+        put?: never;
+        /**
+         * Fleet Bot Cohort Flatten
+         * @description Fleet-routed POST /accounts/{account_id}/bots/cohort-flatten (bot_action).
+         */
+        post: operations["fleet_bot_cohort_flatten_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bots Deploy Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/deploy (deploy).
+         */
+        get: operations["fleet_bots_deploy_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_get"];
+        put?: never;
+        /**
+         * Fleet Bots Deploy Apply
+         * @description Fleet-routed POST /accounts/{account_id}/bots/deploy (deploy).
+         */
+        post: operations["fleet_bots_deploy_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Panel Action
+         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions (bot_action).
+         */
+        post: operations["fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Authority Facts
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).
+         */
+        get: operations["fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Chart History
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/history (bot_panel_read).
+         */
+        get: operations["fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Chart Live
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/live (bot_panel_read).
+         */
+        get: operations["fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Evidence
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/evidence (bot_panel_read).
+         */
+        get: operations["fleet_bot_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/live-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Live Snapshot
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/live-snapshot (bot_panel_read).
+         */
+        get: operations["fleet_bot_live_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/live-stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Live Stream
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/live-stream (bot_panel_read).
+         */
+        get: operations["fleet_bot_live_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/panel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Panel Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/panel (bot_panel_read).
+         */
+        get: operations["fleet_bot_panel_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__panel_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Historical Recovery Confirm
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm (custody_command).
+         */
+        post: operations["fleet_custody_historical_recovery_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Historical Recovery Prepare
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare (custody_command).
+         */
+        post: operations["fleet_custody_historical_recovery_prepare_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Bot Recovery Check
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/check (custody_command).
+         */
+        post: operations["fleet_custody_bot_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Bot Recovery Execute
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute (custody_command).
+         */
+        post: operations["fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Runs Start
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/start (custody_command).
+         */
+        post: operations["fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/runs/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Runs Stop
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).
+         */
+        post: operations["fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Bot Snapshot
+         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/snapshot (custody_read).
+         */
+        get: operations["fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Bot Timeline
+         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/timeline (custody_read).
+         */
+        get: operations["fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/commands/{command_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Command Read
+         * @description Fleet-routed GET /accounts/{account_id}/custody/commands/{command_id} (custody_read).
+         */
+        get: operations["fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/pnl-attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Pnl Attribution
+         * @description Fleet-routed GET /accounts/{account_id}/custody/pnl-attribution (custody_read).
+         */
+        get: operations["fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Reconcile
+         * @description Fleet-routed POST /accounts/{account_id}/custody/reconcile (custody_command).
+         */
+        post: operations["fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/recovery-actions/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Recovery Check
+         * @description Fleet-routed POST /accounts/{account_id}/custody/recovery-actions/check (custody_command).
+         */
+        post: operations["fleet_custody_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/recovery-actions/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Recovery Execute
+         * @description Fleet-routed POST /accounts/{account_id}/custody/recovery-actions/execute (custody_command).
+         */
+        post: operations["fleet_custody_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Account Snapshot
+         * @description Fleet-routed GET /accounts/{account_id}/custody/snapshot (custody_read).
+         */
+        get: operations["fleet_custody_account_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Account Timeline
+         * @description Fleet-routed GET /accounts/{account_id}/custody/timeline (custody_read).
+         */
+        get: operations["fleet_custody_account_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Transactions
+         * @description Fleet-routed GET /accounts/{account_id}/custody/transactions (custody_read).
+         */
+        get: operations["fleet_custody_transactions_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions/external-orders/{external_order_id}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody External Order Ack
+         * @description Fleet-routed POST /accounts/{account_id}/custody/transactions/external-orders/{external_order_id}/acknowledge (custody_command).
+         */
+        post: operations["fleet_custody_external_order_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_external_orders__external_order_id__acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/transactions/{transaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Transaction Read
+         * @description Fleet-routed GET /accounts/{account_id}/custody/transactions/{transaction_id} (custody_read).
+         */
+        get: operations["fleet_custody_transaction_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions__transaction_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/gallery/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Gallery Snapshot
+         * @description Fleet-routed GET /accounts/{account_id}/gallery/snapshot (gallery_read).
+         */
+        get: operations["fleet_gallery_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/gallery/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Gallery Stream
+         * @description Fleet-routed GET /accounts/{account_id}/gallery/stream (gallery_read).
+         */
+        get: operations["fleet_gallery_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Manual Order Ticket Read
+         * @description Fleet-routed GET /accounts/{account_id}/manual-order-tickets/{ticket_id} (manual_orders).
+         */
+        get: operations["fleet_manual_order_ticket_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__get"];
+        /**
+         * Fleet Manual Order Ticket Put
+         * @description Fleet-routed PUT /accounts/{account_id}/manual-order-tickets/{ticket_id} (manual_orders).
+         */
+        put: operations["fleet_manual_order_ticket_put_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Manual Order Ticket Cancel
+         * @description Fleet-routed POST /accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel (manual_orders).
+         */
+        post: operations["fleet_manual_order_ticket_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Manual Order Ticket Continue
+         * @description Fleet-routed POST /accounts/{account_id}/manual-order-tickets/{ticket_id}/continue (manual_orders).
+         */
+        post: operations["fleet_manual_order_ticket_continue_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Manual Orders Capability
+         * @description Fleet-routed GET /accounts/{account_id}/manual-orders/capability (manual_orders).
+         */
+        get: operations["fleet_manual_orders_capability_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Manual Orders Preview
+         * @description Fleet-routed POST /accounts/{account_id}/manual-orders/preview (manual_orders).
+         */
+        post: operations["fleet_manual_orders_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-orders/{order_ref}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Manual Order Cancel
+         * @description Fleet-routed POST /accounts/{account_id}/manual-orders/{order_ref:path}/cancel (manual_orders).
+         */
+        post: operations["fleet_manual_order_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders__order_ref__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Paper Access Confirm
+         * @description Fleet-routed POST /accounts/{account_id}/strategies/{program_key}/paper-access/confirm (deploy).
+         */
+        post: operations["fleet_paper_access_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/strategies/{program_key}/paper-access/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Paper Access Plan
+         * @description Fleet-routed POST /accounts/{account_id}/strategies/{program_key}/paper-access/plan (deploy).
+         */
+        post: operations["fleet_paper_access_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/account-nicknames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Nicknames Read
+         * @description Fleet-routed GET /configuration/account-nicknames (configuration_manage).
+         */
+        get: operations["fleet_configuration_nicknames_read_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/account-nicknames/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Fleet Configuration Nicknames Set
+         * @description Fleet-routed PUT /configuration/account-nicknames/{account_id} (configuration_manage).
+         */
+        put: operations["fleet_configuration_nicknames_set_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames__account_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/credential-slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Credential Slots
+         * @description Fleet-routed GET /configuration/credential-slots (configuration_manage).
+         */
+        get: operations["fleet_configuration_credential_slots_api_brokers__broker__clerks__clerk_id__configuration_credential_slots_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/desk-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Desk State
+         * @description Fleet-routed GET /configuration/desk-state (configuration_manage).
+         */
+        get: operations["fleet_configuration_desk_state_api_brokers__broker__clerks__clerk_id__configuration_desk_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Events
+         * @description Fleet-routed GET /configuration/events (configuration_manage).
+         */
+        get: operations["fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Owner Read
+         * @description Fleet-routed GET /configuration/owner (configuration_manage).
+         */
+        get: operations["fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Fleet Configuration Owner Update
+         * @description Fleet-routed PATCH /configuration/owner (configuration_manage).
+         */
+        patch: operations["fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch"];
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Profiles List
+         * @description Fleet-routed GET /configuration/profiles (configuration_manage).
+         */
+        get: operations["fleet_configuration_profiles_list_api_brokers__broker__clerks__clerk_id__configuration_profiles_get"];
+        put?: never;
+        /**
+         * Fleet Configuration Profile Create
+         * @description Fleet-routed POST /configuration/profiles (configuration_manage).
+         */
+        post: operations["fleet_configuration_profile_create_api_brokers__broker__clerks__clerk_id__configuration_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Profile Read
+         * @description Fleet-routed GET /configuration/profiles/{profile_id} (configuration_manage).
+         */
+        get: operations["fleet_configuration_profile_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Fleet Configuration Profile Update
+         * @description Fleet-routed PATCH /configuration/profiles/{profile_id} (configuration_manage).
+         */
+        patch: operations["fleet_configuration_profile_update_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__patch"];
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Profile Clone
+         * @description Fleet-routed POST /configuration/profiles/{profile_id}/clone (configuration_manage).
+         */
+        post: operations["fleet_configuration_profile_clone_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Revisions List
+         * @description Fleet-routed GET /configuration/profiles/{profile_id}/revisions (configuration_manage).
+         */
+        get: operations["fleet_configuration_revisions_list_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_get"];
+        put?: never;
+        /**
+         * Fleet Configuration Revision Create
+         * @description Fleet-routed POST /configuration/profiles/{profile_id}/revisions (configuration_manage).
+         */
+        post: operations["fleet_configuration_revision_create_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Revision Read
+         * @description Fleet-routed GET /configuration/profiles/{profile_id}/revisions/{revision} (configuration_manage).
+         */
+        get: operations["fleet_configuration_revision_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}/account-pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Account Pin
+         * @description Fleet-routed POST /configuration/profiles/{profile_id}/revisions/{revision}/account-pin (configuration_manage).
+         */
+        post: operations["fleet_configuration_account_pin_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__account_pin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles/{profile_id}/revisions/{revision}/verify-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Verify Account
+         * @description Fleet-routed POST /configuration/profiles/{profile_id}/revisions/{revision}/verify-account (configuration_manage).
+         */
+        post: operations["fleet_configuration_verify_account_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__verify_account_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Selection Read
+         * @description Fleet-routed GET /configuration/selection (configuration_manage).
+         */
+        get: operations["fleet_configuration_selection_read_api_brokers__broker__clerks__clerk_id__configuration_selection_get"];
+        /**
+         * Fleet Configuration Selection Write
+         * @description Fleet-routed PUT /configuration/selection (configuration_manage).
+         */
+        put: operations["fleet_configuration_selection_write_api_brokers__broker__clerks__clerk_id__configuration_selection_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Selection Apply
+         * @description Fleet-routed POST /configuration/selection/apply (configuration_manage).
+         */
+        post: operations["fleet_configuration_selection_apply_api_brokers__broker__clerks__clerk_id__configuration_selection_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Market Status Read
+         * @description Fleet-routed GET /market-status-snapshot (market_status_read).
+         */
+        get: operations["fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Orders Read
+         * @description Fleet-routed GET /orders (orders_read).
+         */
+        get: operations["fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Positions Read
+         * @description Fleet-routed GET /positions (positions_read).
+         */
+        get: operations["fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -24220,6 +25536,37 @@ export interface operations {
             };
         };
     };
+    list_broker_clerks_api_broker_clerks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bars_5s_snapshot_endpoint_api_broker_bars_5s_snapshot_get: {
         parameters: {
             query: {
@@ -27203,6 +28550,2463 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClerkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_broker_clerks_for_broker_api_brokers__broker__clerks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_account_read_api_brokers__broker__clerks__clerk_id__account_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_create_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_admission_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_admission_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_cohort_archive_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_cohort_archive_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_archive_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_cohort_flatten_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_cohort_flatten_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_cohort_flatten_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bots_deploy_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bots_deploy_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_live_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_live_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__live_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_panel_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__panel_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_historical_recovery_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_historical_recovery_prepare_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_bot_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_check_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_bot_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_runs_start_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_start_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                command_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_check_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_recovery_execute_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_recovery_actions_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_account_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_account_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_timeline_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_transactions_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_external_order_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions_external_orders__external_order_id__acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                external_order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_transaction_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_transactions__transaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_gallery_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_gallery_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_order_ticket_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_order_ticket_put_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_order_ticket_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_order_ticket_continue_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_orders_capability_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_capability_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_orders_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_manual_order_cancel_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_orders__order_ref__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                order_ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_paper_access_confirm_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                program_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_paper_access_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__strategies__program_key__paper_access_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                program_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_nicknames_read_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_nicknames_set_api_brokers__broker__clerks__clerk_id__configuration_account_nicknames__account_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_credential_slots_api_brokers__broker__clerks__clerk_id__configuration_credential_slots_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_desk_state_api_brokers__broker__clerks__clerk_id__configuration_desk_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_profiles_list_api_brokers__broker__clerks__clerk_id__configuration_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_profile_create_api_brokers__broker__clerks__clerk_id__configuration_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_profile_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_profile_update_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_profile_clone_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_revisions_list_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_revision_create_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_revision_read_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_account_pin_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__account_pin_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_verify_account_api_brokers__broker__clerks__clerk_id__configuration_profiles__profile_id__revisions__revision__verify_account_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                profile_id: string;
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_selection_read_api_brokers__broker__clerks__clerk_id__configuration_selection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_selection_write_api_brokers__broker__clerks__clerk_id__configuration_selection_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_selection_apply_api_brokers__broker__clerks__clerk_id__configuration_selection_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -19,6 +19,7 @@ blindly (audit 2026-09-13, finding 7).
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -48,6 +49,19 @@ class DeliveryIdentityMismatch(Exception):
     """
 
 
+#: Path parameters may carry Starlette-style converters (``{order_ref:path}``);
+#: binding substitutes the value and drops the converter, which is routing
+#: syntax the receiving agent's own router applies to its side of the path.
+_PATH_BINDING_PATTERN = re.compile(r"\{([a-z_][a-z0-9_]*)(?::[a-z]+)?\}")
+
+
+def bind_path_template(template: str, params: Mapping[str, str]) -> str:
+    """Bind one path template's parameters, tolerating route converters."""
+    return _PATH_BINDING_PATTERN.sub(
+        lambda match: params[match.group(1)], template
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DeliveryRequest:
     """One routed operation, fully pinned before dispatch."""
@@ -63,7 +77,7 @@ class DeliveryRequest:
 
     def agent_path(self) -> str:
         """The agent-side path for this operation with parameters bound."""
-        return self.operation.agent_path_template.format(**self.path_params)
+        return bind_path_template(self.operation.agent_path_template, self.path_params)
 
     def pinned_headers(self) -> dict[str, str]:
         """The identity headers the dispatch is fenced by."""
@@ -107,8 +121,12 @@ def verify_identity_echo(
     echo can never distinguish the serving runtime from a reflection or a
     refusal in flight). Only unpinned dimensions go unchecked.
     """
-    served_broker = headers.get(f"{IDENTITY_HEADER_PREFIX}Broker")
-    served_clerk = headers.get(f"{IDENTITY_HEADER_PREFIX}Clerk-Id")
+    # Header sources differ in case (httpx normalizes; a raw-ASGI dispatch
+    # carries ASGI's lowercase names in a plain mapping), and the identity
+    # contract is about the values, never the casing.
+    lowered = {name.lower(): value for name, value in headers.items()}
+    served_broker = lowered.get("x-fleet-broker")
+    served_clerk = lowered.get("x-fleet-clerk-id")
     if served_broker != request.broker:
         raise DeliveryIdentityMismatch(
             f"The response names broker {served_broker!r}; the attempt pinned "
@@ -120,20 +138,64 @@ def verify_identity_echo(
             f"{request.clerk_id!r}."
         )
     if request.routing_epoch is not None:
-        served_epoch = headers.get(f"{IDENTITY_HEADER_PREFIX}Routing-Epoch")
+        served_epoch = lowered.get("x-fleet-routing-epoch")
         if served_epoch != str(request.routing_epoch):
             raise DeliveryIdentityMismatch(
                 f"The response was served at epoch {served_epoch!r}; the attempt "
                 f"pinned {request.routing_epoch}."
             )
     if request.binding_generation is not None:
-        served_generation = headers.get(f"{IDENTITY_HEADER_PREFIX}Binding-Generation")
+        served_generation = lowered.get("x-fleet-binding-generation")
         if served_generation != str(request.binding_generation):
             raise DeliveryIdentityMismatch(
                 f"The response was served at binding generation "
                 f"{served_generation!r}; the attempt pinned "
                 f"{request.binding_generation}."
             )
+
+
+def validate_event_identity(event: SseEvent, request: DeliveryRequest) -> None:
+    """Verify one streamed event's provenance fields (FR-076).
+
+    Every event of a routed stream carries the serving runtime's identity as
+    ``x-fleet-*`` fields — validated per event, not just on the response
+    headers, so a lane that changes session or binding mid-stream cannot keep
+    feeding the old stream's consumer. A missing field is as fatal as a wrong
+    one: an event that cannot prove its origin is not delivered.
+    """
+    expected_fields: dict[str, str] = {
+        "x-fleet-broker": request.broker,
+        "x-fleet-clerk-id": request.clerk_id,
+    }
+    if request.routing_epoch is not None:
+        expected_fields["x-fleet-routing-epoch"] = str(request.routing_epoch)
+    if request.binding_generation is not None:
+        expected_fields["x-fleet-binding-generation"] = str(request.binding_generation)
+    for field_name, expected in expected_fields.items():
+        served = event.identity.get(field_name)
+        if served is None:
+            raise DeliveryIdentityMismatch(
+                f"A streamed event carries no {field_name} provenance field; "
+                "the stream is closed rather than delivered unverified."
+            )
+        if served != expected:
+            raise DeliveryIdentityMismatch(
+                f"A streamed event names {field_name} {served!r}; the attempt "
+                f"pinned {expected!r}. The stream is closed."
+            )
+
+
+async def _identity_validated_events(
+    events: AsyncIterator[SseEvent], request: DeliveryRequest
+) -> AsyncIterator[SseEvent]:
+    """Yield only provenance-verified events; close the stream on violation.
+
+    The mismatch propagates through the underlying iterator's ``finally``
+    (response and client release), which is the stale-identity closure.
+    """
+    async for event in events:
+        validate_event_identity(event, request)
+        yield event
 
 
 class HttpLaneDelivery:
@@ -194,7 +256,9 @@ class HttpLaneDelivery:
         return StreamDeliveryResult(
             status_code=response.status_code,
             headers=dict(response.headers),
-            events=_closing_event_iterator(response, client),
+            events=_identity_validated_events(
+                _closing_event_iterator(response, client), request
+            ),
         )
 
 
@@ -240,13 +304,17 @@ class LocalLaneDelivery:
         return result
 
     async def stream(self, request: DeliveryRequest) -> StreamDeliveryResult:
-        """Dispatch in-process; the events iterator is forwarded unbuffered."""
+        """Dispatch in-process; events are forwarded provenance-verified."""
         result = self._handler(request)
         if hasattr(result, "__await__"):
             result = await result
         assert isinstance(result, StreamDeliveryResult)
         verify_identity_echo(result.headers, request)
-        return result
+        return StreamDeliveryResult(
+            status_code=result.status_code,
+            headers=result.headers,
+            events=_identity_validated_events(result.events, request),
+        )
 
 
 __all__ = [
@@ -257,5 +325,7 @@ __all__ = [
     "HttpLaneDelivery",
     "LocalLaneDelivery",
     "StreamDeliveryResult",
+    "bind_path_template",
+    "validate_event_identity",
     "verify_identity_echo",
 ]

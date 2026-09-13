@@ -52,11 +52,15 @@ class Capability(StrEnum):
     ACCOUNT_READ = "account_read"
     POSITIONS_READ = "positions_read"
     ORDERS_READ = "orders_read"
+    MARKET_STATUS_READ = "market_status_read"
     CONFIGURATION_MANAGE = "configuration_manage"
     BOT_PANEL_READ = "bot_panel_read"
     BOT_ACTION = "bot_action"
+    DEPLOY = "deploy"
     CUSTODY_READ = "custody_read"
+    CUSTODY_COMMAND = "custody_command"
     GALLERY_READ = "gallery_read"
+    MANUAL_ORDERS = "manual_orders"
     STREAM_SUBSCRIBE = "stream_subscribe"
 
 
@@ -95,8 +99,14 @@ class OperationStream(StrEnum):
 
 
 _OPERATION_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_PATH_PARAM_PATTERN = re.compile(r"\{[a-z_][a-z0-9_]*\}")
-_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+#: Path parameters may carry Starlette-style converters (``{order_ref:path}``);
+#: the converter is routing syntax, not part of the parameter identity.
+_PATH_PARAM_PATTERN = re.compile(r"\{[a-z_][a-z0-9_]*(?::[a-z]+)?\}")
+#: POST is excluded: a POST may be a query over a body (a plan, a diagnostic
+#: check) whose handler computes over durable state without mutating it, and
+#: those carry read idempotency honestly. PUT/PATCH/DELETE are state-setting
+#: by construction.
+_MUTATING_METHODS = frozenset({"PUT", "PATCH", "DELETE"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +174,7 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
                     raise ValueError(
                         f"operation {operation.operation_id!r} repeats path parameter {parameter}"
                     )
-                collected.add(parameter.strip("{}"))
+                collected.add(parameter.strip("{}").split(":", 1)[0])
         if public_parameters != agent_parameters:
             raise ValueError(
                 f"operation {operation.operation_id!r} declares different path parameters "

@@ -280,15 +280,36 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     # authenticates against. Installed wherever the coordinator surface runs
     # (the combined role with a control directory, or the dedicated role).
     if _FLEET_COORDINATOR_SURFACE:
+        import json as _json
+
+        from app.broker.fleet.routing import LaneRouter, coordinator_delivery_for
         from app.broker.fleet.service import FleetControlService
         from app.broker.fleet.store import FleetRegistryStore
         from app.broker.fleet_composition import production_provider_adapters
 
-        app.state.fleet_service = FleetControlService(
+        fleet_service_instance = FleetControlService(
             store=FleetRegistryStore.open(control_dir=fleet_settings.CONTROL_DIR),
             provider_adapters=production_provider_adapters(),
         )
+        app.state.fleet_service = fleet_service_instance
         app.state.fleet_agent_tokens_text = fleet_settings.AGENT_SERVICE_TOKENS_JSON
+        try:
+            coordinator_tokens = _json.loads(
+                fleet_settings.COORDINATOR_SERVICE_TOKENS_JSON or "{}"
+            )
+        except ValueError:
+            coordinator_tokens = None
+        if not isinstance(coordinator_tokens, dict):
+            coordinator_tokens = {}
+
+        app.state.fleet_lane_router = LaneRouter(
+            service=fleet_service_instance,
+            delivery_for=coordinator_delivery_for(
+                fleet_service_instance,
+                coordinator_tokens,
+                local_app=app if _FLEET_ROLE == "combined" else None,
+            ),
+        )
         logger.info(
             "Fleet coordinator surface installed (registry on %s).",
             fleet_settings.CONTROL_DIR,
@@ -494,6 +515,24 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
                 from app.broker_configuration.runtime import (
                     get_broker_configuration_service,
                 )
+
+                def _fleet_served_identity() -> dict[str, object] | None:
+                    """What this runtime actually serves, read at response time.
+
+                    The identity echo (FR-076) derives from live state — the
+                    epoch follows re-registrations, the generation follows the
+                    selection transaction — never from what a caller pinned.
+                    """
+                    if fleet_lane is None or fleet_lane.session is None:
+                        return None
+                    return {
+                        "broker": "alpaca",
+                        "clerk_id": fleet_lane.clerk_id,
+                        "routing_epoch": fleet_lane.session.routing_epoch,
+                        "binding_generation": _effective_binding_generation_now(),
+                    }
+
+                app.state.fleet_served_identity = _fleet_served_identity
 
                 selection_row = get_broker_configuration_service().selection()
                 if (
@@ -848,6 +887,8 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         if fleet_service is not None:
             fleet_service.close()
             app.state.fleet_service = None
+        if hasattr(app.state, "fleet_lane_router"):
+            app.state.fleet_lane_router = None
         logger.info("Shutting down Polygon Data Service")
 
 
@@ -862,6 +903,14 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=settings.get_trusted_hosts(),
 )
+
+# The serving runtime's identity echo (fleet delivery B): fleet-addressed
+# requests — the ones a coordinator pins — are answered with the identity
+# this runtime actually serves, per response and per streamed event. Browser
+# traffic is untouched.
+from app.broker.fleet.agent_identity import FleetIdentityMiddleware  # noqa: E402
+
+app.add_middleware(FleetIdentityMiddleware)
 
 
 # CORS middleware for C# backend
@@ -1108,6 +1157,21 @@ if _FLEET_COORDINATOR_SURFACE:
     from app.routers import internal_fleet as internal_fleet_router
 
     app.include_router(internal_fleet_router.router)
+
+    # The public clerk-scoped routing surface (fleet delivery B): one route
+    # per catalog operation, forwarding through the lane router with the
+    # §10.3 envelope and §10.4 refusal families. A clerk agent mounts none
+    # of it — it serves its agent paths; the coordinator owns routing.
+    from app.broker.fleet_composition import production_provider_adapters
+    from app.routers import broker_clerks
+
+    broker_clerks.register_catalog_operations(
+        {
+            broker: adapter.operations()
+            for broker, adapter in production_provider_adapters().items()
+        }
+    )
+    app.include_router(broker_clerks.router)
 
 # Exception handlers. Register request validation separately so rejected
 # non-finite JSON numbers cannot make FastAPI's own 422 body non-serializable.
