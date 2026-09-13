@@ -15,7 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.fleet.provider import Capability, ServedContext
+from app.broker.fleet.provider import (
+    Capability,
+    OperationIdempotency,
+    OperationReadiness,
+    ProviderOperation,
+    ServedContext,
+)
 from app.broker.fleet.records import StoredLifecycleState
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
@@ -31,6 +37,65 @@ FAKE_BETA_CAPABILITIES = frozenset(
     {
         Capability.ACCOUNT_READ,
         Capability.GALLERY_READ,
+    }
+)
+
+_FAKE_ALPHA_OPERATIONS = frozenset(
+    {
+        ProviderOperation(
+            operation_id="account_read",
+            method="GET",
+            path_template="/account",
+            agent_path_template="/api/fake-alpha/account",
+            capability=Capability.ACCOUNT_READ,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.READ,
+        ),
+        ProviderOperation(
+            operation_id="orders_read",
+            method="GET",
+            path_template="/orders",
+            agent_path_template="/api/fake-alpha/orders",
+            capability=Capability.ORDERS_READ,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.READ,
+        ),
+        ProviderOperation(
+            operation_id="bot_action",
+            method="POST",
+            path_template="/bots/{sid}/actions",
+            agent_path_template="/api/fake-alpha/bots/{sid}/actions",
+            capability=Capability.BOT_ACTION,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=True,
+            idempotency=OperationIdempotency.DURABLE_KEY,
+        ),
+    }
+)
+_FAKE_BETA_OPERATIONS = frozenset(
+    {
+        ProviderOperation(
+            operation_id="account_read",
+            method="GET",
+            path_template="/account",
+            agent_path_template="/api/fake-beta/account",
+            capability=Capability.ACCOUNT_READ,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.READ,
+        ),
+        ProviderOperation(
+            operation_id="gallery_stream",
+            method="GET",
+            path_template="/gallery/stream",
+            agent_path_template="/api/fake-beta/gallery/stream",
+            capability=Capability.GALLERY_READ,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.READ,
+        ),
     }
 )
 
@@ -58,13 +123,15 @@ class FakeProviderAdapter:
     provider_id: str
     adapter_version: str = "test.1"
     capabilities: frozenset[Capability] = FAKE_ALPHA_CAPABILITIES
-    route_catalog: frozenset[str] = frozenset(
-        {"/api/brokers/{broker}/clerks/{clerk_id}/account"}
-    )
+    declared_operations: frozenset[ProviderOperation] = _FAKE_ALPHA_OPERATIONS
     canonical_rule: Callable[[str], str] = lambda raw: raw.strip().upper()
     refused_accounts: frozenset[str] = field(default_factory=frozenset)
     served_context_refusals: list[str] = field(default_factory=list)
     summaries: list[Mapping[str, object]] = field(default_factory=list)
+
+    def operations(self) -> frozenset[ProviderOperation]:
+        """The typed operation catalog this fake serves."""
+        return self.declared_operations
 
     def canonical_account_id(self, external_account_id: str) -> str:
         if external_account_id.strip() in self.refused_accounts:
@@ -76,6 +143,7 @@ class FakeProviderAdapter:
             "provider_id": self.provider_id,
             "adapter_version": self.adapter_version,
             "observed_state": observation.get("reported_state"),
+            "reported_summary": observation.get("reported_summary"),
         }
         self.summaries.append(summary)
         return summary
@@ -89,12 +157,20 @@ class FakeProviderAdapter:
 
 def fake_alpha() -> FakeProviderAdapter:
     """Build the alpha fake provider with its declared capability set."""
-    return FakeProviderAdapter(provider_id="fake_alpha", capabilities=FAKE_ALPHA_CAPABILITIES)
+    return FakeProviderAdapter(
+        provider_id="fake_alpha",
+        capabilities=FAKE_ALPHA_CAPABILITIES,
+        declared_operations=_FAKE_ALPHA_OPERATIONS,
+    )
 
 
 def fake_beta() -> FakeProviderAdapter:
     """Build the beta fake provider with its declared capability set."""
-    return FakeProviderAdapter(provider_id="fake_beta", capabilities=FAKE_BETA_CAPABILITIES)
+    return FakeProviderAdapter(
+        provider_id="fake_beta",
+        capabilities=FAKE_BETA_CAPABILITIES,
+        declared_operations=_FAKE_BETA_OPERATIONS,
+    )
 
 
 @pytest.fixture
@@ -164,12 +240,42 @@ def provision_lane(
     )
 
 
+def bind_lane(
+    service: FleetControlService,
+    lane: Lane,
+    *,
+    account: str,
+    binding_generation: int = 1,
+):
+    """Register, reserve and confirm one lane, returning its session.
+
+    The confirmation carries the registering session's instance and epoch —
+    exactly what a real agent presents from its own registration.
+    """
+    session = service.register_agent_session(
+        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+    )
+    service.reserve_assignment(
+        broker=lane.broker, clerk_id=lane.clerk_id, external_account_id=account
+    )
+    confirmed = service.confirm_assignment(
+        broker=lane.broker,
+        clerk_id=lane.clerk_id,
+        external_account_id=account,
+        binding_generation=binding_generation,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+    return session, confirmed
+
+
 __all__ = [
     "FAKE_ALPHA_CAPABILITIES",
     "FAKE_BETA_CAPABILITIES",
     "FakeProviderAdapter",
     "FrozenClock",
     "Lane",
+    "bind_lane",
     "fake_alpha",
     "fake_beta",
     "provision_lane",

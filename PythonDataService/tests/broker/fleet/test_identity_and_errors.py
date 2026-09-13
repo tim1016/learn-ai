@@ -15,8 +15,10 @@ from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkBindingGenerationConflict,
     ClerkBrokerMismatch,
+    ClerkEndpointNotApproved,
     ClerkIdentityMismatch,
     ClerkNotFound,
+    ClerkRoutingAttemptConflict,
     ClerkRoutingOutcomeUnknown,
     ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
@@ -25,6 +27,7 @@ from app.broker.fleet.errors import (
     ClerkVolumeIdentityMissing,
     ClerkVolumeMountUnproven,
     FleetControlError,
+    FleetProtocolIncompatible,
     FleetRegistryUnavailable,
 )
 
@@ -45,6 +48,9 @@ ALL_FAMILIES: list[type[FleetControlError]] = [
     ClerkAssignmentConflict,
     BrokerClerkCapabilityUnavailable,
     ClerkRoutingOutcomeUnknown,
+    ClerkRoutingAttemptConflict,
+    ClerkEndpointNotApproved,
+    FleetProtocolIncompatible,
     FleetRegistryUnavailable,
 ]
 
@@ -70,6 +76,12 @@ def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
     assert not identity.is_worker_key(identity.new_clerk_id())
     assert identity.is_agent_instance_id(identity.new_agent_instance_id())
     assert identity.is_correlation_id(identity.new_correlation_id())
+    # The transport token family is distinct from every durable identity.
+    token = identity.new_service_token()
+    assert identity.is_service_token(token)
+    assert not identity.is_service_token(identity.new_worker_key())
+    assert not identity.is_worker_key(token)
+    assert len({identity.new_service_token() for _ in range(100)}) == 100
 
 
 @pytest.mark.parametrize("family", ALL_FAMILIES)

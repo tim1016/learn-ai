@@ -37,7 +37,9 @@ def _drive_ceremonies(fleet_service, tmp_path: Path) -> dict[str, object]:
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="secrets-check", tmp_path=tmp_path
     )
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(
+        clerk_id=lane.clerk_id, worker_key=lane.worker_key
+    )
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-secret"
     )
@@ -46,14 +48,23 @@ def _drive_ceremonies(fleet_service, tmp_path: Path) -> dict[str, object]:
         clerk_id=lane.clerk_id,
         external_account_id="acct-secret",
         binding_generation=1,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
     )
-    fleet_service.record_routing_receipt(
+    attempt = fleet_service.open_routing_attempt(
         broker="fake_alpha",
         clerk_id=lane.clerk_id,
         operation_kind="bot_action",
         nonsecret_target_ref="strategy/sid-secret",
         idempotency_key="idem-secret",
-        state=RoutingReceiptState.DELIVERED,
+        pinned_routing_epoch=session.routing_epoch,
+        pinned_binding_generation=1,
+        pinned_agent_instance_id=session.agent_instance_id,
+    )
+    fleet_service.mark_routing_dispatched(correlation_id=attempt.correlation_id)
+    fleet_service.settle_routing_attempt(
+        correlation_id=attempt.correlation_id,
+        outcome=RoutingReceiptState.DELIVERED,
         upstream_receipt_ref="upstream/r-1",
     )
     secret_assignment = fleet_service._store.read_assignment(
@@ -119,3 +130,33 @@ def test_the_worker_key_is_stored_but_never_projected(
         assert "worker_key" not in rendered_entry
         assert "wkrk_" not in rendered_entry
     assert b"wkrk_" in registry_bytes
+
+
+def test_transport_service_tokens_are_stored_nowhere(
+    control_dir: Path, fleet_service, seeded_env
+) -> None:
+    """Audit 2026-09-13, finding 3: the environment-only transport tokens minted
+    at provisioning reach no registry byte and no projection."""
+    volume_root = control_dir.parent / "volumes" / "tokens"
+    volume_root.mkdir(parents=True, exist_ok=True)
+    provisioned = fleet_service.provision_clerk(
+        broker="fake_alpha",
+        display_label="tokens",
+        volume_root=volume_root,
+    )
+
+    db_path = registry_database_path(control_dir)
+    registry_bytes = db_path.read_bytes()
+    for wal_suffix in ("-wal", "-shm"):
+        wal = db_path.with_name(db_path.name + wal_suffix)
+        if wal.exists():
+            registry_bytes += wal.read_bytes()
+
+    assert provisioned.agent_service_token.startswith("svct_")
+    assert provisioned.coordinator_service_token.startswith("svct_")
+    assert provisioned.agent_service_token != provisioned.coordinator_service_token
+    for token in (provisioned.agent_service_token, provisioned.coordinator_service_token):
+        assert token.encode("utf-8") not in registry_bytes
+    assert b"svct_" not in registry_bytes
+    directory = fleet_service.directory()
+    assert "svct_" not in repr(directory)

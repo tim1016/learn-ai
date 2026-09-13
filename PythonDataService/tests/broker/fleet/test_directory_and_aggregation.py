@@ -35,7 +35,7 @@ _ALLOWED_DIRECTORY_FIELDS = {
 def _live(fleet_service, tmp_path: Path, broker: str, label: str):
     """Provision, register, reserve and confirm one lane so it projects ready."""
     lane = provision_lane(fleet_service, broker=broker, label=label, tmp_path=tmp_path)
-    fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
+    session = fleet_service.register_agent_session(clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     fleet_service.reserve_assignment(
         broker=broker, clerk_id=lane.clerk_id, external_account_id=f"acct-{label}"
     )
@@ -44,6 +44,8 @@ def _live(fleet_service, tmp_path: Path, broker: str, label: str):
         clerk_id=lane.clerk_id,
         external_account_id=f"acct-{label}",
         binding_generation=3,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
     )
     return lane
 
@@ -102,7 +104,9 @@ def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
 def test_lifecycle_projects_from_observations_not_stored_flags(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """FR-081: a historical acknowledgement never presents as current liveness."""
+    """FR-081 + audit 2026-09-13 finding 1: a historical acknowledgement never
+    presents as current liveness, and a heartbeat alone never presents as a
+    confirmed binding."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="projecting", tmp_path=control_dir.parent
     )
@@ -114,15 +118,35 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
             e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
         )
 
-    assert entry()["lifecycle_state"] == "starting"  # session, no binding acknowledged
+    assert entry()["lifecycle_state"] == "starting"  # session, nothing confirmed
 
+    # A heartbeat carrying plausible binding facts proves nothing: without a
+    # confirmed assignment the lane still projects starting.
     fleet_service.observe_session(
         clerk_id=lane.clerk_id,
         agent_instance_id=fleet_service._store.read_session(lane.clerk_id).agent_instance_id,
         reported_binding_generation=1,
         reported_state="binding_confirmed",
     )
+    assert entry()["lifecycle_state"] == "starting"
+    assert entry()["effective_binding_generation"] is None
+
+    # The confirmed assignment is what projects ready, with its generation.
+    session = fleet_service._store.read_session(lane.clerk_id)
+    assert session is not None
+    fleet_service.reserve_assignment(
+        broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-projecting"
+    )
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        external_account_id="acct-projecting",
+        binding_generation=1,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
     assert entry()["lifecycle_state"] == "ready"
+    assert entry()["effective_binding_generation"] == 1
 
     fleet_service.observe_session(
         clerk_id=lane.clerk_id,

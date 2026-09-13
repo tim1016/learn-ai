@@ -153,6 +153,43 @@ class ClerkRoutingOutcomeUnknown(FleetControlError):
     status_code: ClassVar[int] = 503
 
 
+class ClerkRoutingAttemptConflict(FleetControlError):
+    """An illegal transition or key reuse on a routing attempt.
+
+    Not one of PRD §10.4's public route families; it is the internal refusal
+    for settling a delivered attempt to anything weaker, or reusing an
+    idempotency key under a different pinned attempt context (audit
+    2026-09-13, finding 7).
+    """
+
+    reason: ClassVar[str] = "clerk_routing_attempt_conflict"
+    status_code: ClassVar[int] = 409
+
+
+class ClerkEndpointNotApproved(FleetControlError):
+    """A registration cites an endpoint the deployment has not approved.
+
+    Internal family (audit 2026-09-13, finding 4): destinations are
+    deployment-owned rows; an agent may cite an approved reference but never
+    choose or change where it points.
+    """
+
+    reason: ClassVar[str] = "clerk_endpoint_not_approved"
+    status_code: ClassVar[int] = 409
+
+
+class FleetProtocolIncompatible(FleetControlError):
+    """An agent and coordinator speak different fleet protocol versions.
+
+    Internal family (audit 2026-09-13, finding 6): incompatible builds refuse
+    explicitly instead of a newer coordinator advertising operations an older
+    agent cannot serve.
+    """
+
+    reason: ClassVar[str] = "fleet_protocol_incompatible"
+    status_code: ClassVar[int] = 409
+
+
 class FleetRegistryUnavailable(FleetControlError):
     """The fleet registry cannot be opened or read (the coordinator's own store).
 
@@ -174,8 +211,10 @@ __all__ = [
     "ClerkAssignmentConflict",
     "ClerkBindingGenerationConflict",
     "ClerkBrokerMismatch",
+    "ClerkEndpointNotApproved",
     "ClerkIdentityMismatch",
     "ClerkNotFound",
+    "ClerkRoutingAttemptConflict",
     "ClerkRoutingOutcomeUnknown",
     "ClerkUnreachable",
     "ClerkVolumeAlreadyRegistered",
@@ -184,5 +223,6 @@ __all__ = [
     "ClerkVolumeIdentityMissing",
     "ClerkVolumeMountUnproven",
     "FleetControlError",
+    "FleetProtocolIncompatible",
     "FleetRegistryUnavailable",
 ]

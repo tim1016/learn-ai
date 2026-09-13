@@ -26,7 +26,7 @@ Single sources of truth are a design constraint. A projection can repeat an auth
 | Custody, arming, risk, and numerical facts | Existing provider authority and canonical Python implementations | Directory, frontend, and coordinator display or carry evidence. |
 | Command intent | Immutable target from the rendered server resource | Dialogs retain this target; mutable navigation state cannot replace it. |
 
-The coordinator is a control-plane authority with a narrow forwarding responsibility. Calling it "pure transport" hides its ownership of assignments, session admission, and routing evidence. Keep these responsibilities in a small fleet module. Keep provider admission and execution in the clerk module. Put local and HTTP delivery adapters behind the same provider operation interface; do not build a second trading implementation or a generic trading engine.
+The coordinator is a control-plane authority with a narrow forwarding responsibility. Calling it “pure transport” hides its ownership of assignments, session admission, and routing evidence. Keep these responsibilities in a small fleet module. Keep provider admission and execution in the clerk module. Put local and HTTP delivery adapters behind the same provider operation interface; do not build a second trading implementation or a generic trading engine.
 
 ## Findings that change the plan
 
@@ -49,7 +49,7 @@ Keep the generation meanings separate: assignment generation changes ownership h
 
 ### 2. P1 — Define crash recovery as a durable protocol
 
-"Local acknowledgement, then confirm remotely" spans two databases. A process can crash after the local write and before the fleet commit; the fleet can commit and lose its reply; the agent can crash before recording that reply. D7 also requires registry verification before profile access, while FR-066 permits recovery with the coordinator unavailable. The plan does not describe how both hold.
+“Local acknowledgement, then confirm remotely” spans two databases. A process can crash after the local write and before the fleet commit; the fleet can commit and lose its reply; the agent can crash before recording that reply. D7 also requires registry verification before profile access, while FR-066 permits recovery with the coordinator unavailable. The plan does not describe how both hold.
 
 **Revision:** specify a recoverable handover with explicit states and reconciliation. The clerk retains additive, nonsecret confirmation evidence identifying the registry, clerk, volume, assignment generation, profile/revision/account, and binding generation it actually confirmed. This is evidence of an existing grant, never an independent grant. Local acknowledgement alone is insufficient for offline recovery.
 
@@ -63,9 +63,9 @@ D3 authenticates agent-to-coordinator calls with `worker_key`. The existing [sch
 
 **Revision:** retain `worker_key` as private durable identity and use separate per-clerk, environment-only authentication material for the two transport directions. Define provisioning, loss, rotation, and restart behavior. Map credential slots through deployment-owned code/configuration. Never copy the shared environment containing all broker credentials into every role.
 
-"Printed once, stored nowhere" needs correction: restartable services need operator-managed secret persistence, such as the existing uncommitted environment-file convention. The application must not persist these secrets in registries, receipts, or logs. Provisioning must not depend on recovering secret output from terminal history, and rerunning migration must not silently rotate credentials.
+“Printed once, stored nowhere” needs correction: restartable services need operator-managed secret persistence, such as the existing uncommitted environment-file convention. The application must not persist these secrets in registries, receipts, or logs. Provisioning must not depend on recovering secret output from terminal history, and rerunning migration must not silently rotate credentials.
 
-Existing [configuration routes](../../PythonDataService/app/routers/broker_configuration.py) require the installation secret themselves. Therefore "routers unchanged" and "browser secret never reaches the agent" require an explicit authentication adaptation. Reuse the business handlers while composing separate public and internal authentication policies. No unauthenticated fallback.
+Existing [configuration routes](../../PythonDataService/app/routers/broker_configuration.py) require the installation secret themselves. Therefore “routers unchanged” and “browser secret never reaches the agent” require an explicit authentication adaptation. Reuse the business handlers while composing separate public and internal authentication policies. No unauthenticated fallback.
 
 ### 4. P1 — Volume and endpoint evidence needs a host-owned seam
 
@@ -81,7 +81,7 @@ There is also a namespace mismatch: provisioning compares absolute root strings 
 
 Giving each agent a different `ALPACA_CLERK_DIR` is insufficient. [Current startup](../../PythonDataService/app/main.py) reads bot bindings and arming-related seals through `live_artifacts_root()`, constructs `BotTaskRegistry` from the separate live-runs setting, validates the data lake, and marks old research jobs failed. [Compose](../../compose.yaml) mounts a shared artifacts tree and a broad environment file. Copying the service definition risks sharing bot state and credentials or duplicating unrelated jobs.
 
-The bot runner also resolves a retained read-only market-data feed. This is a dependency to account for; it is not authorization to develop the deprecated IBKR broker-control surfaces. D1's "no broker client in the coordinator" needs a concrete feed ownership/topology decision so agents do not lose a required input when startup is split.
+The bot runner also resolves a retained read-only market-data feed. This is a dependency to account for; it is not authorization to develop the deprecated IBKR broker-control surfaces. D1's “no broker client in the coordinator” needs a concrete feed ownership/topology decision so agents do not lose a required input when startup is split.
 
 Likewise, returning 503 from `market-status-snapshot` is a functional migration issue. [The existing consumer](../../PythonDataService/app/broker/alpaca/market_liveness.py) can explicitly depend on that upstream for market-status evidence. A runbook sentence does not replace the source or prove that exposure admission still works.
 
@@ -119,7 +119,7 @@ For SSE, validate each complete event's provenance, cap event size and pending b
 
 ### 9. P2 — Keep D5, but define its exact update rule
 
-Capturing a selection generation can work if it is captured only when the effective `(profile, revision, account)` changes. "At the last acknowledgement" is insufficient: [the current acknowledgement policy](../../PythonDataService/app/broker_configuration/binding_decision.py) also acknowledges a consumed Apply, including one that may leave that tuple unchanged.
+Capturing a selection generation can work if it is captured only when the effective `(profile, revision, account)` changes. “At the last acknowledgement” is insufficient: [the current acknowledgement policy](../../PythonDataService/app/broker_configuration/binding_decision.py) also acknowledges a consumed Apply, including one that may leave that tuple unchanged.
 
 **Revision:** one clerk-local transaction decides whether the effective tuple changed and persists its binding generation with that tuple. Stage, refused Apply, ordinary restart, and Apply of the same effective tuple do not change it. A change away and back receives a new generation. Migration establishes a documented initial value without inventing historical transitions. The coordinator only confirms that value.
 
@@ -127,7 +127,7 @@ Frontend resources remain grouped by `(broker, clerk_id)`, but requests, cached 
 
 ### 10. P1 — Migration and rollback must work halfway through
 
-"Idempotent rerun is a no-op" handles only completed migration. Provisioning, marker creation, assignment import, local schema upgrade, and secret delivery cannot commit atomically together. The existing provisioning compensation handles Python exceptions; a process kill between durable writes can leave partial state.
+“Idempotent rerun is a no-op” handles only completed migration. Provisioning, marker creation, assignment import, local schema upgrade, and secret delivery cannot commit atomically together. The existing provisioning compensation handles Python exceptions; a process kill between durable writes can leave partial state.
 
 **Revision:** make migration an offline, resumable ceremony with durable progress and exact identity checks. Acquire the correct local ownership locks, verify the original effective binding, preserve pending Stage/Apply semantics, import ownership without enabling a new writer, and verify sealed evidence remains byte-identical. An already-complete rerun verifies the result; a partial rerun resumes; inconsistent evidence refuses. Do not remint clerk or volume identities to get past a partial failure.
 
