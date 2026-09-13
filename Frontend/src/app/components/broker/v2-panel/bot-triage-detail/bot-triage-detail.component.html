@@ -13,6 +13,7 @@
   <div class="triage-lensbar">
     <app-lens-tabs
       class="triage-lensbar__tabs"
+      idPrefix="triage-lens"
       ariaLabel="Detail lens"
       panelId="triage-lens-panel"
       [lens]="lens()"
@@ -85,7 +86,7 @@
     id="triage-lens-panel"
     class="triage-lens-panel"
     role="tabpanel"
-    [attr.aria-labelledby]="lens() === 'trader' ? 'triage-lens-tab-trader' : 'triage-lens-tab-operator'"
+    [attr.aria-labelledby]="lens() === 'trader' ? 'triage-lens-trader-tab' : 'triage-lens-operator-tab'"
   >
   @if (lens() === 'trader') {
     <div class="triage-trader">

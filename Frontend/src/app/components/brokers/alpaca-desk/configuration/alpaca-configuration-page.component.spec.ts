@@ -235,6 +235,18 @@ async function renderPage(
   return { ...view, queryParamMap };
 }
 
+/**
+ * Writes stay disabled until the page has read both the selection and the
+ * desk projection and their generations agree; wait for that before clicking.
+ */
+async function clickWhenWritesEnabled(name: string): Promise<void> {
+  const button = await screen.findByRole('button', { name });
+  await vi.waitFor(() => {
+    if ((button as HTMLButtonElement).disabled) throw new Error('writes are still disabled');
+  });
+  await userEvent.click(button);
+}
+
 async function saveProfile(name: string): Promise<void> {
   await userEvent.click(await screen.findByRole('button', { name: 'New configuration profile' }));
   await userEvent.type(screen.getByLabelText('Profile name'), name);
@@ -448,11 +460,11 @@ describe('AlpacaConfigurationPageComponent', () => {
     first.fixture.destroy();
     TestBed.resetTestingModule();
     await renderPage(service);
-    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+    await clickWhenWritesEnabled('Stage');
 
     expect(service.staged).toEqual([{ profileId: 'profile-1', revision: 1, generation: 0 }]);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Apply staged revision' }));
+    await clickWhenWritesEnabled('Apply staged revision');
 
     expect(service.applied).toEqual([1]);
     expect(screen.getByText(/nothing has changed yet/)).toBeTruthy();
@@ -489,7 +501,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     await userEvent.click(await screen.findByText('Revision history (3)'));
     expect((screen.getByRole('button', { name: 'Stage revision 3' }) as HTMLButtonElement).disabled).toBe(true);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Stage revision 1' }));
+    await clickWhenWritesEnabled('Stage revision 1');
 
     expect(service.stageSelection).toHaveBeenCalledExactlyOnceWith('profile-paper', 1, 8);
     expect(service.applied).toEqual([]);
@@ -518,7 +530,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     });
     await renderPage(service);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Stage' }));
+    await clickWhenWritesEnabled('Stage');
 
     // The code-like reason arrives through the shared `receiptLabel` pipe.
     expect(screen.getByText('Selection Generation Conflict')).toBeTruthy();

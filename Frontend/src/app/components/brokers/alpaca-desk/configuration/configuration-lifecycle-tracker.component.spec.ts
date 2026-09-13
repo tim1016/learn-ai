@@ -88,6 +88,15 @@ describe('ConfigurationLifecycleTrackerComponent', () => {
     expect(screen.getByText('Refreshing / state unknown')).toBeTruthy();
   });
 
+  it('does not claim refreshing when the generations match but the lifecycle is empty', async () => {
+    await render(ConfigurationLifecycleTrackerComponent, {
+      componentInputs: { selection: selection(), deskState: deskState({ lifecycle: [] }) },
+    });
+
+    expect(screen.queryByText('Refreshing / state unknown')).toBeNull();
+    expect(screen.getByText(/Stage, then Apply/)).toBeTruthy();
+  });
+
   it('says Apply is recorded when the adopted selection says so', async () => {
     await render(ConfigurationLifecycleTrackerComponent, {
       componentInputs: {

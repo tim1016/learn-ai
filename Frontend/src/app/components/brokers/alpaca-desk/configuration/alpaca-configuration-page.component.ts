@@ -211,17 +211,18 @@ export class AlpacaConfigurationPageComponent {
   );
 
   /**
-   * The desk lifecycle and the adopted selection disagree on the selection
-   * generation: another writer moved the fence between the two reads. Every
-   * write (Stage and Apply) stays disabled until a newly adopted response and
-   * a fresh desk state agree again — the tracker shows the refreshing note in
-   * the meantime.
+   * The desk lifecycle and the adopted selection must both be read and agree
+   * on the selection generation before any write runs: another writer may
+   * have moved the fence between the two reads, and an unread desk state
+   * cannot confirm it didn't. Every write (Stage and Apply) stays disabled
+   * until a newly adopted response and a fresh desk state agree — the tracker
+   * shows the refreshing note in the meantime.
    */
   protected readonly writesBlocked = computed(() => {
     const state = this.deskState.hasValue() ? this.deskState.value() : null;
     const selection = this.currentSelection();
-    return state !== null && selection !== null
-      && state.selection_generation !== selection.selection_generation;
+    return state === null || selection === null
+      || state.selection_generation !== selection.selection_generation;
   });
 
   /** One disable signal for every write surface: busy, or generations disagree. */

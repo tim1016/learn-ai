@@ -1,5 +1,5 @@
 <ol class="tracker" aria-label="Configuration change tracker">
-  @if (steps().length > 0) {
+  @if (generationsMatch()) {
     @for (step of steps(); track step.key) {
       <li
         class="tracker__step"
