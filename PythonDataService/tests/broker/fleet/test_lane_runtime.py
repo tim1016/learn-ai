@@ -276,6 +276,24 @@ def test_compatibility_evidence_removes_temporary_file_when_atomic_replace_fails
     assert not list(evidence.path.parent.glob(".route_hits.json.*"))
 
 
+def test_compatibility_evidence_removes_temporary_file_when_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed durable flush leaves no orphaned aggregate temporary file."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+
+    def refuse_fsync(file_descriptor: int) -> None:
+        del file_descriptor
+        raise OSError("fsync refused")
+
+    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_fsync)
+    with pytest.raises(OSError, match="fsync refused"):
+        evidence.record(
+            method="GET", route_family="broker_bots", response_class="2xx"
+        )
+    assert not list(evidence.path.parent.glob(".route_hits.json.*"))
+
+
 async def test_identity_validation_precedes_capacity_and_pinned_reads_are_not_measured(
     tmp_path: Path,
 ) -> None:

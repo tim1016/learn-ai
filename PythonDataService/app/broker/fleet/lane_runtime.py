@@ -273,17 +273,20 @@ class CompatibilityReadEvidence:
     def _write_locked(self, payload: Mapping[str, object]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=self._path.parent, prefix=f".{self._path.name}.", delete=False
-        ) as temporary:
-            temporary.write(encoded)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
+        temporary_path: Path | None = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=self._path.parent, prefix=f".{self._path.name}.", delete=False
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(encoded)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            assert temporary_path is not None
             os.replace(temporary_path, self._path)
-        except OSError:
-            temporary_path.unlink(missing_ok=True)
+        except BaseException:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
             raise
 
 
