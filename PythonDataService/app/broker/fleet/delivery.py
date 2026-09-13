@@ -22,10 +22,13 @@ import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 
+import httpx
+
 from app.broker.fleet.internal_http import (
     FleetStreamError,
     SseEvent,
     build_internal_client,
+    enforce_private_http_target,
     iter_sse_from_response,
 )
 from app.broker.fleet.provider import ProviderOperation
@@ -138,6 +141,7 @@ class HttpLaneDelivery:
 
     def __init__(self, *, base_url: str, coordinator_service_token: str) -> None:
         """Bind the approved agent destination and the coordinator token."""
+        enforce_private_http_target(base_url)
         self._base_url = base_url.rstrip("/")
         self._token = coordinator_service_token
 
@@ -195,7 +199,7 @@ class HttpLaneDelivery:
 
 
 async def _closing_event_iterator(
-    response, client
+    response: httpx.Response, client: httpx.AsyncClient
 ) -> AsyncIterator[SseEvent]:
     """Yield parsed events, closing the response and client at stream end."""
     try:

@@ -19,8 +19,11 @@ incremental events (audit 2026-09-13, finding 8) — real sockets only.
 from __future__ import annotations
 
 import codecs
+import ipaddress
+import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,6 +38,82 @@ class FleetStreamError(Exception):
     API as itself — the coordinator maps it to the lane's ``unreachable`` or
     ``outcome_unknown`` refusal depending on whether a dispatch was possible.
     """
+
+
+class FleetTransportRefused(Exception):
+    """An internal fleet destination is outside the private-network boundary.
+
+    Cleartext fleet traffic (agent service tokens, worker keys) never leaves
+    the private deployment network; an ``http://`` destination that names a
+    public address is refused before any byte is sent.
+    """
+
+
+#: Hosts proven to resolve entirely to private addresses. The boundary check
+#: runs where a destination is bound (presence and delivery construction), and
+#: the lookup is blocking — proven verdicts are cached so repeated
+#: construction never repeats it.
+_PRIVATE_HOST_CACHE: dict[str, None] = {}
+
+
+def address_is_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether one resolved address sits inside the private boundary."""
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+def _parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Parse a host as an IP literal (zone ids stripped), else ``None``."""
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def enforce_private_http_target(url: str) -> None:
+    """Refuse a cleartext destination outside the private network boundary.
+
+    Fleet topology places coordinators and agents on a private compose
+    network, so ``http://`` is acceptable only for loopback, link-local and
+    private (RFC 1918 / unique-local) destinations — the service tokens and
+    worker keys that ride internal calls must never transit a public hop
+    (audit 2026-09-13, finding 4). ``https://`` is accepted anywhere. A host
+    name is resolved and every address it returns must be private; an
+    unresolvable host cannot be verified, so it is refused rather than
+    trusted. Verdicts are cached per host.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme != "http" or not parsed.hostname:
+        raise FleetTransportRefused(
+            f"the internal fleet destination {url!r} must be an http(s) URL"
+        )
+    host = parsed.hostname
+    if host in _PRIVATE_HOST_CACHE:
+        return
+    literal = _parse_ip_literal(host)
+    if literal is not None:
+        addresses = [literal]
+    else:
+        try:
+            resolved = socket.getaddrinfo(host, None)
+        except OSError as exc:
+            raise FleetTransportRefused(
+                f"the internal fleet destination {url!r} does not resolve: {exc}"
+            ) from exc
+        addresses = [
+            address
+            for info in resolved
+            if (address := _parse_ip_literal(info[4][0])) is not None
+        ]
+    for address in addresses:
+        if not address_is_private(address):
+            raise FleetTransportRefused(
+                f"the internal fleet destination {url!r} resolves to the public "
+                f"address {address}; cleartext fleet traffic never leaves the "
+                "private network — use https or a private address"
+            )
+    _PRIVATE_HOST_CACHE[host] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,8 +267,11 @@ __all__ = [
     "DEFAULT_INTERNAL_TIMEOUT_S",
     "DEFAULT_MAX_EVENT_BYTES",
     "FleetStreamError",
+    "FleetTransportRefused",
     "SseEvent",
+    "address_is_private",
     "build_internal_client",
+    "enforce_private_http_target",
     "iter_sse_events",
     "iter_sse_from_response",
 ]

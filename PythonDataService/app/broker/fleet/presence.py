@@ -30,7 +30,10 @@ from pathlib import Path
 from typing import Protocol
 
 from app.broker.fleet.errors import FleetControlError
-from app.broker.fleet.internal_http import build_internal_client
+from app.broker.fleet.internal_http import (
+    build_internal_client,
+    enforce_private_http_target,
+)
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
 
@@ -220,6 +223,7 @@ class RemotePresence:
 
     def __init__(self, *, base_url: str, agent_service_token: str) -> None:
         """Bind the internal destination and this agent's transport token."""
+        enforce_private_http_target(base_url)
         self._base_url = base_url.rstrip("/")
         self._token = agent_service_token
 
@@ -259,7 +263,15 @@ class RemotePresence:
             raise FleetControlError(
                 f"The fleet coordinator refused {path}: {detail or response.status_code}",
             )
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            # A malformed 200 is the coordinator misbehaving, not an operator
+            # refusal: translate so the heartbeat family (not a bare decode
+            # error) handles it.
+            raise FleetPresenceError(
+                f"The fleet coordinator returned a malformed body for {path}: {exc}",
+            ) from exc
         if not isinstance(body, dict):
             raise FleetPresenceError(
                 f"The fleet coordinator returned an unexpected body for {path}.",
@@ -292,7 +304,13 @@ class RemotePresence:
                 "The fleet coordinator refused to serve the volume expectation "
                 f"for clerk {clerk_id}: {_error_detail(response) or response.status_code}",
             )
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise FleetPresenceError(
+                "The fleet coordinator returned a malformed volume expectation: "
+                f"{exc}",
+            ) from exc
         if not isinstance(body, dict):
             raise FleetPresenceError(
                 "The fleet coordinator returned an unexpected volume expectation.",

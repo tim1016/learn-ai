@@ -329,7 +329,7 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
         clerk_row = service._store.read_clerk(clerk_id)
         assert clerk_row is not None
 
-        seeded = _seed_effective_binding_generation(volume_root)
+        seeded, generation = _seed_effective_binding_generation(volume_root)
         account, profile_id, revision = _effective_tuple(volume_root)
 
         imported = None
@@ -353,16 +353,14 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
                 broker=clerk_row.broker,
                 clerk_id=clerk_id,
                 external_account_id=account,
-                binding_generation=1,
+                binding_generation=generation,
                 agent_instance_id=_MIGRATION_INSTANCE,
                 routing_epoch=migration_session.routing_epoch,
                 effective_profile_id=profile_id,
                 effective_revision=revision,
             )
             evidence = read_confirmation_evidence(volume_root)
-            if evidence is None or evidence.binding_generation != max(
-                imported.confirmed_binding_generation or 1, 1
-            ):
+            if evidence is None or evidence.binding_generation != generation:
                 write_confirmation_evidence(
                     volume_root,
                     ConfirmationEvidence(
@@ -371,7 +369,7 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
                         registry_id=service._store.registry_id,
                         assignment_generation=imported.assignment_generation,
                         canonical_account_id=canonical,
-                        binding_generation=imported.confirmed_binding_generation or 1,
+                        binding_generation=generation,
                         effective_profile_id=profile_id,
                         effective_revision=revision,
                         confirmed_at_ms=now_ms_utc(),
@@ -388,6 +386,7 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
                 "volume_id": clerk_row.volume_id,
                 "deployment_namespace": clerk_row.deployment_namespace,
                 "binding_generation_seeded": seeded,
+                "binding_generation": generation,
                 "assignment": (
                     None
                     if imported is None
@@ -432,14 +431,22 @@ def _effective_tuple(volume_root: Path) -> tuple[str | None, str | None, int | N
     )
 
 
-def _seed_effective_binding_generation(volume_root: Path) -> bool:
-    """Seed generation 1 for an existing effective tuple, once, under the lock."""
+def _seed_effective_binding_generation(volume_root: Path) -> tuple[bool, int]:
+    """Seed generation 1 for an existing effective tuple, once, under the lock.
+
+    Returns whether this run performed the seed and the effective generation
+    the volume now carries. A volume that already advanced past 1 through
+    Apply cycles keeps its generation, and the imported confirmation cites
+    the volume's value — a hardcoded 1 would leave the registry's confirmed
+    observation disagreeing with the clerk's own selection until the next
+    re-confirmation.
+    """
     from app.broker_configuration.runtime import build_service
     from app.broker_configuration.store import ProfilesStore, profiles_database_path
     from app.broker_configuration.worker_lifecycle import selection_handover
 
     if not profiles_database_path(volume_root).exists():
-        return False
+        return False, 0
     with selection_handover(service_factory=lambda: build_service(clerk_dir=volume_root)):
         store = ProfilesStore.open(clerk_dir=volume_root)
         try:
@@ -449,7 +456,13 @@ def _seed_effective_binding_generation(volume_root: Path) -> bool:
                     "WHERE id = 1 AND effective_binding_generation = 0 "
                     "AND effective_profile_id IS NOT NULL"
                 )
-                return cursor.rowcount == 1
+                seeded = cursor.rowcount == 1
+                row = conn.execute(
+                    "SELECT effective_binding_generation FROM installation_selection "
+                    "WHERE id = 1"
+                ).fetchone()
+                generation = int(row[0]) if row is not None else 0
+                return seeded, generation
         finally:
             store.close()
 

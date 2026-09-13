@@ -9,7 +9,7 @@ and market-data dependency to exactly one role before any composition change.
 Verified against `app/main.py`, `app/broker/alpaca/**`, `app/broker_configuration/**`,
 `app/services/**`, `app/broker/ibkr/config.py` and `compose.yaml` on the A2 branch.
 
-##Writable roots
+## Writable roots
 
 | Root | Source setting | Written by | Role in fleet mode |
 |---|---|---|---|

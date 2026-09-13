@@ -23,7 +23,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.broker.alpaca.clerk.fleet_adapter import (
     ALPACA_OPERATIONS,
@@ -677,7 +677,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         assert not any(path.startswith("/api/brokers") for path in paths)
 
 
-def _volume_with_effective_tuple(tmp_path: Path) -> Path:
+def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:
     """A legacy clerk volume: profiles db holding an effective tuple."""
     from app.broker_configuration.service import BrokerConfigurationService
     from app.broker_configuration.store import ProfilesStore
@@ -705,9 +705,10 @@ def _volume_with_effective_tuple(tmp_path: Path) -> Path:
             conn.execute(
                 "UPDATE installation_selection SET effective_profile_id = ?, "
                 "effective_revision = 1, effective_account_id = "
-                "'ABCDEF01-1234-ABCD-5678-EF0123456789', effective_acknowledged_at_ms = 11 "
+                "'ABCDEF01-1234-ABCD-5678-EF0123456789', effective_acknowledged_at_ms = 11, "
+                "effective_binding_generation = ? "
                 "WHERE id = 1",
-                (created.profile.profile_id,),
+                (created.profile.profile_id, binding_generation),
             )
     finally:
         store.close()
@@ -779,6 +780,111 @@ def test_migrate_existing_enrols_resumes_and_never_remints(tmp_path: Path, capsy
         assert evidence.canonical_account_id == "abcdef01-1234-abcd-5678-ef0123456789"
     finally:
         service.close()
+
+
+def test_the_ceremony_confirms_the_volumes_generation_not_a_hardcoded_one(
+    tmp_path: Path, capsys
+) -> None:
+    """A volume that already advanced past 1 through Apply cycles keeps its
+    generation: the imported confirmation and evidence cite the volume's
+    value, so the registry's confirmed observation agrees with the clerk's
+    own selection from the first boot."""
+    from scripts.manage_broker_fleet import main
+
+    control_dir = tmp_path / "control"
+    volume_root = _volume_with_effective_tuple(tmp_path, binding_generation=3)
+    common = [
+        "--control-dir",
+        str(control_dir),
+        "--volume-root",
+        str(volume_root),
+        "--attestation-id",
+        "learn-ai-alpaca-paper",
+        "--deployment-namespace",
+        "compose:test",
+    ]
+
+    assert main(["init", "--control-dir", str(control_dir)]) == 0
+    capsys.readouterr()
+    assert main(["migrate-existing", *common]) == 0
+    ceremony = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert ceremony["step"] == "complete"
+    assert ceremony["binding_generation_seeded"] is False
+    assert ceremony["binding_generation"] == 3
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+    )
+    try:
+        assignment = service._store.read_assignment(
+            broker="alpaca", canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+        assert assignment is not None
+        assert assignment.confirmed_binding_generation == 3
+        evidence = read_confirmation_evidence(volume_root)
+        assert evidence is not None
+        assert evidence.binding_generation == 3
+    finally:
+        service.close()
+
+
+async def test_an_enrolled_agent_without_any_coordinator_destination_refuses(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path
+) -> None:
+    """An enrolled clerk agent naming neither a coordinator URL nor a control
+    directory gets a typed boot refusal — not an AssertionError that -O strips."""
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+        )
+        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
+
+        with pytest.raises(FleetBootRefused, match="requires FLEET_COORDINATOR_URL"):
+            await open_fleet_lane(
+                settings=settings, volume_root=Path(provisioned.clerk.volume_root)
+            )
+    finally:
+        service.close()
+
+
+async def test_a_malformed_200_from_the_coordinator_is_presence_unavailability() -> None:
+    """A heartbeat response that is not JSON translates to the presence
+    family, so the heartbeat loop logs and re-registers instead of dying on
+    a bare decode error."""
+    from fastapi import FastAPI
+
+    from app.broker.fleet.presence import FleetPresenceError, RemotePresence
+
+    coordinator = FastAPI()
+
+    @coordinator.post("/internal/fleet/sessions/observe")
+    async def observe() -> PlainTextResponse:
+        # A 200 whose body is not JSON — httpx's response.json() then raises,
+        # which the presence seam must translate, not leak.
+        return PlainTextResponse("not-json{")
+
+    server = _RealServer(coordinator)
+    server.start()
+    try:
+        presence = RemotePresence(
+            base_url=server.base_url, agent_service_token="svct_" + "2" * 32
+        )
+        with pytest.raises(FleetPresenceError, match="malformed"):
+            await presence.observe(
+                clerk_id="clrk_000000000000000000000000aa",
+                agent_instance_id="agnt_000000000000000000000000",
+            )
+    finally:
+        server.stop()
 
 
 async def test_an_effective_lane_restarts_and_reconfirms_under_a_new_epoch(

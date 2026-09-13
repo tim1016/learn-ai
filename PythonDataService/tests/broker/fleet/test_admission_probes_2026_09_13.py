@@ -244,6 +244,20 @@ def test_registration_cannot_choose_or_move_its_endpoint(
             endpoint_ref="agent:paper-1",
             base_url="http://user:pass@alpaca-paper-clerk:8000",
         )
+    # Cleartext to a public address is refused at approval time — host names
+    # are boundary-checked again where they are dialed (the transport seam).
+    with pytest.raises(ValueError, match="public address"):
+        fleet_service.approve_endpoint(
+            clerk_id=lane.clerk_id,
+            endpoint_ref="agent:paper-1",
+            base_url="http://93.184.216.34:8000",
+        )
+    https = fleet_service.approve_endpoint(
+        clerk_id=lane.clerk_id,
+        endpoint_ref="agent:paper-1",
+        base_url="https://alpaca-paper-clerk:8443",
+    )
+    assert https.base_url == "https://alpaca-paper-clerk:8443"
 
 
 def test_an_agent_speaking_another_protocol_version_refuses(

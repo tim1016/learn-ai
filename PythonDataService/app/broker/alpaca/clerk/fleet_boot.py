@@ -42,6 +42,7 @@ from app.broker.fleet.confirmation import (
 )
 from app.broker.fleet.errors import FleetControlError
 from app.broker.fleet.identity import new_agent_instance_id
+from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.presence import (
     FleetPresence,
     FleetPresenceError,
@@ -133,12 +134,26 @@ async def open_fleet_lane(
             raise FleetBootRefused(
                 "A remote fleet presence requires FLEET_AGENT_SERVICE_TOKEN.",
             )
-        presence = RemotePresence(
-            base_url=settings.COORDINATOR_URL,
-            agent_service_token=settings.AGENT_SERVICE_TOKEN,
-        )
+        try:
+            presence = RemotePresence(
+                base_url=settings.COORDINATOR_URL,
+                agent_service_token=settings.AGENT_SERVICE_TOKEN,
+            )
+        except FleetTransportRefused as exc:
+            raise FleetBootRefused(
+                f"The fleet coordinator destination is refused: {exc}",
+                next_step="Serve the coordinator on the private deployment "
+                "network or over https.",
+            ) from exc
     else:
-        assert settings.CONTROL_DIR is not None
+        if settings.CONTROL_DIR is None:
+            # An enrolled lane must name its coordinator one way or the
+            # other; `assert` would vanish under `python -O`.
+            raise FleetBootRefused(
+                "An enrolled fleet lane requires FLEET_COORDINATOR_URL (agent) "
+                "or FLEET_CONTROL_DIR (combined) — neither is set.",
+                next_step="Set the coordinator destination for this role.",
+            )
         from app.broker.fleet_composition import production_provider_adapters
 
         owned_service = FleetControlService(
