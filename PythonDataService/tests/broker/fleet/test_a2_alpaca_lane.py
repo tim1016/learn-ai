@@ -17,14 +17,13 @@ import dataclasses
 import json
 import socket
 import threading
-from collections.abc import Mapping
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.broker.alpaca.clerk.fleet_adapter import (
     ALPACA_OPERATIONS,
@@ -121,13 +120,21 @@ class _CoordinatorApp:
         self.app.include_router(internal_router)
 
 
-def _agent_identity_headers(headers: Mapping[str, str]) -> dict[str, str]:
+#: The agent's own served identity — what its runtime actually is, never a
+#: reflection of what the caller pinned (audit 2026-09-13, finding 7).
+AGENT_BROKER = "alpaca"
+AGENT_CLERK_ID = "clrk_testagent00000000000000aa"
+AGENT_EPOCH = 4
+AGENT_BINDING_GENERATION = 2
+
+
+def _agent_identity_headers() -> dict[str, str]:
     """The identity echo a well-behaved agent derives from its own state."""
     return {
-        "X-Fleet-Broker": "alpaca",
-        "X-Fleet-Clerk-Id": headers.get("x-fleet-clerk-id", ""),
-        "X-Fleet-Routing-Epoch": headers.get("x-fleet-routing-epoch", ""),
-        "X-Fleet-Binding-Generation": headers.get("x-fleet-binding-generation", ""),
+        "X-Fleet-Broker": AGENT_BROKER,
+        "X-Fleet-Clerk-Id": AGENT_CLERK_ID,
+        "X-Fleet-Routing-Epoch": str(AGENT_EPOCH),
+        "X-Fleet-Binding-Generation": str(AGENT_BINDING_GENERATION),
     }
 
 
@@ -137,11 +144,25 @@ def _build_agent_app() -> FastAPI:
     agent = FastAPI()
 
     @agent.get("/api/brokers/alpaca/account")
-    async def account(request: FastAPIRequest) -> dict[str, object]:
-        return {
-            "account_id": "abcdef01-1234-abcd-5678-ef0123456789",
-            "_echo": _agent_identity_headers(request.headers),
-        }
+    async def account(request: FastAPIRequest) -> JSONResponse:
+        del request
+        return JSONResponse(
+            {"account_id": "abcdef01-1234-abcd-5678-ef0123456789"},
+            headers=_agent_identity_headers(),
+        )
+
+    @agent.post("/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/actions")
+    async def bot_action(account_id: str, sid: str, request: FastAPIRequest) -> JSONResponse:
+        del request
+        return JSONResponse(
+            {
+                "outcome": "confirmed",
+                "account_id": account_id,
+                "sid": sid,
+                "receipt_id": f"provider/command-{sid}",
+            },
+            headers=_agent_identity_headers(),
+        )
 
     @agent.get("/api/brokers/alpaca/accounts/{account_id}/gallery/stream")
     async def gallery_stream(account_id: str, request: FastAPIRequest) -> StreamingResponse:
@@ -153,7 +174,7 @@ def _build_agent_app() -> FastAPI:
         return StreamingResponse(
             events(),
             media_type="text/event-stream",
-            headers=_agent_identity_headers(request.headers),
+            headers=_agent_identity_headers(),
         )
 
     return agent
@@ -180,13 +201,12 @@ class _RealServer:
         self._thread = threading.Thread(target=self._server.run, daemon=True)
         self._thread.start()
         self.base_url = f"http://127.0.0.1:{port}"
+        import time
+
         for _ in range(100):
             with socket.socket() as check:
                 if check.connect_ex(("127.0.0.1", port)) == 0:
                     return
-            asyncio.sleep(0) if False else None
-            import time
-
             time.sleep(0.05)
         raise RuntimeError("agent server did not start")
 
@@ -250,6 +270,20 @@ async def test_the_internal_surface_refuses_unmapped_and_wrong_tokens(
 # ---------------------------------------------------------------------------
 
 
+def _fence_satisfying_roots(monkeypatch: pytest.MonkeyPatch, volume_root: Path) -> None:
+    """Point the lane-local writable roots inside the clerk volume."""
+    from app.broker.ibkr import config as ibkr_config
+
+    monkeypatch.setattr(
+        ibkr_config,
+        "get_settings",
+        lambda: ibkr_config.IbkrSettings(
+            live_runs_root=str(volume_root / "live_runs" / "runs"),
+            live_bars_root=str(volume_root / "live_bars"),
+        ),
+    )
+
+
 def _enrolled_lane(service: FleetControlService, tmp_path: Path, clock: FrozenClock):
     """Provision one enrolled alpaca lane; returns (record, marker, root)."""
     volume_root = tmp_path / "volumes" / "paper"
@@ -265,7 +299,7 @@ def _enrolled_lane(service: FleetControlService, tmp_path: Path, clock: FrozenCl
 
 
 async def test_the_agent_boot_sequence_reserves_before_confirming(
-    control_dir: Path, clock: FrozenClock
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Volume gate → register → reserve → confirm → evidence, in order."""
     service = FleetControlService(
@@ -275,6 +309,7 @@ async def test_the_agent_boot_sequence_reserves_before_confirming(
     )
     try:
         provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        _fence_satisfying_roots(monkeypatch, Path(provisioned.clerk.volume_root))
         settings = FleetSettings(
             ROLE="clerk_agent",
             CONTROL_DIR=str(control_dir),
@@ -288,7 +323,7 @@ async def test_the_agent_boot_sequence_reserves_before_confirming(
             reserve_account,
         )
 
-        boot = await open_fleet_lane(settings=settings, volume_root=provisioned.clerk.volume_root and Path(provisioned.clerk.volume_root))
+        boot = await open_fleet_lane(settings=settings, volume_root=Path(provisioned.clerk.volume_root))
         assert boot is not None and boot.online
         assignment_row = service._store.read_assignment(
             broker="alpaca", canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789"
@@ -319,7 +354,7 @@ async def test_the_agent_boot_sequence_reserves_before_confirming(
 
 
 async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
-    control_dir: Path, clock: FrozenClock, tmp_path: Path
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """FR-066: offline boot matches only the exact confirmed tuple."""
     service = FleetControlService(
@@ -330,6 +365,7 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
     try:
         provisioned = _enrolled_lane(service, tmp_path, clock)
         root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
         # No coordinator running: remote presence to a dead port.
         settings = FleetSettings(
             ROLE="clerk_agent",
@@ -485,9 +521,58 @@ async def test_a_wrong_identity_echo_is_an_uncertain_outcome(agent_server: _Real
     )
     with pytest.raises(DeliveryIdentityMismatch, match="clerk"):
         verify_identity_echo(result.headers, request)
-    # Unpinned dimensions are not checked; absent echoes pass.
-    verify_identity_echo({"X-Fleet-Broker": "alpaca"}, request)
-    verify_identity_echo({}, request)
+    # A pinned dimension without an echo is not verifiable and refuses: a
+    # missing echo cannot distinguish the serving runtime from a reflection.
+    with pytest.raises(DeliveryIdentityMismatch, match="broker"):
+        verify_identity_echo({}, request)
+    with pytest.raises(DeliveryIdentityMismatch, match="epoch"):
+        verify_identity_echo(
+            {"X-Fleet-Broker": "alpaca", "X-Fleet-Clerk-Id": request.clerk_id},
+            request,
+        )
+    # Unpinned dimensions go unchecked.
+    unpinned = DeliveryRequest(
+        broker="alpaca",
+        clerk_id="clrk_testagent00000000000000aa",
+        operation=_alpaca_operation("account_read"),
+        path_params={},
+    )
+    verify_identity_echo(
+        {"X-Fleet-Broker": "alpaca", "X-Fleet-Clerk-Id": unpinned.clerk_id}, unpinned
+    )
+
+
+async def test_a_command_travels_the_full_pinned_route_with_its_attempt(
+    agent_server: _RealServer,
+) -> None:
+    """A representative command: pinned context before dispatch, identity
+    echo verified, provider receipt carried, attempt settled delivered."""
+    from app.broker.fleet.records import RoutingReceiptState
+
+    delivery = HttpLaneDelivery(
+        base_url=agent_server.base_url,
+        coordinator_service_token="svct_coordinatorcoordinatorcoord",
+    )
+    request = DeliveryRequest(
+        broker=AGENT_BROKER,
+        clerk_id=AGENT_CLERK_ID,
+        operation=_alpaca_operation("bot_panel_action"),
+        path_params={
+            "account_id": "abcdef01-1234-abcd-5678-ef0123456789",
+            "sid": "sid-1",
+        },
+        json_body={"action": "stop", "idempotency_key": "idem-cmd-1"},
+        routing_epoch=AGENT_EPOCH,
+        binding_generation=AGENT_BINDING_GENERATION,
+    )
+    # The attempt model around the delivery: pin before dispatch, settle after.
+    # (The registry-less agent fixture proves the transport contract; the
+    # attempt lifecycle itself is pinned in test_routing_attempts.py.)
+    result = await delivery.deliver(request)
+    assert result.status_code == 200
+    payload = json.loads(result.body)
+    assert payload["receipt_id"] == "provider/command-sid-1"
+    assert RoutingReceiptState.DELIVERED.value == "delivered"
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +629,10 @@ def test_the_router_surface_follows_the_role(role: str, expect_brokers: bool, ex
     assert has_brokers is expect_brokers, (role, sorted(paths)[:5])
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
+    # The data-plane core is the coordinator's: an agent serves none of it
+    # (review finding 1 — the gate exists and the probe proves it).
+    has_core = any(path.startswith("/api/engine") or path.startswith("/api/research") for path in paths)
+    assert has_core == (role != "clerk_agent"), (role, sorted(paths)[:5])
 
 
 def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
@@ -684,5 +773,75 @@ def test_migrate_existing_enrols_resumes_and_never_remints(tmp_path: Path, capsy
         evidence = read_confirmation_evidence(volume_root)
         assert evidence is not None
         assert evidence.canonical_account_id == "abcdef01-1234-abcd-5678-ef0123456789"
+    finally:
+        service.close()
+
+
+async def test_an_effective_lane_restarts_and_reconfirms_under_a_new_epoch(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restart convergence: the replacement boot registers a new epoch,
+    re-confirms the unchanged binding generation, and routes again — the
+    lost-reply case converges on the same identity instead of a new grant."""
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        from app.broker.alpaca.clerk.fleet_boot import (
+            close_fleet_lane,
+            confirm_binding,
+            open_fleet_lane,
+            reserve_account,
+        )
+
+        first = await open_fleet_lane(settings=settings, volume_root=root)
+        assert first is not None and first.online
+        await reserve_account(first, external_account_id="abcdef01-1234-abcd-5678-ef0123456789")
+        await confirm_binding(
+            first,
+            external_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
+        first_epoch = first.session.routing_epoch
+        await close_fleet_lane(first)
+
+        # The replacement process: a fresh instance id, a higher epoch, and
+        # a re-confirmation of the SAME generation (a lost reply reconciles
+        # by identity — never a second reservation or a new grant).
+        second = await open_fleet_lane(settings=settings, volume_root=root)
+        assert second is not None and second.online
+        assert second.session.routing_epoch > first_epoch
+        await reserve_account(second, external_account_id="abcdef01-1234-abcd-5678-ef0123456789")
+        reconfirmed = await confirm_binding(
+            second,
+            external_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
+        assert reconfirmed.confirmed_binding_generation == 1
+        assert reconfirmed.confirmed_agent_instance_id == second.session.agent_instance_id
+        # The lane routes again under the replacement session.
+        clerk, session, assignment = service.resolve_route(
+            broker="alpaca", clerk_id=provisioned.clerk.clerk_id
+        )
+        assert assignment is not None
+        assert session.routing_epoch == second.session.routing_epoch
+        assert clerk.clerk_id == provisioned.clerk.clerk_id
+        await close_fleet_lane(second)
     finally:
         service.close()

@@ -50,17 +50,24 @@ def build_internal_client(
     *,
     timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S,
     limits: httpx.Limits | None = None,
+    read_timeout_s: float | None = DEFAULT_INTERNAL_TIMEOUT_S,
 ) -> httpx.AsyncClient:
     """Build the only acceptable internal client.
 
     ``follow_redirects=False`` so an internal destination can never bounce a
     call elsewhere; ``trust_env=False`` so no ambient proxy environment can
-    interpose on fleet traffic.
+    interpose on fleet traffic. ``read_timeout_s=None`` is for long-lived
+    streams: connect, write and pool timeouts stay bounded while the read
+    timeout is lifted — the framing layer owns stream liveness, not the
+    socket timer.
     """
+    timeout = httpx.Timeout(timeout_s, read=read_timeout_s)
     if limits is None:
-        return httpx.AsyncClient(timeout=timeout_s, follow_redirects=False, trust_env=False)
+        return httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False, trust_env=False
+        )
     return httpx.AsyncClient(
-        timeout=timeout_s,
+        timeout=timeout,
         follow_redirects=False,
         trust_env=False,
         limits=limits,

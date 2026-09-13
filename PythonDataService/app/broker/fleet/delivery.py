@@ -98,35 +98,34 @@ def verify_identity_echo(
 ) -> None:
     """Verify the serving runtime's identity echo against the pinned attempt.
 
-    The echo must come from the actual serving runtime, so reflected request
-    headers never satisfy this check on their own — the values are compared
-    against what the caller pinned when opening the attempt, and only headers
-    the request pinned are checked (an unpinned dimension is not an echo).
+    The broker and clerk echo are required on every delivery, and a pinned
+    epoch or binding generation must be echoed too — a response that omits
+    the echo of a pinned dimension is not verifiable and refuses (a missing
+    echo can never distinguish the serving runtime from a reflection or a
+    refusal in flight). Only unpinned dimensions go unchecked.
     """
     served_broker = headers.get(f"{IDENTITY_HEADER_PREFIX}Broker")
     served_clerk = headers.get(f"{IDENTITY_HEADER_PREFIX}Clerk-Id")
-    if served_broker is not None and served_broker != request.broker:
+    if served_broker != request.broker:
         raise DeliveryIdentityMismatch(
             f"The response names broker {served_broker!r}; the attempt pinned "
             f"{request.broker!r}."
         )
-    if served_clerk is not None and served_clerk != request.clerk_id:
+    if served_clerk != request.clerk_id:
         raise DeliveryIdentityMismatch(
             f"The response names clerk {served_clerk!r}; the attempt pinned "
             f"{request.clerk_id!r}."
         )
     if request.routing_epoch is not None:
         served_epoch = headers.get(f"{IDENTITY_HEADER_PREFIX}Routing-Epoch")
-        if served_epoch is not None and served_epoch != str(request.routing_epoch):
+        if served_epoch != str(request.routing_epoch):
             raise DeliveryIdentityMismatch(
                 f"The response was served at epoch {served_epoch!r}; the attempt "
                 f"pinned {request.routing_epoch}."
             )
     if request.binding_generation is not None:
         served_generation = headers.get(f"{IDENTITY_HEADER_PREFIX}Binding-Generation")
-        if served_generation is not None and served_generation != str(
-            request.binding_generation
-        ):
+        if served_generation != str(request.binding_generation):
             raise DeliveryIdentityMismatch(
                 f"The response was served at binding generation "
                 f"{served_generation!r}; the attempt pinned "
@@ -167,7 +166,7 @@ class HttpLaneDelivery:
 
     async def stream(self, request: DeliveryRequest) -> StreamDeliveryResult:
         """Forward one streaming operation; events parse as they arrive."""
-        client = build_internal_client(timeout_s=None)
+        client = build_internal_client(read_timeout_s=None)
         response = await client.send(
             client.build_request(
                 request.operation.method,
@@ -180,7 +179,14 @@ class HttpLaneDelivery:
             ),
             stream=True,
         )
-        verify_identity_echo(response.headers, request)
+        try:
+            verify_identity_echo(response.headers, request)
+        except DeliveryIdentityMismatch:
+            # A refused echo still holds an open stream: release both ends
+            # before surfacing the uncertain outcome.
+            await response.aclose()
+            await client.aclose()
+            raise
         return StreamDeliveryResult(
             status_code=response.status_code,
             headers=dict(response.headers),

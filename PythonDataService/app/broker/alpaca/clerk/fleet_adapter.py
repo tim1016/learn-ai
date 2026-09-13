@@ -91,6 +91,18 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             idempotency=OperationIdempotency.READ,
         ),
         ProviderOperation(
+            operation_id="bot_panel_action",
+            method="POST",
+            path_template="/accounts/{account_id}/bots/{sid}/actions",
+            agent_path_template=(
+                "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/actions"
+            ),
+            capability=Capability.BOT_ACTION,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=True,
+            idempotency=OperationIdempotency.DURABLE_KEY,
+        ),
+        ProviderOperation(
             operation_id="gallery_stream",
             method="GET",
             path_template="/accounts/{account_id}/gallery/stream",

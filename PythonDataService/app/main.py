@@ -239,20 +239,31 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     broker endpoints return 503.
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
+    if _FLEET_ROLE == "fleet_coordinator" and fleet_settings.CONTROL_DIR is None:
+        raise RuntimeError(
+            "FLEET_ROLE=fleet_coordinator requires FLEET_CONTROL_DIR; a "
+            "coordinator without its registry volume refuses to start."
+        )
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
 
     # Root identity (#1876) — validated first, before any other subsystem
     # touches the lake: a LakeRootIdentityError here aborts startup (see
     # _validate_data_root_identity's docstring for why this is not
-    # best-effort like the IBKR connect below).
-    _validate_data_root_identity()
+    # best-effort like the IBKR connect below). The lake is the
+    # coordinator's artifact (fleet A2 inventory): a clerk agent serves no
+    # lake route and must not abort on the coordinator-owned root.
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        _validate_data_root_identity()
 
     # Every job runs on a thread of this process, so whatever the active set
     # still calls queued or running belonged to the previous process and has
     # no worker (a crash, an out-of-memory kill, a restart). Close those records
     # before the listener opens, so nothing reads as live for a day and the
     # research record behind each can be Finished.
-    fail_jobs_without_a_worker()
+    # Job ownership is the coordinator's: a clerk agent restarting (every
+    # Apply) must not fail the coordinator's queued research jobs.
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        fail_jobs_without_a_worker()
 
     # The coordinator's fleet state: the registry on its own control volume
     # plus the internal agent-token mapping the /internal/fleet surface
@@ -855,95 +866,100 @@ app.add_middleware(
 DATA_PLANE_CONTROL_DEPENDENCIES = [Depends(require_data_plane_control_secret)]
 PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
 
-app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
-app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
-app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
-app.include_router(options.router, prefix="/api/options", tags=["options"])
-app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
-app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
-app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
-app.include_router(news.router, prefix="/api/news", tags=["news"])
-app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
-app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
-app.include_router(research.router, prefix="/api/research", tags=["research"])
-app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
-app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
-app.include_router(
-    golden_validation.router,
-    prefix="/api/research/golden-validations",
-    tags=["research-golden-validation"],
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
-)
-# Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
-app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
-app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-# Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
-app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
-app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
-# Research-pipeline walk-forward (Phase C). Registered BEFORE
-# ``research_runs`` so the literal ``/walk-forward`` segment wins
-# against the ``GET /{run_id}`` route on the parent router.
-app.include_router(
-    walk_forward.router,
-    prefix="/api/research/strategy-runs/walk-forward",
-    tags=["research-walk-forward"],
-)
-# Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
-# placement so the literal ``/monte-carlo`` segment wins.
-app.include_router(
-    monte_carlo.router,
-    prefix="/api/research/strategy-runs/monte-carlo",
-    tags=["research-monte-carlo"],
-)
-# Research-pipeline null baselines (Phase E1). Same pre-research_runs
-# placement so the literal ``/baselines`` segment wins.
-app.include_router(
-    baselines.router,
-    prefix="/api/research/strategy-runs/baselines",
-    tags=["research-baselines"],
-)
-# Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
-app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
-# Trading-calendar preview — sibling endpoint under ``/api/research`` so
-# the date-picker UI can surface skipped sessions before a run is
-# submitted. Lives in a separate ``APIRouter`` instance from the
-# strategy-runs router because their prefixes differ.
-app.include_router(
-    research_runs.calendar_router,
-    prefix="/api/research",
-    tags=["research-trading-calendar"],
-)
-app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
-app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
-app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
-app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
-# LEAN Sidecar Lab — data-plane API in front of the launcher service.
-# Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
-# algorithm source. See docs/architecture/lean-sidecar-lab.md.
-app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
-app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
-# Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
-# Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
-app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
-# QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
-# Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
-# the four endpoints silently 404'd until pricing-lab surfaced it.
-app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
-# Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
-# the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
-app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
-# Edge router carries its own /api/edge prefix.
-app.include_router(edge.router)
-# Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
-# Router carries its own /api/edge/iv30 prefix.
-app.include_router(iv30.router)
-# IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
-# Step D of IV-ownership plan. Driven by .NET cron; not in-process.
-app.include_router(iv_recorder.router)
-# /research/data-divergence/* — dashboard + matrix endpoints. The router
-# carries its own prefix so we mount it bare.
-app.include_router(research_divergence.router)
+# Data-plane core part 1 (research, engine, aggregates, jobs): the
+# coordinator and combined roles own it; a clerk agent serves none of
+# it (fleet A2 inventory router table).
+if _ROLE_RUNS_DATA_PLANE_CORE:
+    app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
+    app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
+    app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
+    app.include_router(options.router, prefix="/api/options", tags=["options"])
+    app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+    app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
+    app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
+    app.include_router(news.router, prefix="/api/news", tags=["news"])
+    app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
+    app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
+    app.include_router(research.router, prefix="/api/research", tags=["research"])
+    app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
+    app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+    app.include_router(
+        golden_validation.router,
+        prefix="/api/research/golden-validations",
+        tags=["research-golden-validation"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
+    # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
+    app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
+    app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
+    app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
+    app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
+    # Research-pipeline walk-forward (Phase C). Registered BEFORE
+    # ``research_runs`` so the literal ``/walk-forward`` segment wins
+    # against the ``GET /{run_id}`` route on the parent router.
+    app.include_router(
+        walk_forward.router,
+        prefix="/api/research/strategy-runs/walk-forward",
+        tags=["research-walk-forward"],
+    )
+    # Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
+    # placement so the literal ``/monte-carlo`` segment wins.
+    app.include_router(
+        monte_carlo.router,
+        prefix="/api/research/strategy-runs/monte-carlo",
+        tags=["research-monte-carlo"],
+    )
+    # Research-pipeline null baselines (Phase E1). Same pre-research_runs
+    # placement so the literal ``/baselines`` segment wins.
+    app.include_router(
+        baselines.router,
+        prefix="/api/research/strategy-runs/baselines",
+        tags=["research-baselines"],
+    )
+    # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
+    app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
+    # Trading-calendar preview — sibling endpoint under ``/api/research`` so
+    # the date-picker UI can surface skipped sessions before a run is
+    # submitted. Lives in a separate ``APIRouter`` instance from the
+    # strategy-runs router because their prefixes differ.
+    app.include_router(
+        research_runs.calendar_router,
+        prefix="/api/research",
+        tags=["research-trading-calendar"],
+    )
+    app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
+    app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
+    app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
+    app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
+    # LEAN Sidecar Lab — data-plane API in front of the launcher service.
+    # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
+    # algorithm source. See docs/architecture/lean-sidecar-lab.md.
+    app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
+    app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
+    # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
+    # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
+    app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
+    # QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
+    # Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
+    # the four endpoints silently 404'd until pricing-lab surfaced it.
+    app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
+    # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
+    # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
+    app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Edge router carries its own /api/edge prefix.
+    app.include_router(edge.router)
+    # Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
+    # Router carries its own /api/edge/iv30 prefix.
+    app.include_router(iv30.router)
+    # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
+    # Step D of IV-ownership plan. Driven by .NET cron; not in-process.
+    app.include_router(iv_recorder.router)
+    # /research/data-divergence/* — dashboard + matrix endpoints. The router
+    # carries its own prefix so we mount it bare.
+    app.include_router(research_divergence.router)
+
 # Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
 # subscription count. Requires the always-on control secret (GET exposes live
 # broker state: connection status, last bar watermark, subscription count).
@@ -1056,7 +1072,9 @@ if _ROLE_RUNS_CLERK:
 # dependency and there is no argument for these two being the exception.
 # Decided at the flag flip (#1839, carry-forward A6) rather than inherited
 # from the flag-dark slice that first registered the router.
-app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+if _ROLE_RUNS_DATA_PLANE_CORE:
+    app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+
 
 # Dev-only broker fault-injection seam (PRD #1354) — gated by
 # ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered

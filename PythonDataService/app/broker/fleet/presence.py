@@ -282,6 +282,11 @@ class RemotePresence:
             ) from exc
         finally:
             await client.aclose()
+        if response.status_code >= 500:
+            raise FleetPresenceError(
+                "The fleet coordinator failed serving the volume expectation "
+                f"for clerk {clerk_id}: {response.status_code}.",
+            )
         if response.status_code != 200:
             raise FleetControlError(
                 "The fleet coordinator refused to serve the volume expectation "

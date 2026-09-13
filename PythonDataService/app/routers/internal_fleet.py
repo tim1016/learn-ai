@@ -96,7 +96,11 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
     if not isinstance(mapping, dict):
         raise HTTPException(status_code=503, detail="agent token mapping unreadable")
     expected = mapping.get(clerk_id)
-    if not isinstance(expected, str) or not matches_service_token(token, expected):
+    if (
+        not isinstance(expected, str)
+        or not expected
+        or not matches_service_token(token, expected)
+    ):
         logger.warning(
             "internal fleet call refused for unknown or mismatched agent token",
             extra={"clerk_id": clerk_id},

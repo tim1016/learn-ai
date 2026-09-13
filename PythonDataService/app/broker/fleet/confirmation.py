@@ -178,10 +178,19 @@ def write_confirmation_evidence(clerk_root: Path, evidence: ConfirmationEvidence
     }
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}")
-    temporary.write_text(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8"
-    )
+    # Durability to the same bar as the registry's FULL-sync SQLite: the
+    # evidence is the FR-066 offline story, and a rename that outlived its
+    # data on power loss would vouch for a grant that no longer exists.
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, target)
+    directory = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def evidence_vouches_for(

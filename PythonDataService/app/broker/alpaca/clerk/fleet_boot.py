@@ -26,7 +26,6 @@ the coordinator, failing closed.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -51,6 +50,7 @@ from app.broker.fleet.presence import (
     SessionInfo,
 )
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
+from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService, FleetRegistryStore
 from app.config import FleetSettings
 from app.utils.timestamps import now_ms_utc
@@ -156,6 +156,13 @@ async def open_fleet_lane(
         volume_id="",
         owned_service=owned_service,
     )
+    # The writable-root fence (fleet A2 inventory): the lane's bot-binding
+    # and live-bars roots must live inside the verified clerk volume — the
+    # re-homing is enforced before any database writer or broker client
+    # opens, not left as a deployment convention. The broker capture
+    # directory is deliberately exempt: it is lane evidence on the agent's
+    # own container filesystem, never a shared root.
+    _fence_writable_roots(volume_root=volume_root)
     try:
         expectation = await presence.expectation(clerk_id=settings.CLERK_ID)
         boot.registry_id = str(expectation["registry_id"])
@@ -174,7 +181,23 @@ async def open_fleet_lane(
             fleet_protocol_version=FLEET_PROTOCOL_VERSION,
         )
     except FleetPresenceError as exc:
+        # Offline rule (FR-066): the evidence must name THIS volume's
+        # enrolled identity — a foreign or hand-copied evidence file does
+        # not vouch for anything here.
+        marker = volume_module.read_volume_marker(volume_root)
         evidence = read_confirmation_evidence(volume_root)
+        if marker is not None and evidence is not None and (
+            evidence.clerk_id != marker.clerk_id or evidence.volume_id != marker.volume_id
+        ):
+            await close_fleet_lane(boot)
+            raise FleetBootRefused(
+                "The confirmation evidence on this volume names clerk "
+                f"{evidence.clerk_id}/volume {evidence.volume_id}; the volume's "
+                f"marker names {marker.clerk_id}/{marker.volume_id}. Evidence "
+                "never migrates onto another lane.",
+                next_step="Restore this volume's own evidence from backup or "
+                "re-enrol it with the coordinator available.",
+            ) from exc
         if evidence is None:
             await close_fleet_lane(boot)
             raise FleetBootRefused(
@@ -213,7 +236,7 @@ async def confirm_binding(
     effective_profile_id: str | None,
     effective_revision: int | None,
     assignment_observed: Mapping[str, object] | None = None,
-) -> None:
+) -> AccountAssignmentRecord:
     """Confirm the binding observation and persist the clerk's evidence."""
     if boot.session is None:
         raise FleetBootRefused(
@@ -247,6 +270,7 @@ async def confirm_binding(
         ),
     )
     del assignment_observed  # reserved for the delivery-B forwarding facts
+    return confirmed
 
 
 def offline_boot_matches(
@@ -278,16 +302,18 @@ def start_heartbeat(
     """Observe on a cadence; observations never confirm anything."""
 
     async def _beat() -> None:
+        from app.broker.fleet.identity import new_agent_instance_id
+
         while True:
             await asyncio.sleep(interval_s)
             reported = facts()
             summary = reported.get("reported_summary")
+            if boot.session is None:
+                continue
             try:
                 await boot.presence.observe(
                     clerk_id=boot.clerk_id,
-                    agent_instance_id=boot.session.agent_instance_id
-                    if boot.session
-                    else "",
+                    agent_instance_id=boot.session.agent_instance_id,
                     reported_binding_generation=reported.get("reported_binding_generation"),
                     reported_account_id=reported.get("reported_account_id"),
                     reported_state=reported.get("reported_state"),
@@ -297,6 +323,29 @@ def start_heartbeat(
                 logger.warning(
                     "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
                 )
+                # A coordinator that restarted lost this session: present a
+                # fresh registration so the lane returns to routed without a
+                # process restart. The confirmation on the assignment is not
+                # touched — a re-confirmation is the next boot's first act.
+                try:
+                    boot.session = await boot.presence.register(
+                        clerk_id=boot.clerk_id,
+                        worker_key=boot.worker_key,
+                        agent_instance_id=new_agent_instance_id(),
+                        endpoint_ref=None,
+                        adapter_version=_ADAPTER.adapter_version,
+                        fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+                    )
+                    logger.info(
+                        "Fleet session re-registered after heartbeat refusal.",
+                        extra={"clerk_id": boot.clerk_id},
+                    )
+                except FleetControlError as register_exc:
+                    logger.warning(
+                        "Fleet re-registration refused: %s",
+                        register_exc.message,
+                        extra={"clerk_id": boot.clerk_id},
+                    )
 
     return asyncio.create_task(_beat(), name=f"fleet-heartbeat-{boot.clerk_id}")
 
@@ -305,10 +354,46 @@ async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
     """Release the boot's transport and any owned service."""
     if boot is None:
         return
-    with contextlib.suppress(Exception):
+    try:
         await boot.presence.close()
+    except Exception as exc:
+        logger.warning(
+            "Fleet presence close failed during lane shutdown: %s", exc,
+            extra={"clerk_id": boot.clerk_id},
+        )
     if boot.owned_service is not None:
         boot.owned_service.close()
+
+
+def _fence_writable_roots(*, volume_root: Path) -> None:
+    """Refuse writable lane roots that escape the verified clerk volume.
+
+    The bot-binding root (``IBKR_LIVE_RUNS_ROOT``'s parent — the live_state
+    tree and arming seals) and the live-bars aggregation root must resolve
+    inside the clerk volume in the clerk-agent role; a deployment that left
+    them on the shared artifacts tree would let two lanes write one root,
+    which is exactly what the fleet exists to prevent (fleet A2 inventory;
+    audit 2026-09-13, finding 5).
+    """
+    from app.broker.ibkr.config import get_settings as get_ibkr_settings
+
+    volume = volume_root.resolve()
+    ibkr_settings = get_ibkr_settings()
+    fenced = {
+        "live_state_root": Path(ibkr_settings.live_runs_root).parent,
+        "live_bars_root": Path(ibkr_settings.live_bars_root),
+    }
+    for label, root in fenced.items():
+        resolved = root.resolve()
+        if resolved != volume and volume not in resolved.parents:
+            raise FleetBootRefused(
+                f"The {label} at {resolved} escapes the clerk volume {volume}; "
+                "a clerk agent's writable roots are lane-local by fence, not "
+                "convention.",
+                next_step="Re-home the root inside the clerk volume "
+                "(e.g. <clerk_dir>/live_runs and <clerk_dir>/live_bars) and "
+                "restart the agent.",
+            )
 
 
 def _verify_root_against_expectation(
