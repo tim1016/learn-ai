@@ -62,7 +62,7 @@
     <button
       type="button"
       (click)="runQualityAnalysis()"
-      [disabled]="qualityLoading()"
+      [disabled]="!canRunQuality()"
     >
       {{ qualityLoading() ? 'Analyzing…' : 'Run quality analysis' }}
     </button>

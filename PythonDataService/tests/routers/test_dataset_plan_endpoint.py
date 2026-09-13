@@ -262,3 +262,173 @@ async def test_plan_timeframe_advice_present(api: FastAPI) -> None:
     assert body["allowed_timeframes"]
     assert body["recommended_timeframes"]
     assert set(body["recommended_timeframes"]) <= set(body["allowed_timeframes"])
+
+
+# ── Review follow-ups (PR #2043) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_plan_daily_columns_include_vwap_and_transactions(api: FastAPI) -> None:
+    """Polygon grouped-daily aggregates return o/h/l/c/v/vw/n for every
+    timespan — the synthetic preview frame must carry vwap/transactions
+    for hour/day/week/… recipes too, or the receipt would claim columns
+    the ZIP path actually emits are absent."""
+    response = await _post_plan(api, {**_RECIPE, "timespan": "day", "indicator_entries": []})
+    assert response.status_code == 200
+    body = response.json()
+    for col in ("open", "high", "low", "close", "volume", "vwap", "transactions", "session"):
+        assert col in body["output_columns"], f"{col} missing from daily plan columns"
+
+
+@pytest.mark.asyncio
+async def test_plan_timeframe_advice_uses_resolved_numeric_window(api: FastAPI) -> None:
+    """Advice must be derived from the resolved half-open window, not the
+    raw date strings: numeric overrides take precedence."""
+    from app.services.chart_service import get_allowed_timeframes
+
+    start = _open_ms(2025, 11, 26, 9, 30)
+    end = _open_ms(2025, 11, 27, 9, 30)  # one day only (11-27 is Thanksgiving)
+    response = await _post_plan(
+        api,
+        {**_RECIPE, "start_ms_utc": start, "end_ms_utc": end},
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    expected_allowed, _est, expected_recommended = get_allowed_timeframes(
+        "2025-11-26", "2025-11-26", "extended"
+    )
+    assert body["allowed_timeframes"] == expected_allowed
+    assert body["recommended_timeframes"] == [expected_recommended]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["start_ms_utc", "end_ms_utc"])
+async def test_plan_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> None:
+    """Values beyond MAX_TIMESTAMP_MS must fail validation (422), not 500."""
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+    response = await _post_plan(api, {**_RECIPE, field: MAX_TIMESTAMP_MS + 1})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["start_ms_utc", "end_ms_utc"])
+async def test_generation_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> None:
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.post(
+            "/api/dataset/generate-csv",
+            json={**_RECIPE, field: MAX_TIMESTAMP_MS + 1},
+        )
+    assert response.status_code == 422
+
+
+def test_generation_numeric_window_overrides_fetch_dates() -> None:
+    """Numeric bounds take per-field precedence and convert to the inclusive
+    fetch span; a half-open end on the session open of day X excludes day X."""
+    from app.models.requests import DatasetGenerationRequest
+    from app.services.dataset_plan_service import resolve_generation_window
+
+    base = {**_RECIPE, "indicator_entries": []}
+    request = DatasetGenerationRequest(
+        **base,
+        start_ms_utc=_open_ms(2025, 11, 26, 10, 0),
+        end_ms_utc=_open_ms(2025, 12, 2, 9, 30),
+    )
+    resolved = resolve_generation_window(request)
+    assert resolved.from_date == "2025-11-26"
+    assert resolved.to_date == "2025-12-01"  # 12-02 session open is EXCLUSIVE
+
+
+def test_generation_numeric_window_partial_override_and_passthrough() -> None:
+    from app.models.requests import DatasetGenerationRequest
+    from app.services.dataset_plan_service import resolve_generation_window
+
+    base = {**_RECIPE, "indicator_entries": []}
+    # Start-only override wins per-field; to_date is untouched.
+    request = DatasetGenerationRequest(**base, start_ms_utc=_open_ms(2025, 11, 26, 10, 0))
+    resolved = resolve_generation_window(request)
+    assert resolved.from_date == "2025-11-26"
+    assert resolved.to_date == "2025-12-01"
+
+    # No numeric bounds → request returned unchanged (dates preserved).
+    passthrough = DatasetGenerationRequest(**base)
+    assert resolve_generation_window(passthrough) is passthrough
+
+
+@pytest.mark.asyncio
+async def test_plan_include_quality_report_adds_warning_not_bars(api: FastAPI) -> None:
+    without = await _post_plan(api, {**_RECIPE, "indicator_entries": []})
+    with_report = await _post_plan(
+        api, {**_RECIPE, "indicator_entries": [], "include_quality_report": True}
+    )
+    assert without.status_code == 200 and with_report.status_code == 200
+    a, b = without.json(), with_report.json()
+    assert b["estimated_bars"] == a["estimated_bars"]
+    assert not any("quality" in w for w in a["warnings"])
+    assert any("quality_report.md" in w for w in b["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_plan_sessions_expose_ms_open_anchors(api: FastAPI) -> None:
+    response = await _post_plan(api, _RECIPE)
+    assert response.status_code == 200
+    body = response.json()
+    anchors = body["exchange_session_opens_ms_utc"]
+    assert anchors == [
+        _open_ms(2025, 11, 26, 9, 30),
+        _open_ms(2025, 11, 28, 9, 30),
+        _open_ms(2025, 12, 1, 9, 30),
+    ]
+    assert len(anchors) == body["session_count"] == len(body["exchange_sessions"])
+
+
+def test_empty_column_meta_preserves_base_metadata_columns() -> None:
+    """Regression: exports with NO indicators must still describe every
+    base column (OHLCV, PC, vwap, transactions, session) in the metadata
+    and columns.csv — the base-column slice must not truncate when
+    column_meta is empty."""
+    from app.routers.dataset import _projection_without_indicators
+    from app.services.dataset_service import build_metadata_csv, project_output_columns
+
+    n = 5
+    close = pd.Series([100.0] * n)
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.Series(range(n), dtype="int64") * 60_000,
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": pd.Series([1] * n, dtype="int64"),
+            "vwap": close,
+            "transactions": pd.Series([1] * n, dtype="int64"),
+            "session": "rth",
+            "PC": close,
+        }
+    )
+    column_meta: list[dict[str, Any]] = []
+    full = project_output_columns(frame, column_meta)
+    ohlcv_cols = _projection_without_indicators(frame, column_meta)
+    assert ohlcv_cols == full
+    assert {
+        "PC",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "vwap",
+        "transactions",
+        "session",
+    } <= set(ohlcv_cols)
+
+    csv_text = build_metadata_csv(column_meta, ohlcv_cols).decode("utf-8")
+    assert csv_text.splitlines()[0].startswith("column,")
+    for col in ohlcv_cols:
+        assert any(line.split(",")[0] == col for line in csv_text.splitlines()[1:]), (
+            f"{col} missing from columns.csv rows:\n{csv_text}"
+        )
+

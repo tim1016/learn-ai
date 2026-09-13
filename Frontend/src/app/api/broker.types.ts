@@ -10220,6 +10220,11 @@ export interface components {
              */
             adjusted?: boolean;
             /**
+             * End Ms Utc
+             * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.
+             */
+            end_ms_utc?: number | null;
+            /**
              * Fail On Gaps
              * @description Reject intra-day gaps. Disable only together with explicit forward_fill=True.
              * @default true
@@ -10323,6 +10328,11 @@ export interface components {
              */
             sort?: string;
             /**
+             * Start Ms Utc
+             * @description Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).
+             */
+            start_ms_utc?: number | null;
+            /**
              * Ticker
              * @description Ticker symbol
              */
@@ -10410,6 +10420,12 @@ export interface components {
              * @default true
              */
             include_previous_close?: boolean;
+            /**
+             * Include Quality Report
+             * @description Companion flag: run the data-quality pipeline on the fetched bars and bundle quality_report.md — additional Polygon fetches and compute at generation time.
+             * @default false
+             */
+            include_quality_report?: boolean;
             /**
              * Include Quotes
              * @description Companion flag: bundle quotes.csv (tick-level)
@@ -10521,6 +10537,11 @@ export interface components {
              * @description Exchange the calendar resolves against (e.g. NYSE).
              */
             exchange: string;
+            /**
+             * Exchange Session Opens Ms Utc
+             * @description Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.
+             */
+            exchange_session_opens_ms_utc: number[];
             /**
              * Exchange Sessions
              * @description Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.

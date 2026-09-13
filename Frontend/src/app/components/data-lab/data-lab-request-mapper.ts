@@ -38,6 +38,13 @@ export interface ChartIndicatorWireEntry {
   params: Record<string, number>;
 }
 
+/** Map the store's session vocabulary to the wire vocabulary. The store's
+ *  default "Regular" is `regular`, but the Python chart/dataset endpoints
+ *  only recognize `rth`; "extended" passes through unchanged. Pure. */
+export function mapSessionToWire(session: string): string {
+  return session === 'rth' || session === 'extended' ? session : 'rth';
+}
+
 export interface ChartRequestBody {
   ticker: string;
   from_date: string;
@@ -63,7 +70,7 @@ export function buildChartRequestBody(input: ChartRequestMapperInput): ChartRequ
     start_ms_utc: input.window.startMsUtc,
     end_ms_utc: input.window.endMsUtc,
     timeframe: input.timeframe,
-    session: input.session,
+    session: mapSessionToWire(input.session),
     forward_fill: input.forwardFill,
     adjusted: input.adjusted,
     indicators: input.indicators.map(i => ({ name: i.canonicalKey, params: { ...i.params } })),
@@ -103,6 +110,8 @@ export interface GenerateZipMapperInput {
   options: OptionsCompanionWireConfig;
   /** Additional fixed flags carried from the legacy monolith payload. */
   warmup: boolean;
+  /** Server-side dividend adjustment (distinct from split `adjusted`). */
+  adjustForDividends: boolean;
   timespan: string;
   multiplier: number;
   sort: string;
@@ -126,10 +135,11 @@ export function buildGenerateZipPayload(input: GenerateZipMapperInput): Record<s
       name: i.canonicalKey,
       params: { ...i.params },
     })),
-    session: input.session,
+    session: mapSessionToWire(input.session),
     forward_fill: input.forwardFill,
     fail_on_gaps: !input.forwardFill,
     adjusted: input.adjusted,
+    adjust_for_dividends: input.adjustForDividends,
     warmup: input.warmup,
     timespan: input.timespan,
     multiplier: input.multiplier,

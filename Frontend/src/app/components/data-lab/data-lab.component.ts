@@ -25,7 +25,6 @@ import {
 import { resolveLegacyDataLabUrl } from './data-lab-ingress';
 import { dataLabIndicatorInstanceId } from './data-lab-workspace-store';
 import { utcMsToIsoDate } from './data-lab-request-mapper';
-import { parseYmd } from '../../utils/date-validation';
 import {
   DataLabWorkspaceStore,
   DEFAULT_DATA_LAB_INDICATORS,
@@ -121,6 +120,26 @@ export const BAR_TIMEFRAMES: readonly BarTimeframeOption[] = [
   { value: '1d', label: '1 day', timespan: 'day', multiplier: 1 },
 ];
 
+/** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
+ *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
+ *  MsUtc window boundaries shift with the viewer's timezone — every
+ *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
+ *  returns null for malformed or impossible calendar dates. */
+export function parseYmdMsUtc(s: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  const ms = Date.UTC(y, m - 1, d);
+  const check = new Date(ms);
+  if (
+    check.getUTCFullYear() !== y ||
+    check.getUTCMonth() !== m - 1 ||
+    check.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return ms;
+}
+
 /**
  * Data Lab route shell (PRD §7.2).
  *
@@ -183,26 +202,42 @@ export class DataLabComponent {
     this.refreshSessionList();
   }
 
+  /** True once the ingress has applied a legacy URL's scope params. The
+   *  redirected canonical URL KEEPS the surviving scope params (ticker/
+   *  from/to) by design, so the shape check alone can't distinguish
+   *  "not yet processed" from "already processed" — without this guard the
+   *  NavigationEnd re-check would re-navigate to the same URL forever. */
+  private ingressApplied = false;
+
   /** If the current URL carries legacy Data Lab query state, resolve it and
    *  replaceState-navigate to the canonical child route. URL state may
    *  populate the workspace but NEVER auto-fetches (PRD §14).
    *
    *  A child-route redirect rewrites `/data-lab?mode=build` to
    *  `/data-lab/explore?mode=build` before this shell activates, so the
-   *  trigger keys on the legacy `mode` marker or the legacy parent path —
-   *  never on canonical child URLs, which can carry the surviving scope
-   *  params by design.
+   *  trigger keys on the legacy `mode` marker, the legacy parent path, or a
+   *  canonical child URL carrying legacy scope keys — that last shape is
+   *  what a `/data-quality?ticker=…` bookmark looks like AFTER Angular's
+   *  redirect preserves its query string onto `/data-lab/validate`.
    *
    *  Public so the ingress spec can drive it against a stubbed
    *  `router.url`. */
   runLegacyIngress(): void {
+    if (this.ingressApplied) return;
     const url = this.router.url;
     const parsed = new URL(url, 'https://data-lab.invalid');
     const query = parsed.searchParams;
     const path = parsed.pathname.replace(/\/+$/, '');
+    const hasLegacyScopeKeys = ['ticker', 'from', 'to', 'trading-session', 'sessionId'].some(
+      (k) => query.get(k) !== null,
+    );
     const isLegacyShape =
-      query.get('mode') !== null || path === '/data-lab' || path === '/data-quality';
+      query.get('mode') !== null ||
+      path === '/data-lab' ||
+      path === '/data-quality' ||
+      (path.startsWith('/data-lab/') && hasLegacyScopeKeys);
     if (!isLegacyShape) return;
+    this.ingressApplied = true;
 
     const resolution = resolveLegacyDataLabUrl(url);
     this.applyLegacyScope(resolution.params);
@@ -220,13 +255,13 @@ export class DataLabComponent {
   private applyLegacyScope(params: Record<string, string>): void {
     const patch: Parameters<DataLabWorkspaceStore['patchDraft']>[0] = {};
     if (params['ticker']) patch.ticker = params['ticker'];
-    const from = params['from'] ? parseYmd(params['from']) : null;
-    const to = params['to'] ? parseYmd(params['to']) : null;
-    if (from || to) {
+    const from = params['from'] ? parseYmdMsUtc(params['from']) : null;
+    const to = params['to'] ? parseYmdMsUtc(params['to']) : null;
+    if (from !== null || to !== null) {
       const draft = this.store.draft();
       patch.window = {
-        startMsUtc: from ? from.getTime() : draft.window.startMsUtc,
-        endMsUtc: to ? to.getTime() : draft.window.endMsUtc,
+        startMsUtc: from !== null ? from : draft.window.startMsUtc,
+        endMsUtc: to !== null ? to : draft.window.endMsUtc,
       };
     }
     if (params['trading-session']) {
@@ -271,20 +306,20 @@ export class DataLabComponent {
   }
 
   onFromInput(event: Event): void {
-    const parsed = parseYmd((event.target as HTMLInputElement).value);
-    if (!parsed) return;
+    const parsedMs = parseYmdMsUtc((event.target as HTMLInputElement).value);
+    if (parsedMs === null) return;
     const draft = this.store.draft();
     this.store.patchDraft({
-      window: { ...draft.window, startMsUtc: parsed.getTime() },
+      window: { ...draft.window, startMsUtc: parsedMs },
     });
   }
 
   onToInput(event: Event): void {
-    const parsed = parseYmd((event.target as HTMLInputElement).value);
-    if (!parsed) return;
+    const parsedMs = parseYmdMsUtc((event.target as HTMLInputElement).value);
+    if (parsedMs === null) return;
     const draft = this.store.draft();
     this.store.patchDraft({
-      window: { ...draft.window, endMsUtc: parsed.getTime() },
+      window: { ...draft.window, endMsUtc: parsedMs },
     });
   }
 
@@ -330,6 +365,10 @@ export class DataLabComponent {
     if (this.sessionsDrawerOpen()) this.refreshSessionList();
   }
 
+  /** Saving requires a committed scope — building the config from the
+   *  uncommitted draft could persist a setup the chart never followed. */
+  readonly canSaveSession = computed(() => !!this.store.committedScope());
+
   private sessionConfigFromStore(): {
     ticker: string;
     fromDate: string;
@@ -338,15 +377,16 @@ export class DataLabComponent {
     forwardFill: boolean;
     adjusted: boolean;
     entries: { name: string; params: Record<string, number> }[];
-  } {
-    const draft = this.store.draft();
+  } | null {
+    const scope = this.store.committedScope();
+    if (!scope) return null;
     return {
-      ticker: draft.ticker,
-      fromDate: utcMsToIsoDate(draft.window.startMsUtc),
-      toDate: utcMsToIsoDate(draft.window.endMsUtc),
-      session: draft.session === 'extended' ? 'extended' : 'rth',
-      forwardFill: draft.forwardFill,
-      adjusted: draft.adjusted,
+      ticker: scope.ticker,
+      fromDate: utcMsToIsoDate(scope.window.startMsUtc),
+      toDate: utcMsToIsoDate(scope.window.endMsUtc),
+      session: scope.session === 'extended' ? 'extended' : 'rth',
+      forwardFill: scope.forwardFill,
+      adjusted: scope.adjusted,
       entries: this.store.indicators().map((i) => ({
         name: i.canonicalKey,
         params: { ...i.params },
@@ -355,10 +395,16 @@ export class DataLabComponent {
   }
 
   async saveSession(): Promise<void> {
+    const config = this.sessionConfigFromStore();
+    if (!config) return;
     this.savingSession.set(true);
     try {
-      const config = this.sessionConfigFromStore();
-      const snapshot = this.store.latestChartSnapshot() as never;
+      // Persist the latest chart snapshot ONLY when it still matches the
+      // committed configuration: `chartStale` is set by any scope/recipe
+      // edit after the last settled fetch, so a stale chart means the
+      // snapshot depicts a config the saved setup no longer has. Clear it
+      // rather than persisting an unrelated render.
+      const snapshot = (this.store.chartStale() ? null : this.store.latestChartSnapshot()) as never;
       const activeId = this.activeSessionId();
       if (activeId) {
         await this.sessionService.updateSession(
@@ -396,8 +442,8 @@ export class DataLabComponent {
     this.store.patchDraft({
       ticker: session.config.ticker,
       window: {
-        startMsUtc: parseYmd(session.config.fromDate)?.getTime() ?? this.store.draft().window.startMsUtc,
-        endMsUtc: parseYmd(session.config.toDate)?.getTime() ?? this.store.draft().window.endMsUtc,
+        startMsUtc: parseYmdMsUtc(session.config.fromDate) ?? this.store.draft().window.startMsUtc,
+        endMsUtc: parseYmdMsUtc(session.config.toDate) ?? this.store.draft().window.endMsUtc,
       },
       session: session.config.session,
       forwardFill: session.config.forwardFill,

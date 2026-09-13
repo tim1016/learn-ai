@@ -10,7 +10,7 @@ NYSE calendar (``pandas_market_calendars``) — it never calls Polygon.
 from __future__ import annotations
 
 import importlib.metadata
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -21,7 +21,7 @@ from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
     session_windows_ms_utc,
 )
-from app.models.requests import DatasetPlanRequest
+from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.chart_service import get_allowed_timeframes
 from app.services.dataset_service import calculate_dynamic_indicators, project_output_columns
@@ -45,8 +45,9 @@ _SESSIONS_PER_UNIT: dict[str, int] = {
     "quarter": 63,
     "year": 252,
 }
-# Timespans whose Polygon aggregates carry vwap/transactions fields.
-_VWAP_TIMESPANS = frozenset({"second", "minute"})
+# Polygon grouped-daily aggregates carry o/h/l/c/v/vw/n for EVERY
+# timespan — vwap/transactions columns are projected regardless of recipe.
+
 
 _PROJECTION_FRAME_ROWS = 300
 
@@ -148,9 +149,10 @@ def _projection_frame(request: DatasetPlanRequest) -> pd.DataFrame:
     """Synthetic frame carrying exactly the columns a real processed frame would.
 
     Column PRESENCE is deterministic from the recipe (OHLCV always;
-    ``PC`` when include_previous_close; vwap/transactions for
-    second/minute aggregates per Polygon's response shape; ``session``
-    always — the export pipeline tags it whenever from/to are given).
+    vwap/transactions for EVERY timespan — Polygon grouped-daily
+    aggregates return o/h/l/c/v/vw/n for second-through-year bars;
+    ``session`` always — the export pipeline tags it whenever from/to
+    are given).
     Row VALUES are irrelevant: only names flow into the projection.
     """
     n = _PROJECTION_FRAME_ROWS
@@ -163,11 +165,10 @@ def _projection_frame(request: DatasetPlanRequest) -> pd.DataFrame:
             "low": close - 0.5,
             "close": close,
             "volume": pd.Series([1_000] * n, dtype="int64"),
+            "vwap": close,
+            "transactions": pd.Series([10] * n, dtype="int64"),
         }
     )
-    if request.timespan in _VWAP_TIMESPANS:
-        df["vwap"] = close
-        df["transactions"] = pd.Series([10] * n, dtype="int64")
     df["session"] = "rth"
     if request.include_previous_close:
         df["PC"] = close.shift(1).bfill()
@@ -238,14 +239,21 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
     _, column_meta = calculate_dynamic_indicators(frame, request.indicator_entries)
     output_columns = project_output_columns(frame, column_meta)
 
-    if request.timespan in _VWAP_TIMESPANS:
-        assumptions.append(
-            f"vwap/transactions columns assumed present in Polygon {request.timespan} aggregates"
-        )
+    assumptions.append(
+        "vwap/transactions columns assumed present in Polygon aggregates for all timespans"
+    )
 
     deps, warnings = _companion_dependencies(request)
+    if request.include_quality_report:
+        warnings.append(
+            "include_quality_report=True runs the data-quality pipeline over the fetched "
+            "window and bundles quality_report.md — additional Polygon fetches and compute "
+            "beyond the bar estimate"
+        )
+    # Timeframe advice must describe the RESOLVED window, not the raw date
+    # strings: numeric ms bounds take precedence over from_date/to_date.
     allowed, _estimates, recommended = get_allowed_timeframes(
-        request.from_date, request.to_date, request.session
+        enum_start.isoformat(), enum_end.isoformat(), request.session
     )
 
     calendar_version = importlib.metadata.version("pandas_market_calendars")
@@ -260,6 +268,7 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
         window_start_ms_utc=window_start,
         window_end_ms_utc=window_end,
         exchange_sessions=[d.isoformat() for d in session_dates],
+        exchange_session_opens_ms_utc=[session_open_ms_utc(d) for d in session_dates],
         session_count=len(session_dates),
         output_columns=output_columns,
         output_column_count=len(output_columns),
@@ -273,4 +282,43 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
         exchange=EXCHANGE,
         calendar_timezone=CALENDAR_TIMEZONE,
         calendar_version=calendar_version,
+    )
+
+
+def resolve_generation_window(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
+    """Apply the canonical numeric window to a generation request.
+
+    When ``start_ms_utc``/``end_ms_utc`` are supplied they take per-field
+    precedence over the date strings and are converted — through the ET
+    calendar semantics the plan service uses — into the inclusive
+    from/to date span the fetch pipeline consumes:
+
+    * start → the ET date containing ``start_ms_utc``;
+    * end (EXCLUSIVE) → the ET date of ``end_ms_utc - 1ms``; when the end
+      lands at or before that date's session open (e.g. exactly the
+      session open of day X), the fetch span backs off to the prior day
+      so day X's data is excluded — the day-granularity fetch cannot
+      split a calendar day.
+
+    Returns the request unchanged when no numeric bound is supplied.
+    Raises :class:`ValueError` when the resolved span is empty.
+    """
+    if request.start_ms_utc is None and request.end_ms_utc is None:
+        return request
+    from_date = _parse_date(request.from_date)
+    to_date = _parse_date(request.to_date)
+    if request.start_ms_utc is not None:
+        from_date = _et_date_of_ms(request.start_ms_utc)
+    if request.end_ms_utc is not None:
+        end_date = _et_date_of_ms(request.end_ms_utc - 1)
+        if request.end_ms_utc <= session_open_ms_utc(end_date):
+            end_date -= timedelta(days=1)
+        to_date = end_date
+    if from_date > to_date:
+        raise ValueError(
+            f"resolved generation window is empty: {from_date.isoformat()} "
+            f"after {to_date.isoformat()}"
+        )
+    return request.model_copy(
+        update={"from_date": from_date.isoformat(), "to_date": to_date.isoformat()}
     )

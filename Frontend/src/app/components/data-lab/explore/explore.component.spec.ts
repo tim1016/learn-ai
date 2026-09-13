@@ -98,8 +98,14 @@ describe('ExploreComponent', () => {
     expect(req.request.body['start_ms_utc']).toBe(WINDOW.startMsUtc);
     expect(req.request.body['end_ms_utc']).toBe(WINDOW.endMsUtc);
     expect(req.request.body['ticker']).toBe('SPY');
+    // The store's default session is `regular`; the wire vocabulary is `rth`.
+    expect(req.request.body['session']).toBe('rth');
+    // Stale stays set until the fetch settles — not when it is issued.
+    expect(store.chartStale()).toBe(true);
+    expect(fixture.componentInstance.chartRefreshing()).toBe(true);
     req.flush(chartResponse());
     await waitFor(() => expect(store.chartStale()).toBe(false));
+    await waitFor(() => expect(fixture.componentInstance.chartRefreshing()).toBe(false));
 
     http.verify();
   });

@@ -60,11 +60,26 @@ describe('DataLabWorkspaceStore chart staleness', () => {
     store.markChartStale();
     expect(store.consumeStale('sig-1')).toBe(false); // no signature recorded yet
     expect(store.recordChartRequest('sig-1')).toBe(true);
+    // Recording a request no longer clears staleness — only settling does.
+    expect(store.chartStale()).toBe(true);
+    store.settleChartRequest();
     expect(store.chartStale()).toBe(false);
     store.markChartStale();
     expect(store.consumeStale('sig-2')).toBe(false); // wrong signature
     expect(store.chartStale()).toBe(true);
     expect(store.consumeStale('sig-1')).toBe(true);
+    expect(store.chartStale()).toBe(false);
+  });
+
+  it('recordChartRequest keeps the stale flag set while a request is pending', () => {
+    // An in-flight (or failed) fetch must leave old bars visibly out of
+    // date — only settleChartRequest (the explicit success/failure
+    // callback) clears the flag.
+    const store = committedStore();
+    expect(store.chartStale()).toBe(true);
+    expect(store.recordChartRequest('sig-a')).toBe(true);
+    expect(store.chartStale()).toBe(true);
+    store.settleChartRequest();
     expect(store.chartStale()).toBe(false);
   });
 });
@@ -102,6 +117,19 @@ describe('DataLabWorkspaceStore recipe', () => {
   it('updateIndicator returns null for unknown ids', () => {
     const store = createDataLabWorkspaceStore();
     expect(store.updateIndicator('nope|a=1', { a: 2 })).toBeNull();
+  });
+
+  it('updateIndicator refuses params colliding with another instance identity', () => {
+    // Identity is parameter-aware: editing ema(10) into ema(50) while an
+    // ema(50) instance exists would duplicate ids — refuse and keep the
+    // previous state instead.
+    const store = createDataLabWorkspaceStore();
+    const id10 = store.addIndicator('ema', { length: 10 });
+    const id50 = store.addIndicator('ema', { length: 50 });
+    expect(store.updateIndicator(id10, { length: 50 })).toBeNull();
+    expect(store.indicators().map(i => i.id).sort()).toEqual([id10, id50].sort());
+    // A no-op edit onto the instance's own identity is fine.
+    expect(store.updateIndicator(id10, { length: 10 })).toBe(id10);
   });
 
   it('removeIndicator drops the instance and its color override', () => {
@@ -188,6 +216,58 @@ describe('DataLabWorkspaceStore serialization', () => {
     const result = store.restore({ schemaVersion: 1, ticker: 'zzz' });
     expect(result.warnings[0]).toContain('schemaVersion');
     expect(store.serialize()).toEqual(before);
+  });
+
+  it('refuses an inverted window with a warning', () => {
+    const store = createDataLabWorkspaceStore();
+    const result = store.restore({
+      schemaVersion: 2,
+      ticker: 'AAPL',
+      windowMsUtc: { startMsUtc: 200, endMsUtc: 100 },
+    });
+    expect(result.warnings.some(w => w.includes('invalid windowMsUtc'))).toBe(true);
+    expect(store.committedWindow()).toBeNull();
+    expect(store.committedTicker()).toBe('');
+    expect(store.committedScope()).toBeNull();
+  });
+
+  it('restore populates the committed scope atomically from one validated object', () => {
+    const store = createDataLabWorkspaceStore();
+    const result = store.restore({
+      schemaVersion: 2,
+      ticker: 'AAPL',
+      windowMsUtc: WINDOW,
+      scope: { timeframe: 'hour', timespan: 'hour', multiplier: 2, session: 'extended', forwardFill: false, adjusted: false },
+    });
+    expect(result.warnings).toEqual([]);
+    expect(store.committedTicker()).toBe('AAPL');
+    expect(store.committedWindow()).toEqual(WINDOW);
+    expect(store.committedScope()).toEqual({
+      ticker: 'AAPL',
+      window: WINDOW,
+      timeframe: 'hour',
+      timespan: 'hour',
+      multiplier: 2,
+      session: 'extended',
+      forwardFill: false,
+      adjusted: false,
+    });
+  });
+
+  it('restore without a usable ticker+window leaves the committed scope null', () => {
+    const store = createDataLabWorkspaceStore();
+    const result = store.restore({
+      schemaVersion: 2,
+      ticker: 'AAPL',
+      scope: { session: 'extended' },
+    });
+    expect(result.warnings).toEqual([]);
+    expect(store.committedTicker()).toBe('');
+    expect(store.committedWindow()).toBeNull();
+    expect(store.committedScope()).toBeNull();
+    // The draft still received the restored fields.
+    expect(store.draft().ticker).toBe('AAPL');
+    expect(store.draft().session).toBe('extended');
   });
 
   it('refuses a non-object payload', () => {

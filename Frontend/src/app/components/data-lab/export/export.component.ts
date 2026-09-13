@@ -9,7 +9,7 @@ import { RouterLink } from '@angular/router';
 
 import { RunSessionService } from '../../../services/run-session.service';
 import { PastChainInspectorComponent } from '../past-chain-inspector/past-chain-inspector.component';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
 import type { DataLabCompanionSettings } from '../data-lab-workspace-store';
@@ -30,7 +30,7 @@ import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.ser
  */
 @Component({
   selector: 'app-data-lab-export',
-  imports: [RouterLink, PastChainInspectorComponent, ReceiptLabelPipe],
+  imports: [RouterLink, PastChainInspectorComponent, AssetIdentityComponent],
   templateUrl: './export.component.html',
   styleUrls: ['./export.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -137,6 +137,7 @@ export class ExportComponent {
       companions: this.store.companions(),
       options: this.buildOptionsConfig(),
       warmup: this.warmup(),
+      adjustForDividends: this.adjustForDividends(),
       timespan: draft.timespan,
       multiplier: draft.multiplier,
       sort: this.sort(),
@@ -230,9 +231,26 @@ export class ExportComponent {
   }
 
   // ── Template helpers ──────────────────────────────────────
-  /** Render a receipt block verbatim — no client-side reshaping. */
-  pretty(value: unknown): string {
-    return JSON.stringify(value, null, 2);
+  /** Render session entries defensively: the current contract ships
+   *  YYYY-MM-DD strings in `exchange_sessions`; the server is concurrently
+   *  moving to ms-UTC session anchors, so object entries with
+   *  open/close anchors render as UTC instants instead of breaking. */
+  sessionLabels(receipt: DataLabPlanReceipt): string[] {
+    const sessions = receipt.exchange_sessions ?? [];
+    return sessions.map((entry): string => {
+      if (typeof entry === 'string') return entry;
+      if (typeof entry === 'object' && entry !== null) {
+        const e = entry as { open_ms_utc?: unknown; close_ms_utc?: unknown };
+        const open = typeof e.open_ms_utc === 'number' && Number.isFinite(e.open_ms_utc)
+          ? new Date(e.open_ms_utc).toISOString()
+          : null;
+        const close = typeof e.close_ms_utc === 'number' && Number.isFinite(e.close_ms_utc)
+          ? new Date(e.close_ms_utc).toISOString()
+          : null;
+        if (open || close) return `${open ?? '—'} → ${close ?? '—'}`;
+      }
+      return String(entry);
+    });
   }
 
   /** Options-companion checkbox rows, in stable display order. */

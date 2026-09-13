@@ -29,7 +29,7 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.schemas.dataset_plan import DatasetPlanResponse
-from app.services.dataset_plan_service import build_dataset_plan
+from app.services.dataset_plan_service import build_dataset_plan, resolve_generation_window
 from app.services.dataset_service import (
     add_previous_close_column,
     build_csv_bytes,
@@ -64,6 +64,14 @@ def _projection_without_indicators(
     """
     cols = project_output_columns(df, column_meta)
     return cols[: len(cols) - len(column_meta)]
+
+
+def _resolve_window_or_422(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
+    """Apply numeric window bounds; an unresolvable span is a client error."""
+    try:
+        return resolve_generation_window(request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
 
 def _fetch_and_process(
@@ -237,6 +245,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data in chunks, calculate selected indicators,
     and return a streaming CSV file."""
     try:
+        request = _resolve_window_or_422(request)
         logger.info(
             f"[DATASET] Generating CSV for {request.ticker}: "
             f"{request.from_date} to {request.to_date}, "
@@ -274,6 +283,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
 async def generate_dataset_metadata(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data, calculate indicators, and return metadata JSON."""
     try:
+        request = _resolve_window_or_422(request)
         df, column_meta, raw_count = _fetch_and_process(request)
 
         ohlcv_cols = _projection_without_indicators(df, column_meta)
@@ -310,6 +320,7 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
 async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data, calculate indicators, and return column descriptions CSV."""
     try:
+        request = _resolve_window_or_422(request)
         df, column_meta, _ = _fetch_and_process(request)
 
         csv_bytes = build_metadata_csv(column_meta, _projection_without_indicators(df, column_meta))
@@ -537,6 +548,7 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
     chunk-level UI progress; use that one for unified-flow Fetch.
     """
     try:
+        request = _resolve_window_or_422(request)
         logger.info(
             f"[DATASET] Generating ZIP for {request.ticker}: "
             f"{request.from_date} to {request.to_date}, "

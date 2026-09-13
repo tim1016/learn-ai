@@ -168,6 +168,28 @@ describe('DataLabComponent (shell)', () => {
     );
   });
 
+  it('applies a redirected /data-quality bookmark on the validate child URL', async () => {
+    const { navSpy, fixture } = await renderDirectShell(
+      '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',
+    );
+    fixture.componentInstance.runLegacyIngress();
+
+    expect(navSpy).toHaveBeenCalledWith(
+      ['/data-lab/validate'],
+      {
+        queryParams: { ticker: 'AAPL', from: '2026-04-15', to: '2026-05-15' },
+        replaceUrl: true,
+      },
+    );
+    expect(fixture.componentInstance.store.committedTicker()).toBe('AAPL');
+    expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
+      Date.UTC(2026, 3, 15),
+    );
+    expect(fixture.componentInstance.store.committedWindow()?.endMsUtc).toBe(
+      Date.UTC(2026, 4, 15),
+    );
+  });
+
   it('surfaces ingress warnings in a dismissible banner', async () => {
     const { fixture } = await renderDirectShell('/data-lab?mode=bogus&frobnicate=1');
     fixture.componentInstance.runLegacyIngress();

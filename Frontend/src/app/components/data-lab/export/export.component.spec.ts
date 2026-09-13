@@ -72,16 +72,22 @@ describe('ExportComponent', () => {
       http.expectOne(`${environment.pythonServiceUrl}/api/dataset/plan`),
     );
     plan.flush({
+      ticker: 'SPY',
+      window_start_ms_utc: WINDOW.startMsUtc,
+      window_end_ms_utc: WINDOW.endMsUtc,
+      exchange_sessions: ['2026-04-15', '2026-04-16', '2026-04-17'],
       session_count: 21,
-      output_column_count: 9,
       output_columns: ['unix_ts', 'open', 'high', 'low', 'close', 'volume', 'rsi_14'],
-      warnings: ['NON_TRADING_WINDOW'],
-      estimates: { polygon_requests: 4 },
-      estimate_assumptions: { plan: 'starter' },
-      estimate_provenance: { source: 'python' },
-      timeframe_advice: { recommended: '5m' },
+      output_column_count: 9,
+      estimated_bars: 8946,
+      estimate_assumptions: ['~391 rth bars per daily session', 'no half days modeled'],
+      estimate_provenance: 'pandas-market-calendars NYSE schedule',
+      companion_dependencies: [],
+      warnings: ['Tick-level volume is estimated from minute aggregates.'],
+      allowed_timeframes: ['15m', '1h', '4h', '1D'],
+      recommended_timeframes: ['1D'],
       exchange: 'NYSE',
-      timezone: 'America/New_York',
+      calendar_timezone: 'America/New_York',
       calendar_version: '2026.1',
     });
 
@@ -90,10 +96,16 @@ describe('ExportComponent', () => {
     const receipt = await screen.findByRole('region', { name: 'Dataset plan receipt' });
     expect(await within(receipt).findByText('21')).toBeTruthy();
     expect(await screen.findByText(/unix_ts, open, high, low, close, volume, rsi_14/)).toBeTruthy();
-    expect(await screen.findByText(/polygon_requests/)).toBeTruthy();
-    // Backend receipt codes render through the receiptLabel pipe, which
-    // title-cases code segments: NON_TRADING_WINDOW → "Non Trading Window".
-    expect(await screen.findByText('Non Trading Window')).toBeTruthy();
+    // Estimated bars / timeframe advice / timezone render from the real
+    // DatasetPlanResponse contract fields.
+    expect(await within(receipt).findByText('8946')).toBeTruthy();
+    expect(await screen.findByText(/Allowed: 15m, 1h, 4h, 1D/)).toBeTruthy();
+    expect(await screen.findByText(/Recommended: 1D/)).toBeTruthy();
+    expect(await screen.findByText('America/New_York')).toBeTruthy();
+    // Server-authored warning prose renders directly — no receiptLabel pipe.
+    expect(
+      await screen.findByText('Tick-level volume is estimated from minute aggregates.'),
+    ).toBeTruthy();
     http.verify();
   });
 
@@ -114,7 +126,17 @@ describe('ExportComponent', () => {
     expect(payload['start_ms_utc']).toBe(WINDOW.startMsUtc);
     expect(payload['end_ms_utc']).toBe(WINDOW.endMsUtc);
     expect(payload['indicator_entries']).toEqual([{ name: 'rsi', params: { length: 14 } }]);
+    expect(payload['adjust_for_dividends']).toBe(false);
     // No HTTP of its own — generation is job-backed only (FR-005).
     http.verify();
+  });
+
+  it('sends adjust_for_dividends when the toggle is on', async () => {
+    const { runSession } = await renderExport();
+    await userEvent.click(screen.getByRole('checkbox', { name: /server-side dividend adjustment/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Generate dataset ZIP' }));
+    await waitFor(() => expect(runSession.start).toHaveBeenCalledTimes(1));
+    const payload = runSession.start.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload['adjust_for_dividends']).toBe(true);
   });
 });

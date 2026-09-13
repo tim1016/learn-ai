@@ -41,7 +41,9 @@ describe('buildChartRequestBody', () => {
       start_ms_utc: WINDOW.startMsUtc,
       end_ms_utc: WINDOW.endMsUtc,
       timeframe: 'hour',
-      session: 'regular',
+      // The store's default "Regular" session is `regular`, but Python only
+      // recognizes `rth` — the mapper translates on the wire.
+      session: 'rth',
       forward_fill: true,
       adjusted: true,
       indicators: [
@@ -117,6 +119,7 @@ describe('buildGenerateZipPayload', () => {
       },
       options: OPTIONS,
       warmup: true,
+      adjustForDividends: true,
       timespan: 'day',
       multiplier: 1,
       sort: 'timestamp',
@@ -133,10 +136,11 @@ describe('buildGenerateZipPayload', () => {
         { name: 'ema', params: { length: 10 } },
         { name: 'rsi', params: { length: 14 } },
       ],
-      session: 'regular',
+      session: 'rth',
       forward_fill: true,
       fail_on_gaps: false,
       adjusted: true,
+      adjust_for_dividends: true,
       warmup: true,
       timespan: 'day',
       multiplier: 1,
@@ -177,12 +181,14 @@ describe('buildGenerateZipPayload', () => {
       },
       options: OPTIONS,
       warmup: true,
+      adjustForDividends: false,
       timespan: 'day',
       multiplier: 1,
       sort: 'timestamp',
       limit: 50000,
     });
     expect(payload['options_companion']).toBeNull();
+    expect(payload['adjust_for_dividends']).toBe(false);
     expect(payload['fail_on_gaps']).toBe(true);
     expect(payload['indicator_entries']).toEqual([]);
   });

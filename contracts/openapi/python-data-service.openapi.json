@@ -11622,6 +11622,20 @@
             "title": "Adjusted",
             "type": "boolean"
           },
+          "end_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.",
+            "title": "End Ms Utc"
+          },
           "fail_on_gaps": {
             "default": true,
             "description": "Reject intra-day gaps. Disable only together with explicit forward_fill=True.",
@@ -11741,6 +11755,20 @@
             "title": "Sort",
             "type": "string"
           },
+          "start_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).",
+            "title": "Start Ms Utc"
+          },
           "ticker": {
             "description": "Ticker symbol",
             "maxLength": 20,
@@ -11792,6 +11820,7 @@
           "end_ms_utc": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -11835,6 +11864,12 @@
             "default": true,
             "description": "Add a 'PC' prior-session-close column",
             "title": "Include Previous Close",
+            "type": "boolean"
+          },
+          "include_quality_report": {
+            "default": false,
+            "description": "Companion flag: run the data-quality pipeline on the fetched bars and bundle quality_report.md \u2014 additional Polygon fetches and compute at generation time.",
+            "title": "Include Quality Report",
             "type": "boolean"
           },
           "include_quotes": {
@@ -11898,6 +11933,7 @@
           "start_ms_utc": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -11988,6 +12024,14 @@
             "title": "Exchange",
             "type": "string"
           },
+          "exchange_session_opens_ms_utc": {
+            "description": "Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Exchange Session Opens Ms Utc",
+            "type": "array"
+          },
           "exchange_sessions": {
             "description": "Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.",
             "items": {
@@ -12053,6 +12097,7 @@
           "window_start_ms_utc",
           "window_end_ms_utc",
           "exchange_sessions",
+          "exchange_session_opens_ms_utc",
           "session_count",
           "output_columns",
           "output_column_count",

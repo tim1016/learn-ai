@@ -239,13 +239,22 @@ export class DataLabWorkspaceStore {
     this._chartStale.set(true);
   }
 
-  /** Record the signature of the chart request actually issued and clear the
-   *  stale flag. Returns true when the stored signature changes. */
+  /** Record the signature of the chart request actually issued. The stale
+   *  flag STAYS set while the request is pending — an in-flight failure must
+   *  leave the old bars visibly out of date, not looking current. Call
+   *  {@link settleChartRequest} from the explicit success/failure callback.
+   *  Returns true when the stored signature changes. */
   recordChartRequest(signature: string): boolean {
     const changed = this._lastChartRequestSignature() !== signature;
     this._lastChartRequestSignature.set(signature);
-    this._chartStale.set(false);
     return changed;
+  }
+
+  /** Settle a pending chart request (success or failure): only here does the
+   *  stale flag clear, so a failed fetch never leaves old bars reading as
+   *  current. */
+  settleChartRequest(): void {
+    this._chartStale.set(false);
   }
 
   /** Consume staleness for a known signature. True when the chart rendering
@@ -300,13 +309,18 @@ export class DataLabWorkspaceStore {
 
   /** Update an instance's params. Preserves list position and migrates the
    *  color override to the new parameter-aware identity. Returns the new id,
-   *  or null when `id` is unknown. */
+   *  or null when `id` is unknown — or when the new params collide with a
+   *  DIFFERENT instance's identity: identity is parameter-aware, so merging
+   *  two instances silently would duplicate ids. Refusing (keeping the
+   *  previous state) is the least surprising option; remove the other
+   *  instance first if the merge is intended. */
   updateIndicator(id: string, params: Readonly<Record<string, number>>): string | null {
     const list = this._indicators();
     const index = list.findIndex(i => i.id === id);
     if (index === -1) return null;
     const instance = list[index];
     const nextId = dataLabIndicatorInstanceId(instance.canonicalKey, params);
+    if (list.some(i => i.id === nextId && i.id !== id)) return null;
     const next: DataLabIndicatorInstance = { id: nextId, canonicalKey: instance.canonicalKey, params: { ...params } };
     this._indicators.update(current => {
       const copy = [...current];
@@ -445,13 +459,20 @@ export class DataLabWorkspaceStore {
 
     let window: DataLabWindowMsUtc | null = null;
     const rawWindow = raw['windowMsUtc'];
-    if (
-      typeof rawWindow === 'object' && rawWindow !== null &&
-      isFiniteInt((rawWindow as Record<string, unknown>)['startMsUtc']) &&
-      isFiniteInt((rawWindow as Record<string, unknown>)['endMsUtc'])
-    ) {
-      const w = rawWindow as Record<string, number>;
-      window = { startMsUtc: w['startMsUtc'], endMsUtc: w['endMsUtc'] };
+    if (typeof rawWindow === 'object' && rawWindow !== null) {
+      const w = rawWindow as Record<string, unknown>;
+      if (isFiniteInt(w['startMsUtc']) && isFiniteInt(w['endMsUtc'])) {
+        // Same inversion rule as commitScope(): a half-open window requires
+        // start < end; accepting an inverted one would smuggle an invalid
+        // committed scope into the workspace.
+        if (w['startMsUtc'] < w['endMsUtc']) {
+          window = { startMsUtc: w['startMsUtc'], endMsUtc: w['endMsUtc'] };
+        } else {
+          warnings.push('Dropped invalid windowMsUtc');
+        }
+      } else if ('windowMsUtc' in raw) {
+        warnings.push('Dropped invalid windowMsUtc');
+      }
     } else if ('windowMsUtc' in raw) {
       warnings.push('Dropped invalid windowMsUtc');
     }
@@ -558,10 +579,23 @@ export class DataLabWorkspaceStore {
       warnings.push('Dropped invalid savedSession');
     }
 
-    // Apply
+    // Apply. The committed ticker/window/scope triple is derived from ONE
+    // validated scope object and written together — a partial write would
+    // leave e.g. committedScope null while committedTicker is set, which
+    // readers treat as "never committed". A payload without a usable
+    // ticker+window restores the draft/recipe but leaves the committed
+    // scope untouched.
     this._draft.update(d => ({ ...d, ...draftPatch, ticker, window: window ?? d.window }));
-    this._committedTicker.set(ticker);
-    if (window) this._committedWindow.set({ ...window });
+    if (ticker && window) {
+      const scope: DataLabDraftScope = {
+        ...this._draft(),
+        ticker,
+        window: { ...window },
+      };
+      this._committedTicker.set(scope.ticker);
+      this._committedWindow.set({ ...scope.window });
+      this._committedScope.set(scope);
+    }
     this._indicators.set(instances);
     this._colorOverrides.set(overrides);
     this._companions.set(companions);

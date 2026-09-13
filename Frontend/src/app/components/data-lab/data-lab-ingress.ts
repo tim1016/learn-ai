@@ -63,6 +63,12 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   // Mode selection — invalid values fall back with a warning. The default
   // destination is Explore; `sessionId` alone never leaves it (PRD §14).
   let route: DataLabRoute = '/data-lab/explore';
+  // A canonical child path keeps its own destination. The /data-quality →
+  // /data-lab/validate redirect preserves the query string, so the shell
+  // first sees the REDIRECTED URL — keying only on the original legacy
+  // paths would drop the bookmark's ticker/range before this runs.
+  const canonical = /^\/data-lab\/(explore|export|validate)$/.exec(path);
+  if (canonical) route = canonical[0] as DataLabRoute;
   const mode = query.get('mode');
   if (mode !== null) {
     const mapped = MODE_TO_ROUTE[mode];

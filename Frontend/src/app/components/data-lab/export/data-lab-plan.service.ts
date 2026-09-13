@@ -12,22 +12,30 @@ import { environment } from '../../../../environments/environment';
  * generate-zip-shaped payload produced by the pure request mapper, so plan
  * and generate can never drift apart. */
 
-/** The plan receipt, rendered as-is. Fields are optional-by-contract so an
- *  evolving Python response never breaks rendering; unknown fields are
- *  ignored, never computed around. */
+/** The plan receipt, rendered as-is. Mirrors the Python DatasetPlanResponse
+ *  contract (PythonDataService/app/schemas/dataset_plan.py and the generated
+ *  components.schemas.DatasetPlanResponse snapshot). Fields are
+ *  optional-by-contract so an evolving Python response never breaks
+ *  rendering; unknown fields are ignored, never computed around. */
 export interface DataLabPlanReceipt {
+  ticker?: string;
+  window_start_ms_utc?: number;
+  window_end_ms_utc?: number;
+  /** Session entries are YYYY-MM-DD strings today; the server is moving to
+   *  ms-UTC session anchors, so render defensively (see ExportComponent). */
+  exchange_sessions?: readonly unknown[];
   session_count?: number;
-  sessions?: readonly { open_ms_utc?: number; close_ms_utc?: number }[];
-  output_column_count?: number;
   output_columns?: readonly string[];
-  warnings?: readonly string[];
-  timeframe_advice?: Record<string, unknown>;
-  estimates?: Readonly<Record<string, unknown>>;
-  estimate_assumptions?: Readonly<Record<string, unknown>>;
-  estimate_provenance?: Record<string, unknown>;
+  output_column_count?: number;
+  estimated_bars?: number;
+  estimate_assumptions?: readonly string[];
+  estimate_provenance?: string;
   companion_dependencies?: readonly string[];
+  warnings?: readonly string[];
+  allowed_timeframes?: readonly string[];
+  recommended_timeframes?: readonly string[];
   exchange?: string;
-  timezone?: string;
+  calendar_timezone?: string;
   calendar_version?: string;
   [key: string]: unknown;
 }

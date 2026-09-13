@@ -1204,6 +1204,18 @@ def build_metadata_csv(
         "transactions": "Number of transactions in the minute bar",
     }
     for col in ohlcv_cols:
+        if col == "session":
+            base.append(
+                (
+                    col,
+                    "string",
+                    "Derived from NYSE calendar",
+                    "",
+                    "",
+                    "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
+                )
+            )
+            continue
         col_type = "int" if col == "transactions" else "float"
         base.append((col, col_type, "Polygon.io", "", "", desc_map.get(col, col)))
 

@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.ticker_request import Session, TickerRequest
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class AggregateRequest(BaseModel):
@@ -356,6 +357,24 @@ class DatasetGenerationRequest(BaseModel):
         description="When true, run the data-quality pipeline on the fetched bars and bundle "
         "quality_report.md into the ZIP alongside the dataset.",
     )
+    # Canonical numeric window (int64 ms UTC) — additive; per-field takes
+    # precedence over the date strings so a generated dataset matches the
+    # planned half-open window (data-lab workspace redesign PRD §12).
+    start_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window start (int64 ms UTC). When supplied, takes "
+        "precedence over from_date for the fetch span (resolved via the ET calendar).",
+    )
+    end_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, "
+        "takes precedence over to_date; a window ending on the session open of day X "
+        "excludes day X's data.",
+    )
     include_previous_close: bool = Field(
         True,
         description="When true, add a 'PC' column to dataset.csv positioned before 'open'. "
@@ -407,6 +426,18 @@ class DatasetGenerationRequest(BaseModel):
             raise ValueError("sort must be 'asc' or 'desc'")
         return v
 
+    @model_validator(mode="after")
+    def validate_generation_numeric_window(self) -> "DatasetGenerationRequest":
+        if (
+            self.start_ms_utc is not None
+            and self.end_ms_utc is not None
+            and self.start_ms_utc >= self.end_ms_utc
+        ):
+            raise ValueError(
+                f"start_ms_utc {self.start_ms_utc} must be before end_ms_utc {self.end_ms_utc}"
+            )
+        return self
+
 
 class DatasetPlanRequest(BaseModel):
     """Request for ``POST /api/dataset/plan`` — local, fetch-free planning.
@@ -457,14 +488,21 @@ class DatasetPlanRequest(BaseModel):
         None,
         description="Optional options companion config; planned workload is estimated, never fetched.",
     )
+    include_quality_report: bool = Field(
+        False,
+        description="Companion flag: run the data-quality pipeline on the fetched bars and "
+        "bundle quality_report.md — additional Polygon fetches and compute at generation time.",
+    )
     start_ms_utc: int | None = Field(
         None,
         ge=0,
+        le=MAX_TIMESTAMP_MS,
         description="Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date.",
     )
     end_ms_utc: int | None = Field(
         None,
         ge=0,
+        le=MAX_TIMESTAMP_MS,
         description="Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date.",
     )
 

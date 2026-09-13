@@ -40,7 +40,11 @@ import { IndicatorConfigModalComponent } from '../indicator-config-modal/indicat
 import type { ActiveIndicatorEntry } from '../active-indicator-card/active-indicator-card.component';
 
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
-import { buildChartRequestBody, utcMsToIsoDate } from '../data-lab-request-mapper';
+import {
+  buildChartRequestBody,
+  mapSessionToWire,
+  utcMsToIsoDate,
+} from '../data-lab-request-mapper';
 import { windowToNewsQuery, NEWS_MAX_HEADLINES } from './news-window-adapter';
 
 /** Local news-section state beyond the store's coarse newsState. */
@@ -83,6 +87,10 @@ export class ExploreComponent {
    *  @if until the first explicit refresh (PRD §16 empty state). */
   readonly chartRendered = signal(false);
   readonly chartRefreshing = signal(false);
+  /** True between handing the chart component a fetch and that fetch
+   *  settling — distinguishes "not started" from "finished" when the
+   *  chart's `loading` signal is observed. */
+  private readonly chartFetchIssued = signal(false);
   readonly computeAllIndicators = signal(false);
 
   // ── Drawers ───────────────────────────────────────────────
@@ -145,6 +153,30 @@ export class ExploreComponent {
       },
       { allowSignalWrites: true },
     );
+
+    // Settle an in-flight refresh from the chart component's own lifecycle:
+    // `loading` flips false in the fetch's finally block, on success AND on
+    // failure. Until then chartRefreshing stays true (the refresh button
+    // stays disabled, so requests can't overlap) and the store's stale flag
+    // stays set (a failed fetch must leave the old bars visibly out of
+    // date, not looking current). The fetchIssued guard keeps the freshly
+    // mounted chart (viewChild present, loading still false, no fetch
+    // started) from settling the refresh early.
+    effect(
+      () => {
+        const chart = this.chartComponent();
+        if (!chart) return;
+        const loading = chart.loading();
+        untracked(() => {
+          if (!loading && this.chartFetchIssued() && this.chartRefreshing()) {
+            this.chartFetchIssued.set(false);
+            this.chartRefreshing.set(false);
+            this.store.settleChartRequest();
+          }
+        });
+      },
+      { allowSignalWrites: true },
+    );
   }
 
   // ── Committed scope → chart inputs ────────────────────────
@@ -158,7 +190,10 @@ export class ExploreComponent {
     return w ? utcMsToIsoDate(w.endMsUtc) : '';
   });
   readonly chartTimeframe = computed(() => {
-    const d = this.store.draft();
+    // Chart policy reads the COMMITTED scope — a fetch must never mix a
+    // committed ticker/window with uncommitted draft bar policy.
+    const d = this.store.committedScope();
+    if (!d) return '1D';
     if (d.timespan === 'minute') return `${d.multiplier}m`;
     if (d.timespan === 'hour') return `${d.multiplier}h`;
     if (d.timespan === 'day') return d.multiplier === 1 ? '1D' : `${d.multiplier}D`;
@@ -170,24 +205,32 @@ export class ExploreComponent {
     () => !!this.store.committedTicker() && !!this.store.committedWindow(),
   );
 
+  /** Wire-vocabulary session for the chart component's own POST body —
+   *  Python only recognizes `rth`, while the store's default is `regular`. */
+  readonly chartSession = computed(() =>
+    mapSessionToWire(this.store.committedScope()?.session ?? this.store.draft().session),
+  );
+
   readonly canRefresh = computed(() => this.hasCommittedScope() && !this.chartRefreshing());
 
-  /** The one and only chart fetch trigger (FR-003). */
+  /** The one and only chart fetch trigger (FR-003). Bar policy comes from
+   *  the committed scope, never the draft. */
   refreshChart(): void {
-    const window = this.store.committedWindow();
-    const ticker = this.store.committedTicker();
-    if (!window || !ticker) return;
-    const draft = this.store.draft();
+    const scope = this.store.committedScope();
+    if (!scope) return;
     const body = buildChartRequestBody({
-      ticker,
-      window,
+      ticker: scope.ticker,
+      window: scope.window,
       timeframe: this.chartTimeframe(),
-      session: draft.session,
-      forwardFill: draft.forwardFill,
-      adjusted: draft.adjusted,
+      session: scope.session,
+      forwardFill: scope.forwardFill,
+      adjusted: scope.adjusted,
       indicators: this.store.indicators(),
       computeAllIndicators: this.computeAllIndicators(),
     });
+    // Records the request signature WITHOUT clearing the stale flag — the
+    // settle effect above clears chartRefreshing and the stale flag when
+    // the chart component's fetch finishes (success or failure).
     this.store.recordChartRequest(JSON.stringify(body));
     this.chartRendered.set(true);
     this.chartRefreshing.set(true);
@@ -196,10 +239,11 @@ export class ExploreComponent {
       const chart = this.chartComponent();
       if (!chart) {
         this.chartRefreshing.set(false);
+        this.store.settleChartRequest();
         return;
       }
+      this.chartFetchIssued.set(true);
       chart.fetchData();
-      this.chartRefreshing.set(false);
     });
   }
 
@@ -210,7 +254,9 @@ export class ExploreComponent {
 
   onChartTimeframeRejected(event: { requested: string; recommended: string }): void {
     // Server-authored recovery choice (PRD §16): apply the recommendation to
-    // the draft scope; the user still refreshes explicitly.
+    // the draft scope AND commit it — chart fetches read the committed scope,
+    // so without the commit the next explicit refresh would resend the just
+    // rejected timeframe forever. The user still refreshes explicitly.
     const parsed = /^(\d+)([mhDWM])$/.exec(event.recommended);
     if (!parsed) return;
     const multiplier = parseInt(parsed[1], 10);
@@ -219,7 +265,8 @@ export class ExploreComponent {
       parsed[2] === 'h' ? 'hour' :
       parsed[2] === 'D' ? 'day' :
       parsed[2] === 'W' ? 'week' : 'month';
-    this.store.patchDraft({ timespan, multiplier });
+    this.store.patchDraft({ timespan, multiplier, timeframe: event.recommended });
+    this.store.commitScope();
     this.store.markChartStale();
   }
 
@@ -402,10 +449,14 @@ export class ExploreComponent {
       const result = await firstValueFrom(
         this.newsService.news(windowToNewsQuery(ticker, window)),
       );
+      // The committed scope may have changed while the request was pending —
+      // a late response for the old scope must not overwrite the section.
+      if (this.isStaleNewsScope(ticker, window)) return;
       this.newsArticles.set(result.articles);
       this.newsState.set('ready');
       this.store.setNewsState('ready');
     } catch (e: unknown) {
+      if (this.isStaleNewsScope(ticker, window)) return;
       const status = (e as { status?: number }).status;
       if (status === 429) {
         this.newsState.set('rate-limited');
@@ -417,5 +468,17 @@ export class ExploreComponent {
         this.newsError.set(e instanceof Error ? e.message : String(e));
       }
     }
+  }
+
+  /** True when the scope a pending news request captured no longer matches
+   *  the current committed scope (ticker or window changed mid-flight). */
+  private isStaleNewsScope(ticker: string, window: { startMsUtc: number; endMsUtc: number }): boolean {
+    const current = this.store.committedWindow();
+    return (
+      this.store.committedTicker() !== ticker ||
+      !current ||
+      current.startMsUtc !== window.startMsUtc ||
+      current.endMsUtc !== window.endMsUtc
+    );
   }
 }

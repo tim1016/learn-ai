@@ -102,10 +102,18 @@ export class ValidateComponent {
     const window = this.store.committedWindow();
     return window
       ? `${this.store.committedTicker() || '—'} · ${utcMsToIsoDate(window.startMsUtc)} → ${utcMsToIsoDate(window.endMsUtc)}`
-      : 'No committed scope — quality analysis uses the ticker above with no date filter.';
+      : 'No committed scope — commit a ticker and window (Explore or the shell scope bar) before running quality analysis.';
   });
 
+  /** Quality analysis requires from_date/to_date server-side; without a
+   *  committed window the request is a guaranteed 422, so the run action
+   *  stays disabled until a committed range exists. */
+  readonly canRunQuality = computed(
+    () => !!this.store.committedWindow() && !this.qualityLoading(),
+  );
+
   async runQualityAnalysis(): Promise<void> {
+    if (!this.canRunQuality()) return;
     this.qualityLoading.set(true);
     this.qualityError.set('');
     this.qualityResult.set(null);

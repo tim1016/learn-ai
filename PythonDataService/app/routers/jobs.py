@@ -382,6 +382,12 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
     # Validate the embedded dataset payload through the existing schema.
     try:
         dataset_req = DatasetGenerationRequest.model_validate(req.dataset)
+        # Numeric window bounds (start_ms_utc/end_ms_utc) take precedence
+        # over the date strings — resolve them into the fetch span here so
+        # fetch, companions, and filename all describe the planned window.
+        from app.services.dataset_plan_service import resolve_generation_window
+
+        dataset_req = resolve_generation_window(dataset_req)
     except Exception as exc:  # pydantic ValidationError or shape mismatch
         raise HTTPException(status_code=400, detail=f"invalid dataset payload: {exc}")
 

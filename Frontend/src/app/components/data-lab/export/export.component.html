@@ -10,7 +10,14 @@
     shell scope bar or on <a routerLink="/data-lab/explore">Explore</a>.
   </p>
   <dl class="export__kv">
-    <dt>Ticker</dt><dd>{{ store.committedTicker() || '—' }}</dd>
+    <dt>Ticker</dt>
+    <dd>
+      @if (store.committedTicker()) {
+        <app-asset-identity [symbol]="store.committedTicker()" [size]="'sm'" />
+      } @else {
+        —
+      }
+    </dd>
     <dt>Session</dt><dd>{{ store.draft().session }}</dd>
     <dt>Forward fill</dt><dd>{{ store.draft().forwardFill ? 'on' : 'off' }}</dd>
     <dt>Splits adjusted</dt><dd>{{ store.draft().adjusted ? 'yes' : 'no' }}</dd>
@@ -59,36 +66,50 @@
       <h3>Server plan</h3>
       <dl class="export__kv">
         <dt>Session count</dt><dd>{{ receipt.session_count ?? '—' }}</dd>
+        <dt>Estimated bars</dt><dd>{{ receipt.estimated_bars ?? '—' }}</dd>
         <dt>Output columns</dt><dd>{{ receipt.output_column_count ?? '—' }}</dd>
         @if (receipt.exchange) { <dt>Exchange</dt><dd>{{ receipt.exchange }}</dd> }
-        @if (receipt.timezone) { <dt>Timezone</dt><dd>{{ receipt.timezone }}</dd> }
+        @if (receipt.calendar_timezone) { <dt>Timezone</dt><dd>{{ receipt.calendar_timezone }}</dd> }
         @if (receipt.calendar_version) { <dt>Calendar</dt><dd>{{ receipt.calendar_version }}</dd> }
       </dl>
       @if (receipt.output_columns; as cols) {
         <p class="export__cols">{{ cols.join(', ') }}</p>
       }
+      @if (receipt.exchange_sessions?.length) {
+        <h4>Sessions</h4>
+        <p class="export__cols">{{ sessionLabels(receipt).join(', ') }}</p>
+      }
       @if (receipt.warnings?.length) {
         <ul class="export__warnings">
           @for (warning of receipt.warnings; track warning) {
-            <li role="alert">{{ warning | receiptLabel }}</li>
+            <li role="alert">{{ warning }}</li>
           }
         </ul>
       }
-      @if (receipt.estimates) {
-        <h4>Estimates (server-authored)</h4>
-        <pre class="export__pre">{{ pretty(receipt.estimates) }}</pre>
+      @if (receipt.allowed_timeframes?.length || receipt.recommended_timeframes?.length) {
+        <h4>Timeframe advice</h4>
+        @if (receipt.allowed_timeframes?.length) {
+          <p class="export__cols">Allowed: {{ receipt.allowed_timeframes.join(', ') }}</p>
+        }
+        @if (receipt.recommended_timeframes?.length) {
+          <p class="export__cols">Recommended: {{ receipt.recommended_timeframes.join(', ') }}</p>
+        }
       }
-      @if (receipt.estimate_assumptions) {
-        <h4>Assumptions</h4>
-        <pre class="export__pre">{{ pretty(receipt.estimate_assumptions) }}</pre>
+      @if (receipt.estimate_assumptions?.length) {
+        <h4>Estimate assumptions</h4>
+        <ul class="export__warnings">
+          @for (assumption of receipt.estimate_assumptions; track assumption) {
+            <li>{{ assumption }}</li>
+          }
+        </ul>
       }
       @if (receipt.estimate_provenance) {
-        <h4>Provenance</h4>
-        <pre class="export__pre">{{ pretty(receipt.estimate_provenance) }}</pre>
+        <h4>Estimate provenance</h4>
+        <p class="export__cols">{{ receipt.estimate_provenance }}</p>
       }
-      @if (receipt.timeframe_advice) {
-        <h4>Timeframe advice</h4>
-        <pre class="export__pre">{{ pretty(receipt.timeframe_advice) }}</pre>
+      @if (receipt.companion_dependencies?.length) {
+        <h4>Companion dependencies</h4>
+        <p class="export__cols">{{ receipt.companion_dependencies.join(', ') }}</p>
       }
     </div>
   }

@@ -85,6 +85,28 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     expect(resolveLegacyDataLabUrl('/data-quality?mode=build').route).toBe('/data-lab/export');
   });
 
+  it('a redirected /data-quality bookmark keeps validate and preserves ticker/range params', () => {
+    // Angular's /data-quality → /data-lab/validate redirect preserves the
+    // query string, so the shell first sees the REDIRECTED URL. The
+    // resolver must keep the validate destination and the scope params —
+    // keying only on the original legacy path would drop them.
+    const res = resolveLegacyDataLabUrl(
+      '/data-lab/validate?ticker=AAPL&from=2026-01-02&to=2026-06-30',
+    );
+    expect(res.route).toBe('/data-lab/validate');
+    expect(res.params).toEqual({
+      ticker: 'AAPL',
+      from: '2026-01-02',
+      to: '2026-06-30',
+    });
+    expect(res.warnings).toEqual([]);
+  });
+
+  it('an explicit mode still overrides an already-canonical child path', () => {
+    const res = resolveLegacyDataLabUrl('/data-lab/validate?mode=build');
+    expect(res.route).toBe('/data-lab/export');
+  });
+
   it('drops known keys with empty values', () => {
     const res = resolveLegacyDataLabUrl('/data-lab?ticker=');
     expect(res.params).toEqual({});

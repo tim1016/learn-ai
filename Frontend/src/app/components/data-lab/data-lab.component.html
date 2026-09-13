@@ -116,10 +116,10 @@
         [value]="sessionName()"
         (input)="onSessionNameInput($event)"
       />
-      <button type="button" (click)="saveSession()" [disabled]="savingSession()">
+      <button type="button" (click)="saveSession()" [disabled]="savingSession() || !canSaveSession()">
         {{ activeSessionId() ? 'Update setup' : 'Save setup' }}
       </button>
-      <button type="button" (click)="saveAsNewSession()" [disabled]="savingSession()">
+      <button type="button" (click)="saveAsNewSession()" [disabled]="savingSession() || !canSaveSession()">
         Save as new
       </button>
       @if (activeSessionId()) {

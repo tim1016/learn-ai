@@ -26,6 +26,11 @@ class DatasetPlanResponse(BaseModel):
         ...,
         description="Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.",
     )
+    exchange_session_opens_ms_utc: list[int] = Field(
+        ...,
+        description="Calendar-derived session-open anchor for each entry of exchange_sessions, "
+        "in the same order (int64 ms UTC). The canonical wire form of the session list.",
+    )
     session_count: int = Field(..., ge=0, description="Number of scheduled exchange sessions in range")
     output_columns: list[str] = Field(
         ...,
