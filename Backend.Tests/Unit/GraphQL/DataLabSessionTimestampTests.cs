@@ -76,7 +76,8 @@ public class DataLabSessionTimestampTests
         // Window re-derives from the new legacy dates (UTC midnight).
         Assert.Equal(1772409600000L, session.WindowStartMsUtc); // 2026-03-02T00:00:00Z
         Assert.Equal(1774915200000L, session.WindowEndMsUtc);   // 2026-03-31T00:00:00Z
-        Assert.True(session.UpdatedMsUtc > session.CreatedMsUtc);
+        // Server write time; >= (not >) because save and update can share a millisecond.
+        Assert.True(session.UpdatedMsUtc >= session.CreatedMsUtc);
         // Legacy columns stay populated and move with the numeric authority.
         Assert.Equal("2026-03-02", session.FromDate);
         Assert.Equal("2026-03-31", session.ToDate);
@@ -141,5 +142,130 @@ public class DataLabSessionTimestampTests
         Assert.Equal(created, session.UpdatedAt);
         Assert.Equal("2025-06-01", session.FromDate);
         Assert.Equal("2025-06-30", session.ToDate);
+    }
+
+    // ── Timestamp validation ──────────────────────────────────
+
+    private const long MaxTimestampMsUtc = 253_402_300_799_999; // mirrors PythonDataService MAX_TIMESTAMP_MS
+
+    [Fact]
+    public async Task SaveDataLabSession_RejectsInvertedWindow()
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var input = NewInput();
+        input.WindowStartMsUtc = 1770336000000L; // 2026-02-06
+        input.WindowEndMsUtc = 1767571200000L;   // 2026-01-05 (earlier)
+
+        var result = await mutation.SaveDataLabSession(context, input);
+
+        Assert.False(result.Success);
+        Assert.Contains("windowStartMsUtc", result.Message);
+        Assert.Empty(await context.DataLabSessions.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(-1L)]
+    [InlineData(MaxTimestampMsUtc + 1)]
+    [InlineData(long.MaxValue)]
+    public async Task SaveDataLabSession_RejectsOutOfRangeWindowStart(long value)
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var input = NewInput();
+        input.WindowStartMsUtc = value;
+        input.WindowEndMsUtc = value + 1_000_000; // window ordering itself is fine
+
+        var result = await mutation.SaveDataLabSession(context, input);
+
+        Assert.False(result.Success);
+        Assert.Contains("windowStartMsUtc", result.Message);
+    }
+
+    [Theory]
+    [InlineData(-1L)]
+    [InlineData(MaxTimestampMsUtc + 1)]
+    public async Task SaveDataLabSession_RejectsOutOfRangeCreatedMs(long value)
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var input = NewInput();
+        input.CreatedMsUtc = value;
+
+        var result = await mutation.SaveDataLabSession(context, input);
+
+        Assert.False(result.Success);
+        Assert.Contains("createdMsUtc", result.Message);
+    }
+
+    [Fact]
+    public async Task UpdateDataLabSession_RejectsInvertedWindow()
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var saveResult = await mutation.SaveDataLabSession(context, NewInput());
+
+        var input = NewInput();
+        input.WindowStartMsUtc = 2000L;
+        input.WindowEndMsUtc = 1000L;
+        var updated = await mutation.UpdateDataLabSession(context, saveResult.Id!.Value, input);
+
+        Assert.False(updated.Success);
+        Assert.Contains("windowStartMsUtc", updated.Message);
+        // The stored session is untouched by the rejected update.
+        var session = await context.DataLabSessions.AsNoTracking().SingleAsync(s => s.Id == saveResult.Id.Value);
+        Assert.Equal(1767571200000L, session.WindowStartMsUtc);
+        Assert.Equal(1770336000000L, session.WindowEndMsUtc);
+    }
+
+    [Fact]
+    public async Task UpdateDataLabSession_RejectsOutOfRangeTimestamp()
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var saveResult = await mutation.SaveDataLabSession(context, NewInput());
+
+        var input = NewInput();
+        input.WindowEndMsUtc = long.MaxValue;
+        var updated = await mutation.UpdateDataLabSession(context, saveResult.Id!.Value, input);
+
+        Assert.False(updated.Success);
+        Assert.Contains("windowEndMsUtc", updated.Message);
+    }
+
+    [Fact]
+    public async Task UpdateDataLabSession_IgnoresCreatedMsUtcInput()
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var input = NewInput();
+        input.CreatedMsUtc = 1000L; // create-only: honored on save
+        var saveResult = await mutation.SaveDataLabSession(context, input);
+
+        var updateInput = NewInput();
+        updateInput.CreatedMsUtc = 999L; // must be ignored on update
+        var updated = await mutation.UpdateDataLabSession(context, saveResult.Id!.Value, updateInput);
+
+        Assert.True(updated.Success);
+        var session = await context.DataLabSessions.AsNoTracking().SingleAsync(s => s.Id == saveResult.Id.Value);
+        Assert.Equal(1000L, session.CreatedMsUtc);
+    }
+
+    [Fact]
+    public async Task UpdateDataLabSession_UpdatedMsUtcIsServerOwned()
+    {
+        using var context = TestDbContextFactory.Create();
+        var mutation = new DataLabMutation();
+        var saveResult = await mutation.SaveDataLabSession(context, NewInput());
+
+        var updateInput = NewInput();
+        updateInput.UpdatedMsUtc = 42L; // must be ignored: server sets write time
+        var updated = await mutation.UpdateDataLabSession(context, saveResult.Id!.Value, updateInput);
+
+        Assert.True(updated.Success);
+        var session = await context.DataLabSessions.AsNoTracking().SingleAsync(s => s.Id == saveResult.Id.Value);
+        Assert.NotNull(session.UpdatedMsUtc);
+        Assert.NotEqual(42L, session.UpdatedMsUtc);
+        Assert.True(session.UpdatedMsUtc >= session.CreatedMsUtc);
     }
 }

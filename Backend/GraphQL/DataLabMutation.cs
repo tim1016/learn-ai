@@ -13,6 +13,35 @@ public class DataLabMutation
     // Legacy DateTime/string columns remain written and read for dual-read
     // compatibility; numeric fields are authoritative when non-null.
 
+    /// <summary>
+    /// Upper bound for caller-supplied ms-UTC timestamps (9999-12-31T23:59:59.999Z).
+    /// Mirrors MAX_TIMESTAMP_MS in PythonDataService/app/utils/session_anchors.py;
+    /// deliberately far below Int64.MaxValue.
+    /// </summary>
+    private const long MaxTimestampMsUtc = 253_402_300_799_999;
+
+    /// <summary>
+    /// Validates caller-supplied numeric timestamps: each must be nonnegative and
+    /// ≤ <see cref="MaxTimestampMsUtc"/>, and caller-provided window endpoints
+    /// must be strictly increasing when both are supplied. Returns an error
+    /// message, or null when valid.
+    /// </summary>
+    private static string? ValidateTimestamps(DataLabSessionInput input)
+    {
+        if (input.WindowStartMsUtc is < 0 or > MaxTimestampMsUtc)
+            return $"windowStartMsUtc must be between 0 and {MaxTimestampMsUtc}";
+        if (input.WindowEndMsUtc is < 0 or > MaxTimestampMsUtc)
+            return $"windowEndMsUtc must be between 0 and {MaxTimestampMsUtc}";
+        if (input.CreatedMsUtc is < 0 or > MaxTimestampMsUtc)
+            return $"createdMsUtc must be between 0 and {MaxTimestampMsUtc}";
+        // Window ordering is enforced only on caller-provided endpoints; the
+        // legacy date-string derivation path keeps its existing behavior.
+        if (input.WindowStartMsUtc.HasValue && input.WindowEndMsUtc.HasValue
+            && input.WindowStartMsUtc.Value >= input.WindowEndMsUtc.Value)
+            return "windowStartMsUtc must be strictly before windowEndMsUtc";
+        return null;
+    }
+
     private static long ToEpochMsUtc(DateTime utc) =>
         new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeMilliseconds();
 
@@ -41,6 +70,20 @@ public class DataLabMutation
     {
         try
         {
+            // Numeric authority: input values win when supplied, otherwise
+            // derive (interim UTC-midnight derivation for the window).
+            var windowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate);
+            var windowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate);
+            var validationError = ValidateTimestamps(input);
+            if (validationError != null)
+            {
+                return new DataLabSessionResult
+                {
+                    Success = false,
+                    Message = validationError,
+                };
+            }
+
             var now = DateTime.UtcNow;
             var session = new DataLabSession
             {
@@ -56,10 +99,10 @@ public class DataLabMutation
                 ChartSnapshotJson = input.ChartSnapshotJson,
                 CreatedAt = now,
                 UpdatedAt = now,
-                // Numeric authority: input values win when supplied, otherwise
-                // derive (interim UTC-midnight derivation for the window).
-                WindowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate),
-                WindowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate),
+                WindowStartMsUtc = windowStartMsUtc,
+                WindowEndMsUtc = windowEndMsUtc,
+                // CreatedMsUtc is create-only: honored on save when provided,
+                // else server time. UpdatedMsUtc is always server-owned.
                 CreatedMsUtc = input.CreatedMsUtc ?? ToEpochMsUtc(now),
                 UpdatedMsUtc = ToEpochMsUtc(now),
             };
@@ -115,9 +158,24 @@ public class DataLabMutation
             session.EntriesJson = input.EntriesJson;
             session.ChartSnapshotJson = input.ChartSnapshotJson;
             var updatedNow = DateTime.UtcNow;
+            var windowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate);
+            var windowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate);
+            var validationError = ValidateTimestamps(input);
+            if (validationError != null)
+            {
+                return new DataLabSessionResult
+                {
+                    Success = false,
+                    Message = validationError,
+                };
+            }
+
             session.UpdatedAt = updatedNow;
-            session.WindowStartMsUtc = input.WindowStartMsUtc ?? TryParseDateOnlyMsUtc(input.FromDate);
-            session.WindowEndMsUtc = input.WindowEndMsUtc ?? TryParseDateOnlyMsUtc(input.ToDate);
+            session.WindowStartMsUtc = windowStartMsUtc;
+            session.WindowEndMsUtc = windowEndMsUtc;
+            // CreatedMsUtc is create-only: on update the stored value is kept
+            // (backfilled from CreatedAt for legacy rows); input.CreatedMsUtc
+            // is ignored. UpdatedMsUtc is server-owned.
             session.CreatedMsUtc ??= ToEpochMsUtc(session.CreatedAt);
             session.UpdatedMsUtc = ToEpochMsUtc(updatedNow);
 
@@ -289,14 +347,20 @@ public class DataLabSessionInput
 
     // ── Optional int64 ms UTC overrides (additive timestamp migration, PRD §13).
     // When null, mutations derive the values: window from the legacy date-only
-    // strings (interim UTC-midnight derivation) and created/updated from now. ──
+    // strings (interim UTC-midnight derivation) and created/updated from now.
+    // Validation: supplied values must be within [0, 253402300799999]
+    // (9999-12-31T23:59:59.999Z) and the window strictly increasing. ──
 
+    [GraphQLDescription("Inclusive window start in int64 ms UTC. When null, derived from fromDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly before windowEndMsUtc when both are set.")]
     public long? WindowStartMsUtc { get; set; }
 
+    [GraphQLDescription("Inclusive window end in int64 ms UTC. When null, derived from toDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly after windowStartMsUtc when both are set.")]
     public long? WindowEndMsUtc { get; set; }
 
+    [GraphQLDescription("Create-only: session creation time in int64 ms UTC. Honored by saveDataLabSession when provided (within [0, 253402300799999]); ignored by updateDataLabSession, which keeps the stored value (or backfills it from the legacy createdAt).")]
     public long? CreatedMsUtc { get; set; }
 
+    [GraphQLDescription("Server-owned: ignored on input. The server always sets updatedMsUtc to the write time.")]
     public long? UpdatedMsUtc { get; set; }
 }
 

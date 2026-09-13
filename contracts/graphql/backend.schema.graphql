@@ -1595,12 +1595,12 @@ input DataLabSessionInput {
   session: String!
   forwardFill: Boolean!
   adjusted: Boolean!
+  entriesJson: String!
+  chartSnapshotJson: String
   windowStartMsUtc: Long
   windowEndMsUtc: Long
   createdMsUtc: Long
   updatedMsUtc: Long
-  entriesJson: String!
-  chartSnapshotJson: String
 }
 
 input DataLabSessionSortInput {
