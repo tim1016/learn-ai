@@ -150,8 +150,7 @@ async def describe_broker_clerk(
 
 def _lookup_operation(broker: str, operation: ProviderOperation, service: Any):
     """Resolve the operation against the named broker's own catalog."""
-    adapters = service._provider_adapters
-    adapter = adapters.get(broker)
+    adapter = service.adapters().get(broker)
     if adapter is None:
         from app.broker.fleet.errors import BrokerNotSupported
 

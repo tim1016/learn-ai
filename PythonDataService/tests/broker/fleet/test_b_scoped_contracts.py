@@ -720,7 +720,9 @@ def test_existing_wildcards_do_not_shadow_the_clerk_surface() -> None:
         assert matched[0].startswith("fleet_"), matched
 
 
-def test_a_broker_without_the_operation_refuses_the_capability() -> None:
+def test_a_broker_without_the_operation_refuses_the_capability(
+    tmp_path: Path,
+) -> None:
     """A broker that does not declare the route's operation refuses it —
     no cross-provider silent servicing."""
     from app.routers.broker_clerks import _lookup_operation
@@ -729,9 +731,7 @@ def test_a_broker_without_the_operation_refuses_the_capability() -> None:
     alpaca_ops = production_provider_adapters()["alpaca"].operations()
     custody = next(op for op in alpaca_ops if op.operation_id == "custody_reconcile")
     service = FleetControlService(
-        store=FleetRegistryStore.open(
-            control_dir=Path("/tmp/fleet-b-capability-check")
-        ),
+        store=FleetRegistryStore.open(control_dir=tmp_path / "capability-check"),
         provider_adapters={"fake_alpha": fake_alpha()},
     )
     try:

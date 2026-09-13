@@ -396,7 +396,7 @@ class LaneRouter:
         path_params: Mapping[str, str],
         expected_binding_generation: int | None,
     ):
-        if broker not in self._service._provider_adapters:
+        if broker not in self._service.adapters():
             from app.broker.fleet.errors import BrokerNotSupported
 
             raise BrokerNotSupported(f"No production adapter serves {broker!r}.")

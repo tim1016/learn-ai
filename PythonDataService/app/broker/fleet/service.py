@@ -170,6 +170,10 @@ class FleetControlService:
         """Resolve the deployment's adapter for one broker, failing closed."""
         return require_adapter(self._provider_adapters, broker)
 
+    def adapters(self) -> Mapping[str, BrokerProviderAdapter]:
+        """The deployment's provider composition (catalog reads, never mutation)."""
+        return dict(self._provider_adapters)
+
     def require_capability(self, *, broker: str, capability: Capability) -> None:
         """Refuse an operation the provider does not declare (PRD FR-006)."""
         adapter = self._adapter(broker)
