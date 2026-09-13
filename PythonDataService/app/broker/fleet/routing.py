@@ -173,15 +173,25 @@ class LaneRouter:
             result = await delivery.deliver(request)
         except DeliveryIdentityMismatch as exc:
             raise ClerkIdentityMismatch(
-                f"The lane's response failed identity verification: {exc}",
+                "The lane's response failed identity verification; the "
+                "transport-level detail is in the coordinator log.",
                 next_step="The wrong lane answered; refresh and retry against "
                 "the lane's current resource.",
             ) from exc
         except FleetControlError:
             raise
         except Exception as exc:
+            # The exception text can carry internal topology (hostnames,
+            # ports, paths); it goes to the log, never the public refusal.
+            logger.warning(
+                "Lane delivery failed for %s on %s: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkUnreachable(
-                f"Clerk {clerk_id} could not serve {operation.operation_id}: {exc}",
+                f"Clerk {clerk_id} could not serve {operation.operation_id}; "
+                "the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
             raise ClerkUnreachable(
@@ -225,14 +235,28 @@ class LaneRouter:
         try:
             result = await delivery.stream(request)
         except DeliveryIdentityMismatch as exc:
+            logger.warning(
+                "Lane stream failed identity verification for %s on %s: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkIdentityMismatch(
-                f"The lane's stream failed identity verification: {exc}",
+                "The lane's stream failed identity verification; the "
+                "transport-level detail is in the coordinator log.",
             ) from exc
         except FleetControlError:
             raise
         except Exception as exc:
+            logger.warning(
+                "Lane stream open failed for %s on %s: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkUnreachable(
-                f"Clerk {clerk_id} could not open {operation.operation_id}: {exc}",
+                f"Clerk {clerk_id} could not open {operation.operation_id}; "
+                "the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
             raise ClerkUnreachable(
@@ -331,9 +355,16 @@ class LaneRouter:
                 correlation_id=receipt.correlation_id,
                 outcome=RoutingReceiptState.OUTCOME_UNKNOWN,
             )
+            logger.warning(
+                "Command %s on %s failed identity verification after dispatch: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkRoutingOutcomeUnknown(
                 f"The lane's response for {operation.operation_id} failed "
-                f"identity verification: {exc}",
+                "identity verification; the transport-level detail is in the "
+                "coordinator log.",
                 next_step="The command may have been applied. Reconcile by the "
                 "idempotency key with the provider clerk's receipt; never "
                 "resubmit blindly.",
@@ -345,9 +376,16 @@ class LaneRouter:
                 correlation_id=receipt.correlation_id,
                 outcome=RoutingReceiptState.OUTCOME_UNKNOWN,
             )
+            logger.warning(
+                "Command %s on %s has an unknown outcome after dispatch: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkRoutingOutcomeUnknown(
                 f"Clerk {clerk_id} accepted {operation.operation_id} dispatch "
-                f"but the outcome is unknown: {exc}",
+                "but the outcome is unknown; the transport detail is in the "
+                "coordinator log.",
                 next_step="Reconcile by the idempotency key; the provider "
                 "clerk's command machinery is the outcome authority.",
             ) from exc
