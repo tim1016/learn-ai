@@ -1,0 +1,117 @@
+# ADR 0062 fleet deployment. This is intentionally separate from compose.yaml:
+# the existing stack remains the supported combined/development posture, while a
+# fleet deployment names a coordinator and every clerk explicitly.
+name: learn-ai-fleet
+
+x-fleet-agent: &fleet-agent
+  build:
+    context: ./PythonDataService
+  image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+  profiles: ["fleet"]
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  pids_limit: 256
+  cpus: "1.00"
+  mem_limit: 768m
+  environment: &fleet-agent-environment
+    FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
+    ALPACA_CLERK_DIR: /app/artifacts/alpaca_clerk
+    IBKR_LIVE_RUNS_ROOT: /app/artifacts/alpaca_clerk/live_runs
+    IBKR_LIVE_BARS_ROOT: /app/artifacts/alpaca_clerk/live_bars
+    BROKER_CAPTURE_DIR: /app/artifacts/alpaca_clerk/broker_captures
+    IBKR_READONLY: "true"
+    IBKR_BROKER_ENABLED: "true"
+    IBKR_HOST: auto
+    IBKR_PORT: "4002"
+    # The current Settings construction requires a value; lane market data is
+    # still the retained read-only IBKR feed below, never coordinator-owned.
+    POLYGON_API_KEY: ""
+    FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-16}
+    FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-4}
+    FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-64}
+    FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
+  extra_hosts:
+    - "host.containers.internal:host-gateway"
+    - "host.docker.internal:host-gateway"
+  networks:
+    - fleet-private
+
+services:
+  fleet-coordinator:
+    build:
+      context: ./PythonDataService
+    image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+    profiles: ["fleet"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    pids_limit: 192
+    cpus: "1.00"
+    mem_limit: 768m
+    env_file:
+      - path: ${FLEET_COORDINATOR_ENV_FILE:-./deploy/fleet/env/coordinator.env}
+        required: false
+    environment:
+      FLEET_ROLE: fleet_coordinator
+      FLEET_CONTROL_DIR: /app/artifacts/fleet
+      # The current process-wide Settings construction requires this value,
+      # but the coordinator does not use a market-data client or broker SDK.
+      POLYGON_API_KEY: ""
+      FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
+      FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-32}
+      FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-8}
+      FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-128}
+      FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
+    volumes:
+      - fleet-coordinator-control:/app/artifacts/fleet
+    ports:
+      # The coordinator is the only public fleet surface. Clerk agents have
+      # no host port and are reachable only on fleet-private.
+      - "127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}:8000"
+    networks:
+      - fleet-private
+
+  alpaca-paper-clerk:
+    <<: *fleet-agent
+    env_file:
+      - path: ${FLEET_PAPER_ENV_FILE:-./deploy/fleet/env/paper.env}
+        required: false
+    environment:
+      <<: *fleet-agent-environment
+      FLEET_ROLE: clerk_agent
+      FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
+      FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
+      IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-1201}
+      FLEET_ALLOW_LIVE_MUTATIONS: "false"
+    volumes:
+      - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
+
+  alpaca-live-clerk:
+    <<: *fleet-agent
+    env_file:
+      - path: ${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}
+        required: false
+    environment:
+      <<: *fleet-agent-environment
+      FLEET_ROLE: clerk_agent
+      FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
+      FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
+      IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1202}
+      # This is deliberately not an enablement switch. Existing per-account
+      # arming and Live gates remain the sole authority for any mutation.
+      FLEET_ALLOW_LIVE_MUTATIONS: "false"
+    volumes:
+      - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
+
+volumes:
+  fleet-coordinator-control:
+  fleet-alpaca-paper-data:
+  fleet-alpaca-live-data:
+
+networks:
+  fleet-private:
+    driver: bridge
+    internal: true

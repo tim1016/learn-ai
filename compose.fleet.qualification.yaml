@@ -1,0 +1,104 @@
+# Test-only overlay for scripts.run_broker_fleet_compose_qualification.
+# It replaces production commands with harmless probe processes and adds fake
+# provider endpoints. Never deploy this overlay or its generated env files.
+services:
+  fleet-coordinator:
+    profiles: ["fleet-qualification"]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "coordinator"]
+    volumes:
+      - fleet-coordinator-control:/app/artifacts/fleet
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  alpaca-paper-clerk:
+    profiles: ["fleet-qualification"]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "lane"]
+    environment:
+      FLEET_PROBE_LANE: paper
+      FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
+      FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
+    volumes:
+      - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    depends_on:
+      fleet-fake-paper-provider:
+        condition: service_healthy
+      fleet-fake-market-data:
+        condition: service_healthy
+
+  alpaca-live-clerk:
+    profiles: ["fleet-qualification"]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "lane"]
+    environment:
+      FLEET_PROBE_LANE: live
+      FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012
+      FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
+    volumes:
+      - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    depends_on:
+      fleet-fake-live-provider:
+        condition: service_healthy
+      fleet-fake-market-data:
+        condition: service_healthy
+
+  fleet-fake-paper-provider:
+    image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+    profiles: ["fleet-qualification"]
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "fake-provider"]
+    environment: { FLEET_PROBE_PROVIDER: paper }
+    volumes:
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    networks: [fleet-private]
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8011/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  fleet-fake-live-provider:
+    image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+    profiles: ["fleet-qualification"]
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "fake-provider"]
+    environment: { FLEET_PROBE_PROVIDER: live }
+    volumes:
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    networks: [fleet-private]
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8012/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  fleet-fake-market-data:
+    image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+    profiles: ["fleet-qualification"]
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "fake-market-data"]
+    volumes:
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
+    networks: [fleet-private]
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8013/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10

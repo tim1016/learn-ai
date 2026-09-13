@@ -14,6 +14,12 @@ compose.override.yml
 
 # Environment variables (contains API keys)
 .env
+deploy/fleet/env/coordinator.env
+deploy/fleet/env/paper.env
+deploy/fleet/env/live.env
+!deploy/fleet/
+!deploy/fleet/env/
+!deploy/fleet/env/*.env.example
 
 # Angular environment files (may contain API keys for development)
 **/environments/environment.development.ts
