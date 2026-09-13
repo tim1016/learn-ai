@@ -1,10 +1,10 @@
 """Bounded runtime resources and compatibility-read evidence for one lane.
 
 This module is intentionally fleet-generic: it does not know a provider,
-account, strategy, or any broker credential.  A clerk-agent process opts into
-it through :class:`app.config.FleetSettings`; the coordinator and legacy
-combined process never install this middleware.  Two independent pools keep a
-long-lived SSE client from consuming ordinary request capacity.
+account, strategy, or any broker credential.  Clerk-agent and combined
+processes install compatibility observation during the pre-cutover window;
+only clerk agents install the two resource pools.  Those independent pools
+keep a long-lived SSE client from consuming ordinary request capacity.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -23,7 +24,7 @@ from typing import Any
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
-_COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 1
+_COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 _COMPATIBILITY_EVIDENCE_RELATIVE_PATH = Path("compatibility") / "route_hits.json"
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
 _COMPATIBILITY_ROUTE_FAMILIES = frozenset(
@@ -36,6 +37,7 @@ _COMPATIBILITY_ROUTE_FAMILIES = frozenset(
     }
 )
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
+logger = logging.getLogger(__name__)
 
 
 class FleetLaneCapacityExhausted(Exception):
@@ -198,51 +200,105 @@ class CompatibilityReadEvidence:
         self._path = clerk_dir / _COMPATIBILITY_EVIDENCE_RELATIVE_PATH
         self._clock = clock
         self._lock = threading.Lock()
+        # At most five route families times four response classes can be
+        # pending. Coalescing preserves count evidence while a single worker
+        # owns disk I/O; it never creates an unbounded task/queue per request.
+        self._pending_updates: dict[tuple[str, str], int] = {}
+        self._export_task: asyncio.Task[None] | None = None
 
     @property
     def path(self) -> Path:
         """The stable lane-local file which Delivery E can inspect or export."""
         return self._path
 
-    def record(self, *, method: str, route_family: str, response_class: str) -> None:
-        """Atomically add one completed response without retaining request content."""
+    def schedule(self, *, route_family: str, response_class: str) -> None:
+        """Schedule a bounded lane-local export without delaying an HTTP response."""
+        if (
+            route_family not in _COMPATIBILITY_ROUTE_FAMILIES
+            or response_class not in _COMPATIBILITY_RESPONSE_CLASSES
+        ):
+            logger.error(
+                "Compatibility route-hit export received an invalid aggregate key.",
+                extra={"route_family": route_family, "response_class": response_class},
+            )
+            return
+        key = (route_family, response_class)
+        self._pending_updates[key] = self._pending_updates.get(key, 0) + 1
+        if self._export_task is not None and not self._export_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self._drain_exports())
+        except RuntimeError:
+            logger.exception(
+                "Compatibility route-hit export could not be scheduled.",
+                extra={"route_family": route_family, "response_class": response_class},
+            )
+            return
+        self._export_task = task
+        task.add_done_callback(self._finish_export)
+
+    async def flush(self) -> None:
+        """Await pending exports for tests and an explicit operator export seam."""
+        while self._export_task is not None:
+            await asyncio.gather(self._export_task, return_exceptions=True)
+            await asyncio.sleep(0)
+
+    async def _drain_exports(self) -> None:
+        """Drain the fixed-cardinality aggregate through one off-loop writer."""
+        while self._pending_updates:
+            pending = self._pending_updates
+            self._pending_updates = {}
+            await asyncio.to_thread(self._record_batch, pending)
+
+    def _finish_export(self, task: asyncio.Task[None]) -> None:
+        """Surface a background persistence failure without changing the response."""
+        if self._export_task is task:
+            self._export_task = None
+        if task.cancelled():
+            logger.warning(
+                "Compatibility route-hit export was cancelled.",
+                extra={"evidence_kind": "compatibility_route_hit"},
+            )
+            return
+        exception = task.exception()
+        if exception is not None:
+            logger.error(
+                "Compatibility route-hit export failed.",
+                exc_info=exception,
+                extra={"evidence_kind": "compatibility_route_hit"},
+            )
+
+    def _record_batch(self, updates: Mapping[tuple[str, str], int]) -> None:
+        """Atomically persist one coalesced batch on the bounded worker thread."""
         timestamp_ms = self._clock()
         if timestamp_ms < 0 or timestamp_ms > MAX_TIMESTAMP_MS:
             raise ValueError("Compatibility evidence clock returned an invalid timestamp.")
-        if (
-            method.upper() not in _SAFE_METHODS
-            or route_family not in _COMPATIBILITY_ROUTE_FAMILIES
-            or response_class not in _COMPATIBILITY_RESPONSE_CLASSES
-        ):
-            raise ValueError("Compatibility evidence accepts only fixed retained-read families.")
-        key = (method.upper(), route_family, response_class)
         with self._lock:
             payload = self._read_locked()
             entries = payload["route_hits"]
-            for entry in entries:
-                if (
-                    entry["method"],
-                    entry["route_family"],
-                    entry["response_class"],
-                ) == key:
-                    entry["count"] += 1
+            by_key = {
+                (entry["route_family"], entry["response_class"]): entry
+                for entry in entries
+            }
+            for key, count in updates.items():
+                entry = by_key.get(key)
+                if entry is not None:
+                    entry["count"] += count
                     entry["last_observed_at_ms"] = timestamp_ms
-                    break
-            else:
-                entries.append(
-                    {
-                        "method": key[0],
-                        "route_family": key[1],
-                        "response_class": key[2],
-                        "count": 1,
-                        "first_observed_at_ms": timestamp_ms,
-                        "last_observed_at_ms": timestamp_ms,
-                    }
-                )
+                    continue
+                entry = {
+                    "route_family": key[0],
+                    "response_class": key[1],
+                    "count": count,
+                    "first_observed_at_ms": timestamp_ms,
+                    "last_observed_at_ms": timestamp_ms,
+                }
+                entries.append(entry)
+                by_key[key] = entry
             entries.sort(
                 key=lambda entry: (
                     entry["route_family"],
-                    entry["method"],
                     entry["response_class"],
                 )
             )
@@ -291,27 +347,35 @@ class CompatibilityReadEvidence:
 
 
 class FleetLaneRuntimeMiddleware:
-    """Apply lane resources and unscoped-read measurement to a clerk agent."""
+    """Measure retained reads everywhere and enforce capacity only on an agent."""
 
     def __init__(
         self,
         app: Any,
         *,
-        config: LaneRuntimeConfig,
+        config: LaneRuntimeConfig | None,
         evidence: CompatibilityReadEvidence,
     ) -> None:
         self.app = app
-        self._requests = _CapacityPool(
-            name="request",
-            limit=config.max_inflight_requests,
-            queue_limit=config.request_queue_limit,
-            timeout_ms=config.request_queue_timeout_ms,
+        self._requests = (
+            _CapacityPool(
+                name="request",
+                limit=config.max_inflight_requests,
+                queue_limit=config.request_queue_limit,
+                timeout_ms=config.request_queue_timeout_ms,
+            )
+            if config is not None
+            else None
         )
-        self._streams = _CapacityPool(
-            name="stream",
-            limit=config.max_inflight_streams,
-            queue_limit=config.request_queue_limit,
-            timeout_ms=config.request_queue_timeout_ms,
+        self._streams = (
+            _CapacityPool(
+                name="stream",
+                limit=config.max_inflight_streams,
+                queue_limit=config.request_queue_limit,
+                timeout_ms=config.request_queue_timeout_ms,
+            )
+            if config is not None
+            else None
         )
         self._evidence = evidence
 
@@ -347,11 +411,7 @@ class FleetLaneRuntimeMiddleware:
                 return
             response_class = f"{status // 100}xx"
             if response_class in _COMPATIBILITY_RESPONSE_CLASSES:
-                self._evidence.record(
-                    method=method,
-                    route_family=family,
-                    response_class=response_class,
-                )
+                self._evidence.schedule(route_family=family, response_class=response_class)
             measurement_recorded = True
 
         async def refuse(pool: str) -> None:
@@ -374,12 +434,12 @@ class FleetLaneRuntimeMiddleware:
                     ],
                 }
             )
-            record_response(503)
             await send({"type": "http.response.body", "body": body, "more_body": False})
 
         try:
             try:
-                request_lease = await self._requests.acquire()
+                if self._requests is not None:
+                    request_lease = await self._requests.acquire()
             except FleetLaneCapacityExhausted as exc:
                 await refuse(exc.pool)
                 return
@@ -394,7 +454,7 @@ class FleetLaneRuntimeMiddleware:
                         for name, value in message.get("headers", [])
                     }
                     content_type = response_headers.get(b"content-type", b"")
-                    if b"text/event-stream" in content_type:
+                    if b"text/event-stream" in content_type and self._streams is not None:
                         try:
                             stream_lease = await self._streams.acquire()
                         except FleetLaneCapacityExhausted as exc:

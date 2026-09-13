@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +19,11 @@ from app.broker.fleet.lane_runtime import (
     compatibility_route_family,
 )
 
+AsgiMessage = dict[str, Any]
+Receive = Callable[[], Awaitable[AsgiMessage]]
+Send = Callable[[AsgiMessage], Awaitable[None]]
+AsgiApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
+
 
 def _config(*, requests: int = 1, streams: int = 1, queue: int = 0, timeout_ms: int = 0) -> LaneRuntimeConfig:
     """Build a small explicit lane sizing for one isolated test."""
@@ -30,7 +36,7 @@ def _config(*, requests: int = 1, streams: int = 1, queue: int = 0, timeout_ms: 
 
 
 async def _invoke(
-    app: Callable[..., Awaitable[None]],
+    app: AsgiApp,
     *,
     method: str = "GET",
     path: str = "/api/brokers/alpaca/bots",
@@ -38,12 +44,12 @@ async def _invoke(
     app_state: object | None = None,
 ) -> list[dict[str, Any]]:
     """Call a small ASGI app without HTTPX's intentionally buffering SSE transport."""
-    messages: list[dict[str, Any]] = []
+    messages: list[AsgiMessage] = []
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> AsgiMessage:
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: AsgiMessage) -> None:
         messages.append(message)
 
     await app(
@@ -60,7 +66,7 @@ async def _invoke(
     return messages
 
 
-def _status(messages: list[dict[str, Any]]) -> int:
+def _status(messages: list[AsgiMessage]) -> int:
     """Return the one response status emitted by an ASGI invocation."""
     return next(message["status"] for message in messages if message["type"] == "http.response.start")
 
@@ -73,7 +79,7 @@ async def test_request_capacity_refuses_then_recovers_without_running_refused_ha
     release = asyncio.Event()
     handler_calls = 0
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         nonlocal handler_calls
         handler_calls += 1
         entered.set()
@@ -103,7 +109,7 @@ async def test_bounded_request_queue_waits_then_admits_after_release(tmp_path: P
     release = asyncio.Event()
     calls = 0
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -134,7 +140,7 @@ async def test_stream_capacity_is_separate_from_ordinary_requests_and_recovers(
     stream_started = asyncio.Event()
     release_stream = asyncio.Event()
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         if scope["path"] == "/stream":
             await send(
                 {
@@ -189,7 +195,7 @@ async def test_measurement_persists_only_safe_aggregate_and_never_mutations(
     """No account, strategy, query, body, header, or secret reaches lane evidence."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1_789_000_000_123)
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
@@ -198,11 +204,11 @@ async def test_measurement_persists_only_safe_aggregate_and_never_mutations(
     await _invoke(runtime, path=path, headers=[(b"authorization", b"Bearer secret")])
     await _invoke(runtime, method="POST", path=path)
     await _invoke(runtime, path=path, headers=[(b"x-fleet-clerk-id", b"clrk_pinned")])
+    await evidence.flush()
 
     payload = evidence.snapshot()
     assert payload["route_hits"] == [
         {
-            "method": "GET",
             "route_family": "broker_bots",
             "response_class": "2xx",
             "count": 1,
@@ -221,7 +227,7 @@ async def test_compatibility_evidence_separates_unauthorized_and_not_found_respo
     """Failed probes cannot be mistaken for successfully migrated consumers."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1_789_000_000_123)
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         headers = {name: value for name, value in scope["headers"]}
         status = 404 if scope["path"].endswith("/missing") else 200
         if scope["path"].endswith("/assets") and b"x-test-auth" not in headers:
@@ -237,10 +243,10 @@ async def test_compatibility_evidence_separates_unauthorized_and_not_found_respo
         headers=[(b"x-test-auth", b"accepted")],
     )
     await _invoke(runtime, path="/api/brokers/alpaca/activities/missing")
+    await evidence.flush()
 
     assert evidence.snapshot()["route_hits"] == [
         {
-            "method": "GET",
             "route_family": "brokers_lane_extras",
             "response_class": "2xx",
             "count": 1,
@@ -248,7 +254,6 @@ async def test_compatibility_evidence_separates_unauthorized_and_not_found_respo
             "last_observed_at_ms": 1_789_000_000_123,
         },
         {
-            "method": "GET",
             "route_family": "brokers_lane_extras",
             "response_class": "4xx",
             "count": 2,
@@ -258,8 +263,8 @@ async def test_compatibility_evidence_separates_unauthorized_and_not_found_respo
     ]
 
 
-def test_compatibility_evidence_removes_temporary_file_when_atomic_replace_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A failed durable export does not leave a request-shaped temporary file behind."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
@@ -269,11 +274,53 @@ def test_compatibility_evidence_removes_temporary_file_when_atomic_replace_fails
         raise OSError("replace refused")
 
     monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", refuse_replace)
-    with pytest.raises(OSError, match="replace refused"):
-        evidence.record(
-            method="GET", route_family="broker_bots", response_class="2xx"
-        )
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    assert _status(await _invoke(runtime)) == 200
+    await evidence.flush()
     assert not list(evidence.path.parent.glob(".route_hits.json.*"))
+    assert "Compatibility route-hit export failed." in caplog.text
+
+
+async def test_background_evidence_export_does_not_delay_an_authorized_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slow evidence persistence runs off-loop after the handler's response start."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+
+    def slow_record(updates: Mapping[tuple[str, str], int]) -> None:
+        del updates
+        time.sleep(0.2)
+
+    monkeypatch.setattr(evidence, "_record_batch", slow_record)
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    started_at = time.monotonic()
+    assert _status(await _invoke(runtime)) == 200
+    assert time.monotonic() - started_at < 0.1
+    await evidence.flush()
+
+
+async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> None:
+    """Combined pre-cutover mode records browser reads without fleet sizing."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    assert _status(await _invoke(runtime)) == 200
+    await evidence.flush()
+    assert evidence.snapshot()["route_hits"][0]["route_family"] == "broker_bots"
 
 
 def test_compatibility_evidence_removes_temporary_file_when_fsync_fails(
@@ -306,7 +353,7 @@ async def test_identity_validation_precedes_capacity_and_pinned_reads_are_not_me
     calls = 0
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
 
-    async def handler(scope, receive, send) -> None:
+    async def handler(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         nonlocal calls
         calls += 1
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -346,6 +393,7 @@ async def test_identity_validation_precedes_capacity_and_pinned_reads_are_not_me
     )
     assert _status(pinned_read) == 200
     assert calls == 1
+    await evidence.flush()
     assert evidence.snapshot()["route_hits"] == []
     start = next(message for message in pinned_read if message["type"] == "http.response.start")
     assert (b"x-fleet-clerk-id", b"clrk_serving") in start["headers"]
