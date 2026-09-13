@@ -25,12 +25,13 @@ interface ManualOrderTicketQuery {
 }
 
 export interface ManualOrderTicketNavigation {
-  readonly commands: readonly ['/brokers', string];
+  readonly commands: readonly ['/brokers', string, 'clerks', string, 'accounts', string];
   readonly queryParams: Params;
 }
 
 export function buildManualOrderTicketNavigation(
   broker: string,
+  clerkId: string,
   accountId: string,
   symbol: string,
 ): ManualOrderTicketNavigation {
@@ -41,7 +42,10 @@ export function buildManualOrderTicketNavigation(
     [MANUAL_ORDER_QUERY.ticketId]: crypto.randomUUID(),
     [MANUAL_ORDER_QUERY.legId]: crypto.randomUUID(),
   } satisfies ManualOrderTicketQuery;
-  return { commands: ['/brokers', broker], queryParams };
+  return {
+    commands: ['/brokers', broker, 'clerks', clerkId, 'accounts', accountId],
+    queryParams,
+  };
 }
 
 export function parseManualOrderTicketQuery(

@@ -317,7 +317,7 @@ describe('BotTileComponent', () => {
   it('opens an inline confirm on quick-action click and only emits action after confirming', async () => {
     const onAction = vi.fn();
     await render(BotTileComponent, {
-      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA3' },
       on: { action: onAction },
       providers: [routerProvider()],
     });
@@ -361,7 +361,9 @@ describe('BotTileComponent', () => {
   it('does not emit when the inline confirm is cancelled', async () => {
     const onAction = vi.fn();
     await render(BotTileComponent, {
-      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      inputs: {
+        bot: bot(), bars: [bar()], broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA3',
+      },
       on: { action: onAction },
       providers: [routerProvider()],
     });
@@ -457,7 +459,9 @@ describe('BotTileComponent', () => {
   it('navigates to the bot detail page when the chart body is clicked', async () => {
     const navigate = vi.fn().mockResolvedValue(true);
     const { container } = await render(BotTileComponent, {
-      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      inputs: {
+        bot: bot(), bars: [bar()], broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA3',
+      },
       providers: [routerProvider(navigate)],
     });
 
@@ -466,7 +470,7 @@ describe('BotTileComponent', () => {
     fireEvent.click(chartRegion as Element);
 
     expect(navigate).toHaveBeenCalledWith([
-      '/brokers', 'alpaca', 'accounts', 'PA3', 'bots', 'sid-1',
+      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA3', 'bots', 'sid-1',
     ]);
   });
 

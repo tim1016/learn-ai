@@ -19,7 +19,7 @@
         <span>This account has no bots set up.</span>
         <a
           class="gallery-page__empty-link"
-          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'bots']"
+          [routerLink]="['/brokers', broker(), 'clerks', clerkId(), 'accounts', accountId(), 'bots']"
         >View bots roster</a>
       </div>
     }
@@ -35,6 +35,7 @@
         [barsBySymbol]="store.barsBySymbol()"
         [markersBySid]="store.markersBySid()"
         [broker]="broker()"
+        [clerkId]="clerkId()"
         [accountId]="accountId()"
         [pendingSids]="pendingSids()"
         [resolution]="store.resolution()"

@@ -62,11 +62,12 @@ const PANEL: BotPanelView = {
 describe('TraderBotBannerComponent', () => {
   it('shows one mission verdict and the direct trader actions without legacy header noise', async () => {
     await render(TraderBotBannerComponent, {
-      inputs: { panel: PANEL },
+      inputs: { panel: PANEL, clerkId: 'clrk_spec' },
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('link', { name: /alpaca bots/i })).toBeTruthy();
+    const back = screen.getByRole('link', { name: /alpaca bots/i }) as HTMLAnchorElement;
+    expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/acc-1/bots');
     expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Mission blocked' })).toBeTruthy();
@@ -100,7 +101,7 @@ describe('TraderBotBannerComponent', () => {
     };
 
     await render(TraderBotBannerComponent, {
-      inputs: { panel },
+      inputs: { panel, clerkId: 'clrk_spec' },
       providers: [provideRouter([])],
     });
 

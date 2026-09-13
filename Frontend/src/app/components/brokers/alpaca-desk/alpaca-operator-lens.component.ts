@@ -17,6 +17,7 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { SqliteTimelineQuery } from '../../../services/brokers.service';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.component';
 
 /** Mechanism, repair, and immutable receipt evidence for the Alpaca desk. */
@@ -38,12 +39,14 @@ export class AlpacaOperatorLensComponent {
   readonly refreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   private readonly data = inject(AlpacaOperatorLensDataService);
+  private readonly deskAccount = inject(AlpacaDeskAccountDataService);
   private readonly custodyPanel = viewChild<ElementRef<HTMLDetailsElement>>('custodyPanel');
 
   protected readonly status = this.data.status;
   protected readonly projection = this.data.projection;
   protected readonly projectionRefreshVersion = this.data.projectionRefreshVersion;
   protected readonly custodyOpened = signal(false);
+  protected readonly dataTarget = this.deskAccount.target;
 
   constructor() {
     effect(() => {

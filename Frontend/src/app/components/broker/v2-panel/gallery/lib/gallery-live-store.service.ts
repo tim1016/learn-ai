@@ -7,6 +7,7 @@ import {
   type AuthenticatedSseConnection,
   type AuthenticatedSseStatus,
 } from '../../../../../services/authenticated-sse-connection';
+import { accountUrl } from '../../../../../fleet/clerk-scoped-url';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 import type {
   GalleryBotView,
@@ -20,7 +21,11 @@ const FALLBACK_POLL_MS = 5_000;
 
 interface GalleryRequest {
   readonly broker: string;
+  readonly clerkId: string;
   readonly accountId: string;
+  /** Directory provenance captured for this connection and its cursor. */
+  readonly bindingGeneration: number | null;
+  readonly routingEpoch: number | null;
 }
 
 function isGalleryResolution(value: unknown): value is GalleryResolution {
@@ -141,11 +146,26 @@ export class GalleryLiveStore {
     this.destroyRef.onDestroy(() => this.stop());
   }
 
-  async start(broker: string, accountId: string): Promise<void> {
+  async start(
+    broker: string,
+    clerkId: string,
+    accountId: string,
+    bindingGeneration: number | null = null,
+    routingEpoch: number | null = null,
+  ): Promise<void> {
     const identityChanged = this.request !== null
-      && (this.request.broker !== broker || this.request.accountId !== accountId);
+      && (this.request.broker !== broker || this.request.clerkId !== clerkId
+        || this.request.accountId !== accountId
+        || this.request.bindingGeneration !== bindingGeneration
+        || this.request.routingEpoch !== routingEpoch);
     this.closeTransport();
-    const request: GalleryRequest = { broker, accountId };
+    const request: GalleryRequest = {
+      broker,
+      clerkId,
+      accountId,
+      bindingGeneration,
+      routingEpoch,
+    };
     this.request = request;
     const generation = ++this.generation;
     if (identityChanged) {
@@ -337,18 +357,14 @@ export class GalleryLiveStore {
     this.stopFallback();
   }
 
-  private base(request: GalleryRequest): string {
-    return `/api/brokers/${encodeURIComponent(request.broker)}/accounts/${encodeURIComponent(request.accountId)}`;
-  }
-
   private snapshotUrl(request: GalleryRequest): string {
-    return `${this.base(request)}/gallery/snapshot`;
+    return accountUrl(request, '/gallery/snapshot');
   }
 
   private streamUrl(request: GalleryRequest): string {
     const params = new URLSearchParams();
     if (this.epoch !== '') params.set('cursor', `${this.epoch}:${this.surfaceVersion}`);
     const query = params.toString();
-    return `${this.base(request)}/gallery/stream${query ? `?${query}` : ''}`;
+    return `${accountUrl(request, '/gallery/stream')}${query ? `?${query}` : ''}`;
   }
 }

@@ -32,6 +32,7 @@ import {
   type DeployStrategyParamsSchema,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
+import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -114,6 +115,13 @@ interface DeploySubmissionReadiness {
   guidance: string;
 }
 
+interface FrozenDeployCommand {
+  readonly context: string;
+  readonly ticketKey: string;
+  readonly routeKey: string;
+  readonly target: ResourceTarget;
+}
+
 @Component({
   selector: 'app-alpaca-deploy-workflow',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -131,7 +139,13 @@ interface DeploySubmissionReadiness {
   styleUrl: './alpaca-deploy-workflow.component.scss',
 })
 export class AlpacaDeployWorkflowComponent {
+  /** Frozen lane context for deploy reads and commands; the deploy drawer is
+   * frozen-dialog state — its target survives navigation (FR-094). */
+  protected readonly deployTarget = (accountId: string) => withAccount(this.target(), accountId);
+
   readonly accountId = input.required<string>();
+  /** Frozen when the drawer opens; never reconstructed from the directory. */
+  readonly target = input.required<ResourceTarget>();
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
@@ -147,6 +161,8 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly invalidParameterFields = signal<ReadonlySet<string>>(new Set());
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
+  /** Retained only while the exact deploy intent has no terminal receipt. */
+  private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -170,8 +186,7 @@ export class AlpacaDeployWorkflowComponent {
     loader: async ({ params, abortSignal }) => {
       const symbol = untracked(this.scopedSymbol);
       const view = await this.panelService.getDeployView(
-        'alpaca',
-        params,
+        this.deployTarget(params),
         symbol ?? undefined,
       );
       // `getDeployView` wraps `firstValueFrom(http.get)`, which no `reload()`
@@ -567,6 +582,15 @@ export class AlpacaDeployWorkflowComponent {
       const symbol = current.symbol || strategy.validation_case_symbol;
       if (symbol !== current.symbol) this.applySymbol(symbol);
     });
+
+    effect(() => {
+      const frozen = this.frozenCommand();
+      if (frozen === null) return;
+      const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
+      if (frozen.ticketKey !== this.ticketKey(this.ticket()) || frozen.routeKey !== routeKey) {
+        this.frozenCommand.set(null);
+      }
+    });
   }
 
   protected setInstanceId(value: string): void {
@@ -748,17 +772,18 @@ export class AlpacaDeployWorkflowComponent {
     this.admissionDecision.set(null);
     const ticket = this.ticket();
     const body = this.deployBody(ticket, strategy);
+    const commandTarget = this.commandTargetFor(body, view.account_id);
 
     try {
       const decision = await this.panelService.previewStartAdmission(
-        'alpaca',
-        view.account_id,
+        commandTarget,
         body,
       );
       if (!this.submissionStillCurrent(body)) return;
       this.admissionDecision.set(decision);
       if (!decision.allowed) return;
-      this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
+      this.receipt.set(await this.panelService.deployBot(commandTarget, body));
+      this.frozenCommand.set(null);
     } catch (error) {
       const decision = this.admissionFromError(error);
       if (decision) this.admissionDecision.set(decision);
@@ -801,6 +826,48 @@ export class AlpacaDeployWorkflowComponent {
       };
     }
     return body;
+  }
+
+  /**
+   * Preview and apply (including an uncertain-outcome retry) are one durable
+   * command. A changed ticket or route produces a different context and
+   * explicitly abandons the prior key before minting another.
+   */
+  private commandTargetFor(body: DeployBotBody, accountId: string): ResourceTarget {
+    const lane = this.target();
+    const context = JSON.stringify({
+      broker: lane.broker,
+      clerkId: lane.clerkId,
+      accountId,
+      bindingGeneration: lane.bindingGeneration,
+      routingEpoch: lane.routingEpoch,
+      body,
+    });
+    const frozen = this.frozenCommand();
+    if (frozen?.context === context) return frozen.target;
+
+    const target = withCommand(withAccount(lane, accountId), 'bot_action', crypto.randomUUID());
+    this.frozenCommand.set({
+      context,
+      target,
+      ticketKey: this.ticketKey(this.ticket()),
+      routeKey: this.commandRouteKey(lane, accountId),
+    });
+    return target;
+  }
+
+  private ticketKey(ticket: AlpacaDeployTicket): string {
+    return JSON.stringify(ticket);
+  }
+
+  private commandRouteKey(target: ResourceTarget, accountId: string): string {
+    return laneKey(
+      target.broker,
+      target.clerkId,
+      target.routingEpoch,
+      target.bindingGeneration,
+      accountId,
+    );
   }
 
   private submissionStillCurrent(submitted: DeployBotBody): boolean {

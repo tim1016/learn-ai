@@ -9,6 +9,12 @@ import {
   type PaperAccessPlan,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', {
+  accountId: 'paper-account-1', bindingGeneration: 3, routingEpoch: 7,
+});
 
 const AVAILABLE_STRATEGY: DeployBotStrategy = {
   strategy_key: 'ema_crossover_signal',
@@ -61,8 +67,9 @@ describe('DeployPaperAccessComponent', () => {
   it('prepares a review and requires a separate explicit confirmation', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
-      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      providers: [
+      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: service }],
     });
 
     expect(screen.getByRole('heading', { name: 'Paper access' })).toBeTruthy();
@@ -72,8 +79,7 @@ describe('DeployPaperAccessComponent', () => {
     fixture.detectChanges();
 
     expect(service.preparePaperAccess).toHaveBeenCalledWith(
-      'alpaca',
-      'paper-account-1',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'paper-account-1' }),
       'ema_crossover_signal',
       'Enable Paper access from the Alpaca Deploy page.',
     );
@@ -92,11 +98,14 @@ describe('DeployPaperAccessComponent', () => {
     fixture.detectChanges();
 
     expect(service.confirmPaperAccess).toHaveBeenCalledWith(
-      'alpaca',
-      'paper-account-1',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'paper-account-1' }),
       'ema_crossover_signal',
       PLAN,
     );
+    const preparedTarget = service.preparePaperAccess.mock.calls[0][0];
+    const confirmedTarget = service.confirmPaperAccess.mock.calls[0][0];
+    expect(preparedTarget.idempotencyKey).toEqual(expect.any(String));
+    expect(confirmedTarget).toBe(preparedTarget);
     expect(screen.getByText('Paper access enabled')).toBeTruthy();
     expect(screen.getByText(/deploying a bot remains a separate action/i)).toBeTruthy();
   });
@@ -104,7 +113,7 @@ describe('DeployPaperAccessComponent', () => {
   it('does not render approval controls for strategies outside the sealed-program gate', async () => {
     const service = panelServiceMock();
     await render(DeployPaperAccessComponent, {
-      inputs: {
+      inputs: { target: TARGET,
         accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'not_required' },
         modeLabel: 'Paper' as const,
@@ -116,10 +125,50 @@ describe('DeployPaperAccessComponent', () => {
     expect(service.preparePaperAccess).not.toHaveBeenCalled();
   });
 
+  it('drops a presented review when the same account rebinds to another Clerk', async () => {
+    const service = panelServiceMock();
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(screen.getByRole('region', { name: 'Review Paper access' })).toBeTruthy();
+
+    fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'paper-account-1', bindingGeneration: 3, routingEpoch: 7,
+    }));
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', { name: 'Review Paper access' })).toBeNull();
+    expect(service.confirmPaperAccess).not.toHaveBeenCalled();
+  });
+
+  it('drops a presented review when the same lane advances its routing epoch', async () => {
+    const service = panelServiceMock();
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'paper-account-1', bindingGeneration: 4, routingEpoch: 8,
+    }));
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', { name: 'Review Paper access' })).toBeNull();
+    expect(service.confirmPaperAccess).not.toHaveBeenCalled();
+  });
+
   it('does not offer approval when backend prerequisites are blocked', async () => {
     const service = panelServiceMock();
     await render(DeployPaperAccessComponent, {
-      inputs: {
+      inputs: { target: TARGET,
         accountId: 'paper-account-1',
         strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'blocked' },
         modeLabel: 'Paper' as const,
@@ -141,7 +190,7 @@ describe('DeployPaperAccessComponent', () => {
       },
     });
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -158,7 +207,7 @@ describe('DeployPaperAccessComponent', () => {
   it('omits the git lineage row when the receipt predates it', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -185,7 +234,7 @@ describe('DeployPaperAccessComponent', () => {
       }),
     );
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -198,10 +247,40 @@ describe('DeployPaperAccessComponent', () => {
     expect(within(alert).getByText(/validation proof is no longer current/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try review again' })).toBeTruthy();
   });
+
+  it('retries a failed confirm with the exact reviewed target and durable key', async () => {
+    const service = panelServiceMock();
+    service.confirmPaperAccess
+      .mockRejectedValueOnce(new Error('connection lost after submit'))
+      .mockResolvedValueOnce({ action: 'activated' });
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { target: TARGET, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper' },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    await fixture.whenStable();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Paper access' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(screen.getByRole('button', { name: 'Try enable again' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try enable again' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(service.confirmPaperAccess).toHaveBeenCalledTimes(2);
+    expect(service.confirmPaperAccess.mock.calls[1][0])
+      .toBe(service.confirmPaperAccess.mock.calls[0][0]);
+    expect(service.confirmPaperAccess.mock.calls[1][0].idempotencyKey)
+      .toBe(service.confirmPaperAccess.mock.calls[0][0].idempotencyKey);
+  });
   it('words the same grant for the shadow world on a live account', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: {
+      inputs: { target: resourceTarget('alpaca', 'clrk_spec', {
+        accountId: '9LIVE0001', bindingGeneration: 3, routingEpoch: 7,
+      }),
         accountId: '9LIVE0001',
         strategy: AVAILABLE_STRATEGY,
         modeLabel: 'Shadow' as const,

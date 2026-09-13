@@ -16,6 +16,8 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { TransactionRailComponent } from './transaction-rail.component';
 import { HealthCardComponent } from './health-card.component';
 import { ClerkCardComponent } from './clerk-card.component';
@@ -79,12 +81,23 @@ export class OperatorLensComponent {
 
   // Route context — needed for the evidence endpoint calls.
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
 
   // ── Services ──────────────────────────────────────────────────────────────
 
   private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly target = () => {
+    const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
+    return resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      entityId: this.sid(),
+      bindingGeneration: lane?.effective_binding_generation ?? null,
+      routingEpoch: lane?.routing_epoch ?? null,
+    });
+  };
 
   // ── Local state ───────────────────────────────────────────────────────────
 
@@ -96,13 +109,16 @@ export class OperatorLensComponent {
     params: () => this.journalActivated()
       ? [
           this.broker(),
+          this.clerkId(),
           this.accountId(),
           this.sid(),
+          this.target().bindingGeneration ?? '',
+          this.target().routingEpoch ?? '',
           this.panel().journal_tail_seq ?? 'empty',
         ].join('|')
       : undefined,
     loader: () =>
-      this.panelSvc.getEvidence(this.broker(), this.accountId(), this.sid(), {
+      this.panelSvc.getEvidence(this.target(), this.sid(), {
         pageSize: 24,
         clientHint: 'operator-lens-journal-tail',
       }),

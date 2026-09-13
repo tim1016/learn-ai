@@ -93,62 +93,33 @@ describe('routes', () => {
   it.each([
     'options-lab',
     'strategy-lab',
-    'brokers/:broker/accounts/:accountId/gallery',
-    'brokers/:broker/accounts/:accountId/bots/:sid',
   ])('marks %s as an intentionally full-bleed workspace', (path) => {
     expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });
   });
 
-  it('redirects historical Alpaca Deploy URLs into the desk drawer', () => {
-    for (const path of ['brokers/alpaca/deploy', 'brokers/alpaca/accounts/:accountId/deploy']) {
-      expect(routes.find((candidate) => candidate.path === path)).toMatchObject({
-        redirectTo: 'brokers/alpaca?deploy',
-        pathMatch: 'full',
-      });
-    }
-  });
-
-  it('lazily loads the broker configuration surface at its own path under the desk', async () => {
-    const route = routes.find((candidate) => candidate.path === 'brokers/alpaca/configuration');
-    if (route?.loadComponent === undefined) throw new Error('Broker configuration route is missing.');
-
-    const { AlpacaConfigurationPageComponent } = await import(
-      './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component'
-    );
-
-    expect(await route.loadComponent()).toBe(AlpacaConfigurationPageComponent);
-    // The desk consumes no trailing segments, so it must not swallow this path.
-    expect(routes.find((candidate) => candidate.path === 'brokers/alpaca')?.children).toBeUndefined();
-  });
-
-  it('keeps unscoped broker bot surfaces behind account-resolving guards', () => {
-    for (const path of ['brokers/:broker/bots', 'brokers/:broker/gallery']) {
-      const route = routes.find((candidate) => candidate.path === path);
-      expect(route?.canActivate).toHaveLength(1);
-    }
-  });
-
   it.each([
-    ['broker', 'brokers/alpaca'],
-    ['broker/accounts', 'brokers/alpaca'],
-    ['broker/accounts/:accountId', 'brokers/alpaca'],
-    ['broker/account-monitor', 'brokers/alpaca'],
-    ['broker/reconciliation', 'brokers/alpaca'],
-    ['broker/orders', 'brokers/alpaca'],
-    ['broker/session-mirror', 'brokers/alpaca'],
-    ['broker/paper-run', 'brokers/alpaca/bots'],
-    ['broker/instances', 'brokers/alpaca/bots'],
-    ['broker/instances/:id', 'brokers/alpaca/bots'],
-    ['broker/bots', 'brokers/alpaca/bots'],
-    ['broker/bots/:id', 'brokers/alpaca/bots'],
-    ['broker/offline-replay', 'brokers/alpaca'],
-    ['broker/bot-manual', 'brokers/alpaca/manual'],
-    ['broker/deploy', 'brokers/alpaca?deploy'],
-  ])('keeps the deprecated %s URL as a redirect to %s', (path, redirectTo) => {
-      const route = routes.find((candidate) => candidate.path === path);
+    ['/broker', '/brokers/alpaca'],
+    ['/broker/accounts', '/brokers/alpaca'],
+    ['/broker/accounts/account-1', '/brokers/alpaca'],
+    ['/broker/account-monitor', '/brokers/alpaca'],
+    ['/broker/reconciliation', '/brokers/alpaca'],
+    ['/broker/orders', '/brokers/alpaca'],
+    ['/broker/session-mirror', '/brokers/alpaca'],
+    ['/broker/paper-run', '/brokers/alpaca'],
+    ['/broker/instances', '/brokers/alpaca'],
+    ['/broker/instances/bot-1', '/brokers/alpaca'],
+    ['/broker/bots', '/brokers/alpaca'],
+    ['/broker/bots/bot-1', '/brokers/alpaca'],
+    ['/broker/offline-replay', '/brokers/alpaca'],
+    ['/broker/bot-manual', '/brokers/alpaca/manual'],
+    ['/broker/deploy', '/brokers/alpaca'],
+  ])('navigates the deprecated %s URL to %s', async (path, expectedUrl) => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
 
-      expect(route).toMatchObject({ redirectTo, pathMatch: 'full' });
-      expect(route?.loadComponent).toBeUndefined();
+    await router.navigateByUrl(path);
+
+    expect(router.url).toBe(expectedUrl);
   });
 
   it('keeps the Clerk diagnostic gallery unlinked beneath the examples route', async () => {

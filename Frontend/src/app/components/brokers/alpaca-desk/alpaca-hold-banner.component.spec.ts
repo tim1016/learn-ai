@@ -5,6 +5,9 @@ import type { ClerkStatus } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
+import { resourceTarget, type ResourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 4, routingEpoch: 1 });
 
 function heldStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
   return {
@@ -38,6 +41,7 @@ function clearStatus(): ClerkStatus {
 
 async function renderBanner(service: Partial<BrokersService>) {
   return render(AlpacaHoldBannerComponent, {
+    inputs: { target: TARGET },
     providers: [{ provide: BrokersService, useValue: service }],
   });
 }
@@ -86,6 +90,30 @@ describe('AlpacaHoldBannerComponent', () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it('discards a late hold response after the routed clerk target changes', async () => {
+    let resolveOld = (_status: ClerkStatus): void => undefined;
+    const oldResponse = new Promise<ClerkStatus>((resolve) => {
+      resolveOld = resolve;
+    });
+    const nextTarget = resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA10',
+      bindingGeneration: 2,
+      routingEpoch: 3,
+    });
+    const getClerkStatus = vi.fn((target: ResourceTarget) =>
+      target.clerkId === TARGET.clerkId ? oldResponse : Promise.resolve(clearStatus()));
+    const view = await renderBanner({ getClerkStatus });
+    await waitFor(() => expect(getClerkStatus).toHaveBeenCalledWith(TARGET));
+
+    view.fixture.componentRef.setInput('target', nextTarget);
+    view.fixture.detectChanges();
+    await waitFor(() => expect(getClerkStatus).toHaveBeenCalledWith(nextTarget));
+    resolveOld(heldStatus());
+    await view.fixture.whenStable();
+
+    expect(screen.queryByText(/Unexplained Order Hold/)).toBeNull();
   });
 
 });

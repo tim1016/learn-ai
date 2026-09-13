@@ -12,6 +12,15 @@ import {
   AccountDeskTransactionHistoryComponent,
   matchesLocalDateMs,
 } from './account-desk-transaction-history.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clerk-1', {
+  accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,
+});
+const NEXT_TARGET = resourceTarget('alpaca', 'clerk-2', {
+  accountId: 'PA2', bindingGeneration: 3, routingEpoch: 5,
+});
 
 if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -76,7 +85,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     const opener = screen.getByRole('button', { name: /view evidence for learn-ai\/bot-a\/v1:intent-1/i });
     fireEvent.click(opener);
 
-    expect(accountTransaction).toHaveBeenCalledWith('PA1', 'ctxn-1');
+    expect(accountTransaction).toHaveBeenCalledWith('clerk-1', 'PA1', 'ctxn-1');
     expect(await screen.findByRole('heading', { name: 'Custody receipt' })).toBeTruthy();
     expect(screen.getByText('sha256:opaque')).toBeTruthy();
     expect(screen.getByText('Account Clerk Unavailable')).toBeTruthy();
@@ -116,9 +125,61 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
 
     await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledWith(
-      'PA1', 'alpaca-external-1', 'operator@example.test',
+      expect.objectContaining({
+        broker: 'alpaca',
+        clerkId: 'clerk-1',
+        accountId: 'PA1',
+        capability: 'custody_command',
+      }),
+      'alpaca-external-1',
+      'operator@example.test',
     ));
     expect(load).toHaveBeenCalledWith('PA1');
+  });
+
+  it('does not refresh a new lane when an old acknowledgement finishes late', async () => {
+    let release = (): void => undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const acknowledgeExternalOrder = vi.fn(() => pending);
+    const load = vi.fn().mockResolvedValue(undefined);
+    const view = await renderHistory({
+      load,
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
+      target: { value: 'operator@example.test' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+    await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledTimes(1));
+
+    view.fixture.componentRef.setInput('target', NEXT_TARGET);
+    view.fixture.componentRef.setInput('accountId', 'PA2');
+    view.fixture.detectChanges();
+    release();
+    await pending;
+    await view.fixture.whenStable();
+
+    expect(load).not.toHaveBeenCalledWith('PA1');
   });
 
   it('uses broker-owned timestamps to load the selected Today, 30D, and 60D periods', async () => {
@@ -137,9 +198,13 @@ describe('AccountDeskTransactionHistoryComponent', () => {
       toMs: 1_700_086_400_000,
     }));
     fireEvent.click(screen.getByRole('button', { name: '30D' }));
-    await vi.waitFor(() => expect(getPortfolioHistory).toHaveBeenLastCalledWith('alpaca', '30D'));
+    await vi.waitFor(() => expect(getPortfolioHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ broker: 'alpaca', accountId: 'PA1' }), '30D',
+    ));
     fireEvent.click(screen.getByRole('button', { name: '60D' }));
-    await vi.waitFor(() => expect(getPortfolioHistory).toHaveBeenLastCalledWith('alpaca', '60D'));
+    await vi.waitFor(() => expect(getPortfolioHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ broker: 'alpaca', accountId: 'PA1' }), '60D',
+    ));
   });
 
   it('warns when the complete-period client safety limit is reached', async () => {
@@ -184,15 +249,17 @@ async function renderHistory(
     loadedCount: signal(0),
     loadedPages: signal(0),
     rowLimitReached: signal(false),
+    setTarget: vi.fn(),
     retry: vi.fn(),
     load: vi.fn().mockResolvedValue(undefined),
     ...storeOverrides,
   };
   return render(AccountDeskTransactionHistoryComponent, {
     inputs: showScopeControl
-      ? { accountId: 'PA1', showScopeControl: true }
-      : { accountId: 'PA1', showScopeControl: false, fromMs: 1, toMs: 2 },
+      ? { accountId: 'PA1', target: TARGET, showScopeControl: true }
+      : { accountId: 'PA1', target: TARGET, showScopeControl: false, fromMs: 1, toMs: 2 },
     providers: [
+      provideFleetDirectory(),
       { provide: AccountDeskTransactionHistoryStore, useValue: store },
       {
         provide: BrokersService,

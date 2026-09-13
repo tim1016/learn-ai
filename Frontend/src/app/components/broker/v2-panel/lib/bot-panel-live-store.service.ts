@@ -10,12 +10,16 @@ import type {
   ChartLiveResolution,
 } from './broker-v2-panel.types';
 import { BrokerV2PanelService } from './broker-v2-panel.service';
+import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
 
 interface LivePanelRequest {
   readonly broker: string;
+  readonly clerkId: string;
   readonly accountId: string;
   readonly sid: string;
   readonly resolution: ChartLiveResolution;
+  readonly bindingGeneration?: number | null;
+  readonly routingEpoch?: number | null;
 }
 
 const FALLBACK_POLL_MS = 5_000;
@@ -56,8 +60,11 @@ export class BotPanelLiveStore {
     const generation = ++this.generation;
     const identityChanged = this.request !== null && (
       this.request.broker !== request.broker
+      || this.request.clerkId !== request.clerkId
       || this.request.accountId !== request.accountId
       || this.request.sid !== request.sid
+      || this.request.bindingGeneration !== request.bindingGeneration
+      || this.request.routingEpoch !== request.routingEpoch
     );
     if (identityChanged) {
       this.transactionRequest += 1;
@@ -77,7 +84,7 @@ export class BotPanelLiveStore {
       this.currentError.set(error instanceof Error ? error.message : 'Live snapshot is unavailable.');
     }
     if (!this.isCurrent(generation)) return;
-    this.openStream(request);
+    this.openStream(generation, request);
   }
 
   async refresh(): Promise<void> {
@@ -101,8 +108,7 @@ export class BotPanelLiveStore {
     const transactionRequest = ++this.transactionRequest;
     try {
       const panel = await this.panelService.getPanel(
-        request.broker,
-        request.accountId,
+        this.readTarget(request),
         request.sid,
         transactionRef,
       );
@@ -136,14 +142,25 @@ export class BotPanelLiveStore {
 
   private fetchSnapshot(request: LivePanelRequest): Promise<BotPanelLiveSnapshot> {
     return this.panelService.getLiveSnapshot(
-      request.broker,
-      request.accountId,
+      this.readTarget(request),
       request.sid,
       request.resolution,
     );
   }
 
-  private openStream(request: LivePanelRequest): void {
+  /** The read target every snapshot, panel and stream request is addressed
+   * by — broker and clerk identity on the wire (FR-092), late responses for
+   * a superseded lane discarded by the identity comparison in start(). */
+  private readTarget(request: LivePanelRequest): ResourceTarget {
+    return resourceTarget(request.broker, request.clerkId, {
+      accountId: request.accountId,
+      entityId: request.sid,
+      bindingGeneration: request.bindingGeneration ?? null,
+      routingEpoch: request.routingEpoch ?? null,
+    });
+  }
+
+  private openStream(generation: number, request: LivePanelRequest): void {
     this.stream = openVersionedSnapshotStream(
       () => {
         const snapshot = this.currentSnapshot();
@@ -151,8 +168,7 @@ export class BotPanelLiveStore {
           ? undefined
           : `${snapshot.stream_epoch}:${snapshot.surface_version}`;
         return this.panelService.liveStreamUrl(
-          request.broker,
-          request.accountId,
+          this.readTarget(request),
           request.sid,
           request.resolution,
           cursor,
@@ -161,10 +177,17 @@ export class BotPanelLiveStore {
       isLiveSnapshot,
       'Bot panel stream',
       {
-        onSnapshot: (snapshot) => this.adopt(snapshot),
-        onMalformedSnapshot: (message) => this.currentError.set(message),
-        onReset: () => void this.refresh(),
+        onSnapshot: (snapshot) => {
+          if (this.isCurrent(generation)) this.adopt(snapshot);
+        },
+        onMalformedSnapshot: (message) => {
+          if (this.isCurrent(generation)) this.currentError.set(message);
+        },
+        onReset: () => {
+          if (this.isCurrent(generation)) void this.refresh();
+        },
         onStatus: (status) => {
+          if (!this.isCurrent(generation)) return;
           this.currentStatus.set(status);
           if (status === 'open' || status === 'closed') this.stopFallback();
           if (status === 'error') this.startFallback();

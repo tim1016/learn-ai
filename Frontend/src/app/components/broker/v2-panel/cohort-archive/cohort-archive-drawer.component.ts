@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   input,
   output,
@@ -12,6 +13,8 @@ import {
 import { Drawer } from 'primeng/drawer';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
 import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
 import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
@@ -60,6 +63,7 @@ function isArmed(leg: CohortArchiveLeg): leg is ArmedArchiveLeg {
 export class CohortArchiveDrawerComponent {
   readonly visible = input.required<boolean>();
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
 
   readonly closed = output();
@@ -67,6 +71,7 @@ export class CohortArchiveDrawerComponent {
   readonly archived = output();
 
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   protected readonly submitting = signal(false);
   protected readonly outcome = signal<CohortActionResult | null>(null);
@@ -74,6 +79,8 @@ export class CohortArchiveDrawerComponent {
   protected readonly submitError = signal(false);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   protected readonly confirmText = signal('');
+  /** Target rendered when the destructive drawer was opened. */
+  private readonly presentedTarget = signal<ResourceTarget | null>(null);
 
   /**
    * Clear everything that could act on a bot.
@@ -91,12 +98,42 @@ export class CohortArchiveDrawerComponent {
   }
 
   /** Read while the drawer is open; idle while it is closed. */
+  private readonly target = computed(() =>
+    resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      bindingGeneration:
+        this.fleetDirectory.lane(this.broker(), this.clerkId())
+          ?.effective_binding_generation ?? null,
+      routingEpoch:
+        this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+    }),
+  );
+
   private readonly archivable = resource({
-    params: () =>
-      this.visible() ? { broker: this.broker(), accountId: this.accountId() } : undefined,
-    loader: ({ params }) =>
-      this.panelService.getCohortArchiveView(params.broker, params.accountId),
+    params: () => (this.visible() ? { target: this.target() } : undefined),
+    loader: ({ params }) => this.panelService.getCohortArchiveView(params.target),
   });
+
+  constructor() {
+    // Keep the command target bound to the drawer presentation. A route reuse
+    // or lane rebinding while it is open invalidates its typed confirmation
+    // instead of allowing the old selection to follow the new lane.
+    let openedTarget: ResourceTarget | null = null;
+    effect(() => {
+      const visible = this.visible();
+      const target = this.target();
+      if (!visible) {
+        openedTarget = null;
+        this.presentedTarget.set(null);
+        return;
+      }
+      if (openedTarget !== target) {
+        if (openedTarget !== null) this.clearDestructiveState();
+        openedTarget = target;
+        this.presentedTarget.set(withCommand(target, 'bot_action', crypto.randomUUID()));
+      }
+    });
+  }
 
   protected readonly view = computed<CohortArchiveView | null>(() => {
     const value = this.archivable.value();
@@ -195,7 +232,12 @@ export class CohortArchiveDrawerComponent {
   }
 
   protected async submit(): Promise<void> {
-    if (!this.canSubmit()) return;
+    const target = this.presentedTarget();
+    if (!this.canSubmit() || target === null) return;
+    const idempotencyKey = target.idempotencyKey;
+    if (idempotencyKey === null) {
+      throw new Error('The presented archive command is missing its durable identity.');
+    }
     const legs = this.selectedLegs().map((leg) => ({
       strategy_instance_id: leg.strategy_instance_id,
       revision: leg.revision,
@@ -206,10 +248,9 @@ export class CohortArchiveDrawerComponent {
     this.submitError.set(false);
     try {
       const result = await this.panelService.runCohortArchive(
-        this.broker(),
-        this.accountId(),
+        target,
         {
-          idempotency_key: crypto.randomUUID(),
+          idempotency_key: idempotencyKey,
           reason: 'Cohort archive from the bots roster',
           legs,
         },

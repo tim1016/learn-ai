@@ -21,6 +21,12 @@ import type {
   ManualOrderPreview,
   ManualOrderTicket,
 } from '../../../api/alpaca.types';
+import {
+  type ResourceTarget,
+  withAccount,
+  withCommand,
+  withEntity,
+} from '../../../fleet/resource-target';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -55,6 +61,9 @@ import { AlpacaOrderPreviewComponent } from './alpaca-order-preview.component';
 })
 export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
+  readonly target = input.required<ResourceTarget>();
+
+  private requireClerkId(): string { return this.target().clerkId; }
   readonly initialSymbol = input('');
   readonly expectedAccountId = input.required<string>();
   readonly manualTicketId = input<string | null>(null);
@@ -73,6 +82,10 @@ export class AlpacaOrderEntryComponent {
   private readonly manualLegIds = signal<ReadonlyMap<number, string>>(new Map());
   private readonly manualCancelRequestId = signal<string | null>(null);
   private readonly manualCancelTicketId = signal<string | null>(null);
+  /** Targets are captured as each irreversible interaction opens. */
+  private readonly previewTarget = signal<ResourceTarget | null>(null);
+  private readonly continuationTarget = signal<ResourceTarget | null>(null);
+  private readonly cancellationTarget = signal<ResourceTarget | null>(null);
   protected readonly submitError = signal<string | null>(null);
   protected readonly cancelling = signal(false);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
@@ -135,6 +148,9 @@ export class AlpacaOrderEntryComponent {
       this.manualCancelTicketId.set(null);
       this.manualCancellation.set(null);
       this.manualLegIds.set(new Map());
+      this.previewTarget.set(null);
+      this.continuationTarget.set(null);
+      this.cancellationTarget.set(null);
     });
     effect(() => {
       const accountId = this.expectedAccountId();
@@ -190,12 +206,15 @@ export class AlpacaOrderEntryComponent {
     this.submitError.set(null);
     const ticketId = this.manualTicketId();
     if (ticketId === null) return;
+    const target = this.newCommandTarget();
+    this.previewTarget.set(target);
     this.submitting.set(true);
     try {
-      const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
+      const preview = await this.brokers.previewSqliteManualOrder(target.clerkId, this.targetAccountId(target), {
         ticket_id: ticketId,
         legs: this.manualRequestLegs(),
       });
+      if (this.previewTarget() !== target || !this.matchesCurrentRouteTarget(target)) return;
       this.manualPreview.set(preview);
       if (!preview.capability.available || preview.preview_token === null) {
         this.submitError.set(preview.capability.unavailable?.message ?? 'Manual order is unavailable.');
@@ -203,7 +222,9 @@ export class AlpacaOrderEntryComponent {
       }
       this.previewOpen.set(true);
     } catch (err) {
-      this.submitError.set(this.submissionErrorMessage(err));
+      if (this.previewTarget() === target && this.matchesCurrentRouteTarget(target)) {
+        this.submitError.set(this.submissionErrorMessage(err));
+      }
     } finally {
       this.submitting.set(false);
     }
@@ -211,6 +232,7 @@ export class AlpacaOrderEntryComponent {
 
   protected closePreview(): void {
     this.previewOpen.set(false);
+    this.previewTarget.set(null);
   }
 
   protected async confirmSubmit(): Promise<void> {
@@ -235,7 +257,9 @@ export class AlpacaOrderEntryComponent {
     if (ticketId === null || previewToken === null || previewToken === undefined) {
       throw new Error('Refresh the manual order preview before confirming.');
     }
-    const ticket = await this.brokers.submitSqliteManualOrder(this.expectedAccountId(), ticketId, {
+    const target = this.previewTarget();
+    if (target === null) throw new Error('Refresh the manual order preview before confirming.');
+    const ticket = await this.brokers.submitSqliteManualOrder(target, ticketId, {
       legs: this.manualRequestLegs(),
       preview_token: previewToken,
     });
@@ -245,6 +269,7 @@ export class AlpacaOrderEntryComponent {
   private async restoreManualTicket(ticketId: string, accountId: string): Promise<void> {
     try {
       const ticket = await this.brokers.getSqliteManualOrderTicket(
+        this.requireClerkId(),
         accountId,
         ticketId,
       );
@@ -276,13 +301,16 @@ export class AlpacaOrderEntryComponent {
     this.cancelling.set(true);
     this.submitError.set(null);
     try {
-      const cancelRequestId =
-        this.manualCancelTicketId() === ticketId
-          ? (this.manualCancelRequestId() ?? this.newStableRequestId())
-          : this.newStableRequestId();
+      const sameTicket = this.manualCancelTicketId() === ticketId;
+      const priorTarget = sameTicket ? this.cancellationTarget() : null;
+      const cancelRequestId = sameTicket
+        ? (this.manualCancelRequestId() ?? this.newStableRequestId())
+        : this.newStableRequestId();
+      const target = priorTarget ?? this.newCommandTarget(cancelRequestId);
       this.manualCancelRequestId.set(cancelRequestId);
       this.manualCancelTicketId.set(ticketId);
-      const ticket = await this.brokers.cancelSqliteManualOrderTicket(this.expectedAccountId(), ticketId, {
+      this.cancellationTarget.set(target);
+      const ticket = await this.brokers.cancelSqliteManualOrderTicket(target, ticketId, {
         cancel_request_id: cancelRequestId,
       });
       this.manualTicket.set(ticket);
@@ -310,7 +338,12 @@ export class AlpacaOrderEntryComponent {
         }
         return { leg_id: leg.leg_id, instruction };
       });
-      const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
+      const existingTarget = this.continuationTarget();
+      const target = existingTarget?.entityId === ticket.ticket_id
+        ? existingTarget
+        : this.newCommandTarget(undefined, ticket.ticket_id);
+      this.continuationTarget.set(target);
+      const preview = await this.brokers.previewSqliteManualOrder(target.clerkId, this.targetAccountId(target), {
         ticket_id: ticket.ticket_id,
         legs,
       });
@@ -319,10 +352,11 @@ export class AlpacaOrderEntryComponent {
         return;
       }
       this.manualTicket.set(await this.brokers.continueSqliteManualOrderTicket(
-        this.expectedAccountId(),
+        target,
         ticket.ticket_id,
         { legs, preview_token: preview.preview_token },
       ));
+      this.continuationTarget.set(null);
     } catch (err) {
       this.submitError.set(this.submissionErrorMessage(err));
     } finally {
@@ -336,6 +370,30 @@ export class AlpacaOrderEntryComponent {
       throw new Error('This browser cannot create a durable request identity.');
     }
     return globalThis.crypto.randomUUID();
+  }
+
+  private newCommandTarget(
+    idempotencyKey = this.newStableRequestId(),
+    entityId: string | null = null,
+  ): ResourceTarget {
+    const target = withEntity(withAccount(this.target(), this.expectedAccountId()), entityId);
+    return withCommand(target, 'manual_orders', idempotencyKey);
+  }
+
+  private targetAccountId(target: ResourceTarget): string {
+    if (target.accountId === null) throw new Error('The manual order target has no account.');
+    return target.accountId;
+  }
+
+  /** A preview is display state, so it cannot cross a route or binding change. */
+  private matchesCurrentRouteTarget(target: ResourceTarget): boolean {
+    const current = this.target();
+    return current.broker === target.broker
+      && current.clerkId === target.clerkId
+      && current.accountId === target.accountId
+      && current.bindingGeneration === target.bindingGeneration
+      && current.routingEpoch === target.routingEpoch
+      && this.expectedAccountId() === target.accountId;
   }
 
   private toRequestLeg(leg: AlpacaOrderDraftLeg): BrokerOrderLeg {

@@ -126,11 +126,11 @@ import { CurrentUrlService } from './shell/current-url.service';
       <app-top-bar [accountMode]="shellAccountMode()">
         <app-menubar shell-nav />
         <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
-          <a class="shell-quick-link" routerLink="/brokers/alpaca/bots">
+          <a class="shell-quick-link" routerLink="/brokers/alpaca" [queryParams]="{ surface: 'bots' }">
             <i class="pi pi-server" aria-hidden="true"></i>
             <span>Bots</span>
           </a>
-          <a class="shell-quick-link" routerLink="/brokers/alpaca/gallery">
+          <a class="shell-quick-link" routerLink="/brokers/alpaca" [queryParams]="{ surface: 'gallery' }">
             <i class="pi pi-th-large" aria-hidden="true"></i>
             <span>Gallery</span>
           </a>

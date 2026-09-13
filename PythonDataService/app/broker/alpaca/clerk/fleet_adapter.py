@@ -23,7 +23,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.3"
+_ADAPTER_VERSION = "alpaca-fleet.4"
 
 _ALPACA_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -84,6 +84,46 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         _op("account_read", "GET", "/account", capability=Capability.ACCOUNT_READ),
         _op("positions_read", "GET", "/positions", capability=Capability.POSITIONS_READ),
         _op("orders_read", "GET", "/orders", capability=Capability.ORDERS_READ),
+        # The desk's account evidence is lane-scoped even where the
+        # pre-fleet clerk handler still exposes its compatibility alias under
+        # ``/api/brokers/alpaca``.  These declarations are the one migration
+        # seam: the coordinator pins broker, clerk, epoch and binding before
+        # forwarding to that established handler.
+        _op(
+            "activities_read",
+            "GET",
+            "/activities",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/activities",
+        ),
+        _op(
+            "portfolio_history_read",
+            "GET",
+            "/portfolio-history",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/portfolio-history",
+        ),
+        _op(
+            "portfolio_history_proof_read",
+            "GET",
+            "/portfolio-history-proof",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/portfolio-history-proof",
+        ),
+        _op(
+            "clerk_status_read",
+            "GET",
+            "/clerk/status",
+            capability=Capability.CUSTODY_READ,
+            agent_path="/api/brokers/alpaca/clerk/status",
+        ),
+        _op(
+            "custody_diagnosis_read",
+            "GET",
+            "/clerk/custody-diagnosis",
+            capability=Capability.CUSTODY_READ,
+            agent_path="/api/brokers/alpaca/clerk/custody-diagnosis",
+        ),
         _op(
             "market_status_read",
             "GET",
@@ -366,6 +406,22 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_PANEL_READ,
             account=True,
             stream=OperationStream.SSE,
+        ),
+        _op(
+            "bot_run_current_read",
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/runs/current",
+            capability=Capability.BOT_PANEL_READ,
+            account=True,
+            agent_path="/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/current",
+        ),
+        _op(
+            "bot_run_history_read",
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/runs/history",
+            capability=Capability.BOT_PANEL_READ,
+            account=True,
+            agent_path="/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history",
         ),
         _op(
             "paper_access_plan",

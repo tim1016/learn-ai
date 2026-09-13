@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 
 import type { CustodyDivergence } from '../../../api/alpaca.types';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { BrokersService } from '../../../services/brokers.service';
+import type { ResourceTarget } from '../../../fleet/resource-target';
 import { CustodyDivergenceComponent } from './custody-divergence.component';
 
 /**
@@ -22,10 +23,12 @@ import { CustodyDivergenceComponent } from './custody-divergence.component';
   host: { class: 'block' },
 })
 export class AlpacaCustodyResolutionComponent {
+  readonly target = input.required<ResourceTarget>();
   private readonly brokers = inject(BrokersService);
 
   protected readonly diagnosis = resource({
-    loader: () => this.brokers.getCustodyDiagnosis('alpaca'),
+    params: () => this.target(),
+    loader: ({ params }) => this.brokers.getCustodyDiagnosis(params),
   });
   // `divergences` is optional (`?:`) on the generated CustodyDiagnosis schema
   // (default `[]` server-side); normalize here so the template never has to

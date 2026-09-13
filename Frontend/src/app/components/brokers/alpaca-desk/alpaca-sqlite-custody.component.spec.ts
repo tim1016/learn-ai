@@ -17,8 +17,11 @@ import {
 } from '../../../services/brokers.service';
 import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
 
 const NOW = 1_700_000_000_000;
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 4, routingEpoch: 1 });
 
 const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
   version_token: 'plan-token-17',
@@ -139,10 +142,12 @@ function timeline(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function renderCustody(
@@ -150,8 +155,9 @@ async function renderCustody(
   inputs: { readonly timelineQuery?: SqliteTimelineQuery | null } = {},
 ) {
   return render(AlpacaSqliteCustodyComponent, {
-    inputs: { accountId: 'PA1', ...inputs },
+    inputs: { accountId: 'PA1', target: TARGET, ...inputs },
     providers: [
+      provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokersService, useValue: service },
     ],
@@ -260,7 +266,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(screen.getAllByText('effect:enter:12').length).toBeGreaterThan(0);
     expect(screen.getByText('2 of 2')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull();
-    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', { cursor: 'cursor-11' });
+    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'clrk_spec', 'PA1', { cursor: 'cursor-11' });
   });
 
   it('continues a timeline page with the filters that minted its cursor', async () => {
@@ -290,10 +296,40 @@ describe('AlpacaSqliteCustodyComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load more events' }));
 
     await screen.findAllByText('effect:enter:11');
-    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', {
+    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'clrk_spec', 'PA1', {
       orderRef: 'order:enter:12',
       cursor: 'cursor-11',
     });
+  });
+
+  it('does not publish a stale load-more failure after the lane changes', async () => {
+    const stalePage = deferred<SqliteTimelinePage>();
+    const getSqliteClerkTimeline = vi.fn()
+      .mockResolvedValueOnce(timeline({ next_cursor: 'cursor-11', total_entries: 2 }))
+      .mockReturnValueOnce(stalePage.promise);
+    const view = await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection([action({
+        action_id: 'open_custody_timeline',
+        label: 'Open custody timeline',
+        mutation: false,
+      })])),
+      getSqliteClerkTimeline,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open custody timeline' }));
+    const loadMore = await screen.findByRole('button', { name: 'Load more events' });
+    fireEvent.click(loadMore);
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledTimes(2));
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA1', bindingGeneration: 5, routingEpoch: 2,
+    }));
+    view.fixture.detectChanges();
+    stalePage.reject(new Error('stale lane unavailable'));
+
+    await waitFor(() => expect(screen.queryByText('The custody timeline is temporarily unavailable.')).toBeNull());
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: 'Load more events' }).hasAttribute('disabled'),
+    ).toBe(false));
   });
 
   it('opens exact deep-link filters and updates immutable evidence on row selection', async () => {
@@ -317,7 +353,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
       { timelineQuery: query },
     );
 
-    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledWith('PA1', query));
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledWith('clrk_spec', 'PA1', query));
     fireEvent.click(await screen.findByRole('button', { name: /effect:enter:11/i }));
 
     expect(getSqliteClerkTimeline).toHaveBeenCalledOnce();
@@ -344,11 +380,37 @@ describe('AlpacaSqliteCustodyComponent', () => {
     firstTimeline.resolve(timeline());
 
     await waitFor(() => {
-      expect(getSqliteClerkTimeline).toHaveBeenLastCalledWith('PA1', {
+      expect(getSqliteClerkTimeline).toHaveBeenLastCalledWith('clrk_spec', 'PA1', {
         orderRef: 'order:enter:11',
       });
     });
     expect((await screen.findAllByText('effect:enter:11')).length).toBeGreaterThan(0);
+  });
+
+  it('continues with the new lane query when the prior timeline request fails', async () => {
+    const staleTimeline = deferred<SqliteTimelinePage>();
+    const getSqliteClerkTimeline = vi.fn()
+      .mockReturnValueOnce(staleTimeline.promise)
+      .mockResolvedValueOnce(timeline({ entries: [timelineEntry(11)] }));
+    const view = await renderCustody(
+      {
+        getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+        getSqliteClerkTimeline,
+      },
+      { timelineQuery: { orderRef: 'order:enter:12' } },
+    );
+
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA1', bindingGeneration: 5, routingEpoch: 2,
+    }));
+    view.fixture.componentRef.setInput('timelineQuery', { orderRef: 'order:enter:11' });
+    view.fixture.detectChanges();
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledTimes(2));
+    staleTimeline.reject(new Error('stale lane unavailable'));
+
+    expect((await screen.findAllByText('effect:enter:11')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('The custody timeline is temporarily unavailable.')).toBeNull();
   });
 
   it('explains when an exact evidence filter has no matching immutable transition', async () => {
@@ -425,7 +487,9 @@ describe('AlpacaSqliteCustodyComponent', () => {
     confirmation.componentInstance.confirmed.emit();
 
     await waitFor(() => {
-      expect(executeSqliteRecoveryAction).toHaveBeenCalledWith('PA1', cancel);
+      expect(executeSqliteRecoveryAction).toHaveBeenCalledWith(
+        expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'PA1', capability: 'custody_command' }), cancel,
+      );
     });
     expect(await screen.findByText('order:entry:12')).toBeTruthy();
   });
@@ -458,7 +522,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     })).toBeTruthy();
     expect(screen.getByText('Spy')).toBeTruthy();
     expect(screen.getByText('1.25')).toBeTruthy();
-    expect(checkSqliteRecoveryAction).toHaveBeenCalledWith('PA1', prepare);
+    expect(checkSqliteRecoveryAction).toHaveBeenCalledWith('clrk_spec', 'PA1', prepare);
     expect(executeSqliteRecoveryAction).not.toHaveBeenCalled();
   });
 

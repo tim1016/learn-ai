@@ -10,6 +10,7 @@ import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 import type { GalleryBotView, GalleryLiveStatus, GalleryResolution } from '../lib/gallery.types';
 import { BotGalleryPageComponent } from './bot-gallery-page.component';
+import { provideFleetDirectory } from '../../../../../fleet/fleet-directory-testing';
 
 const BROKER = 'alpaca';
 const ACCOUNT_ID = 'PA3';
@@ -94,11 +95,12 @@ async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverri
   const messageService = { add: vi.fn() };
 
   TestBed.overrideComponent(BotGalleryPageComponent, {
-    set: { providers: [{ provide: GalleryLiveStore, useValue: store }] },
+    set: { providers: [
+      provideFleetDirectory(),{ provide: GalleryLiveStore, useValue: store }] },
   });
 
   const view = await render(BotGalleryPageComponent, {
-    inputs: { broker: BROKER, accountId: ACCOUNT_ID },
+    inputs: { clerkId: 'clrk_spec', broker: BROKER, accountId: ACCOUNT_ID },
     providers: [
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: panelService },
@@ -115,7 +117,7 @@ describe('BotGalleryPageComponent', () => {
 
     await renderPage(store);
 
-    expect(store.start).toHaveBeenCalledWith(BROKER, ACCOUNT_ID);
+    expect(store.start).toHaveBeenCalledWith(BROKER, 'clrk_spec', ACCOUNT_ID, null, null);
   });
 
   it('shows a loading skeleton while connecting with no bots yet', async () => {
@@ -143,7 +145,9 @@ describe('BotGalleryPageComponent', () => {
 
     expect(screen.getByText('No bots yet')).toBeTruthy();
     const link = screen.getByRole('link', { name: 'View bots roster' }) as HTMLAnchorElement;
-    expect(link.getAttribute('href')).toBe(`/brokers/${BROKER}/accounts/${ACCOUNT_ID}/bots`);
+    expect(link.getAttribute('href')).toBe(
+      `/brokers/${BROKER}/clerks/clrk_spec/accounts/${ACCOUNT_ID}/bots`,
+    );
   });
 
   it('shows a non-blocking delayed indicator when the feed is stale, and keeps the dock visible', async () => {
@@ -190,10 +194,12 @@ describe('BotGalleryPageComponent', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(panelService.getPanel).toHaveBeenCalledWith(BROKER, ACCOUNT_ID, 'sid-1');
+    expect(panelService.getPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ broker: BROKER, clerkId: 'clrk_spec', accountId: ACCOUNT_ID }),
+      'sid-1',
+    );
     expect(panelService.runBotAction).toHaveBeenCalledWith(
-      BROKER,
-      ACCOUNT_ID,
+      expect.objectContaining({ broker: BROKER, clerkId: 'clrk_spec', accountId: ACCOUNT_ID }),
       'sid-1',
       fakeAction('stop'),
     );

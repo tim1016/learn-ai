@@ -15,6 +15,8 @@ import type {
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { OperatorDisclosureCardComponent } from '../operator-lens/operator-disclosure-card.component';
 import { BotRunHistoryComponent } from './bot-run-history.component';
 
@@ -33,35 +35,49 @@ interface RunHistoryLocation {
 })
 export class OperatorRunHistoryComponent {
   private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
+  readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
   readonly botRunning = input.required<boolean>();
   protected readonly expanded = signal(false);
   private readonly activated = signal(false);
 
-  private readonly location = linkedSignal<string, RunHistoryLocation>({
-    source: this.sid,
+  private readonly target = computed(() => {
+    const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
+    return resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      entityId: this.sid(),
+      bindingGeneration: lane?.effective_binding_generation ?? null,
+      routingEpoch: lane?.routing_epoch ?? null,
+    });
+  });
+
+  /** Cursors are opaque and lane-local; discard them on any provenance change. */
+  private readonly location = linkedSignal<ResourceTarget, RunHistoryLocation>({
+    source: this.target,
     computation: () => ({ mode: 'current', cursor: null, newerCursors: [] }),
   });
 
   private readonly currentRun = resource({
     params: () => this.activated()
-      ? { broker: this.broker(), sid: this.sid(), running: this.botRunning() }
+      ? { target: this.target(), sid: this.sid(), running: this.botRunning() }
       : undefined,
-    loader: ({ params }) => this.panelSvc.getCurrentRun(params.broker, params.sid),
+    loader: ({ params }) => this.panelSvc.getCurrentRun(params.target, params.sid),
   });
 
   private readonly previousRun = resource({
     params: () => {
       const location = this.location();
       return this.activated() && location.mode === 'history'
-        ? { broker: this.broker(), sid: this.sid(), cursor: location.cursor }
+        ? { target: this.target(), sid: this.sid(), cursor: location.cursor }
         : undefined;
     },
     loader: ({ params }) =>
-      this.panelSvc.getRunHistory(params.broker, params.sid, params.cursor ?? undefined),
+      this.panelSvc.getRunHistory(params.target, params.sid, params.cursor ?? undefined),
   });
 
   protected readonly state = computed<RunHistoryState>(() => {

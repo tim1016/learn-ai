@@ -8,6 +8,13 @@ import type {
   HistoricalExecutionRecoveryPlan,
   HistoricalExecutionRecoveryReceipt,
 } from '../../../../api/alpaca.types';
+import {
+  ResourceTarget,
+  commandBodyOf,
+  type FleetCapability,
+  withCommand,
+} from '../../../../fleet/resource-target';
+import { accountUrl } from '../../../../fleet/clerk-scoped-url';
 import type {
   BotCatalogView,
   BotPanelView,
@@ -47,46 +54,64 @@ export type PaperAccessEvent = components['schemas']['CanaryAdmissionEvent'];
 /**
  * HTTP client for the broker-v2 panel surface.
  *
- * Targets `/api/brokers/{broker}/accounts/{accountId}/...` (the account-scoped
- * endpoints from S1). The base URL is parameterised so S4 operator lens reuses
- * this service without change.
+ * Targets the clerk-scoped routing surface (fleet delivery B):
+ * `/api/brokers/{broker}/clerks/{clerkId}/accounts/{accountId}/…`. Every
+ * request carries broker and clerk identity (FR-092), commands carry the
+ * §10.3 envelope frozen from the caller's `ResourceTarget` (FR-094/095),
+ * and the two unscoped legacy bot-run reads stay on their compatibility
+ * paths until delivery E's measured retirement.
  */
 @Injectable({ providedIn: 'root' })
 export class BrokerV2PanelService {
   private readonly http = inject(HttpClient);
   private readonly polls = inject(PolledReadScheduler);
 
-  private base(broker: string, accountId: string): string {
-    return `/api/brokers/${encodeURIComponent(broker)}/accounts/${encodeURIComponent(accountId)}`;
+  /**
+   * Wrap one command payload with the §10.3 envelope. The envelope's
+   * idempotency identity is frozen by the interaction owner before it calls
+   * the service. The capability is the endpoint's declared catalog
+   * capability, not caller input.
+   */
+  private commandBody(
+    target: ResourceTarget,
+    capability: FleetCapability,
+    payload: object,
+  ): object {
+    const payloadKey = (payload as { idempotency_key?: string }).idempotency_key;
+    if (target.idempotencyKey === null) {
+      throw new Error('A durable command requires a target with a frozen idempotency key.');
+    }
+    if (payloadKey !== undefined && payloadKey !== target.idempotencyKey) {
+      throw new Error('The command payload idempotency key must match its frozen target.');
+    }
+    return commandBodyOf(withCommand(target, capability, target.idempotencyKey), payload);
   }
 
   getPanelProfile(broker: string): Promise<PanelProfile> {
+    // Retained-legacy broker-level read (delivery B inventory); clerk scoping
+    // for it would ride a future catalog entry, not this delivery.
     return firstValueFrom(
       this.http.get<PanelProfile>(`/api/brokers/${encodeURIComponent(broker)}/panel-profile`),
     );
   }
 
-  deployBot(
-    broker: string,
-    accountId: string,
-    body: DeployBotBody,
-  ): Promise<DeployBotReceipt> {
+  deployBot(target: ResourceTarget, body: DeployBotBody): Promise<DeployBotReceipt> {
     return firstValueFrom(
       this.http.post<DeployBotReceipt>(
-        `${this.base(broker, accountId)}/bots`,
-        body,
+        accountUrl(target, '/bots'),
+        this.commandBody(target, 'bot_action', body),
       ),
     );
   }
 
   previewStartAdmission(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     body: DeployBotBody,
   ): Promise<RunAdmissionDecision> {
+    // A plan over durable state — read-idempotent, no envelope required.
     return firstValueFrom(
       this.http.post<RunAdmissionDecision>(
-        `${this.base(broker, accountId)}/bots/admission`,
+        accountUrl(target, '/bots/admission'),
         body,
       ),
     );
@@ -98,57 +123,53 @@ export class BrokerV2PanelService {
    * and connectivity only (issue #1777).
    */
   getDeployView(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     symbol?: string,
   ): Promise<DeployBotView> {
     const params = symbol ? new HttpParams().set('symbol', symbol) : undefined;
     return firstValueFrom(
-      this.http.get<DeployBotView>(
-        `${this.base(broker, accountId)}/bots/deploy`,
-        { params },
-      ),
+      this.http.get<DeployBotView>(accountUrl(target, '/bots/deploy'), { params }),
     );
   }
 
   preparePaperAccess(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     strategyKey: string,
     reason: string,
   ): Promise<PaperAccessPlan> {
     return firstValueFrom(
       this.http.post<PaperAccessPlan>(
-        `${this.base(broker, accountId)}/strategies/${encodeURIComponent(strategyKey)}/paper-access/plan`,
+        accountUrl(target, `/strategies/${encodeURIComponent(strategyKey)}/paper-access/plan`),
         { reason },
       ),
     );
   }
 
   confirmPaperAccess(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     strategyKey: string,
     plan: PaperAccessPlan,
   ): Promise<PaperAccessEvent> {
     return firstValueFrom(
       this.http.post<PaperAccessEvent>(
-        `${this.base(broker, accountId)}/strategies/${encodeURIComponent(strategyKey)}/paper-access/confirm`,
-        { plan, confirmation_token: plan.confirmation_token },
+        accountUrl(
+          target,
+          `/strategies/${encodeURIComponent(strategyKey)}/paper-access/confirm`,
+        ),
+        this.commandBody(target, 'deploy', { plan, confirmation_token: plan.confirmation_token }),
       ),
     );
   }
 
-  getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {
+  getCatalog(target: ResourceTarget): Promise<BotCatalogView[]> {
     // Polled every few seconds; a hang here freezes the roster (S7), and
     // overlapping polls are what turn a 267 ms read into a 2.58 s one
     // (#1912) — the scheduler answers both.
-    return this.polls.get<BotCatalogView[]>(`${this.base(broker, accountId)}/bots/catalog`);
+    return this.polls.get<BotCatalogView[]>(accountUrl(target, '/bots/catalog'));
   }
 
   getPanel(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     transactionRef?: string,
   ): Promise<BotPanelView> {
@@ -157,10 +178,10 @@ export class BrokerV2PanelService {
       params = params.set('transaction_ref', transactionRef);
     }
     // Polled by the roster's detail pane on the same tick as the catalog
-    // (#1912), so it shares the roster's scheduler rather than adding to the
-    // fan-out it is trying to remove.
+    // (#1912), so it shares the roster's scheduler rather than adding to
+    // the fan-out it is trying to remove.
     return this.polls.get<BotPanelView>(
-      `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/panel`,
+      accountUrl(target, `/bots/${encodeURIComponent(sid)}/panel`),
       params,
     );
   }
@@ -169,42 +190,39 @@ export class BrokerV2PanelService {
    * The archivable roster, grouped and backend-authored (ADR 0052).
    *
    * Fetched on demand, never polled: it builds a panel projection per
-   * candidate, which is priced for an operator opening a surface rather than
-   * for a poll loop. Deliberately outside the polled-read scheduler for the
+   * candidate, which is priced for an operator opening a surface rather
+   * than for a poll loop. Deliberately outside the polled-read scheduler for the
    * same reason — it is not one of the reads whose fan-out #1912 coalesces.
    */
-  getCohortArchiveView(broker: string, accountId: string): Promise<CohortArchiveView> {
+  getCohortArchiveView(target: ResourceTarget): Promise<CohortArchiveView> {
     return firstValueFrom(
-      this.http.get<CohortArchiveView>(
-        `${this.base(broker, accountId)}/bots/cohort-archive`,
-      ),
+      this.http.get<CohortArchiveView>(accountUrl(target, '/bots/cohort-archive')),
     );
   }
 
   /** Archive the named legs; every leg comes back with a typed outcome. */
   runCohortArchive(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     request: CohortArchiveRequest,
   ): Promise<CohortActionResult> {
     return firstValueFrom(
       this.http.post<CohortActionResult>(
-        `${this.base(broker, accountId)}/bots/cohort-archive`,
-        request,
+        accountUrl(target, '/bots/cohort-archive'),
+        this.commandBody(target, 'bot_action', request),
       ),
     );
   }
 
-  getCurrentRun(broker: string, sid: string): Promise<BotRunView> {
+  getCurrentRun(target: ResourceTarget, sid: string): Promise<BotRunView> {
     return firstValueFrom(
       this.http.get<BotRunView>(
-        `/api/brokers/${encodeURIComponent(broker)}/bots/${encodeURIComponent(sid)}/runs/current`,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/runs/current`),
       ),
     );
   }
 
   getRunHistory(
-    broker: string,
+    target: ResourceTarget,
     sid: string,
     cursor?: string,
   ): Promise<BotRunHistoryPage> {
@@ -212,22 +230,21 @@ export class BrokerV2PanelService {
     if (cursor) params = params.set('cursor', cursor);
     return firstValueFrom(
       this.http.get<BotRunHistoryPage>(
-        `/api/brokers/${encodeURIComponent(broker)}/bots/${encodeURIComponent(sid)}/runs/history`,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/runs/history`),
         { params },
       ),
     );
   }
 
   runAction(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     request: PanelActionRequest,
   ): Promise<PanelActionResult> {
     return firstValueFrom(
       this.http.post<PanelActionResult>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/actions`,
-        request,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/actions`),
+        this.commandBody(target, 'bot_action', request),
       ),
     );
   }
@@ -271,14 +288,19 @@ export class BrokerV2PanelService {
    * dead-ending variant to reach by accident.
    */
   async runBotAction(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     action: PanelAction,
     reason: string | null = null,
   ): Promise<PanelActionResult> {
+    if (target.idempotencyKey === null) {
+      throw new Error('A bot action requires a target frozen by its interaction owner.');
+    }
+    // A retry is still the same command, so it must keep the exact target the
+    // interaction owner captured before presenting the action.
+    const actionTarget = target;
     try {
-      return await this.submitAction(broker, accountId, sid, action, reason);
+      return await this.submitAction(actionTarget, sid, action, reason);
     } catch (error) {
       if (
         !(error instanceof HttpErrorResponse) ||
@@ -287,7 +309,7 @@ export class BrokerV2PanelService {
       ) {
         throw error;
       }
-      const panel = await this.getPanel(broker, accountId, sid);
+      const panel = await this.getPanel(actionTarget, sid);
       const fresh = panel.actions.find(
         (candidate) => candidate.action_id === action.action_id,
       );
@@ -300,25 +322,28 @@ export class BrokerV2PanelService {
       }
       // Same operator-confirmed action, resubmitted against a refreshed
       // token — not a new action, so the same reason still applies.
-      return await this.submitAction(broker, accountId, sid, fresh, reason);
+      return await this.submitAction(actionTarget, sid, fresh, reason);
     }
   }
 
   private submitAction(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     action: PanelAction,
     reason: string | null,
   ): Promise<PanelActionResult> {
+    const idempotencyKey = target.idempotencyKey;
+    if (idempotencyKey === null) {
+      throw new Error('A bot action requires a target frozen by its interaction owner.');
+    }
     const request: PanelActionRequest = {
       action_id: action.action_id,
       revision: action.revision,
       concurrency_token: action.concurrency_token,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: idempotencyKey,
       reason,
     };
-    return this.runAction(broker, accountId, sid, request);
+    return this.runAction(target, sid, request);
   }
 
   /**
@@ -327,83 +352,85 @@ export class BrokerV2PanelService {
    * ceremony, not a generic panel action.
    */
   prepareHistoricalExecutionRecovery(
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     concurrencyToken: string,
   ): Promise<HistoricalExecutionRecoveryPlan> {
     return firstValueFrom(
       this.http.post<HistoricalExecutionRecoveryPlan>(
-        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/bots/${encodeURIComponent(sid)}/historical-execution-recovery/prepare`,
-        { concurrency_token: concurrencyToken },
+        accountUrl(
+          target,
+          `/custody/bots/${encodeURIComponent(sid)}/historical-execution-recovery/prepare`,
+        ),
+        this.commandBody(target, 'custody_command', { concurrency_token: concurrencyToken }),
       ),
     );
   }
 
   /** Confirm exactly the short-lived evidence plan returned by prepare. */
   confirmHistoricalExecutionRecovery(
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     plan: HistoricalExecutionRecoveryPlan,
   ): Promise<HistoricalExecutionRecoveryReceipt> {
     return firstValueFrom(
       this.http.post<HistoricalExecutionRecoveryReceipt>(
-        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/bots/${encodeURIComponent(sid)}/historical-execution-recovery/confirm`,
-        { plan, confirmation_token: plan.confirmation_token },
+        accountUrl(
+          target,
+          `/custody/bots/${encodeURIComponent(sid)}/historical-execution-recovery/confirm`,
+        ),
+        this.commandBody(target, 'custody_command', { plan, confirmation_token: plan.confirmation_token }),
       ),
     );
   }
 
   getLiveChart(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     resolution: ChartLiveResolution,
   ): Promise<ChartLiveResponse> {
     const params = new HttpParams().set('resolution', resolution);
     // The tape polls beside the detail pane's panel read (#1912).
     return this.polls.get<ChartLiveResponse>(
-      `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/live`,
+      accountUrl(target, `/bots/${encodeURIComponent(sid)}/chart/live`),
       params,
     );
   }
 
   getLiveSnapshot(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     resolution: ChartLiveResolution,
   ): Promise<BotPanelLiveSnapshot> {
     const params = new HttpParams().set('resolution', resolution);
     return firstValueFrom(
       this.http.get<BotPanelLiveSnapshot>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/live-snapshot`,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/live-snapshot`),
         { params },
       ),
     );
   }
 
   liveStreamUrl(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     resolution: ChartLiveResolution,
     cursor?: string,
   ): string {
     const params = new URLSearchParams({ resolution });
     if (cursor) params.set('cursor', cursor);
-    return `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/live-stream?${params.toString()}`;
+    return `${accountUrl(target, `/bots/${encodeURIComponent(sid)}/live-stream`)}?${params.toString()}`;
   }
 
   getHistoryChart(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     timeframe: ChartHistoryTimeframe,
   ): Promise<ChartHistoryResponse> {
     const params = new HttpParams().set('timeframe', timeframe);
     return firstValueFrom(
       this.http.get<ChartHistoryResponse>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/history`,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/chart/history`),
         { params },
       ),
     );
@@ -411,8 +438,7 @@ export class BrokerV2PanelService {
 
   /** §14 Operator-gated raw evidence — bounded, paged, audit-logged. */
   getEvidence(
-    broker: string,
-    accountId: string,
+    target: ResourceTarget,
     sid: string,
     options: {
       transactionRef?: string;
@@ -428,7 +454,7 @@ export class BrokerV2PanelService {
     if (options.clientHint) params = params.set('client_hint', options.clientHint);
     return firstValueFrom(
       this.http.get<EvidencePage>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/evidence`,
+        accountUrl(target, `/bots/${encodeURIComponent(sid)}/evidence`),
         { params },
       ),
     );

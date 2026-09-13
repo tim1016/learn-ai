@@ -17,6 +17,7 @@ import {
   type DeployBotStrategy,
   type PaperAccessPlan,
 } from "../v2-panel/lib/broker-v2-panel.service";
+import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
 
 const UI_ACTIVATION_REASON = "Enable Paper access from the Alpaca Deploy page.";
 
@@ -29,10 +30,14 @@ interface PaperAccessFailure {
 type PaperAccessFlow =
   | { kind: "idle" }
   | { kind: "preparing" }
-  | { kind: "review"; plan: PaperAccessPlan }
-  | { kind: "confirming"; plan: PaperAccessPlan }
+  | { kind: "review"; plan: PaperAccessPlan; target: ResourceTarget; strategyKey: string }
+  | { kind: "confirming"; plan: PaperAccessPlan; target: ResourceTarget; strategyKey: string }
   | { kind: "complete" }
-  | { kind: "error"; failure: PaperAccessFailure };
+  | {
+    kind: "error";
+    failure: PaperAccessFailure;
+    retry: { plan: PaperAccessPlan; target: ResourceTarget; strategyKey: string } | null;
+  };
 
 /** Two-step account approval for one sealed Signal Program. */
 @Component({
@@ -44,6 +49,7 @@ type PaperAccessFlow =
 })
 export class DeployPaperAccessComponent {
   readonly accountId = input.required<string>();
+  readonly target = input.required<ResourceTarget>();
   readonly strategy = input.required<DeployBotStrategy>();
   /**
    * The broker world this account's grant is worded for: `Paper` on a paper
@@ -58,7 +64,17 @@ export class DeployPaperAccessComponent {
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly identity = computed(
-    () => `${this.accountId()}\u0000${this.strategy().strategy_key}`,
+    () => {
+      const target = this.target();
+      return [
+        target.broker,
+        target.clerkId,
+        target.accountId,
+        target.bindingGeneration,
+        target.routingEpoch,
+        this.strategy().strategy_key,
+      ].join("\u0000");
+    },
   );
   private lastIdentity = "";
 
@@ -89,39 +105,66 @@ export class DeployPaperAccessComponent {
     const strategy = this.strategy();
     if (strategy.paper_access_state !== "available") return;
     const identity = this.identity();
+    const laneTarget = this.target();
+    // The review and its confirmation are one durable interaction. Capture
+    // the lane and key before the first await so a later route reuse cannot
+    // send the reviewed plan through a newly-bound Clerk.
+    const target = withCommand(laneTarget, 'deploy', crypto.randomUUID());
     this.flow.set({ kind: "preparing" });
     try {
       const plan = await this.panelService.preparePaperAccess(
-        "alpaca",
-        this.accountId(),
+        target,
         strategy.strategy_key,
         UI_ACTIVATION_REASON,
       );
       if (identity !== this.identity()) return;
-      this.flow.set({ kind: "review", plan });
+      this.flow.set({ kind: "review", plan, target, strategyKey: strategy.strategy_key });
     } catch (error) {
       if (identity !== this.identity()) return;
-      this.flow.set({ kind: "error", failure: this.toFailure(error) });
+      this.flow.set({ kind: "error", failure: this.toFailure(error), retry: null });
     }
   }
 
-  protected async confirm(plan: PaperAccessPlan): Promise<void> {
+  protected async confirm(): Promise<void> {
+    const review = this.flow();
+    if (review.kind !== "review") return;
     const identity = this.identity();
-    this.flow.set({ kind: "confirming", plan });
+    this.flow.set({
+      kind: "confirming",
+      plan: review.plan,
+      target: review.target,
+      strategyKey: review.strategyKey,
+    });
     try {
       await this.panelService.confirmPaperAccess(
-        "alpaca",
-        this.accountId(),
-        this.strategy().strategy_key,
-        plan,
+        review.target,
+        review.strategyKey,
+        review.plan,
       );
       if (identity !== this.identity()) return;
       this.flow.set({ kind: "complete" });
       this.accessChanged.emit();
     } catch (error) {
       if (identity !== this.identity()) return;
-      this.flow.set({ kind: "error", failure: this.toFailure(error) });
+      this.flow.set({
+        kind: "error",
+        failure: this.toFailure(error),
+        retry: { plan: review.plan, target: review.target, strategyKey: review.strategyKey },
+      });
     }
+  }
+
+  protected retry(): void {
+    const failed = this.flow();
+    if (failed.kind !== "error" || failed.retry === null) {
+      void this.prepare();
+      return;
+    }
+    // A confirm can fail after reaching the coordinator. Replaying the exact
+    // frozen target lets its durable key answer that uncertainty instead of
+    // converting the retry into a second access command.
+    this.flow.set({ kind: "review", ...failed.retry });
+    void this.confirm();
   }
 
   protected cancel(): void {

@@ -23,6 +23,7 @@
             [bars]="barsBySymbol().get(bot.symbol) ?? []"
             [markers]="markersBySid().get(bot.sid) ?? []"
             [broker]="broker()"
+            [clerkId]="clerkId()"
             [accountId]="accountId()"
             [pending]="pendingSids().has(bot.sid)"
             (action)="forwardAction($event)"

@@ -112,6 +112,28 @@ with it or the coordinator refuses before dispatch.
 | `gallery_snapshot` | GET | `/accounts/{account_id}/gallery/snapshot` | `/api/brokers/alpaca/accounts/{account_id}/gallery/snapshot` | `gallery_read` | read |
 | `gallery_stream` | GET | `/accounts/{account_id}/gallery/stream` | `…/gallery/stream` | `gallery_read` | read (SSE) |
 
+## Desk lane reads (catalog, B2)
+
+The canonical fleet desk may not re-resolve a global/default lane. These
+public paths therefore pin the selected clerk before forwarding to their
+existing Alpaca clerk handlers; the unscoped aliases remain telemetry-only
+compatibility routes until Delivery E.
+
+| Operation id | Method | Public | Agent path today | Capability | Idempotency |
+|---|---|---|---|---|---|
+| `activities_read` | GET | `/activities` | `/api/brokers/alpaca/activities` | `account_read` | read |
+| `portfolio_history_read` | GET | `/portfolio-history` | `…/portfolio-history` | `account_read` | read |
+| `portfolio_history_proof_read` | GET | `/portfolio-history-proof` | `…/portfolio-history-proof` | `account_read` | read |
+| `clerk_status_read` | GET | `/clerk/status` | `…/clerk/status` | `custody_read` | read |
+| `custody_diagnosis_read` | GET | `/clerk/custody-diagnosis` | `…/clerk/custody-diagnosis` | `custody_read` | read |
+
+## Bot run evidence (catalog, B2)
+
+| Operation id | Method | Public | Agent path today | Capability | Idempotency |
+|---|---|---|---|---|---|
+| `bot_run_current_read` | GET | `/accounts/{account_id}/bots/{sid}/runs/current` | `/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/current` | `bot_panel_read` | read |
+| `bot_run_history_read` | GET | `/accounts/{account_id}/bots/{sid}/runs/history` | `/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history` | `bot_panel_read` | read |
+
 ## Custody family (catalog) — new home for `/api/alpaca-clerk-sqlite` + `/api/accounts`
 
 The clerk-scope custody prefix is the PRD's named home for these; the agent

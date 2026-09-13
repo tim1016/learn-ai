@@ -32,12 +32,17 @@ describe('app menu projections', () => {
   });
 
   it('carries the query parameters an entry needs to navigate', () => {
-    const deploy = menuItemsFor('/data-lab')
-      .find((group) => group.label === 'Alpaca')
-      ?.items?.find((item) => item.label === 'Deploy');
+    const alpaca = menuItemsFor('/data-lab').find((group) => group.label === 'Alpaca');
+    const deploy = alpaca?.items?.find((item) => item.label === 'Deploy');
+    const bots = alpaca?.items?.find((item) => item.label === 'Bots');
+    const gallery = alpaca?.items?.find((item) => item.label === 'Gallery');
 
     expect(deploy?.routerLink).toBe('/brokers/alpaca');
     expect(deploy?.queryParams).toEqual({ deploy: '' });
+    expect(bots?.routerLink).toBe('/brokers/alpaca');
+    expect(bots?.queryParams).toEqual({ surface: 'bots' });
+    expect(gallery?.routerLink).toBe('/brokers/alpaca');
+    expect(gallery?.queryParams).toEqual({ surface: 'gallery' });
   });
 
   it.each([
@@ -52,7 +57,9 @@ describe('app menu projections', () => {
   });
 
   it('maps account-scoped Alpaca pages onto their stable menu entry', () => {
-    const node = activeMenuNodeFor('/brokers/alpaca/accounts/PA9/gallery/sid-3');
+    const node = activeMenuNodeFor(
+      '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery',
+    );
 
     expect(node?.group.title).toBe('Alpaca');
     expect(node?.item.title).toBe('Gallery');
@@ -65,10 +72,16 @@ describe('app menu projections', () => {
     ).toBe(ACTIVE_GROUP_CLASS);
   });
 
+  it.each(['bots', 'gallery'] as const)('resolves the %s lane-selection alias', (surface) => {
+    expect(activeMenuNodeFor(`/brokers/alpaca?surface=${surface}`)?.item.title)
+      .toBe(surface === 'bots' ? 'Bots' : 'Gallery');
+  });
+
   it('resolves page titles through the active menu node', () => {
     expect(pageTitleFor('/pricing-lab')).toBe('Pricing Lab');
-    expect(pageTitleFor('/brokers/alpaca/accounts/PA9/gallery/sid-3')).toBe('Gallery');
+    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Gallery');
     expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Deploy');
+    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Deploy');
     expect(pageTitleFor('/jobs-demo')).toBeNull();
   });
 

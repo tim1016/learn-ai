@@ -28,6 +28,10 @@ interface Deferred {
   readonly resolve: () => void;
 }
 
+const CLERK_ID = 'clrk-playwright-1413';
+const CLERK_SCOPE = `/api/brokers/alpaca/clerks/${CLERK_ID}`;
+const ACCOUNT_SCOPE = `${CLERK_SCOPE}/accounts/${ACCOUNT_ID}`;
+
 interface CorrelationContext {
   readonly browserEpoch: string;
   readonly pageLoad: number;
@@ -184,6 +188,35 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       const request = route.request();
       const url = new URL(request.url());
       const path = url.pathname;
+
+      if (path === '/api/broker-clerks') {
+        await route.fulfill({
+          json: {
+            observed_at_ms: 1_753_800_004_000,
+            clerks: [{
+              broker: 'alpaca',
+              clerk_id: CLERK_ID,
+              display_label: 'Correlation campaign lane',
+              lifecycle_state: 'ready',
+              volume_id: 'vol-playwright-1413',
+              last_seen_at_ms: 1_753_800_004_000,
+              routing_epoch: 14,
+              effective_binding_generation: 13,
+              capabilities: ['bot_panel_read', 'bot_action'],
+              provider_summary: {
+                provider_id: 'alpaca',
+                adapter_version: 'alpaca-fleet.4',
+                confirmed_account_id: ACCOUNT_ID,
+                confirmed_binding_generation: 13,
+                endpoint_mode: 'paper',
+                authority_state: 'real_paper',
+              },
+              observed_at_ms: 1_753_800_004_000,
+            }],
+          },
+        });
+        return;
+      }
 
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/live-snapshot`)) {
         await route.fulfill({
@@ -344,7 +377,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       plannedPageLoad = pageLoad;
       if (pageLoad === 0) {
         await page.goto(
-          `/brokers/alpaca/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}?lens=operator`,
+          `/brokers/alpaca/clerks/${CLERK_ID}/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}?lens=operator`,
         );
       } else {
         await page.reload();
@@ -500,7 +533,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
               presented_action_id: PRESENTED_ACTION_ID,
               click_target: EVIDENCE_CLICK_TARGET,
               evidence_request_method: 'GET',
-              evidence_request_path: `/api/brokers/alpaca/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}/evidence?transaction_ref=${TRANSACTION_REF}&page_size=12&client_hint=operator-transaction-timeline`,
+              evidence_request_path: `${ACCOUNT_SCOPE}/bots/${STRATEGY_INSTANCE_ID}/evidence?transaction_ref=${TRANSACTION_REF}&page_size=12&client_hint=operator-transaction-timeline`,
               operation_reference: receiptRef,
               proof_reference: receiptRef,
               dispatched_lifecycle_action_id: null,

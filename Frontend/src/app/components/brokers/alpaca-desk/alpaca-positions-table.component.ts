@@ -9,6 +9,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AlpacaTraderLensDataService } from './alpaca-trader-lens-data.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /**
  * Alpaca open-positions table. Read-only. Four distinct renders: loading,
@@ -34,10 +35,15 @@ import { AlpacaTraderLensDataService } from './alpaca-trader-lens-data.service';
 })
 export class AlpacaPositionsTableComponent {
   private readonly traderData = inject(AlpacaTraderLensDataService, { optional: true });
+  private readonly deskAccount = inject(AlpacaDeskAccountDataService, { optional: true });
   private readonly brokers = inject(BrokersService);
 
   protected readonly positions = this.traderData?.positions ?? resource({
-    loader: () => this.brokers.listPositions(),
+    params: () => this.deskAccount?.target() ?? null,
+    loader: ({ params }) =>
+      params === null
+        ? Promise.reject(new Error('Positions require a routed desk target.'))
+        : this.brokers.listPositions(params),
   });
 
   protected readonly globalFilterFields = ['symbol', 'side', 'asset_class'];

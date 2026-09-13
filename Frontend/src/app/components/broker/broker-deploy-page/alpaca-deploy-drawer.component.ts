@@ -1,8 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, resource } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  input,
+  output,
+  resource,
+  signal,
+} from '@angular/core';
 import { Drawer } from 'primeng/drawer';
 
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
+import type { ResourceTarget } from '../../../fleet/resource-target';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 
 /**
@@ -22,18 +33,25 @@ import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.componen
 export class AlpacaDeployDrawerComponent {
   readonly visible = input.required<boolean>();
   readonly accountId = input('');
+  readonly target = input<ResourceTarget | null>(null);
   readonly closed = output();
 
   private readonly brokers = inject(BrokersService);
   private readonly deskAccountData = inject(AlpacaDeskAccountDataService, { optional: true });
+  private readonly candidateTarget = computed(
+    () => this.target() ?? this.deskAccountData?.target() ?? null,
+  );
+  private readonly frozenTarget = signal<ResourceTarget | null>(null);
+  private wasVisible = false;
+  /** The target is captured when the drawer opens, never recalculated while
+   * a preview or submit is in flight. */
+  protected readonly resolvedTarget = this.frozenTarget.asReadonly();
 
   protected readonly account = resource({
-    params: () => (
-      this.visible() && this.accountId().trim() === '' && this.deskAccountData === null
-        ? 'alpaca'
-        : undefined
-    ),
-    loader: ({ params }) => this.brokers.getAccount(params),
+    params: () => this.visible() && this.accountId().trim() === '' ? this.resolvedTarget() : null,
+    loader: ({ params }) => params === null
+      ? Promise.reject(new Error('Deploy requires a routed clerk target.'))
+      : this.brokers.getAccount(params),
   });
 
   protected readonly resolvedAccountId = computed(() => {
@@ -45,7 +63,9 @@ export class AlpacaDeployDrawerComponent {
   });
 
   protected readonly accountUnavailable = computed(
-    () => this.deskAccountData?.account.error() !== undefined || this.account.error() !== undefined,
+    () => this.resolvedTarget() === null
+      || this.deskAccountData?.account.error() !== undefined
+      || this.account.error() !== undefined,
   );
 
   /** `null` while no account read has answered, or the account is live: the chrome then names no world. */
@@ -72,6 +92,15 @@ export class AlpacaDeployDrawerComponent {
     const world = this.brokerWorld();
     return world === null ? 'Alpaca account' : `Alpaca ${world} account`;
   });
+
+  constructor() {
+    effect(() => {
+      const visible = this.visible();
+      if (visible && !this.wasVisible) this.frozenTarget.set(this.candidateTarget());
+      if (!visible) this.frozenTarget.set(null);
+      this.wasVisible = visible;
+    });
+  }
 
   protected close(): void {
     this.closed.emit();

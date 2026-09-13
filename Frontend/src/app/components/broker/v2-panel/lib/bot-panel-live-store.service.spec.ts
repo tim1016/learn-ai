@@ -81,6 +81,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -103,6 +104,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -122,6 +124,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -140,6 +143,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -149,6 +153,7 @@ describe('BotPanelLiveStore', () => {
 
     const switching = store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-2',
       resolution: '5s',
@@ -160,10 +165,52 @@ describe('BotPanelLiveStore', () => {
     expect(store.snapshot()?.stream_epoch).toBe('epoch-b');
   });
 
+  it('clears and rejects old stream frames when the same account is rebound', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+      bindingGeneration: 1,
+      routingEpoch: 1,
+    });
+    const oldSource = StubEventSource.instances[0];
+    const replacement = deferred<BotPanelLiveSnapshot>();
+    service.getLiveSnapshot.mockReturnValueOnce(replacement.promise);
+
+    const rebinding = store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+      bindingGeneration: 2,
+      routingEpoch: 2,
+    });
+    expect(store.snapshot()).toBeNull();
+
+    // A browser can deliver an event queued just before close. The callback
+    // belongs to the superseded generation and must not resurrect its panel.
+    oldSource.emit('snapshot', JSON.stringify(snapshot(99, 'epoch-old')));
+    expect(store.snapshot()).toBeNull();
+
+    replacement.resolve(snapshot(1, 'epoch-new'));
+    await rebinding;
+    expect(store.snapshot()?.stream_epoch).toBe('epoch-new');
+    expect(service.getLiveSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ bindingGeneration: 2, routingEpoch: 2 }),
+      'sid-1',
+      '5s',
+    );
+  });
+
   it('ignores a refresh response that resolves after switching bots', async () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -175,6 +222,7 @@ describe('BotPanelLiveStore', () => {
 
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-2',
       resolution: '5s',
@@ -189,6 +237,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',
@@ -200,6 +249,7 @@ describe('BotPanelLiveStore', () => {
 
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-2',
       resolution: '5s',
@@ -216,6 +266,7 @@ describe('BotPanelLiveStore', () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({
       broker: 'alpaca',
+      clerkId: 'clrk_spec',
       accountId: 'PA-1',
       sid: 'sid-1',
       resolution: '5s',

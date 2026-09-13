@@ -68,6 +68,38 @@ def _build_agent_app(
     async def account() -> JSONResponse:
         return JSONResponse({"account_id": ACCOUNT, "status": "ACTIVE"})
 
+    @agent.get("/api/brokers/alpaca/activities")
+    async def activities() -> JSONResponse:
+        return JSONResponse([{"activity_type": "FILL"}])
+
+    @agent.get("/api/brokers/alpaca/portfolio-history")
+    async def portfolio_history() -> JSONResponse:
+        return JSONResponse({"timestamps": [], "equity": []})
+
+    @agent.get("/api/brokers/alpaca/portfolio-history-proof")
+    async def portfolio_history_proof() -> JSONResponse:
+        return JSONResponse({"history": {"timestamps": [], "equity": []}})
+
+    @agent.get("/api/brokers/alpaca/clerk/status")
+    async def clerk_status() -> JSONResponse:
+        return JSONResponse({"account_id": ACCOUNT, "outstanding_intents": 0})
+
+    @agent.get("/api/brokers/alpaca/clerk/custody-diagnosis")
+    async def custody_diagnosis() -> JSONResponse:
+        return JSONResponse({"divergences": []})
+
+    @agent.get(
+        "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/current"
+    )
+    async def current_run(account_id: str, sid: str) -> JSONResponse:
+        return JSONResponse({"account_id": account_id, "sid": sid, "run_id": "current"})
+
+    @agent.get(
+        "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/runs/history"
+    )
+    async def run_history(account_id: str, sid: str) -> JSONResponse:
+        return JSONResponse({"account_id": account_id, "sid": sid, "runs": []})
+
     @agent.get("/api/brokers/alpaca/configuration/selection")
     async def selection() -> JSONResponse:
         return JSONResponse({"effective_account_id": ACCOUNT.upper()})
@@ -295,8 +327,26 @@ async def test_lane_reads_route_through_the_public_surface(fleet: _Fleet) -> Non
         response = await client.get(f"{fleet.base}/account")
         assert response.status_code == 200
         assert response.json()["account_id"] == ACCOUNT
-        assert response.headers["x-fleet-broker"] == "alpaca"
-        assert response.headers["x-fleet-clerk-id"] == fleet.lane.clerk_id
+
+
+async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_lane(
+    fleet: _Fleet,
+) -> None:
+    """The C desk's full operational read set stays inside one lane route."""
+    async with fleet.client() as client:
+        for path in (
+            "/activities?current_session=true",
+            "/portfolio-history?range=1D",
+            "/portfolio-history-proof?range=1D",
+            "/clerk/status",
+            "/clerk/custody-diagnosis",
+            f"/accounts/{ACCOUNT}/bots/sid-9/runs/current",
+            f"/accounts/{ACCOUNT}/bots/sid-9/runs/history?limit=1",
+        ):
+            response = await client.get(f"{fleet.base}{path}")
+            assert response.status_code == 200, path
+            assert response.headers["x-fleet-broker"] == "alpaca", path
+            assert response.headers["x-fleet-clerk-id"] == fleet.lane.clerk_id, path
 
         configuration = await client.get(f"{fleet.base}/configuration/selection")
         assert configuration.status_code == 200

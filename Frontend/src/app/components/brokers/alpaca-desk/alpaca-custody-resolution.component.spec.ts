@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CustodyDiagnosis } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
 function diagnosis(overrides: Partial<CustodyDiagnosis> = {}): CustodyDiagnosis {
   return {
     broker: 'alpaca',
@@ -28,6 +31,7 @@ function service(value: CustodyDiagnosis): Partial<BrokersService> {
 describe('AlpacaCustodyResolutionComponent', () => {
   it('renders the SQLite custody comparison as read-only evidence', async () => {
     await render(AlpacaCustodyResolutionComponent, {
+      inputs: { target: TARGET },
       providers: [{ provide: BrokersService, useValue: service(diagnosis()) }],
     });
 
@@ -37,6 +41,7 @@ describe('AlpacaCustodyResolutionComponent', () => {
 
   it('shows divergence evidence without offering a generic mutation', async () => {
     await render(AlpacaCustodyResolutionComponent, {
+      inputs: { target: TARGET },
       providers: [{
         provide: BrokersService,
         useValue: service(diagnosis({

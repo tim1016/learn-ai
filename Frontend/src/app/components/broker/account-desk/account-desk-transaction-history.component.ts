@@ -24,6 +24,12 @@ import type {
   ClerkTransactionOrigin,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
+import {
+  laneKey,
+  type ResourceTarget,
+  withAccount,
+  withCommand,
+} from '../../../fleet/resource-target';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -118,17 +124,21 @@ export class AccountDeskTransactionHistoryComponent {
   private readonly filterService = inject(FilterService);
 
   readonly accountId = input<string | null>(null);
+  /** Explicit desk target for broker-history reads. */
+  readonly target = input<ResourceTarget | null>(null);
   readonly refreshVersion = input(0);
   readonly fromMs = input<number | null>(null);
   readonly toMs = input<number | null>(null);
   readonly showScopeControl = input(true);
   readonly pageSize = input(8);
 
-  private activeAccountId = this.store.accountId();
+  private activeReceiptContext: string | null = null;
   protected readonly scope = signal<HistoryScope>('today');
   protected readonly scopeOptions = SCOPE_OPTIONS;
   protected readonly scopeConfig = SCOPE_CONFIG;
   protected readonly selectedTransaction = signal<ClerkTransactionSummary | null>(null);
+  /** Captured with the receipt: acknowledgement cannot follow navigation. */
+  protected readonly selectedTarget = signal<ResourceTarget | null>(null);
   protected readonly receiptOpener = signal<HTMLElement | null>(null);
   protected readonly acknowledgementOperator = signal('');
   protected readonly acknowledgingExternalOrderId = signal<string | null>(null);
@@ -137,13 +147,15 @@ export class AccountDeskTransactionHistoryComponent {
   protected readonly selectedBrokerHistory = resource<BrokerPortfolioHistory | null, {
     readonly enabled: boolean;
     readonly range: PortfolioHistoryRange;
+    readonly target: ResourceTarget | null;
   }>({
     params: () => ({
       enabled: this.showScopeControl(),
       range: SCOPE_CONFIG[this.scope()].range,
+      target: this.target(),
     }),
-    loader: ({ params }) => params.enabled
-      ? this.brokers.getPortfolioHistory('alpaca', params.range)
+    loader: ({ params }) => params.enabled && params.target !== null
+      ? this.brokers.getPortfolioHistory(params.target, params.range)
       : Promise.resolve(null),
   });
 
@@ -190,6 +202,7 @@ export class AccountDeskTransactionHistoryComponent {
     effect(() => {
       const accountId = this.accountId();
       const window = this.activeWindow();
+      this.store.setTarget(this.target());
       this.refreshVersion();
       if (accountId !== null && window !== null) {
         untracked(() => void this.store.load(accountId, {
@@ -199,11 +212,15 @@ export class AccountDeskTransactionHistoryComponent {
       }
     });
     effect(() => {
-      const accountId = this.store.accountId();
-      if (accountId === this.activeAccountId) return;
-      this.activeAccountId = accountId;
+      const context = this.currentReceiptContext();
+      if (context === this.activeReceiptContext) return;
+      this.activeReceiptContext = context;
       this.selectedTransaction.set(null);
+      this.selectedTarget.set(null);
       this.receiptOpener.set(null);
+      this.acknowledgementOperator.set('');
+      this.acknowledgementError.set(null);
+      this.acknowledgingExternalOrderId.set(null);
     });
   }
 
@@ -221,13 +238,23 @@ export class AccountDeskTransactionHistoryComponent {
   }
 
   protected openReceipt(row: TransactionTableRow, event: MouseEvent): void {
+    const target = this.target();
+    if (target === null) return;
     const opener = event.currentTarget;
     this.receiptOpener.set(opener instanceof HTMLElement ? opener : null);
+    // This target belongs to the receipt, not the live route. A later route
+    // or directory change must not move an acknowledgement to another clerk.
+    this.selectedTarget.set(withCommand(
+      withAccount(target, this.accountId() ?? target.accountId),
+      'custody_command',
+      this.newReceiptCommandId(),
+    ));
     this.selectedTransaction.set(row.transaction);
   }
 
   protected onReceiptClosed(): void {
     this.selectedTransaction.set(null);
+    this.selectedTarget.set(null);
     this.receiptOpener.set(null);
   }
 
@@ -244,20 +271,70 @@ export class AccountDeskTransactionHistoryComponent {
     const accountId = this.store.accountId();
     const externalOrderId = transaction?.external_order_id;
     const operator = this.acknowledgementOperator().trim();
-    if (!accountId || !externalOrderId || !operator || this.acknowledgingExternalOrderId() !== null) return;
+    const target = this.selectedTarget();
+    if (
+      !accountId
+      || !externalOrderId
+      || !operator
+      || target === null
+      || this.acknowledgingExternalOrderId() !== null
+    ) return;
 
     this.acknowledgingExternalOrderId.set(externalOrderId);
     this.acknowledgementError.set(null);
     try {
-      await this.brokers.acknowledgeExternalOrder(accountId, externalOrderId, operator);
+      await this.brokers.acknowledgeExternalOrder(target, externalOrderId, operator);
+      if (!this.isCurrent(target, accountId)) return;
       await this.store.load(accountId);
+      if (!this.isCurrent(target, accountId)) return;
       this.acknowledgementOperator.set('');
       this.onReceiptClosed();
-    } catch {
-      this.acknowledgementError.set('Could not acknowledge this external order. Retry after reviewing the evidence.');
+    } catch (error: unknown) {
+      if (this.isCurrent(target, accountId)) {
+        // The evidence drawer deliberately presents one safe retry message;
+        // backend-authored detail remains available in the durable receipt.
+        void error;
+        this.acknowledgementError.set('Could not acknowledge this external order. Retry after reviewing the evidence.');
+      }
     } finally {
-      this.acknowledgingExternalOrderId.set(null);
+      if (
+        this.isCurrent(target, accountId)
+        && this.acknowledgingExternalOrderId() === externalOrderId
+      ) {
+        this.acknowledgingExternalOrderId.set(null);
+      }
     }
+  }
+
+  private currentReceiptContext(): string | null {
+    const target = this.target();
+    const accountId = this.accountId() ?? target?.accountId ?? null;
+    return target === null
+      ? null
+      : laneKey(
+          target.broker,
+          target.clerkId,
+          target.routingEpoch,
+          target.bindingGeneration,
+          accountId,
+        );
+  }
+
+  private isCurrent(target: ResourceTarget, accountId: string): boolean {
+    return this.currentReceiptContext() === laneKey(
+      target.broker,
+      target.clerkId,
+      target.routingEpoch,
+      target.bindingGeneration,
+      accountId,
+    );
+  }
+
+  private newReceiptCommandId(): string {
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+      throw new Error('This browser cannot create a durable request identity.');
+    }
+    return globalThis.crypto.randomUUID();
   }
 }
 

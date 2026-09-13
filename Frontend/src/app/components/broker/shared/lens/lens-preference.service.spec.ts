@@ -24,6 +24,7 @@ describe('LensPreferenceService', () => {
   it('writes no second storage key', () => {
     TestBed.inject(LensPreferenceService).write('trader');
 
-    expect(Object.keys(localStorage)).toEqual([CANONICAL_KEY]);
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    expect(keys).toEqual([CANONICAL_KEY]);
   });
 });

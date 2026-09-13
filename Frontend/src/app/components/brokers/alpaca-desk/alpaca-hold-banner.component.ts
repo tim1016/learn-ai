@@ -3,6 +3,7 @@ import {
   Component,
   DestroyRef,
   inject,
+  input,
   resource,
   signal,
 } from '@angular/core';
@@ -10,6 +11,7 @@ import { MessageModule } from 'primeng/message';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokersService } from '../../../services/brokers.service';
+import type { ResourceTarget } from '../../../fleet/resource-target';
 
 /**
  * Alpaca exposure-hold banner (phase-2 S6). Renders ONLY when the clerk reports
@@ -30,13 +32,14 @@ import { BrokersService } from '../../../services/brokers.service';
   host: { class: 'block' },
 })
 export class AlpacaHoldBannerComponent {
+  readonly target = input.required<ResourceTarget>();
   private readonly brokers = inject(BrokersService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly refreshEpoch = signal(0);
 
   protected readonly status = resource({
-    params: () => this.refreshEpoch(),
-    loader: () => this.brokers.getClerkStatus(),
+    params: () => ({ target: this.target(), refreshEpoch: this.refreshEpoch() }),
+    loader: ({ params }) => this.brokers.getClerkStatus(params.target),
   });
 
   constructor() {

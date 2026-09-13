@@ -28,6 +28,10 @@ export class AlpacaAccountCardComponent {
   protected readonly expanded = signal(false);
 
   protected readonly account = this.deskAccount?.account ?? resource({
-    loader: () => this.brokers.getAccount(),
+    params: () => this.deskAccount?.target() ?? null,
+    loader: ({ params }) =>
+      params === null
+        ? Promise.reject(new Error('Alpaca account cards require a routed desk target.'))
+        : this.brokers.getAccount(params),
   });
 }

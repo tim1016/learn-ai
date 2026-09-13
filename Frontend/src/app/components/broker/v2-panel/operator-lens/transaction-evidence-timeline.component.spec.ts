@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EvidenceEntry, EvidencePage } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TransactionEvidenceTimelineComponent } from './transaction-evidence-timeline.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -51,6 +52,7 @@ function page(
 function inputs(transactionRef = 'tx-1') {
   return {
     broker: 'alpaca',
+    clerkId: 'clrk_spec',
     accountId: 'acc-1',
     sid: 'sid-1',
     transactionRef,
@@ -65,7 +67,8 @@ describe('TransactionEvidenceTimelineComponent', () => {
       .mockReturnValueOnce(nextPage.promise);
     const { fixture } = await render(TransactionEvidenceTimelineComponent, {
       inputs: inputs(),
-      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
+      providers: [
+      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
     });
 
     expect(await screen.findByText('Newest event')).toBeTruthy();
@@ -74,8 +77,7 @@ describe('TransactionEvidenceTimelineComponent', () => {
     fireEvent.click(loadMore);
     expect(getEvidence).toHaveBeenCalledTimes(2);
     expect(getEvidence).toHaveBeenLastCalledWith(
-      'alpaca',
-      'acc-1',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'acc-1' }),
       'sid-1',
       expect.objectContaining({ cursor: 1, transactionRef: 'tx-1' }),
     );
@@ -94,7 +96,10 @@ describe('TransactionEvidenceTimelineComponent', () => {
       .mockReturnValueOnce(second.promise);
     const { fixture } = await render(TransactionEvidenceTimelineComponent, {
       inputs: inputs('tx-a'),
-      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
+      providers: [
+        provideFleetDirectory(),
+        { provide: BrokerV2PanelService, useValue: { getEvidence } },
+      ],
     });
 
     fixture.componentRef.setInput('transactionRef', 'tx-b');
@@ -115,7 +120,10 @@ describe('TransactionEvidenceTimelineComponent', () => {
       .mockResolvedValueOnce(page('tx-1', [entry(1, 'Recovered event')]));
     const { fixture } = await render(TransactionEvidenceTimelineComponent, {
       inputs: inputs(),
-      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
+      providers: [
+        provideFleetDirectory(),
+        { provide: BrokerV2PanelService, useValue: { getEvidence } },
+      ],
     });
 
     expect((await screen.findByRole('alert')).textContent).toContain('Evidence endpoint unavailable');
@@ -138,6 +146,7 @@ describe('TransactionEvidenceTimelineComponent', () => {
     await render(TransactionEvidenceTimelineComponent, {
       inputs: inputs(),
       providers: [
+        provideFleetDirectory(),
         {
           provide: BrokerV2PanelService,
           useValue: { getEvidence: vi.fn().mockResolvedValue(page('tx-1', [sqliteEntry])) },
@@ -160,6 +169,7 @@ describe('TransactionEvidenceTimelineComponent', () => {
     await render(TransactionEvidenceTimelineComponent, {
       inputs: inputs(),
       providers: [
+        provideFleetDirectory(),
         {
           provide: BrokerV2PanelService,
           useValue: { getEvidence: vi.fn().mockResolvedValue(page('tx-1', [sqliteEntry])) },

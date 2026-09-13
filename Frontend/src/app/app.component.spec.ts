@@ -139,8 +139,8 @@ describe('AppComponent', () => {
     const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
     expect(nav?.querySelector('app-broker-banner')).toBeNull();
     expect(connection?.querySelector('app-broker-banner')).toBeTruthy();
-    expect(connection?.querySelector('a[href="/brokers/alpaca/bots"]')).toBeTruthy();
-    expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca?surface=bots"]')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca?surface=gallery"]')).toBeTruthy();
   });
 
   it('should contain a router-outlet', () => {

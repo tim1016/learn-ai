@@ -8,6 +8,15 @@ import type {
 } from '../../../api/clerk-transaction-history.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { resourceTarget } from '../../../fleet/resource-target';
+
+const FIRST_TARGET = resourceTarget('alpaca', 'clrk_first', {
+  accountId: 'PA1', routingEpoch: 1, bindingGeneration: 1,
+});
+const SECOND_TARGET = resourceTarget('alpaca', 'clrk_second', {
+  accountId: 'PA1', routingEpoch: 2, bindingGeneration: 2,
+});
 
 describe('AccountDeskTransactionHistoryStore', () => {
   const broker = { accountTransactions: vi.fn() };
@@ -16,6 +25,7 @@ describe('AccountDeskTransactionHistoryStore', () => {
     broker.accountTransactions.mockReset();
     TestBed.configureTestingModule({
       providers: [
+      provideFleetDirectory(),
         provideZonelessChangeDetection(),
         AccountDeskTransactionHistoryStore,
         { provide: BrokersService, useValue: broker },
@@ -33,17 +43,18 @@ describe('AccountDeskTransactionHistoryStore', () => {
         resolveSecond = resolve;
       }));
     const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
 
     const loading = store.load('PA1', { fromMs: 1_700_000_000_000, toMs: 1_700_086_400_000 });
     await vi.waitFor(() => expect(broker.accountTransactions).toHaveBeenCalledTimes(2));
 
     expect(store.rows()).toEqual([]);
     expect(store.loadedCount()).toBe(1);
-    expect(broker.accountTransactions).toHaveBeenNthCalledWith(1, 'PA1', null, 100, {
+    expect(broker.accountTransactions).toHaveBeenNthCalledWith(1, 'clrk_first', 'PA1', null, 100, {
       fromMs: 1_700_000_000_000,
       toMs: 1_700_086_400_000,
     });
-    expect(broker.accountTransactions).toHaveBeenNthCalledWith(2, 'PA1', 'cursor-2', 100, {
+    expect(broker.accountTransactions).toHaveBeenNthCalledWith(2, 'clrk_first', 'PA1', 'cursor-2', 100, {
       fromMs: 1_700_000_000_000,
       toMs: 1_700_086_400_000,
     });
@@ -63,6 +74,7 @@ describe('AccountDeskTransactionHistoryStore', () => {
       }))
       .mockResolvedValueOnce(historyPage([transaction('current', 20)]));
     const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
 
     void store.load('PA1', { fromMs: 1, toMs: 10 });
     await store.load('PA1', { fromMs: 11, toMs: 20 });
@@ -81,6 +93,7 @@ describe('AccountDeskTransactionHistoryStore', () => {
       }))
       .mockResolvedValueOnce(historyPage());
     const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
 
     void store.load('PA1');
     await store.load('PA1');
@@ -88,11 +101,11 @@ describe('AccountDeskTransactionHistoryStore', () => {
 
     resolveInitial?.(historyPage());
     await vi.waitFor(() => expect(broker.accountTransactions).toHaveBeenCalledTimes(2));
-    expect(broker.accountTransactions).toHaveBeenLastCalledWith('PA1', null, 100, {});
+    expect(broker.accountTransactions).toHaveBeenLastCalledWith('clrk_first', 'PA1', null, 100, {});
   });
 
   it('stops at the explicit client safety limit even when more cursors remain', async () => {
-    broker.accountTransactions.mockImplementation((_: string, cursor: string | null) => {
+    broker.accountTransactions.mockImplementation((_: string, _accountId: string, cursor: string | null) => {
       const pageNumber = cursor === null ? 0 : Number(cursor);
       const rows = Array.from({ length: 100 }, (_, index) => {
         const sequence = pageNumber * 100 + index;
@@ -101,12 +114,37 @@ describe('AccountDeskTransactionHistoryStore', () => {
       return Promise.resolve(historyPage(rows, String(pageNumber + 1)));
     });
     const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
 
     await store.load('PA1');
 
     expect(broker.accountTransactions).toHaveBeenCalledTimes(50);
     expect(store.rows()).toHaveLength(5_000);
     expect(store.rowLimitReached()).toBe(true);
+  });
+
+  it('discards a late page and reloads when the same account moves to another lane', async () => {
+    let resolveFirst: ((page: ClerkTransactionHistoryResponse) => void) | undefined;
+    broker.accountTransactions
+      .mockReturnValueOnce(new Promise<ClerkTransactionHistoryResponse>((resolve) => {
+        resolveFirst = resolve;
+      }))
+      .mockResolvedValueOnce(historyPage([transaction('second-lane', 20)]));
+    const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
+
+    void store.load('PA1');
+    await vi.waitFor(() => expect(broker.accountTransactions).toHaveBeenCalledTimes(1));
+    store.setTarget(SECOND_TARGET);
+    await store.load('PA1');
+    expect(broker.accountTransactions).toHaveBeenLastCalledWith(
+      'clrk_second', 'PA1', null, 100, {},
+    );
+
+    resolveFirst?.(historyPage([transaction('stale-first-lane', 30)]));
+    await Promise.resolve();
+
+    expect(store.rows().map((row) => row.transaction_id)).toEqual(['second-lane']);
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TransactionRailComponent } from './transaction-rail.component';
 import type { EvidencePage, StationView, TransactionRail } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 function makeStation(
   overrides: Partial<StationView> & Pick<StationView, 'station_id' | 'state'>,
@@ -32,7 +33,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     // Each station must have icon + text both present
@@ -57,7 +58,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     const { container } = await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     const item = container.querySelector('.station--satisfied');
@@ -70,7 +71,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     const { container } = await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     const item = container.querySelector('.station--blocked');
@@ -84,7 +85,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     const { container } = await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     expect(container.querySelector('.station--waiting details')?.hasAttribute('open')).toBe(true);
@@ -136,13 +137,14 @@ describe('TransactionRailComponent', () => {
     const runAction = vi.fn();
 
     const { fixture, container } = await render(TransactionRailComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         rail: makeRail([station], 'my-tx-ref'),
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
       },
-      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence, runAction } }],
+      providers: [
+      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: { getEvidence, runAction } }],
     });
 
     const btn = screen.getByRole('button', { name: /view raw evidence/i });
@@ -154,8 +156,7 @@ describe('TransactionRailComponent', () => {
     expect(screen.getByText(/kind=order_event/)).toBeTruthy();
     expect(container.querySelector('.evidence-drawer')).toBeNull();
     expect(getEvidence).toHaveBeenCalledWith(
-      'alpaca',
-      'acc-1',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'acc-1' }),
       'sid-1',
       expect.objectContaining({ transactionRef: 'my-tx-ref' }),
     );
@@ -189,7 +190,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     expect(screen.getByText('No live binding')).toBeTruthy();
@@ -201,7 +202,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     expect(screen.getByText('—')).toBeTruthy();
@@ -210,7 +211,7 @@ describe('TransactionRailComponent', () => {
 
   it('null transaction_ref shows no-transaction message', async () => {
     await render(TransactionRailComponent, {
-      inputs: { rail: { transaction_ref: null, stations: [] } },
+      inputs: { clerkId: 'clrk_spec', rail: { transaction_ref: null, stations: [] } },
     });
 
     expect(screen.getByText(/no active transaction/i)).toBeTruthy();
@@ -222,7 +223,7 @@ describe('TransactionRailComponent', () => {
     ];
 
     const { container } = await render(TransactionRailComponent, {
-      inputs: { rail: makeRail(stations) },
+      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
     });
 
     const summary = container.querySelector('summary');

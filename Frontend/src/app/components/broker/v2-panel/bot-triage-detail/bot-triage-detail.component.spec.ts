@@ -10,6 +10,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotTriageDetailComponent } from './bot-triage-detail.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 function fakeGate(overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckView {
   return {
@@ -78,10 +79,11 @@ async function renderDetail(
 
   const view = await render(BotTriageDetailComponent, {
     providers: [
+      provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: mockPanelService },
     ],
-    componentInputs: { broker: 'alpaca', accountId: 'PA9', sid },
+    componentInputs: { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9', sid },
   });
   return { ...view, mockPanelService };
 }
@@ -211,6 +213,7 @@ describe('BotTriageDetailComponent', () => {
     await render(BotTriageDetailComponent, {
       providers: [
         provideRouter([]),
+        provideFleetDirectory(),
         {
           provide: BrokerV2PanelService,
           useValue: {
@@ -222,7 +225,12 @@ describe('BotTriageDetailComponent', () => {
           },
         },
       ],
-      componentInputs: { broker: 'alpaca', accountId: 'PA9', sid: 'spy-momentum-01' },
+      componentInputs: {
+        broker: 'alpaca',
+        clerkId: 'clrk_spec',
+        accountId: 'PA9',
+        sid: 'spy-momentum-01',
+      },
       componentOutputs: { actionTriggered: { emit: actionTriggered } as never },
     });
 
@@ -324,6 +332,7 @@ describe('BotTriageDetailComponent', () => {
       const { fixture } = await render(BotTriageDetailComponent, {
         providers: [
           provideRouter([]),
+          provideFleetDirectory(),
           {
             provide: BrokerV2PanelService,
             useValue: {
@@ -335,6 +344,7 @@ describe('BotTriageDetailComponent', () => {
         ],
         componentInputs: {
           broker: 'alpaca',
+          clerkId: 'clrk_spec',
           accountId: 'PA9',
           sid: panel.strategy_instance_id,
         },

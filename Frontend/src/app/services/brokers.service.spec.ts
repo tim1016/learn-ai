@@ -7,7 +7,15 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { SqliteRecoveryAction } from '../api/alpaca.types';
+import { resourceTarget } from '../fleet/resource-target';
 import { BrokersService } from './brokers.service';
+import { TEST_CLERK_ID } from '../fleet/fleet-directory-testing';
+
+const TARGET = resourceTarget('alpaca', TEST_CLERK_ID, {
+  accountId: 'PA1',
+  routingEpoch: 7,
+  bindingGeneration: 3,
+});
 
 describe('BrokersService', () => {
   let service: BrokersService;
@@ -24,32 +32,32 @@ describe('BrokersService', () => {
   afterEach(() => httpMock.verify());
 
   it('GETs the account for the named broker', async () => {
-    const promise = service.getAccount('alpaca');
+    const promise = service.getAccount(TARGET);
 
-    const req = httpMock.expectOne('/api/brokers/alpaca/account');
+    const req = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/account`);
     expect(req.request.method).toBe('GET');
     req.flush({ account_id: 'PA1' });
 
     await expect(promise).resolves.toMatchObject({ account_id: 'PA1' });
   });
 
-  it('defaults the broker to alpaca', async () => {
-    const promise = service.getAccount();
+  it('uses the target broker and clerk identity', async () => {
+    const promise = service.getAccount(TARGET);
 
-    httpMock.expectOne('/api/brokers/alpaca/account').flush({ account_id: 'PA1' });
+    httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/account`).flush({ account_id: 'PA1' });
 
     await promise;
   });
 
   it('GETs account activity with a bounded int64-ms cursor', async () => {
-    const promise = service.listActivities('alpaca', {
+    const promise = service.listActivities(TARGET, {
       afterMs: 1_700_000_000_000,
       limit: 25,
     });
 
     const req = httpMock.expectOne(
       (request) =>
-        request.url === '/api/brokers/alpaca/activities' &&
+        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/activities` &&
         request.params.get('after_ms') === '1700000000000' &&
         request.params.get('limit') === '25',
     );
@@ -60,14 +68,14 @@ describe('BrokersService', () => {
   });
 
   it('requests the backend-owned current trading session', async () => {
-    const promise = service.listActivities('alpaca', {
+    const promise = service.listActivities(TARGET, {
       currentSession: true,
       limit: 100,
     });
 
     const req = httpMock.expectOne(
       (request) =>
-        request.url === '/api/brokers/alpaca/activities' &&
+        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/activities` &&
         request.params.get('current_session') === 'true' &&
         request.params.get('limit') === '100' &&
         !request.params.has('after_ms'),
@@ -78,10 +86,10 @@ describe('BrokersService', () => {
   });
 
   it('coalesces concurrent account reads for the same broker', async () => {
-    const first = service.getAccount('alpaca');
-    const second = service.getAccount('alpaca');
+    const first = service.getAccount(TARGET);
+    const second = service.getAccount(TARGET);
 
-    const requests = httpMock.match('/api/brokers/alpaca/account');
+    const requests = httpMock.match(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/account`);
     expect(requests).toHaveLength(1);
     requests[0].flush({ account_id: 'PA-SHARED' });
 
@@ -107,11 +115,11 @@ describe('BrokersService', () => {
   });
 
   it('keeps generic broker orders available only for diagnostics', async () => {
-    const promise = service.listOrders('alpaca', { status: 'all', limit: 50 });
+    const promise = service.listOrders(TEST_CLERK_ID, { status: 'all', limit: 50 });
 
     const req = httpMock.expectOne(
       (request) =>
-        request.url === '/api/brokers/alpaca/orders' &&
+        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/orders` &&
         request.params.get('status') === 'all' &&
         request.params.get('limit') === '50',
     );
@@ -122,9 +130,9 @@ describe('BrokersService', () => {
   });
 
   it('GETs the clerk status for the named broker', async () => {
-    const promise = service.getClerkStatus('alpaca');
+    const promise = service.getClerkStatus(TARGET);
 
-    const req = httpMock.expectOne('/api/brokers/alpaca/clerk/status');
+    const req = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/clerk/status`);
     expect(req.request.method).toBe('GET');
     req.flush({
       broker: 'alpaca',
@@ -139,9 +147,9 @@ describe('BrokersService', () => {
   });
 
   it('GETs the custody diagnosis for the named broker', async () => {
-    const promise = service.getCustodyDiagnosis('alpaca');
+    const promise = service.getCustodyDiagnosis(TARGET);
 
-    const req = httpMock.expectOne('/api/brokers/alpaca/clerk/custody-diagnosis');
+    const req = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/clerk/custody-diagnosis`);
     expect(req.request.method).toBe('GET');
     req.flush({
       broker: 'alpaca',
@@ -159,8 +167,8 @@ describe('BrokersService', () => {
   });
 
   it('uses the SQLite snapshot and evidence-bound recovery endpoints', async () => {
-    const snapshotPromise = service.getSqliteClerkProjection('PA / 1');
-    const snapshot = httpMock.expectOne('/api/alpaca-clerk-sqlite/accounts/PA%20%2F%201/snapshot');
+    const snapshotPromise = service.getSqliteClerkProjection(TEST_CLERK_ID, 'PA / 1');
+    const snapshot = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA%20%2F%201/custody/snapshot`);
     expect(snapshot.request.method).toBe('GET');
     snapshot.flush({ account_id: 'PA / 1', recovery_actions: [] });
     await snapshotPromise;
@@ -183,9 +191,9 @@ describe('BrokersService', () => {
       confirmation: null,
       primary: true,
     } satisfies SqliteRecoveryAction;
-    const checkPromise = service.checkSqliteRecoveryAction('PA1', action, 'bot / 1');
+    const checkPromise = service.checkSqliteRecoveryAction(TEST_CLERK_ID, 'PA1', action, 'bot / 1');
     const check = httpMock.expectOne(
-      '/api/alpaca-clerk-sqlite/accounts/PA1/bots/bot%20%2F%201/recovery-actions/check',
+      `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA1/custody/bots/bot%20%2F%201/recovery-actions/check`,
     );
     expect(check.request.method).toBe('POST');
     expect(check.request.body).toEqual({
@@ -195,15 +203,30 @@ describe('BrokersService', () => {
     check.flush({ capability: action });
     await expect(checkPromise).resolves.toEqual(action);
 
-    const executePromise = service.executeSqliteRecoveryAction('PA1', action);
+    const executePromise = service.executeSqliteRecoveryAction(
+      resourceTarget('alpaca', TEST_CLERK_ID, {
+        accountId: 'PA1',
+        capability: 'custody_command',
+        idempotencyKey: 'recovery-1',
+        bindingGeneration: 7,
+        routingEpoch: 4,
+      }),
+      action,
+    );
     const execute = httpMock.expectOne(
-      '/api/alpaca-clerk-sqlite/accounts/PA1/recovery-actions/execute',
+      `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA1/custody/recovery-actions/execute`,
     );
     expect(execute.request.method).toBe('POST');
     expect(execute.request.body).toEqual({
       action_id: 'reconcile_now',
       concurrency_token: 'token-1',
       execution_ref: null,
+      command_context: {
+        capability: 'custody_command',
+        idempotency_key: 'recovery-1',
+        expected_effective_binding_generation: 7,
+        target: { account_id: 'PA1' },
+      },
     });
     execute.flush({
       action_id: 'reconcile_now',

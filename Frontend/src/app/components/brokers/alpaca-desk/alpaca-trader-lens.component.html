@@ -40,6 +40,7 @@
           [unavailable]="portfolioHistoryProofUnavailable()"
         />
         <app-account-desk-transaction-history
+          [target]="accountData.target()"
           [accountId]="account()?.account_id ?? null"
           [fromMs]="historyWindow()?.fromMs ?? null"
           [toMs]="historyWindow()?.toMs ?? null"

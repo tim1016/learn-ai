@@ -20,6 +20,8 @@ import type {
 } from '../../../../api/alpaca.types';
 import { AlpacaConfigurationPageComponent } from './alpaca-configuration-page.component';
 import { BrokerConfigurationService } from './broker-configuration.service';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import type { ResourceTarget } from '../../../../fleet/resource-target';
 
 const SLOTS: readonly BrokerCredentialSlot[] = [
   { slot: 'default', label: 'Default credentials', available: true },
@@ -137,16 +139,19 @@ class FakeConfigurationService {
   readonly applied: number[] = [];
   stageRefusal: HttpErrorResponse | null = null;
 
-  listCredentialSlots = vi.fn(async () => SLOTS);
-  listNicknames = vi.fn(async () => this.nicknames);
-  listProfiles = vi.fn(async (options: { includeArchived?: boolean } = {}) =>
+  listCredentialSlots = vi.fn(async (_clerkId: string) => SLOTS);
+  listNicknames = vi.fn(async (_clerkId: string) => this.nicknames);
+  listProfiles = vi.fn(async (
+    _clerkId: string,
+    options: { includeArchived?: boolean } = {},
+  ) =>
     this.profiles.filter((entry) => options.includeArchived === true || !entry.archived),
   );
-  listRevisions = vi.fn(async () => this.revisions);
-  readDeskState = vi.fn(async () => this.desk);
-  readSelection = vi.fn(async () => this.current);
+  listRevisions = vi.fn(async (_clerkId: string, _profileId: string) => this.revisions);
+  readDeskState = vi.fn(async (_clerkId: string) => this.desk);
+  readSelection = vi.fn(async (_clerkId: string) => this.current);
 
-  readRevision = vi.fn(async (profileId: string, rev: number) => {
+  readRevision = vi.fn(async (_clerkId: string, profileId: string, rev: number) => {
     const found = this.revisions.find(
       (entry) => entry.profile_id === profileId && entry.revision === rev,
     );
@@ -154,14 +159,14 @@ class FakeConfigurationService {
     return found;
   });
 
-  readProfile = vi.fn(async (profileId: string): Promise<BrokerProfileDetail> => {
+  readProfile = vi.fn(async (_clerkId: string, profileId: string): Promise<BrokerProfileDetail> => {
     const found = this.profiles.find((entry) => entry.profile_id === profileId);
     if (found === undefined) throw new Error(`no profile ${profileId}`);
     const latest = this.revisions.filter((entry) => entry.profile_id === profileId).at(-1) ?? null;
     return { profile: found, latest_revision: latest };
   });
 
-  createProfile = vi.fn(async (displayName: string): Promise<BrokerProfileDetail> => {
+  createProfile = vi.fn(async (_target: ResourceTarget, displayName: string): Promise<BrokerProfileDetail> => {
     const created = profile({ profile_id: `profile-${this.profiles.length + 1}`, display_name: displayName });
     this.profiles.push(created);
     const first = revision({ profile_id: created.profile_id });
@@ -169,7 +174,11 @@ class FakeConfigurationService {
     return { profile: created, latest_revision: first };
   });
 
-  updateProfile = vi.fn(async (profileId: string, patch: { displayName?: string; archived?: boolean }) => {
+  updateProfile = vi.fn(async (
+    _target: ResourceTarget,
+    profileId: string,
+    patch: { displayName?: string; archived?: boolean },
+  ) => {
     const index = this.profiles.findIndex((entry) => entry.profile_id === profileId);
     const updated = {
       ...this.profiles[index],
@@ -182,11 +191,20 @@ class FakeConfigurationService {
 
   cloneProfile = vi.fn(async () => ({ profile: this.profiles[0], latest_revision: null }));
   createRevision = vi.fn(async () => revision({ revision: 2 }));
-  verifyAccount = vi.fn(async () => this.observed);
+  verifyAccount = vi.fn(async (
+    _target: ResourceTarget,
+    _profileId: string,
+    _revision: number,
+  ) => this.observed);
   pinAccount = vi.fn(async () => revision({ account_pin: 'PA3ZK9QWERTY' }));
   putNickname = vi.fn(async () => ({ account_id: 'PA3ZK9QWERTY', nickname: 'x', updated_at_ms: 1 }));
 
-  stageSelection = vi.fn(async (profileId: string, rev: number, generation: number) => {
+  stageSelection = vi.fn(async (
+    _target: ResourceTarget,
+    profileId: string,
+    rev: number,
+    generation: number,
+  ) => {
     if (this.stageRefusal !== null) throw this.stageRefusal;
     this.staged.push({ profileId, revision: rev, generation });
     this.current = {
@@ -201,7 +219,7 @@ class FakeConfigurationService {
     return this.current;
   });
 
-  applySelection = vi.fn(async (generation: number) => {
+  applySelection = vi.fn(async (_target: ResourceTarget, generation: number) => {
     this.applied.push(generation);
     this.current = {
       ...this.current,
@@ -220,7 +238,9 @@ async function renderPage(
 ) {
   const queryParamMap = new BehaviorSubject(convertToParamMap(query));
   const view = await render(AlpacaConfigurationPageComponent, {
+    componentInputs: { clerkId: 'clrk_spec' },
     providers: [
+      provideFleetDirectory(),
       provideRouter([]),
       {
         provide: ActivatedRoute,
@@ -396,9 +416,52 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     expect(await screen.findByText(/Revision 2 was selected from the Alpaca desk/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Stage revision 2' })).toBeTruthy();
-    expect(service.readProfile).toHaveBeenCalledWith('profile-live');
+    expect(service.readProfile).toHaveBeenCalledWith('clrk_spec', 'profile-live');
     expect(service.staged).toEqual([]);
     expect(service.applied).toEqual([]);
+  });
+
+  it('rekeys every configuration read and clears old observations when the clerk route is reused', async () => {
+    const service = new FakeConfigurationService();
+    const paperProfile = profile();
+    const liveProfile = profile({ display_name: 'Live lane configuration' });
+    const paperRevision = revision();
+    const liveRevision = revision({ endpoint_mode: 'live' });
+    service.current = selection({
+      effective_profile_id: 'profile-paper',
+      effective_revision: 1,
+    });
+    service.listProfiles.mockImplementation(async (clerkId) =>
+      clerkId === 'clrk_spec' ? [paperProfile] : [liveProfile]);
+    service.readProfile.mockImplementation(async (clerkId) => ({
+      profile: clerkId === 'clrk_spec' ? paperProfile : liveProfile,
+      latest_revision: clerkId === 'clrk_spec' ? paperRevision : liveRevision,
+    }));
+    service.listRevisions.mockImplementation(async (clerkId) =>
+      clerkId === 'clrk_spec' ? [paperRevision] : [liveRevision]);
+    service.readRevision.mockImplementation(async (clerkId) =>
+      clerkId === 'clrk_spec' ? paperRevision : liveRevision);
+
+    const view = await renderPage(service, { profileId: 'profile-paper', revision: '1' });
+    expect(await screen.findAllByText('Paper — strategy testing')).not.toHaveLength(0);
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify account (read-only)' }));
+    expect(await screen.findByRole('button', { name: 'Approve this account' })).toBeTruthy();
+
+    view.fixture.componentRef.setInput('clerkId', 'clrk_other');
+    view.fixture.detectChanges();
+
+    expect(await screen.findAllByText('Live lane configuration')).not.toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Approve this account' })).toBeNull();
+    await vi.waitFor(() => {
+      expect(service.listCredentialSlots).toHaveBeenCalledWith('clrk_other');
+      expect(service.listProfiles).toHaveBeenCalledWith('clrk_other', { includeArchived: false });
+      expect(service.listNicknames).toHaveBeenCalledWith('clrk_other');
+      expect(service.readDeskState).toHaveBeenCalledWith('clrk_other');
+      expect(service.readSelection).toHaveBeenCalledWith('clrk_other');
+      expect(service.readProfile).toHaveBeenCalledWith('clrk_other', 'profile-paper');
+      expect(service.listRevisions).toHaveBeenCalledWith('clrk_other', 'profile-paper');
+      expect(service.readRevision).toHaveBeenCalledWith('clrk_other', 'profile-paper', 1);
+    });
   });
 
   it.each([
@@ -503,7 +566,10 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     await clickWhenWritesEnabled('Stage revision 1');
 
-    expect(service.stageSelection).toHaveBeenCalledExactlyOnceWith('profile-paper', 1, 8);
+    expect(service.stageSelection).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ clerkId: 'clrk_spec', capability: 'configuration_manage' }),
+      'profile-paper', 1, 8,
+    );
     expect(service.applied).toEqual([]);
     expect(service.current.effective_revision).toBe(1);
     if (conflict) {
@@ -618,7 +684,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
 
-    expect(service.updateProfile).toHaveBeenCalledWith('profile-1', {
+    expect(service.updateProfile).toHaveBeenCalledWith(expect.objectContaining({ clerkId: 'clrk_spec' }), 'profile-1', {
       displayName: 'Paper — overnight',
     });
     expect(service.profiles[0].display_name).toBe('Paper — overnight');
@@ -677,7 +743,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     await renderPage(service);
 
     expect(await screen.findByText('Live')).toBeTruthy();
-    expect(service.readRevision).toHaveBeenCalledWith('profile-1', 2);
+    expect(service.readRevision).toHaveBeenCalledWith('clrk_spec', 'profile-1', 2);
     expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
   });
 
@@ -797,6 +863,8 @@ describe('AlpacaConfigurationPageComponent', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Verify account (read-only)' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Approve this account' }));
 
-    expect(service.pinAccount).toHaveBeenCalledWith('profile-1', 1, 'PA3ZK9QWERTY');
+    expect(service.pinAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ clerkId: 'clrk_spec' }), 'profile-1', 1, 'PA3ZK9QWERTY',
+    );
   });
 });

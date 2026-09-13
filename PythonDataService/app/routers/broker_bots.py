@@ -30,6 +30,7 @@ from app.schemas.broker_bots import (
 from app.services.bot_runner import (
     BotRunnerError,
     BotTaskRegistry,
+    UnknownBotError,
     get_bot_task_registry,
 )
 
@@ -70,6 +71,21 @@ def _raise_runner_error(error: BotRunnerError) -> NoReturn:
             ),
         },
     )
+
+
+def _require_account_binding(
+    registry: BotTaskRegistry,
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str,
+) -> None:
+    """Reject a scoped read when the durable bot binding names another account."""
+    binding = registry.binding_for_control(broker, strategy_instance_id)
+    if binding.sealed_account_id != account_id:
+        raise UnknownBotError(
+            f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",
+            detail="Use the account recorded by the bot's sealed binding.",
+        )
 
 
 @router.post(
@@ -147,6 +163,24 @@ async def get_current_run(broker: str, strategy_instance_id: str) -> BotRunView:
 
 
 @router.get(
+    "/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/current",
+    response_model=BotRunView,
+    summary="Account-scoped alias of the current bot run",
+)
+async def get_current_run_scoped(
+    broker: str, account_id: str, strategy_instance_id: str
+) -> BotRunView:
+    """Validate the durable account binding before reading the current run."""
+    _resolve_broker(broker)
+    registry = _require_registry()
+    try:
+        _require_account_binding(registry, broker, account_id, strategy_instance_id)
+        return registry.current_run(broker, strategy_instance_id)
+    except BotRunnerError as error:
+        _raise_runner_error(error)
+
+
+@router.get(
     "/{broker}/bots/{strategy_instance_id}/runs/history",
     response_model=BotRunHistoryPage,
     summary="Read one bounded page of previous runs",
@@ -170,6 +204,33 @@ async def get_run_history(
     _resolve_broker(broker)
     registry = _require_registry()
     try:
+        return registry.run_history(
+            broker,
+            strategy_instance_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except BotRunnerError as error:
+        _raise_runner_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/history",
+    response_model=BotRunHistoryPage,
+    summary="Account-scoped alias of the bot run history",
+)
+async def get_run_history_scoped(
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=1, ge=1, le=25),
+) -> BotRunHistoryPage:
+    """Validate the durable account binding before reading run history."""
+    _resolve_broker(broker)
+    registry = _require_registry()
+    try:
+        _require_account_binding(registry, broker, account_id, strategy_instance_id)
         return registry.run_history(
             broker,
             strategy_instance_id,

@@ -17,6 +17,7 @@ import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { OperatorLensComponent } from './operator-lens.component';
+import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 // ── Minimal test data factories ───────────────────────────────────────────────
 
@@ -233,6 +234,7 @@ function makeFakePanelService(evidencePage?: EvidencePage) {
 beforeEach(() => {
   TestBed.configureTestingModule({
     providers: [
+      provideFleetDirectory(),
       {
         provide: MarketDataService,
         useValue: {
@@ -255,7 +257,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -273,7 +275,7 @@ describe('OperatorLensComponent', () => {
     const fakeSvc = makeFakePanelService();
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -290,7 +292,7 @@ describe('OperatorLensComponent', () => {
   it('renders run evidence as the final operator section', async () => {
     const fakeSvc = makeFakePanelService();
     const { container } = await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -334,7 +336,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -379,7 +381,7 @@ describe('OperatorLensComponent', () => {
 
   async function renderLens(panel: BotPanelView): Promise<void> {
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel, profile: makeProfile(), actionPending: false,
         broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
       },
@@ -457,7 +459,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel, profile: makeProfile(), actionPending: false,
         broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
       },
@@ -472,7 +474,7 @@ describe('OperatorLensComponent', () => {
     const fakeSvc = makeFakePanelService();
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -490,7 +492,7 @@ describe('OperatorLensComponent', () => {
     const fakeSvc = makeFakePanelService();
 
     const { fixture } = await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -506,8 +508,7 @@ describe('OperatorLensComponent', () => {
     await fixture.whenStable();
 
     expect(fakeSvc.getEvidence).toHaveBeenCalledWith(
-      'alpaca',
-      'acc-1',
+      expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'acc-1' }),
       'sid-1',
       expect.objectContaining({ clientHint: 'operator-lens-journal-tail' }),
     );
@@ -522,7 +523,7 @@ describe('OperatorLensComponent', () => {
     const fakeSvc = makeFakePanelService();
 
     const { fixture } = await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -561,7 +562,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -596,7 +597,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: value,
         profile: makeProfile(),
         actionPending: false,
@@ -632,7 +633,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -671,7 +672,7 @@ describe('OperatorLensComponent', () => {
     };
 
     const { fixture } = await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -693,7 +694,7 @@ describe('OperatorLensComponent', () => {
   it('has no sidebar evidence drawer', async () => {
     const fakeSvc = makeFakePanelService();
     const { container } = await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
@@ -733,7 +734,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -777,7 +778,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -854,7 +855,7 @@ describe('OperatorLensComponent', () => {
     };
 
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel,
         profile: makeProfile(),
         actionPending: false,
@@ -961,7 +962,7 @@ describe('OperatorLensComponent', () => {
     actionRequested: (trigger: PanelActionTrigger) => void,
   ): Promise<void> {
     await render(OperatorLensComponent, {
-      inputs: {
+      inputs: { clerkId: 'clrk_spec',
         panel, profile: makeProfile(), actionPending: false,
         broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
       },

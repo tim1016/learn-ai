@@ -12,6 +12,8 @@ import { RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
+import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
+import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
@@ -53,11 +55,24 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
   host: { class: 'block h-full' },
 })
 export class BotGalleryPageComponent {
+  /** Frozen lane context for the gallery's reads and actions (FR-094). */
+  private readonly galleryTarget = (sid: string) =>
+    resourceTarget(this.broker(), this.clerkId(), {
+      accountId: this.accountId(),
+      entityId: sid,
+      bindingGeneration:
+        this.fleetDirectory.lane(this.broker(), this.clerkId())
+          ?.effective_binding_generation ?? null,
+      routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+    });
+
   readonly broker = input.required<string>();
+  readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
 
   protected readonly store = inject(GalleryLiveStore);
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
 
@@ -84,16 +99,26 @@ export class BotGalleryPageComponent {
 
   constructor() {
     effect(() => {
-      void this.store.start(this.broker(), this.accountId());
+      const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
+      void this.store.start(
+        this.broker(),
+        this.clerkId(),
+        this.accountId(),
+        lane?.effective_binding_generation ?? null,
+        lane?.routing_epoch ?? null,
+      );
     });
     this.destroyRef.onDestroy(() => this.store.stop());
   }
 
   protected async onAction(event: { sid: string; actionId: string }): Promise<void> {
     if (this.pendingSids().has(event.sid)) return;
+    // Capture once at presentation/submission time. In particular, do not
+    // rebuild from route signals after the authoritative panel read returns.
+    const target = withCommand(this.galleryTarget(event.sid), 'bot_action', crypto.randomUUID());
     this.pendingSids.update((current) => new Set(current).add(event.sid));
     try {
-      const panel = await this.panelService.getPanel(this.broker(), this.accountId(), event.sid);
+      const panel = await this.panelService.getPanel(target, event.sid);
       const action = panel.actions.find((candidate) => candidate.action_id === event.actionId);
       if (action === undefined || !action.enabled) {
         const message = `${event.actionId} is no longer available for ${event.sid}.`;
@@ -101,8 +126,7 @@ export class BotGalleryPageComponent {
         return;
       }
       const result = await this.panelService.runBotAction(
-        this.broker(),
-        this.accountId(),
+        target,
         event.sid,
         action,
       );

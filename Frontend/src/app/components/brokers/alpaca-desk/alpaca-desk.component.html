@@ -6,15 +6,26 @@
         <h1>Alpaca</h1>
       </div>
     </div>
-    <a class="configuration-link" routerLink="/brokers/alpaca/configuration">Configuration</a>
+    @if (configurationRoute(); as configurationRoute) {
+      <a class="configuration-link" [routerLink]="configurationRoute">Configuration</a>
+    }
     @if (operatingDeskVisible()) {
-      <button type="button" class="deploy-button" (click)="openDeploy()">
+      <button
+        type="button"
+        class="deploy-button"
+        [disabled]="!deployAvailable()"
+        [attr.title]="deployAvailable() ? null : 'This clerk does not declare Deploy capability.'"
+        (click)="openDeploy()"
+      >
         <span aria-hidden="true">＋</span>
         Deploy strategy
       </button>
     }
   </header>
 
+  <app-alpaca-lane-directory [requestedSurface]="directorySurface()" />
+
+  @if (contextTarget(); as target) {
   <app-alpaca-desk-account-state
     [state]="deskState()"
     [accountAvailable]="operatingDeskVisible()"
@@ -24,7 +35,7 @@
   />
 
   @if (operatingDeskVisible()) {
-    <app-alpaca-hold-banner />
+    <app-alpaca-hold-banner [target]="target" />
 
     @if (orderRouteMismatch(); as mismatch) {
       <p class="order-route-notice" role="alert">{{ mismatch }}</p>
@@ -32,7 +43,7 @@
       <p class="order-route-notice" role="alert">{{ notice }}</p>
     }
 
-    <app-alpaca-custody-resolution />
+    <app-alpaca-custody-resolution [target]="target" />
 
     <app-lens-tabs
       idPrefix="alpaca"
@@ -50,11 +61,14 @@
       />
     }
   }
+  }
 </main>
 
-@if (operatingDeskVisible()) {
-  <app-alpaca-deploy-drawer [visible]="deployOpen()" (closed)="closeDeploy()" />
+@if (deployAvailable()) {
+  <app-alpaca-deploy-drawer [target]="contextTarget()" [visible]="deployOpen()" (closed)="closeDeploy()" />
+}
 
+@if (operatingDeskVisible()) {
   <p-dialog
     header="Create Alpaca order"
     [visible]="orderEntryOpen()"
@@ -65,6 +79,7 @@
     styleClass="alpaca-order-dialog"
   >
     <app-alpaca-order-entry
+      [target]="contextTarget()!"
       [initialSymbol]="orderPrefill()?.symbol ?? ''"
       [expectedAccountId]="ticketAccountId() ?? ''"
       [manualTicketId]="orderPrefill()?.ticketId ?? null"
