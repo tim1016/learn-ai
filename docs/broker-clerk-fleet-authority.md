@@ -257,16 +257,12 @@ both cheap to fix.
 | 1 | Fix `restart.sh`'s five-name allowlist (`:28`, `:64-65`) | State |
 | 2 | Fix the three refusal parsers to read the flat body; render the 25 reason codes | Observability |
 | 3 | Commit the fleet topology with credentials externalised | State |
-| 4 | Wire `validate_served_context` into `LaneRouter._resolve`, **or** delete it and amend ADR 0062 Decision 5 | Structural |
-| 5 | Move the profiles-DB open after the volume identity gate; fix the comment at `app/main.py:383-386` | State |
-| 6 | Run `run_host_qualification` once on the host | State |
-| 7 | Give `FleetDirectoryService.refresh()` a caller; freeze binding generation at action open | Observability |
-| 8 | Negative test for `_fence_writable_roots`; race test for the nested-root loop | Structural |
-| 9 | Resolve `assignment_mutation_closed` being a copy of `routing_closed` | State |
-| 10 | Close the unscoped-mutation retirement hole (§8) | Structural |
+| 4 | Run `run_host_qualification` once on the host | State |
+| 5 | Give `FleetDirectoryService.refresh()` a caller; freeze binding generation at action open | Observability |
+| 6 | Close the unscoped-mutation retirement hole (§8) | Structural |
 
-Items 4 and 10 are the two where **an accepted authority asserts something the code does not do**.
-Either resolution is acceptable for each; leaving them is not.
+Item 6 is where **an accepted authority asserts something the code does not do**.
+Resolution is acceptable; leaving it is not.
 
 ## 7. The operator-visible surface, and its gaps
 
@@ -340,12 +336,10 @@ claims to fix.**
 
 | Claim | Where | Reality |
 |---|---|---|
-| ADR 0062 Decision 5's provider gate is in force | ADR 0062 | `validate_served_context` has no production caller (§4) |
-| Decision 2: nothing opens on the volume before the identity gate | ADR 0062; comment at `app/main.py:383-386` | A SQLite writer is created **and migrated** first: `app/main.py:377-382` → `broker_configuration/store.py:140-148`. `installation_worker()` (`main.py:222`) also writes a lock file on the unverified volume, and `fleet_boot.py:159-162` opens a second SQLite 25 lines before its own gate |
+| Decision 2: nothing opens on the volume before the identity gate | ADR 0062; comment at `app/main.py:383-386` | **Holds.** The profiles-DB writer and the installation lock file now open only after the gate. `fleet_boot.py:159-162`'s registry open still precedes it, but that registry lives on the coordinator's **control** volume, not the clerk's lane volume — the gate has to open the registry it is checking the lane volume against, so this one is structurally unavoidable, not a violation |
 | The coordinator "never serves an unscoped agent family itself" | `CONTEXT.md:2121` | It serves two unscoped agent-family reads |
 | "The browser secret terminates at the coordinator" | `CONTEXT.md`, composed-auth bullet | Documentation, not code (§4) |
 | Retained unscoped **mutations** will retire with the compatibility mechanism | `docs/design/fleet-b-route-inventory.md` | `_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:31`) — the mechanism **can never reach mutations**. Retirement is also all-families-or-nothing despite a per-family constant, and the gate is clerk-agent-only, so it cannot reach the browser's actual compatibility reads |
-| `assignment_mutation_closed` is a second independent fence | ADR 0062 Consequences; `scripts/manage_broker_fleet.py:361,430` | `RegistryRecoveryState` has one bit; the field is a copy of `routing_closed`. The CLI reports a two-fence claim over a one-fence product |
 | The refusal vocabulary has 16 / 21 families | PRD / `app/broker/fleet/errors.py` | The true wire vocabulary is **25** (22 declared + 3 minted inline) |
 | `production_adapter()` resolves live adapters | `app/broker/fleet/provider.py:348-350` | Resolves against a deliberately-empty constant, has no callers, always refuses `"alpaca"`. The live registry is `app/broker/fleet_composition.py:27-29` |
 
