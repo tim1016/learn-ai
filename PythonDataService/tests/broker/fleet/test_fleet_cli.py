@@ -440,10 +440,25 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
     )
     backup = json.loads(capsys.readouterr().out)
     assert backup["active_clerk_ids"] == []
+    # #2073b: this build writes schema v3, whose nested-root fence a D-era
+    # binary cannot enforce, so its own backup is not D-rollback evidence.
     assert (
         main(
             _argv(
                 "rollback-d-compatible",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 2
+    )
+    assert "newer" in json.loads(capsys.readouterr().out)["error"]
+    assert (
+        main(
+            _argv(
+                "restore-registry",
                 "--control-dir",
                 str(control_dir),
                 "--backup-dir",
@@ -455,7 +470,7 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
     restored = json.loads(capsys.readouterr().out)
     assert restored["routing_closed"] is True
     assert restored["assignment_mutation_closed"] is True
-    assert restored["rollback_topology"] == "d_compatible"
+    assert restored["rollback_topology"] == "current"
     assert (
         main(
             _argv(

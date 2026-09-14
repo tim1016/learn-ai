@@ -250,28 +250,9 @@ class FleetControlService:
                 "volume, never a second identity onto an existing one.",
                 next_step="Use a fresh named volume for the new clerk.",
             )
-        # FR-020/021: writable subtrees of one mounted volume never host two
-        # clerks. Distinct attestations do not make nested roots distinct
-        # physical volumes, so containment is refused in both directions —
-        # but only within one deployment namespace, where path strings share
-        # a filesystem. ``resolve()`` is pure normalization here — the
-        # canonical-root proof above has already excluded every symlink in
-        # the chain.
+        # ``resolve()`` is pure normalization here — the canonical-root proof
+        # above has already excluded every symlink in the chain.
         new_root = canonical_root.resolve()
-        for active in self._store.list_clerks():
-            if active.deployment_namespace != deployment_namespace:
-                continue
-            existing_root = Path(active.volume_root)
-            if new_root == existing_root or new_root.is_relative_to(
-                existing_root
-            ) or existing_root.is_relative_to(new_root):
-                raise ClerkVolumeAlreadyRegistered(
-                    f"The root {volume_root} shares a mounted volume with active "
-                    f"clerk {active.clerk_id} ({existing_root}) in deployment "
-                    f"namespace {deployment_namespace!r}; one clerk, one "
-                    "physical volume.",
-                    next_step="Mount a separate named volume for the new clerk.",
-                )
 
         clerk_id = new_clerk_id()
         volume_id = new_volume_id()
@@ -320,12 +301,35 @@ class FleetControlService:
             retired_at_ms=None,
         )
         with self._store.transaction() as conn:
+            # FR-020/021: writable subtrees of one mounted volume never host
+            # two clerks. Distinct attestations do not make nested roots
+            # distinct physical volumes, so containment is refused in both
+            # directions — but only within one deployment namespace, where
+            # path strings share a filesystem. The check reads inside the
+            # write transaction so no rival provisioning can commit between it
+            # and the insert it guards; schema v3's index and nesting trigger
+            # are the backstop underneath it.
+            for active in self._store.list_clerks_on(conn):
+                if active.deployment_namespace != deployment_namespace:
+                    continue
+                existing_root = Path(active.volume_root)
+                if new_root == existing_root or new_root.is_relative_to(
+                    existing_root
+                ) or existing_root.is_relative_to(new_root):
+                    raise ClerkVolumeAlreadyRegistered(
+                        f"The root {volume_root} shares a mounted volume with active "
+                        f"clerk {active.clerk_id} ({existing_root}) in deployment "
+                        f"namespace {deployment_namespace!r}; one clerk, one "
+                        "physical volume.",
+                        next_step="Mount a separate named volume for the new clerk.",
+                    )
             try:
                 self._store.insert_clerk(conn, record)
             except sqlite3.IntegrityError as exc:
                 # A rival provisioning committed between the pre-checks and
-                # this insert; the loser gets the typed refusal, never the
-                # constraint traceback.
+                # this insert, or the schema's own nested-root fence fired;
+                # the loser gets the typed refusal, never the constraint
+                # traceback.
                 raise ClerkVolumeAlreadyRegistered(
                     f"Another active clerk already claims this volume's identity "
                     f"in deployment namespace {deployment_namespace!r}.",

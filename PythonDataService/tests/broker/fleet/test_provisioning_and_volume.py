@@ -268,3 +268,44 @@ async def test_local_presence_reverifies_the_volume_at_registration_and_reservat
         await presence.reserve(
             broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-1"
         )
+
+
+def test_two_racing_provisionings_of_nested_roots_cannot_both_land(
+    control_dir: Path, fleet_service
+) -> None:
+    """The nested-root refusal survives a race: the DDL is the backstop."""
+    import sqlite3
+
+    parent_root = control_dir.parent / "volumes" / "raced"
+    nested_root = parent_root / "inner"
+    nested_root.mkdir(parents=True)
+    fleet_service.provision_clerk(
+        broker="fake_alpha",
+        display_label="outer",
+        volume_root=parent_root,
+        attestation_id="vol-outer",
+    )
+    # The loser of a race reaches insert_clerk with a stale pre-check result.
+    # Bypassing the Python loop is exactly what that race produces.
+    record = fleet_service._store.read_clerk(
+        fleet_service._store.list_clerks()[0].clerk_id
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="one physical volume"), fleet_service._store.transaction() as conn:
+        conn.execute(
+            "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, "
+            "volume_id, volume_root, deployment_namespace, "
+            "volume_attestation_kind, volume_attestation_id, lifecycle_state, "
+            "created_at_ms, retired_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioned', 1, NULL)",
+            (
+                "clrk_raced0000000000000000aa",
+                "fake_alpha",
+                "wkey_raced000000000000000000",
+                "inner",
+                "vol_raced0000000000000000000",
+                str(nested_root),
+                record.deployment_namespace,
+                record.volume_attestation_kind,
+                "vol-inner",
+            ),
+        )

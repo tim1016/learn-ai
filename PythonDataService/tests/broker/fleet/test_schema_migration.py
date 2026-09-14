@@ -1,4 +1,4 @@
-"""The registered v1 → v2 registry migration (audit 2026-09-13).
+"""The registered registry migrations (audit 2026-09-13; #2073b).
 
 A v1 registry — the only shape the pre-hardening spine ever wrote, and one
 that exists in no production deployment — must upgrade to v2 inside one
@@ -6,6 +6,10 @@ transaction, preserving every clerk, session, assignment and receipt row,
 mapping the old ``failed`` receipt outcome to ``provider_refused``, and
 installing the confirmed/namespace/endpoint fences the hardened protocol
 expects.
+
+The v2 → v3 upgrade, which does run against live registries, installs the
+nested-volume-root fence: a registry that already violates it must fail
+loudly rather than gain half a fence.
 """
 
 from __future__ import annotations
@@ -76,6 +80,44 @@ def _build_v1_registry(control_dir: Path) -> None:
         conn.execute("COMMIT")
     finally:
         conn.close()
+
+
+def _build_v2_registry(control_dir: Path) -> None:
+    """Materialize a populated v2 registry: the v1 shape plus the registered
+    v1 → v2 upgrade, so the v2 → v3 case starts from the real v2 DDL rather
+    than a reconstruction of it."""
+    _build_v1_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for statement in schema.SCHEMA_MIGRATIONS[1]:
+            conn.execute(statement)
+        conn.execute("UPDATE fleet_meta SET schema_version = 2 WHERE id = 1")
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
+_INSERT_CLERK_SQL = (
+    "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
+    "volume_root, deployment_namespace, volume_attestation_kind, "
+    "volume_attestation_id, lifecycle_state, created_at_ms, retired_at_ms) "
+    "VALUES (?, 'fake_alpha', ?, ?, ?, ?, 'host:local', 'compose_named_volume', "
+    "?, 'provisioned', 100, NULL)"
+)
+
+
+def _clerk_values(suffix: str, volume_root: str) -> tuple[str, ...]:
+    """One insertable clerk row differing from its siblings only in its root."""
+    return (
+        f"clrk_{suffix * 24}",
+        f"wkrk_{suffix * 32}",
+        f"clerk-{suffix}",
+        f"vol_{suffix * 24}",
+        volume_root,
+        f"attest-{suffix}",
+    )
 
 
 def test_a_v1_registry_migrates_preserving_every_row(control_dir: Path) -> None:
@@ -243,5 +285,57 @@ def test_a_migrated_registry_carries_the_fresh_v2_fences(control_dir: Path, tmp_
                 "'vol_ffffffffffffffffffffffff', '/volumes/dupe', 'compose:prod', "
                 "'compose_named_volume', 'shared-name', 'provisioned', 100, NULL)"
             )
+    finally:
+        store.close()
+
+
+def test_a_v2_registry_gains_the_nested_volume_root_fence(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """#2073b: the v2 → v3 upgrade installs the nested-root fence byte-for-byte
+    as a fresh v3 build carries it, and the fence is live on the migrated
+    registry — nesting and equality refuse, a mere name prefix does not."""
+    _build_v2_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION
+
+        def fence_sql(conn: sqlite3.Connection) -> dict[str, str]:
+            return {
+                str(row[0]): str(row[1])
+                for row in conn.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE name IN "
+                    "('ux_clerks_volume_root', 'trg_clerks_volume_root_not_nested')"
+                )
+            }
+
+        migrated = fence_sql(store._conn)
+        assert set(migrated) == {
+            "ux_clerks_volume_root",
+            "trg_clerks_volume_root_not_nested",
+        }
+        # Byte parity with a fresh build: a migrated registry and a new one
+        # enforce the fence with the same statement, not merely the same name.
+        fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh")
+        try:
+            assert fence_sql(fresh._conn) == migrated
+        finally:
+            fresh.close()
+
+        # The legacy clerk holds '/volumes/legacy' in namespace 'host:local'.
+        # A root nested inside it is one physical volume, and refuses…
+        with pytest.raises(sqlite3.IntegrityError, match="one physical volume"), store.transaction() as conn:
+            conn.execute(_INSERT_CLERK_SQL, _clerk_values("d", "/volumes/legacy/inner"))
+        # …as does a root the legacy clerk's own root nests inside…
+        with pytest.raises(sqlite3.IntegrityError, match="one physical volume"), store.transaction() as conn:
+            conn.execute(_INSERT_CLERK_SQL, _clerk_values("e", "/volumes"))
+        # …and the equal-root case, which the partial UNIQUE index owns.
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+            conn.execute(_INSERT_CLERK_SQL, _clerk_values("f", "/volumes/legacy"))
+
+        # But the comparison is exact: '/volumes/legacy-2' merely starts with
+        # the legacy root's characters, and is a separate physical volume.
+        with store.transaction() as conn:
+            conn.execute(_INSERT_CLERK_SQL, _clerk_values("g", "/volumes/legacy-2"))
     finally:
         store.close()
