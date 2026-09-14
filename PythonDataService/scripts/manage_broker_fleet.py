@@ -52,6 +52,14 @@ from app.broker.fleet.errors import (
     FleetRegistryUnavailable,
 )
 from app.broker.fleet.identity import new_service_token
+from app.broker.fleet.recovery import (
+    D_COMPATIBLE_SCHEMA_VERSION,
+    create_registry_backup,
+    read_recovery_state,
+    reconcile_restored_lane,
+    restore_registry_backup,
+)
+from app.broker.fleet.schema import SCHEMA_VERSION
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
@@ -276,6 +284,76 @@ def _compatibility_retire(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reassign(args: argparse.Namespace) -> int:
+    """Handle ``reassign-assignment``: verify then transfer one ownership fence."""
+    service = _service(args)
+    try:
+        assigned = service.reassign_assignment(
+            broker=args.broker,
+            external_account_id=args.account_id,
+            expected_assignment_generation=args.expected_generation,
+            proof=args.proof,
+            successor_clerk_id=args.successor_clerk_id,
+            successor_volume_root=Path(args.successor_volume_root),
+        )
+        _write(
+            {
+                "broker": assigned.broker,
+                "canonical_external_account_id": assigned.canonical_external_account_id,
+                "clerk_id": assigned.clerk_id,
+                "assignment_generation": assigned.assignment_generation,
+                "state": str(assigned.state),
+                "routing_open": False,
+                "note": "The successor remains unroutable until its own agent "
+                "confirms the exact binding and existing provider gates admit it.",
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _backup_registry(args: argparse.Namespace) -> int:
+    """Handle ``backup-registry``: snapshot nonsecret coordinator evidence."""
+    service = _service(args)
+    try:
+        manifest = create_registry_backup(service._store, backup_dir=Path(args.backup_dir))
+        _write(
+            {
+                "registry_id": manifest.registry_id,
+                "schema_version": manifest.registry_schema_version,
+                "database_sha256": manifest.database_sha256,
+                "active_clerk_ids": manifest.active_clerk_ids,
+                "backup_dir": args.backup_dir,
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _restore_registry(args: argparse.Namespace) -> int:
+    """Restore a registry without ever opening a blank replacement registry."""
+    manifest = restore_registry_backup(
+        control_dir=Path(args.control_dir),
+        backup_dir=Path(args.backup_dir),
+        max_schema_version=D_COMPATIBLE_SCHEMA_VERSION if args.d_compatible else SCHEMA_VERSION,
+    )
+    state = read_recovery_state(Path(args.control_dir))
+    assert state is not None
+    _write(
+        {
+            "registry_id": manifest.registry_id,
+            "schema_version": manifest.registry_schema_version,
+            "required_clerk_ids": manifest.active_clerk_ids,
+            "routing_closed": state.routing_closed,
+            "assignment_mutation_closed": state.routing_closed,
+            "rollback_topology": "d_compatible" if args.d_compatible else "current",
+        }
+    )
+    return 0
+
+
 def _evaluate_compatibility(args: argparse.Namespace) -> dict[str, object]:
     """Build the shared fail-closed compatibility retirement receipt."""
     return evaluate_retirement(
@@ -292,6 +370,36 @@ def _evaluate_compatibility(args: argparse.Namespace) -> dict[str, object]:
 def _write_compatibility_receipt(args: argparse.Namespace, receipt: dict[str, object]) -> None:
     """Write the durable restricted-record receipt before changing route state."""
     write_retirement_receipt(Path(args.decision_receipt_path), receipt)
+
+
+def _reconcile_registry(args: argparse.Namespace) -> int:
+    """Handle one lane of a restored-registry reconciliation ceremony."""
+    try:
+        provider_summary = json.loads(args.provider_summary)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--provider-summary must be JSON: {exc}") from exc
+    if not isinstance(provider_summary, dict):
+        raise ValueError("--provider-summary must be a JSON object")
+    service = _service(args)
+    try:
+        state = reconcile_restored_lane(
+            service,
+            clerk_id=args.clerk_id,
+            volume_root=Path(args.volume_root),
+            provider_summary=provider_summary,
+        )
+        _write(
+            {
+                "registry_id": state.registry_id,
+                "clerk_id": args.clerk_id,
+                "reconciled_clerk_ids": state.reconciled_clerk_ids,
+                "required_clerk_ids": state.required_clerk_ids,
+                "routing_closed": state.routing_closed,
+            }
+        )
+    finally:
+        service.close()
+    return 0
 
 
 def _migrate_existing(args: argparse.Namespace) -> int:
@@ -704,6 +812,60 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Lane-local compatibility/route_state.json path; repeat for each serving lane",
     )
     compatibility_retire.set_defaults(func=_compatibility_retire)
+
+    reassign = subparsers.add_parser(
+        "reassign-assignment", help="Proof-driven host reassignment to an original successor volume"
+    )
+    _with_control(reassign)
+    reassign.add_argument("--broker", required=True)
+    reassign.add_argument("--account-id", required=True)
+    reassign.add_argument("--expected-generation", type=int, required=True)
+    reassign.add_argument("--proof", required=True)
+    reassign.add_argument("--successor-clerk-id", required=True)
+    reassign.add_argument("--successor-volume-root", required=True)
+    reassign.set_defaults(func=_reassign)
+
+    backup = subparsers.add_parser(
+        "backup-registry", help="Create a nonsecret fleet-registry backup and manifest"
+    )
+    _with_control(backup)
+    backup.add_argument("--backup-dir", required=True)
+    backup.set_defaults(func=_backup_registry)
+
+    restore = subparsers.add_parser(
+        "restore-registry", help="Restore a registry backup with routing and assignments closed"
+    )
+    _with_control(restore)
+    restore.add_argument("--backup-dir", required=True)
+    restore.add_argument(
+        "--d-compatible",
+        action="store_true",
+        help="Refuse anything newer than the Delivery-D registry schema",
+    )
+    restore.set_defaults(func=_restore_registry)
+
+    rollback = subparsers.add_parser(
+        "rollback-d-compatible",
+        help="Restore a Delivery-D-compatible registry topology with recovery hold enabled",
+    )
+    _with_control(rollback)
+    rollback.add_argument("--backup-dir", required=True)
+    rollback.set_defaults(
+        func=lambda args: _restore_registry(argparse.Namespace(**vars(args), d_compatible=True))
+    )
+
+    reconcile = subparsers.add_parser(
+        "reconcile-registry", help="Reconcile one original Clerk volume after registry restore"
+    )
+    _with_control(reconcile)
+    reconcile.add_argument("--clerk-id", required=True)
+    reconcile.add_argument("--volume-root", required=True)
+    reconcile.add_argument(
+        "--provider-summary",
+        required=True,
+        help="Bounded provider summary JSON from the original lane's recovery observation",
+    )
+    reconcile.set_defaults(func=_reconcile_registry)
     return parser
 
 

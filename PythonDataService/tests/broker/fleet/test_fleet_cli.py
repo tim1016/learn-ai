@@ -370,3 +370,62 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
     inventory.write_text(json.dumps({"schema_version": 1, "complete": False}), encoding="utf-8")
     assert main(["compatibility-retire", *common, "--route-state-path", str(tmp_path / "bad.json")]) == 2
     assert "compatibility_retirement_refused:" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
+    tmp_path: Path, capsys
+) -> None:
+    """The operator surface never restores a registry into immediately routable state."""
+    control_dir = tmp_path / "control"
+    volume_root = tmp_path / "volumes" / "paper"
+    volume_root.mkdir(parents=True)
+    backup_dir = tmp_path / "backup"
+    assert main(_argv("init", "--control-dir", str(control_dir))) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            _argv(
+                "provision",
+                "--control-dir",
+                str(control_dir),
+                "--broker",
+                "alpaca",
+                "--label",
+                "Paper",
+                "--volume-root",
+                str(volume_root),
+            )
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["clerk_id"].startswith("clrk_")
+    assert (
+        main(
+            _argv(
+                "backup-registry",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 0
+    )
+    backup = json.loads(capsys.readouterr().out)
+    assert backup["active_clerk_ids"] == []
+    assert (
+        main(
+            _argv(
+                "rollback-d-compatible",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 0
+    )
+    restored = json.loads(capsys.readouterr().out)
+    assert restored["routing_closed"] is False
+    assert restored["assignment_mutation_closed"] is False
+    assert restored["rollback_topology"] == "d_compatible"

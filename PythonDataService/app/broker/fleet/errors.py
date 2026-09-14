@@ -203,6 +203,19 @@ class FleetRegistryUnavailable(FleetControlError):
     status_code: ClassVar[int] = 503
 
 
+class FleetRegistryRecoveryPending(FleetControlError):
+    """A restored registry has not yet reconciled its original lanes.
+
+    A registry backup can be older than the durable confirmation evidence on
+    a Clerk volume.  Until the host ceremony compares those sources, routing
+    and assignment changes must remain closed rather than treating an old
+    registry row as a new authority grant.
+    """
+
+    reason: ClassVar[str] = "fleet_registry_recovery_pending"
+    status_code: ClassVar[int] = 409
+
+
 __all__ = [
     "BrokerAndClerkRequired",
     "BrokerClerkCapabilityUnavailable",
@@ -224,5 +237,6 @@ __all__ = [
     "ClerkVolumeMountUnproven",
     "FleetControlError",
     "FleetProtocolIncompatible",
+    "FleetRegistryRecoveryPending",
     "FleetRegistryUnavailable",
 ]

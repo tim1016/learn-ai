@@ -513,6 +513,17 @@ class FleetRegistryStore:
         )
         return [_assignment_from_row(row) for row in rows]
 
+    def list_assignments_for_clerk_on(
+        self, conn: sqlite3.Connection, clerk_id: str
+    ) -> list[AccountAssignmentRecord]:
+        """List one clerk's assignments inside a caller's write transaction."""
+        rows = conn.execute(
+            f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments WHERE clerk_id = ? "
+            "ORDER BY recorded_at_ms ASC, broker ASC, canonical_external_account_id ASC",
+            (clerk_id,),
+        ).fetchall()
+        return [_assignment_from_row(row) for row in rows]
+
     def list_active_assignments(self) -> list[AccountAssignmentRecord]:
         """List every non-released assignment row."""
         rows = self._query(
@@ -585,6 +596,36 @@ class FleetRegistryStore:
         if cursor.rowcount == 1:
             self.append_assignment_history(conn, assignment)
         return cursor.rowcount == 1
+
+    def reassign_assignment(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        released: AccountAssignmentRecord,
+        reserved_successor: AccountAssignmentRecord,
+        previous_state: AssignmentState,
+    ) -> None:
+        """Release then reserve inside one caller-owned SQLite transaction.
+
+        Both rows address the same broker-qualified account. A failure to
+        install the successor raises while the transaction is still active so
+        the release rolls back with it; reassignment can never leave a split
+        two-commit handover behind.
+        """
+        if not self.cas_update_assignment(
+            conn,
+            released,
+            previous_generation=released.assignment_generation,
+            previous_state=previous_state,
+        ):
+            raise sqlite3.IntegrityError("assignment changed before release")
+        if not self.cas_update_assignment(
+            conn,
+            reserved_successor,
+            previous_generation=released.assignment_generation,
+            previous_state=AssignmentState.RELEASED,
+        ):
+            raise sqlite3.IntegrityError("successor reservation refused")
 
     # ---- assignment history ----------------------------------------------
 
