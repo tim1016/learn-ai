@@ -309,6 +309,31 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
     await evidence.flush()
 
 
+async def test_failed_evidence_batch_is_retried_without_losing_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient export failure retains its bounded batch for the next hit."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    record_batch = evidence._record_batch
+    attempts = 0
+
+    def fail_once(updates: Mapping[tuple[str, str], int]) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("transient export failure")
+        record_batch(updates)
+
+    monkeypatch.setattr(evidence, "_record_batch", fail_once)
+    evidence.schedule(route_family="broker_bots", response_class="2xx")
+    await evidence.flush()
+
+    evidence.schedule(route_family="broker_bots", response_class="2xx")
+    await evidence.flush()
+
+    assert evidence.snapshot()["route_hits"][0]["count"] == 2
+
+
 async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> None:
     """Combined pre-cutover mode records browser reads without fleet sizing."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)

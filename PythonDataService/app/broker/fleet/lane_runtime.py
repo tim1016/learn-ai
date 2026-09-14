@@ -249,7 +249,18 @@ class CompatibilityReadEvidence:
         while self._pending_updates:
             pending = self._pending_updates
             self._pending_updates = {}
-            await asyncio.to_thread(self._record_batch, pending)
+            try:
+                await asyncio.to_thread(self._record_batch, pending)
+            except BaseException:
+                # Preserve the bounded aggregate for the next request to
+                # retry. Evidence failure remains observational: it never
+                # changes the response which already started, and the fixed
+                # route-family vocabulary keeps this retry state bounded.
+                for key, count in pending.items():
+                    self._pending_updates[key] = (
+                        self._pending_updates.get(key, 0) + count
+                    )
+                raise
 
     def _finish_export(self, task: asyncio.Task[None]) -> None:
         """Surface a background persistence failure without changing the response."""
