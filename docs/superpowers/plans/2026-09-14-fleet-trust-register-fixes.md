@@ -242,7 +242,7 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest 
 4. **The qualification harness renders `compose config` with the real Live credential file before it fences.** Export the three `FLEET_*_ENV_FILE` variables to an empty file before running it (Lane F R3).
 5. **CI proves `docker compose`; the host runs `podman compose`.** The migration runbook's `render_fleet_topology.py --engine "podman compose" --check` step is what closes the gap; do not skip it.
 6. **`FLEET_COORDINATOR_SERVICE_TOKEN` misconfigured on a lane turns every forwarded command into a 400** once D-C lands. Check `GET /api/broker-clerks` shows both lanes ready before issuing a command after that restart.
-7. **`Frontend/src/assets/docs/ibkr-setup-guide.md` still tells operators to set `IBKR_READONLY=false`** for order-capable testing. Actuation was retired; the served copy escapes the docs contract. B-B fixes it.
+7. **`Frontend/src/assets/docs/ibkr-setup-guide.md` still tells operators to set `IBKR_READONLY set to false`** for order-capable testing. Actuation was retired; the served copy escapes the docs contract. B-B fixes it.
 8. **Two memory notes were stale** (`reference_ibkr_broker_enabled_is_load_bearing_for_alpaca`, `project_ibkr_gateway_nightly_blackout`). Both were corrected on 2026-09-14.
 
 ---
