@@ -10,7 +10,7 @@ launcher/evaluator operating record, the entire `docs/archive/` tree, shipped
 superpowers plans/specs, retired-protocol reference notes, and dead validation
 artifacts were **hard-deleted to Git history**. Git history
 is their provenance record. Open defects belong in `docs/known-gaps.md`; current
-Alpaca Broker V2 behavior belongs in `docs/broker-v2-operator-manual.md`.
+Alpaca Broker V2 behavior belongs in `docs/broker-clerk-fleet-authority.md`.
 
 **Agent instructions:** `AGENTS.md` is the Codex entry point. The committed
 `CLAUDE.md` / `.claude/**` hierarchy remains the Claude-specific configuration;
@@ -154,8 +154,8 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `options-routes-research.md` cleanup record (pruned to git history 2026-09-12) | 2026-04-29 |
-| `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-19 |
-| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the Broker V2 manual; no independent policy authority | — | 2026-08-06 |
+| `docs/broker-clerk-fleet-authority.md` | **Current** broker clerk fleet control plane and Alpaca Broker V2 operating authority | `docs/broker-v2-operator-manual.md` and its generated served copy (retired 2026-09-14, #2060) | 2026-09-14 |
+| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by `docs/broker-clerk-fleet-authority.md`; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |

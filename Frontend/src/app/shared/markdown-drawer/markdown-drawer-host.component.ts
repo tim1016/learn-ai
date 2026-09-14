@@ -10,7 +10,7 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
  * Single shell-level markdown drawer host.
  *
  * Replaces the former pair `MethodologyDrawerComponent` +
- * `BrokerV2HelpDrawerComponent`.  Mount once at `app-root`; drive with
+ * the shared drawer service.  Mount once at `app-root`; drive with
  * `MarkdownDrawerService.open(docId, anchor?)`.
  *
  * Only one document is ever open at a time — the service enforces this by
