@@ -118,3 +118,44 @@ jobs:
           name: daily-python-test-results
           path: PythonDataService/TestResults/*.xml
           if-no-files-found: ignore
+
+  fleet-compose-qualification:
+    name: Fleet Compose Qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: PythonDataService
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: PythonDataService/requirements*.txt
+      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - run: docker compose version
+      - name: Run the isolated actual-role Compose qualification
+        env:
+          DATA_PLANE_CONTROL_SECRET: ""
+        run: |
+          mkdir -p TestResults
+          # The runner has no deploy/fleet/env/*.env, so the pre-ceremony render
+          # is already secret-free; pin it anyway so the job cannot regress.
+          : > TestResults/empty.env
+          FLEET_LIVE_ENV_FILE=TestResults/empty.env \
+          FLEET_PAPER_ENV_FILE=TestResults/empty.env \
+          FLEET_COORDINATOR_ENV_FILE=TestResults/empty.env \
+          python -m scripts.run_broker_fleet_compose_qualification \
+            --timeout-s 120 --evidence-path TestResults/fleet-compose-qualification.json
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fleet-compose-qualification
+          path: PythonDataService/TestResults/fleet-compose-qualification.json
+          if-no-files-found: error
