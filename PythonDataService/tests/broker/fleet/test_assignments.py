@@ -47,13 +47,25 @@ def test_a_duplicate_canonical_account_within_one_provider_refuses(
 def test_identical_raw_account_ids_coexist_across_providers(
     control_dir: Path, fleet_service
 ) -> None:
-    """Assignment identity is provider-qualified: the same raw string under two providers is two reservations."""
+    """Assignment identity is provider-qualified: one raw string, two providers,
+    two *different* canonical keys and two independent reservations."""
     alpha = provision_lane(fleet_service, broker="fake_alpha", label="x", tmp_path=control_dir.parent)
     beta = provision_lane(fleet_service, broker="fake_beta", label="y", tmp_path=control_dir.parent)
     first = _reserved(fleet_service, "fake_alpha", alpha.clerk_id, "acct-1")
     second = _reserved(fleet_service, "fake_beta", beta.clerk_id, "acct-1")
-    assert first.canonical_external_account_id == second.canonical_external_account_id
+    # Each provider owns its own canonicalization; the registry never folds
+    # two providers' account identities into one key.
+    assert first.canonical_external_account_id == "ACCT-1"
+    assert second.canonical_external_account_id == "acct_1"
+    assert first.canonical_external_account_id != second.canonical_external_account_id
     assert first.broker != second.broker
+    # Neither reservation is visible under the other provider's key.
+    assert fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="acct_1"
+    ) is None
+    assert fleet_service._store.read_assignment(
+        broker="fake_beta", canonical_account_id="ACCT-1"
+    ) is None
     assert fleet_service._store.list_active_assignments() == [first, second]
 
 
