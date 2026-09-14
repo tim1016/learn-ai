@@ -39,6 +39,8 @@ from app.broker.fleet.records import (
     ProviderSummaryObservation,
 )
 from app.broker.fleet.store import registry_database_path
+from app.utils.advisory_lock import advisory_file_lock
+from app.utils.atomic_file import atomic_write_bytes, fsync_parent_dir
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
@@ -103,18 +105,8 @@ def _sha256(path: Path) -> str:
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     """Write small ceremony evidence atomically and durably."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    atomic_write_bytes(path, encoded)
 
 
 def _manifest_from_json(raw: object) -> RegistryBackupManifest:
@@ -357,40 +349,45 @@ def restore_registry_backup(
     database = _validate_backup_database(
         backup_dir=backup_dir, manifest=manifest, max_schema_version=max_schema_version
     )
-    # Write the closed gate *before* replacing the database. A crash between
-    # these two durable actions leaves either the old registry or the restored
-    # one closed; it can never leave a restored registry briefly routable.
-    _write_recovery_state(
-        control_dir,
-        RegistryRecoveryState(
-            state_schema_version=1,
-            registry_id=manifest.registry_id,
-            backup_sha256=manifest.database_sha256,
-            opened_at_ms=now_ms_utc(),
-            required_clerk_ids=manifest.active_clerk_ids,
-            reconciled_clerk_ids=(),
-            provider_summaries={},
-            empty_inventory_attestation=None,
-        ),
-    )
     target = registry_database_path(control_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        preserved = target.with_name(f"{target.name}.before-restore-{now_ms_utc()}")
-        source = sqlite3.connect(target)
-        destination = sqlite3.connect(preserved)
-        try:
-            source.backup(destination)
-        finally:
-            destination.close()
-            source.close()
-    temporary = target.with_name(f"{target.name}.restore-{os.getpid()}")
-    shutil.copy2(database, temporary)
-    with temporary.open("rb") as handle:
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
-    for suffix in ("-wal", "-shm"):
-        target.with_name(f"{target.name}{suffix}").unlink(missing_ok=True)
+    # Store operations and replacement share this lock. An in-flight operation
+    # finishes before recovery starts; afterward, every pre-restore Store sees
+    # the new path identity and refuses until its coordinator restarts.
+    with advisory_file_lock(target):
+        # Write the closed gate *before* replacing the database. A crash between
+        # these two durable actions leaves either the old registry or the restored
+        # one closed; it can never leave a restored registry briefly routable.
+        _write_recovery_state(
+            control_dir,
+            RegistryRecoveryState(
+                state_schema_version=1,
+                registry_id=manifest.registry_id,
+                backup_sha256=manifest.database_sha256,
+                opened_at_ms=now_ms_utc(),
+                required_clerk_ids=manifest.active_clerk_ids,
+                reconciled_clerk_ids=(),
+                provider_summaries={},
+                empty_inventory_attestation=None,
+            ),
+        )
+        if target.exists():
+            preserved = target.with_name(f"{target.name}.before-restore-{now_ms_utc()}")
+            source = sqlite3.connect(target)
+            destination = sqlite3.connect(preserved)
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+                source.close()
+        temporary = target.with_name(f"{target.name}.restore-{os.getpid()}")
+        shutil.copy2(database, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        for suffix in ("-wal", "-shm"):
+            target.with_name(f"{target.name}{suffix}").unlink(missing_ok=True)
+        fsync_parent_dir(target)
     return manifest
 
 

@@ -135,11 +135,21 @@ cross-lane mount just to read a compatibility decision.
   --scoped-route-evidence /restricted-record/scoped-route-health.json \
   --operator-receipt /restricted-record/operator-receipt.json \
   --decision-receipt-path /restricted-record/compatibility-decision.json \
+  --retirement-rollout-path /restricted-record/compatibility-rollout.json \
   --route-state-path /mounted/paper/compatibility/route_state.json \
   --route-state-path /mounted/live/compatibility/route_state.json
 ```
 
-The route-state writes are durable replacements. `retired` returns `410` only
+The command durably records an `applying` rollout journal before changing any
+lane, then checkpoints each successful lane-local write and finishes with
+`complete`. If a mount or write fails, leave the journal and decision receipt
+intact, repair the failed mount, and rerun the exact command with the same
+ordered route-state paths. A resumed rollout uses its original eligible receipt
+even if the measurement inputs have since aged; a changed receipt or path
+inventory refuses. Do not start an independent retirement while a journal is
+incomplete.
+
+The route-state and journal writes are durable replacements. `retired` returns `410` only
 for the fixed retained unscoped read aliases. Canonical scoped routes and every
 mutation retain their existing routing and provider-owned gates. A missing
 state file defaults to `measurement`; an existing corrupt or incomplete state
@@ -149,7 +159,7 @@ never silently re-enables an alias.
 ## Record and rollback limits
 
 Attach the snapshot set, consumer inventory, scoped-route health observation,
-operator receipt, evaluator decision, and applied lane-state paths to the
+operator receipt, evaluator decision, completed rollout journal, and applied lane-state paths to the
 Delivery E record. Also attach the exercised backup/restore, reassignment,
 registry-recovery, and compatible-rollback transcripts required by the
 [Delivery D recovery handoff](fleet-d-recovery-and-rollback.md). This procedure

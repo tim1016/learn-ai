@@ -27,7 +27,7 @@ The output pins registry identity, schema version, SHA-256 and the original acti
 
 ## 2. Restore a coordinator registry
 
-Do not create an empty registry after a coordinator failure. Choose the exact registry database and manifest pair, inspect their restricted storage reference, then restore it:
+Do not create an empty registry after a coordinator failure. Stop the coordinator before replacement and record that shutdown in the restricted incident transcript. Choose the exact registry database and manifest pair, inspect their restricted storage reference, then restore it:
 
 ```bash
 .venv/bin/python -m scripts.manage_broker_fleet restore-registry \
@@ -35,7 +35,7 @@ Do not create an empty registry after a coordinator failure. Choose the exact re
   --backup-dir <restricted-evidence>/registry-<utc-ms>
 ```
 
-The command verifies the database hash and its embedded registry ID/schema against the manifest. It preserves the previous local database beside the target for incident review, installs the exact backup, and writes a durable recovery hold. It refuses corrupted evidence, an unmatched manifest, or a database newer than the requested compatible binary.
+The command verifies the database hash and its embedded registry ID/schema against the manifest. It preserves the previous local database beside the target for incident review, installs the exact backup, and writes a durable recovery hold. It refuses corrupted evidence, an unmatched manifest, or a database newer than the requested compatible binary. Store operations share an exclusive replacement fence and remember the database file identity: if a pre-restore coordinator was not actually stopped, its old SQLite handle refuses every later operation even after lane reconciliation. Restart the coordinator on the restored file before proceeding; never use that fence as permission to skip the stop/restart record.
 
 While the hold is active, all fleet routing, provisioning, endpoint changes, assignment reservation, confirmation, release and reassignment refuse. Agent registration and read-only evidence inspection may continue so an original lane can be prepared for its provider-owned recovery procedure.
 

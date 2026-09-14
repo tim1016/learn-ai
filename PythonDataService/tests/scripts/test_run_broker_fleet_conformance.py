@@ -127,7 +127,7 @@ def test_write_evidence_bundle_removes_its_temporary_file_on_failure(
     def refusing_replace(_source: Path, _destination: Path) -> None:
         raise OSError("simulated replacement failure")
 
-    monkeypatch.setattr(conformance.os, "replace", refusing_replace)
+    monkeypatch.setattr("app.utils.atomic_file.os.replace", refusing_replace)
 
     with pytest.raises(OSError, match="simulated"):
         conformance.write_evidence_bundle(evidence_path, {"schema_version": 1})

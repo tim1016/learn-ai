@@ -153,6 +153,57 @@ def test_registry_restore_keeps_routing_and_assignment_mutation_closed_until_all
         service.close()
 
 
+def test_pre_restore_store_connection_stays_fenced_after_reconciliation(
+    control_dir: Path,
+    fleet_service: FleetControlService,
+) -> None:
+    """An old coordinator cannot resume through its replaced SQLite inode."""
+    lane = provision_lane(
+        fleet_service,
+        broker="fake_alpha",
+        label="paper",
+        tmp_path=control_dir.parent,
+    )
+    session, assignment = bind_lane(fleet_service, lane, account="PAPER")
+    _write_lane_evidence(
+        fleet_service,
+        lane_root=lane.volume_root,
+        clerk_id=lane.clerk_id,
+        session_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+        account="PAPER",
+        assignment_generation=assignment.assignment_generation,
+        binding_generation=1,
+    )
+    backup = control_dir.parent / "backup"
+    create_registry_backup(fleet_service._store, backup_dir=backup)
+
+    # Deliberately violate the runbook's shutdown step. Recovery replaces the
+    # path while this simulated old coordinator still owns an open connection.
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    replacement = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters={"fake_alpha": fleet_service._provider_adapters["fake_alpha"]},
+    )
+    try:
+        complete = reconcile_restored_lane(
+            replacement,
+            clerk_id=lane.clerk_id,
+            volume_root=lane.volume_root,
+            provider_summary={"endpoint_mode": "paper", "authority_state": "ready"},
+        )
+        assert complete.routing_closed is False
+
+        with pytest.raises(FleetRegistryRecoveryPending, match="pre-restore"):
+            fleet_service.resolve_route(
+                broker="fake_alpha",
+                clerk_id=lane.clerk_id,
+                readiness=OperationReadiness.EXECUTION,
+            )
+    finally:
+        replacement.close()
+
+
 def test_registry_recovery_refuses_corrupted_lane_evidence(
     control_dir: Path, fleet_service: FleetControlService
 ) -> None:

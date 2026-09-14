@@ -7,11 +7,15 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.fleet import compatibility_retirement as retirement_module
 from app.broker.fleet.compatibility_retirement import (
     CompatibilityRetirementRefusal,
+    CompatibilityRetirementRolloutState,
     CompatibilityRouteState,
+    apply_retirement_rollout,
     capture_snapshot,
     evaluate_retirement,
+    read_retirement_rollout,
     read_route_state,
     write_route_state,
 )
@@ -211,3 +215,47 @@ def test_route_state_defaults_to_measurement_and_requires_an_eligible_receipt(tm
         retirement_receipt=receipt,
     )
     assert read_route_state(state_path) is CompatibilityRouteState.RETIRED
+
+
+def test_multi_lane_retirement_journals_partial_progress_and_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later lane write failure leaves an explicit, resumable rollout."""
+    receipt = _evaluate(_complete_evidence(tmp_path / "eligible"))
+    first = tmp_path / "paper" / "compatibility" / "route_state.json"
+    second = tmp_path / "live" / "compatibility" / "route_state.json"
+    rollout_path = tmp_path / "restricted" / "retirement-rollout.json"
+    atomic_write = retirement_module.atomic_write_bytes
+    fail_live = True
+
+    def fail_second_lane(path: Path, data: bytes, *, mode: int | None = None) -> None:
+        if fail_live and path == second:
+            raise OSError("injected Live lane publication failure")
+        atomic_write(path, data, mode=mode)
+
+    monkeypatch.setattr(retirement_module, "atomic_write_bytes", fail_second_lane)
+    with pytest.raises(OSError, match="Live lane"):
+        apply_retirement_rollout(
+            rollout_path=rollout_path,
+            state_paths=[first, second],
+            retirement_receipt=receipt,
+        )
+
+    partial = read_retirement_rollout(rollout_path)
+    assert partial is not None
+    assert partial.state is CompatibilityRetirementRolloutState.APPLYING
+    assert partial.retired_route_state_paths == (str(first.resolve()),)
+    assert read_route_state(first) is CompatibilityRouteState.RETIRED
+    assert read_route_state(second) is CompatibilityRouteState.MEASUREMENT
+
+    fail_live = False
+    complete = apply_retirement_rollout(
+        rollout_path=rollout_path,
+        state_paths=[first, second],
+        retirement_receipt=receipt,
+    )
+    assert complete.state is CompatibilityRetirementRolloutState.COMPLETE
+    assert complete.retired_route_state_paths == complete.route_state_paths
+    assert read_route_state(first) is CompatibilityRouteState.RETIRED
+    assert read_route_state(second) is CompatibilityRouteState.RETIRED

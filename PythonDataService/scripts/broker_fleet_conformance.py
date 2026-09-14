@@ -10,13 +10,13 @@ mistaken for rollout acceptance.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.utils.atomic_file import atomic_write_bytes
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SERVICE_ROOT.parent
@@ -260,28 +260,5 @@ def write_evidence_bundle(path: Path, bundle: dict[str, object]) -> None:
     flush the containing directory.  A failed write removes its temporary
     sibling without touching any previously complete record.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(json.dumps(bundle, indent=2, sort_keys=True) + "\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except Exception:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-        raise
+    encoded = (json.dumps(bundle, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    atomic_write_bytes(path, encoded)

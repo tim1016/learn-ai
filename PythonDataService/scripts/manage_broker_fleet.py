@@ -41,10 +41,12 @@ from pathlib import Path
 from app.broker.fleet.compatibility_retirement import (
     CompatibilityRetirementRefusal,
     CompatibilityRouteState,
+    apply_retirement_rollout,
     capture_snapshot,
     evaluate_retirement,
+    read_retirement_receipt,
+    read_retirement_rollout,
     write_retirement_receipt,
-    write_route_state,
 )
 from app.broker.fleet.errors import (
     ClerkVolumeCloneDetected,
@@ -257,9 +259,7 @@ def _compatibility_evaluate(args: argparse.Namespace) -> int:
 
 
 def _compatibility_retire(args: argparse.Namespace) -> int:
-    """Retire only the retained unscoped reads after an eligible evaluation."""
-    receipt = _evaluate_compatibility(args)
-    _write_compatibility_receipt(args, receipt)
+    """Start or resume an evidence-pinned, journaled multi-lane retirement."""
     state_paths = [Path(path) for path in args.route_state_path]
     if not state_paths:
         raise CompatibilityRetirementRefusal(
@@ -267,19 +267,29 @@ def _compatibility_retire(args: argparse.Namespace) -> int:
         )
     if len(set(state_paths)) != len(state_paths):
         raise CompatibilityRetirementRefusal("Retirement route state paths must be unique.")
-    states = [
-        write_route_state(
-            state_path=state_path,
-            state=CompatibilityRouteState.RETIRED,
-            retirement_receipt=receipt,
-        )
-        for state_path in state_paths
-    ]
+    rollout_path = Path(args.retirement_rollout_path)
+    existing = read_retirement_rollout(rollout_path)
+    if existing is None:
+        receipt = _evaluate_compatibility(args)
+        _write_compatibility_receipt(args, receipt)
+    else:
+        receipt = read_retirement_receipt(Path(args.decision_receipt_path))
+        if receipt != existing.retirement_receipt:
+            raise CompatibilityRetirementRefusal(
+                "The rollout journal and durable retirement receipt disagree."
+            )
+    rollout = apply_retirement_rollout(
+        rollout_path=rollout_path,
+        state_paths=state_paths,
+        retirement_receipt=receipt,
+    )
     _write(
         {
             "state": CompatibilityRouteState.RETIRED.value,
+            "rollout_state": rollout.state.value,
+            "rollout_id": rollout.rollout_id,
             "operator_receipt_id": receipt["operator_receipt_id"],
-            "route_state_count": len(states),
+            "route_state_count": len(rollout.retired_route_state_paths),
         }
     )
     return 0
@@ -834,6 +844,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         required=True,
         help="Lane-local compatibility/route_state.json path; repeat for each serving lane",
+    )
+    compatibility_retire.add_argument(
+        "--retirement-rollout-path",
+        required=True,
+        help="Restricted host journal for resumable per-lane retirement acknowledgements",
     )
     compatibility_retire.set_defaults(func=_compatibility_retire)
 

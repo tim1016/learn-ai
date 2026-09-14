@@ -343,6 +343,7 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
         encoding="utf-8",
     )
     decision = tmp_path / "decision.json"
+    rollout = tmp_path / "retirement-rollout.json"
     route_state = tmp_path / "compatibility" / "route_state.json"
     common = _argv(
         "--start-snapshot",
@@ -363,12 +364,38 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
     assert evaluated["state"] == "measurement"
     assert decision.exists()
 
-    assert main(["compatibility-retire", *common, "--route-state-path", str(route_state)]) == 0
-    assert json.loads(capsys.readouterr().out)["state"] == "retired"
+    assert (
+        main(
+            [
+                "compatibility-retire",
+                *common,
+                "--route-state-path",
+                str(route_state),
+                "--retirement-rollout-path",
+                str(rollout),
+            ]
+        )
+        == 0
+    )
+    retired = json.loads(capsys.readouterr().out)
+    assert retired["state"] == "retired"
+    assert retired["rollout_state"] == "complete"
     assert json.loads(route_state.read_text(encoding="utf-8"))["state"] == "retired"
 
     inventory.write_text(json.dumps({"schema_version": 1, "complete": False}), encoding="utf-8")
-    assert main(["compatibility-retire", *common, "--route-state-path", str(tmp_path / "bad.json")]) == 2
+    assert (
+        main(
+            [
+                "compatibility-retire",
+                *common,
+                "--route-state-path",
+                str(tmp_path / "bad.json"),
+                "--retirement-rollout-path",
+                str(tmp_path / "bad-rollout.json"),
+            ]
+        )
+        == 2
+    )
     assert "compatibility_retirement_refused:" in json.loads(capsys.readouterr().out)["error"]
 
 

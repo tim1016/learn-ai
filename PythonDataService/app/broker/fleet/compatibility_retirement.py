@@ -10,14 +10,13 @@ account, Clerk ID, URL, query, header, body, credential, or access log.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from app.utils.atomic_file import atomic_write_bytes
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
@@ -25,6 +24,7 @@ COMPATIBILITY_SNAPSHOT_SCHEMA_VERSION = 1
 COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 COMPATIBILITY_RETIREMENT_SCHEMA_VERSION = 1
 COMPATIBILITY_ROUTE_STATE_SCHEMA_VERSION = 1
+COMPATIBILITY_RETIREMENT_ROLLOUT_SCHEMA_VERSION = 1
 DEFAULT_MAX_EVIDENCE_AGE_MS = 86_400_000
 DEFAULT_MAX_WINDOW_DURATION_MS = 604_800_000
 RETIRED_COMPATIBILITY_ROUTE_FAMILIES = frozenset(
@@ -46,6 +46,13 @@ class CompatibilityRouteState(StrEnum):
     RETIRED = "retired"
 
 
+class CompatibilityRetirementRolloutState(StrEnum):
+    """Host-journal states for a resumable multi-lane retirement."""
+
+    APPLYING = "applying"
+    COMPLETE = "complete"
+
+
 class CompatibilityRetirementRefusal(ValueError):
     """Evidence does not authorize a compatibility-read retirement."""
 
@@ -57,6 +64,18 @@ class CompatibilitySnapshot:
     source_label: str
     captured_at_ms: int
     route_hits: tuple[dict[str, int | str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CompatibilityRetirementRollout:
+    """Durable acknowledgements for one evidence-pinned lane cutover."""
+
+    rollout_id: str
+    state: CompatibilityRetirementRolloutState
+    route_state_paths: tuple[str, ...]
+    retired_route_state_paths: tuple[str, ...]
+    retirement_receipt: dict[str, object]
+    updated_at_ms: int
 
 
 def capture_snapshot(
@@ -176,6 +195,145 @@ def write_retirement_receipt(receipt_path: Path, receipt: Mapping[str, object]) 
     """Durably retain an eligible retirement decision in the rollout record."""
     _validate_retirement_receipt(receipt)
     _write_json_durable(receipt_path, receipt)
+
+
+def read_retirement_receipt(receipt_path: Path) -> dict[str, object]:
+    """Read and validate the durable decision used by a resumed rollout."""
+    receipt = _read_json(receipt_path, "compatibility retirement receipt")
+    _validate_retirement_receipt(receipt)
+    return receipt
+
+
+def read_retirement_rollout(
+    rollout_path: Path,
+) -> CompatibilityRetirementRollout | None:
+    """Read a resumable host rollout journal, or ``None`` before it starts."""
+    if not rollout_path.exists():
+        return None
+    payload = _read_json(rollout_path, "compatibility retirement rollout")
+    expected = {
+        "schema_version",
+        "rollout_id",
+        "state",
+        "route_state_paths",
+        "retired_route_state_paths",
+        "retirement_receipt",
+        "updated_at_ms",
+    }
+    if set(payload) != expected or payload.get("schema_version") != (
+        COMPATIBILITY_RETIREMENT_ROLLOUT_SCHEMA_VERSION
+    ):
+        raise CompatibilityRetirementRefusal(
+            "Compatibility retirement rollout has an unknown or incomplete shape."
+        )
+    rollout_id = payload["rollout_id"]
+    if not isinstance(rollout_id, str) or not rollout_id.startswith("compatret_"):
+        raise CompatibilityRetirementRefusal(
+            "Compatibility retirement rollout has an invalid identity."
+        )
+    try:
+        state = CompatibilityRetirementRolloutState(payload["state"])
+    except (TypeError, ValueError) as exc:
+        raise CompatibilityRetirementRefusal(
+            "Compatibility retirement rollout has an invalid state."
+        ) from exc
+    route_state_paths = _validate_rollout_paths(
+        payload["route_state_paths"], label="route state"
+    )
+    retired_paths = _validate_rollout_paths(
+        payload["retired_route_state_paths"],
+        label="retired route state",
+        allow_empty=True,
+    )
+    if not set(retired_paths).issubset(route_state_paths):
+        raise CompatibilityRetirementRefusal(
+            "Compatibility retirement rollout acknowledges an unknown lane."
+        )
+    if state is CompatibilityRetirementRolloutState.COMPLETE and set(
+        retired_paths
+    ) != set(route_state_paths):
+        raise CompatibilityRetirementRefusal(
+            "A complete compatibility retirement rollout lacks a lane acknowledgement."
+        )
+    receipt = payload["retirement_receipt"]
+    if not isinstance(receipt, Mapping):
+        raise CompatibilityRetirementRefusal(
+            "Compatibility retirement rollout lacks its decision receipt."
+        )
+    _validate_retirement_receipt(receipt)
+    _require_timestamp(payload["updated_at_ms"], "retirement rollout updated_at_ms")
+    return CompatibilityRetirementRollout(
+        rollout_id=rollout_id,
+        state=state,
+        route_state_paths=route_state_paths,
+        retired_route_state_paths=retired_paths,
+        retirement_receipt=dict(receipt),
+        updated_at_ms=payload["updated_at_ms"],
+    )
+
+
+def apply_retirement_rollout(
+    *,
+    rollout_path: Path,
+    state_paths: Sequence[Path],
+    retirement_receipt: Mapping[str, object],
+) -> CompatibilityRetirementRollout:
+    """Retire every lane with a durable, idempotently resumable host journal."""
+    _validate_retirement_receipt(retirement_receipt)
+    normalized_paths = tuple(str(path.resolve()) for path in state_paths)
+    _validate_rollout_paths(list(normalized_paths), label="route state")
+    existing = read_retirement_rollout(rollout_path)
+    if existing is None:
+        rollout = CompatibilityRetirementRollout(
+            rollout_id=f"compatret_{uuid.uuid4().hex}",
+            state=CompatibilityRetirementRolloutState.APPLYING,
+            route_state_paths=normalized_paths,
+            retired_route_state_paths=(),
+            retirement_receipt=dict(retirement_receipt),
+            updated_at_ms=now_ms_utc(),
+        )
+        _write_retirement_rollout(rollout_path, rollout)
+    else:
+        if existing.route_state_paths != normalized_paths:
+            raise CompatibilityRetirementRefusal(
+                "A resumed compatibility retirement must name the original lane paths in order."
+            )
+        if existing.retirement_receipt != dict(retirement_receipt):
+            raise CompatibilityRetirementRefusal(
+                "A resumed compatibility retirement must use its original decision receipt."
+            )
+        rollout = existing
+
+    acknowledged = set(rollout.retired_route_state_paths)
+    for state_path_text in rollout.route_state_paths:
+        write_route_state(
+            state_path=Path(state_path_text),
+            state=CompatibilityRouteState.RETIRED,
+            retirement_receipt=rollout.retirement_receipt,
+        )
+        acknowledged.add(state_path_text)
+        rollout = CompatibilityRetirementRollout(
+            rollout_id=rollout.rollout_id,
+            state=CompatibilityRetirementRolloutState.APPLYING,
+            route_state_paths=rollout.route_state_paths,
+            retired_route_state_paths=tuple(
+                path for path in rollout.route_state_paths if path in acknowledged
+            ),
+            retirement_receipt=rollout.retirement_receipt,
+            updated_at_ms=now_ms_utc(),
+        )
+        _write_retirement_rollout(rollout_path, rollout)
+
+    completed = CompatibilityRetirementRollout(
+        rollout_id=rollout.rollout_id,
+        state=CompatibilityRetirementRolloutState.COMPLETE,
+        route_state_paths=rollout.route_state_paths,
+        retired_route_state_paths=rollout.route_state_paths,
+        retirement_receipt=rollout.retirement_receipt,
+        updated_at_ms=now_ms_utc(),
+    )
+    _write_retirement_rollout(rollout_path, completed)
+    return completed
 
 
 def read_route_state(state_path: Path) -> CompatibilityRouteState:
@@ -403,6 +561,28 @@ def _require_fresh(value: object, evaluated_at_ms: int, max_age_ms: int, label: 
         raise CompatibilityRetirementRefusal(f"{label} is stale or from the future.")
 
 
+def _validate_rollout_paths(
+    raw_paths: object,
+    *,
+    label: str,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    """Validate the closed path inventory stored in a restricted host journal."""
+    if (
+        not isinstance(raw_paths, list)
+        or (not raw_paths and not allow_empty)
+        or any(
+            not isinstance(path, str) or not path or len(path) > 4096
+            for path in raw_paths
+        )
+        or len(set(raw_paths)) != len(raw_paths)
+    ):
+        raise CompatibilityRetirementRefusal(
+            f"Compatibility retirement {label} paths are invalid or repeated."
+        )
+    return tuple(raw_paths)
+
+
 def _read_json(path: Path, artifact: str) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -414,36 +594,43 @@ def _read_json(path: Path, artifact: str) -> dict[str, object]:
 
 
 def _write_json_durable(path: Path, payload: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, prefix=f".{path.name}.", delete=False) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(encoded)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        assert temporary_path is not None
-        os.replace(temporary_path, path)
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except BaseException:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-        raise
+    atomic_write_bytes(path, encoded)
+
+
+def _write_retirement_rollout(
+    rollout_path: Path,
+    rollout: CompatibilityRetirementRollout,
+) -> None:
+    """Publish one complete acknowledgement checkpoint."""
+    _write_json_durable(
+        rollout_path,
+        {
+            "schema_version": COMPATIBILITY_RETIREMENT_ROLLOUT_SCHEMA_VERSION,
+            "rollout_id": rollout.rollout_id,
+            "state": rollout.state.value,
+            "route_state_paths": list(rollout.route_state_paths),
+            "retired_route_state_paths": list(rollout.retired_route_state_paths),
+            "retirement_receipt": rollout.retirement_receipt,
+            "updated_at_ms": rollout.updated_at_ms,
+        },
+    )
 
 
 __all__ = [
+    "COMPATIBILITY_RETIREMENT_ROLLOUT_SCHEMA_VERSION",
     "COMPATIBILITY_ROUTE_STATE_SCHEMA_VERSION",
     "RETIRED_COMPATIBILITY_RESPONSE_CLASSES",
     "RETIRED_COMPATIBILITY_ROUTE_FAMILIES",
     "CompatibilityRetirementRefusal",
+    "CompatibilityRetirementRollout",
+    "CompatibilityRetirementRolloutState",
     "CompatibilityRouteState",
+    "apply_retirement_rollout",
     "capture_snapshot",
     "evaluate_retirement",
+    "read_retirement_receipt",
+    "read_retirement_rollout",
     "read_route_state",
     "write_retirement_receipt",
     "write_route_state",
