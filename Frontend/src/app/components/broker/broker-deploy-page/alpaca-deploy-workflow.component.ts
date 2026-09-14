@@ -164,6 +164,12 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   /** Retained only while the exact deploy intent has no terminal receipt. */
   private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
+  /** Set when the account moves under a frozen preview/apply command. Blocks
+   * `canSubmit` — not just the banner — until this workflow instance is
+   * replaced by reopening the deploy drawer (#2068, decision 10): resetting
+   * it on any lesser event would let a second click carry a fresh durable
+   * identity into the same silent re-adoption this task closes. */
+  protected readonly laneConflict = signal(false);
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -438,6 +444,12 @@ export class AlpacaDeployWorkflowComponent {
     if (!view) {
       return { canSubmit: false, guidance: 'Loading deployment readiness…' };
     }
+    if (this.laneConflict()) {
+      return {
+        canSubmit: false,
+        guidance: 'Reopen this deployment: the account changed while it was open.',
+      };
+    }
     if (this.admissionIsStale()) {
       return {
         canSubmit: false,
@@ -605,6 +617,7 @@ export class AlpacaDeployWorkflowComponent {
     const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
     if (frozen.routeKey !== routeKey) {
       this.frozenCommand.set(null);
+      this.laneConflict.set(true);
       this.submitError.set({
         outcome: 'conflict',
         title: this.errorTitle('conflict'),

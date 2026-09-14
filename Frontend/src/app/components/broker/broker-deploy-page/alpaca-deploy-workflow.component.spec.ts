@@ -1117,7 +1117,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(firstTarget.idempotencyKey).not.toBe(secondTarget.idempotencyKey);
   });
 
-  it('states the conflict, instead of silently minting a new command, when the account rebinds under a frozen preview', async () => {
+  it('blocks resubmission, not just the banner, when the account rebinds under a frozen preview', async () => {
     // The deploy drawer's own target is frozen on open and cannot drift
     // while visible; only the account can move under an already-previewed
     // command. Leaving the preview `allowed: false` keeps frozenCommand set
@@ -1140,6 +1140,21 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fixture.detectChanges();
 
     expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+
+    // The operator, reading the retry as a resume, clicks Deploy again. A
+    // banner alone would leave the button live and a second `submit()` would
+    // mint a fresh idempotency key against the rebound account — the defect
+    // a message-only test cannot catch, since it only proves the *first*,
+    // already-denied submission didn't fire.
+    await component['submit']();
+    fixture.detectChanges();
+
+    expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
     expect(service.deployBot).not.toHaveBeenCalled();
+    // The conflict survives the second attempt instead of being silently
+    // cleared by submit()'s own `this.submitError.set(null)`.
+    expect(screen.getByText(/rebound while the action was open/i)).toBeTruthy();
   });
 });
