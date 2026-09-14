@@ -303,3 +303,47 @@ async def test_a_provider_refusing_the_served_context_closes_the_route(
             path_params={},
             query={},
         )
+
+
+async def test_a_typed_provider_refusal_from_served_context_passes_through_unchanged(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """A FleetControlError subclass from the provider gate is not re-wrapped."""
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import FakeProviderAdapter, bind_lane, fake_alpha, fake_beta, provision_lane
+
+    class _TypedRefusalAdapter(FakeProviderAdapter):
+        def validate_served_context(self, context) -> None:
+            raise ClerkAssignmentConflict("already claimed by another clerk")
+
+    base = fake_alpha()
+    strict = _TypedRefusalAdapter(
+        provider_id=base.provider_id,
+        capabilities=base.capabilities,
+        declared_operations=base.declared_operations,
+    )
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": strict, "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label="typed", tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account="acct-typed")
+
+    def _never(broker: str, session):
+        raise AssertionError("dispatch must not be reached past a provider refusal")
+
+    router = LaneRouter(service=service, delivery_for=_never)
+    operation = next(
+        op for op in strict.operations() if op.operation_id == "account_read"
+    )
+    with pytest.raises(ClerkAssignmentConflict, match="already claimed"):
+        await router.deliver_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )

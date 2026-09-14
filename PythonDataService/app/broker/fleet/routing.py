@@ -45,6 +45,7 @@ from app.broker.fleet.provider import (
     OperationIdempotency,
     OperationReadiness,
     ProviderOperation,
+    ServedContext,
 )
 from app.broker.fleet.records import (
     ClerkSessionRecord,
@@ -496,8 +497,6 @@ class LaneRouter:
             # answers for execution operations only. A configuration-access
             # operation must stay routable for a lane whose binding is broken,
             # which is precisely the lane a provider gate would refuse.
-            from app.broker.fleet.provider import ServedContext
-
             context = ServedContext(
                 broker=broker,
                 clerk_id=clerk_id,
@@ -512,9 +511,20 @@ class LaneRouter:
             except FleetControlError:
                 raise
             except Exception as exc:
+                # The exception text can carry internal topology; it goes to
+                # the log, never the public refusal.
+                logger.warning(
+                    "Provider %s refused to serve %s on %s: %r",
+                    broker,
+                    operation.operation_id,
+                    clerk_id,
+                    exc,
+                    extra={"action": "fleet_provider_refused_served_context"},
+                )
                 raise BrokerClerkCapabilityUnavailable(
                     f"Provider {broker!r} refuses to serve "
-                    f"{operation.operation_id} on clerk {clerk_id}: {exc}",
+                    f"{operation.operation_id} on clerk {clerk_id}; the "
+                    "transport detail is in the coordinator log.",
                     next_step="The provider's own safety gates must pass before "
                     "this operation routes; repair the lane's configuration and "
                     "retry against its current resource.",
