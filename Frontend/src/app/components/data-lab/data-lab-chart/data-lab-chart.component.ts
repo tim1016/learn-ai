@@ -4,7 +4,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
   IChartApi, ISeriesApi,
@@ -134,6 +134,19 @@ function isChartRequestErrorDetail(value: unknown): value is ChartRequestErrorDe
       Array.isArray(detail['allowed_timeframes'])
       && detail['allowed_timeframes'].every(timeframe => typeof timeframe === 'string')
     ));
+}
+
+/** Pull the backend's structured `{error_code, detail, ...}` payload out of a
+ *  failed chart POST.
+ *
+ *  Angular delivers HTTP failures as `HttpErrorResponse`, which implements —
+ *  but does NOT extend — `Error`, so an `instanceof Error` gate never matched
+ *  and every structured code (TIMEFRAME_NOT_ALLOWED, NO_DATA, …) fell through
+ *  to the generic message while `timeframeRejected` never emitted. The check
+ *  is on the concrete class for exactly that reason. */
+function chartRequestErrorDetail(error: unknown): ChartRequestErrorDetail | null {
+  if (!(error instanceof HttpErrorResponse)) return null;
+  return isChartRequestErrorDetail(error.error?.detail) ? error.error.detail : null;
 }
 
 const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W', '1M'];
@@ -456,11 +469,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         barSources: resp.bar_sources ?? null,
       });
     } catch (error: unknown) {
-      const detail = error instanceof Error && isChartRequestErrorDetail(
-        (error as Error & { error?: { detail?: unknown } }).error?.detail,
-      )
-        ? (error as Error & { error: { detail: ChartRequestErrorDetail } }).error.detail
-        : null;
+      const detail = chartRequestErrorDetail(error);
       if (detail) {
         const detailMessage = detail.detail ?? 'An error occurred';
         switch (detail.error_code) {
@@ -470,10 +479,9 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
               this.allowedTimeframes.set(detail.allowed_timeframes);
             }
             // The parent owns the timeframe selection. Hand it the
-            // recommendation so it can auto-correct: the parent's bar-count
-            // safety net only fires above 250k expected bars, but the chart
-            // endpoint rejects at ~20k, so without this the 20k–250k range
-            // would consistently fail with no auto-recovery.
+            // recommendation so it can auto-correct: the chart endpoint
+            // rejects at ~20k estimated bars, so without this a too-fine
+            // timeframe for a wide range would fail with no auto-recovery.
             if (detail.recommended_timeframe) {
               this.timeframeRejected.emit({
                 requested: this.timeframe(),

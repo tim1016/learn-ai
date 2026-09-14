@@ -33,17 +33,23 @@ import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
 import {
   buildChartRequestBody,
   mapSessionToWire,
+  utcDayEndMs,
   utcMsToIsoDate,
 } from '../data-lab-request-mapper';
 
 /**
  * Data Lab Explore (PRD §7.3).
  *
- * Chart-first. The ONLY trigger for chart fetches is the explicit
- * **Refresh chart** button — scope/recipe edits mark the chart stale and
- * the last good chart stays visible behind an "Out of date" badge. The
- * chart request body always comes from the pure mapper
- * ({@link buildChartRequestBody}) — one path.
+ * Chart-first. Fetch triggers are: the explicit **Refresh chart** button, a
+ * shell-issued refresh request (preset click / Apply scope — the operator
+ * changed the committed scope on purpose and the chart follows; 2026-09-13
+ * product decision superseding PRD §14's refresh-only rule), this view's own
+ * Edit-scope drawer Apply, the one-shot timeframe auto-correct re-fetch, and
+ * auto-load on mount when a committed scope already exists. Scope/recipe
+ * edits that do NOT commit mark the chart stale and the last good chart
+ * stays visible behind an "Out of date" badge. The chart request body
+ * always comes from the pure mapper ({@link buildChartRequestBody}) — one
+ * path.
  */
 @Component({
   selector: 'app-data-lab-explore',
@@ -71,9 +77,18 @@ export class ExploreComponent {
   readonly chartRendered = signal(false);
   readonly chartRefreshing = signal(false);
   /** True between handing the chart component a fetch and that fetch
-   *  settling — distinguishes "not started" from "finished" when the
-   *  chart's `loading` signal is observed. */
+   * settling — distinguishes "not started" from "finished" when the
+   * chart's `loading` signal is observed. */
   private readonly chartFetchIssued = signal(false);
+  /** Whether the in-flight (or just-settled) fetch delivered data. The
+   * settle effect clears the stale flag only when this is true — a failed
+   * fetch keeps the old chart marked out of date. */
+  private chartLoadedSinceFetch = false;
+  /** Scope identity of the in-flight chart request (ticker + window +
+   *  session; NOT timeframe — the auto-correct commits a timeframe by
+   *  design). A timeframe rejection for a request whose scope no longer
+   *  matches the committed one is stale advice and gets discarded. */
+  private chartScopeKeyInFlight: string | null = null;
   readonly computeAllIndicators = signal(false);
 
   // ── Drawers ───────────────────────────────────────────────
@@ -125,11 +140,16 @@ export class ExploreComponent {
     // Settle an in-flight refresh from the chart component's own lifecycle:
     // `loading` flips false in the fetch's finally block, on success AND on
     // failure. Until then chartRefreshing stays true (the refresh button
-    // stays disabled, so requests can't overlap) and the store's stale flag
-    // stays set (a failed fetch must leave the old bars visibly out of
-    // date, not looking current). The fetchIssued guard keeps the freshly
-    // mounted chart (viewChild present, loading still false, no fetch
-    // started) from settling the refresh early.
+    // stays disabled, so requests can't overlap). The stale flag clears
+    // ONLY when the settled fetch actually loaded data — a failed fetch
+    // must leave the old bars visibly out of date, not looking current
+    // (that includes the timeframe auto-correct's exhausted-retry fallthrough,
+    // where no replacement data ever arrives). The fetchIssued guard keeps
+    // the freshly mounted chart (viewChild present, loading still false, no
+    // fetch started) from settling the refresh early. A refresh request
+    // that arrived mid-flight is consumed here, after the settle — that is
+    // what makes rapid preset clicks coalesce to one fetch for the newest
+    // scope instead of dropping the newest click.
     effect(
       () => {
         const chart = this.chartComponent();
@@ -139,12 +159,60 @@ export class ExploreComponent {
           if (!loading && this.chartFetchIssued() && this.chartRefreshing()) {
             this.chartFetchIssued.set(false);
             this.chartRefreshing.set(false);
-            this.store.settleChartRequest();
+            if (this.chartLoadedSinceFetch) {
+              this.store.settleChartRequest();
+            } else {
+              this.store.markChartStale();
+            }
+            if (this.hasUnconsumedRefreshRequest()) {
+              this.consumeRefreshRequest();
+              this.refreshChart();
+            }
           }
         });
       },
       { allowSignalWrites: true },
     );
+
+    // Shell-issued refresh requests (preset click, Apply scope). Consumed
+    // immediately when idle; left pending for the settle effect above when a
+    // fetch is already in flight.
+    effect(
+      () => {
+        const tick = this.store.chartRefreshRequests();
+        if (tick === 0 || tick === this.lastConsumedRefreshTick) return;
+        untracked(() => {
+          if (!this.canRefresh()) return;
+          this.consumeRefreshRequest();
+          this.refreshChart();
+        });
+      },
+      { allowSignalWrites: true },
+    );
+
+    // Auto-load on mount (2026-09-13): a committed scope present when Explore
+    // mounts renders immediately instead of waiting for an explicit refresh.
+    // A restored saved-session snapshot renders cached bars instead — that
+    // path keeps its no-fetch, stale-badge semantics.
+    if (this.hasCommittedScope() && !this.store.restoredChartSnapshot()) {
+      this.refreshChart();
+    }
+  }
+
+  // ── Shell refresh requests ─────────────────────────────────
+  // Initialized from the store, not zero: a remount (operator returning
+  // from Export/Validate) must not replay a tick a previous Explore
+  // instance already consumed. A tick queued while Explore was unmounted
+  // needs no replay either — the mount auto-load below fetches the newest
+  // committed scope, which is what that tick was asking for.
+  private lastConsumedRefreshTick = this.store.chartRefreshRequests();
+
+  private hasUnconsumedRefreshRequest(): boolean {
+    return this.store.chartRefreshRequests() > this.lastConsumedRefreshTick;
+  }
+
+  private consumeRefreshRequest(): void {
+    this.lastConsumedRefreshTick = this.store.chartRefreshRequests();
   }
 
   // ── Committed scope → chart inputs ────────────────────────
@@ -197,17 +265,20 @@ export class ExploreComponent {
       computeAllIndicators: this.computeAllIndicators(),
     });
     // Records the request signature WITHOUT clearing the stale flag — the
-    // settle effect above clears chartRefreshing and the stale flag when
-    // the chart component's fetch finishes (success or failure).
+    // settle effect above clears chartRefreshing and (on a loaded fetch)
+    // the stale flag when the chart component's fetch finishes.
     this.store.recordChartRequest(JSON.stringify(body));
+    this.chartLoadedSinceFetch = false;
+    this.chartScopeKeyInFlight = this.committedScopeKey();
     this.chartRendered.set(true);
     this.chartRefreshing.set(true);
     // Defer so a first-time @if mount can populate the viewchild.
     setTimeout(() => {
       const chart = this.chartComponent();
       if (!chart) {
+        // No fetch happened, so nothing settles: the stale flag set by the
+        // commit stays, correctly describing the rendered-but-old chart.
         this.chartRefreshing.set(false);
-        this.store.settleChartRequest();
         return;
       }
       this.chartFetchIssued.set(true);
@@ -215,16 +286,42 @@ export class ExploreComponent {
     });
   }
 
-  onChartDataLoaded(event: DataLabSessionChartSnapshot): void {
-    this.store.setLatestChartSnapshot(event);
-    this.lastQuality.set(event.quality);
+  /** Identity of the currently committed chart scope for stale-response
+   *  correlation — everything except bar policy, which the auto-correct
+   *  path is allowed to change. */
+  private committedScopeKey(): string {
+    const s = this.store.committedScope();
+    return s ? JSON.stringify([s.ticker, s.window.startMsUtc, s.window.endMsUtc, s.session]) : '';
   }
 
+  onChartDataLoaded(event: DataLabSessionChartSnapshot): void {
+    this.chartLoadedSinceFetch = true;
+    this.store.setLatestChartSnapshot(event);
+    this.lastQuality.set(event.quality);
+    // A successful load disarms the auto-correct retry budget — the next
+    // rejection starts a fresh correction cycle.
+    this.timeframeAutoRetried.set(false);
+  }
+
+  /** One auto-correct re-fetch per successful load. The recommended timeframe
+   *  is by construction allowed for the range, so a second rejection means
+   *  something else is wrong and re-fetching in a loop would only burn
+   *  requests — fall back to the stale badge and let the operator decide. */
+  readonly timeframeAutoRetried = signal(false);
+
   onChartTimeframeRejected(event: { requested: string; recommended: string }): void {
+    // A rejection is only advice about the request it answered. If the
+    // committed scope moved on (preset or Apply scope landed mid-flight),
+    // the queued refresh will fetch the new window — a recommendation
+    // computed for the old range must not hijack the new scope's bar policy.
+    if (this.chartScopeKeyInFlight !== this.committedScopeKey()) {
+      this.store.markChartStale();
+      return;
+    }
     // Server-authored recovery choice (PRD §16): apply the recommendation to
     // the draft scope AND commit it — chart fetches read the committed scope,
     // so without the commit the next explicit refresh would resend the just
-    // rejected timeframe forever. The user still refreshes explicitly.
+    // rejected timeframe forever.
     const parsed = /^(\d+)([mhDWM])$/.exec(event.recommended);
     if (!parsed) return;
     const multiplier = parseInt(parsed[1], 10);
@@ -234,8 +331,16 @@ export class ExploreComponent {
       parsed[2] === 'D' ? 'day' :
       parsed[2] === 'W' ? 'week' : 'month';
     this.store.patchDraft({ timespan, multiplier, timeframe: event.recommended });
-    this.store.commitScope();
-    this.store.markChartStale();
+    const committed = this.store.commitScope();
+    if (committed.ok && !this.timeframeAutoRetried()) {
+      this.timeframeAutoRetried.set(true);
+      // Route through the store request (not a direct refreshChart): the
+      // rejection fires while the failed fetch is still settling, and the
+      // request-consumption machinery serializes this fetch after the settle.
+      this.store.requestChartRefresh();
+    } else {
+      this.store.markChartStale();
+    }
   }
 
   // ── Quality / provenance status row ───────────────────────
@@ -269,18 +374,22 @@ export class ExploreComponent {
   }
 
   /** Apply the drawer's picker state: string dates → int64 ms at this
-   *  boundary only, then commit through the store. */
+   *  boundary only, then commit through the store. A successful commit
+   *  requests a chart refresh — this Apply must behave like the shell's
+   *  identically labelled action, not strand a stale chart behind an
+   *  updated scope. */
   applyScopeDrawer(): void {
     const range = this.scopeRange();
     const start = new Date(`${range.from}T00:00:00Z`).getTime();
-    const end = new Date(`${range.to}T00:00:00Z`).getTime();
+    const end = utcDayEndMs(new Date(`${range.to}T00:00:00Z`).getTime());
     this.store.patchDraft({
       ticker: range.symbol,
       window: { startMsUtc: start, endMsUtc: end },
       timespan: range.resolution === 'daily' ? 'day' : range.resolution,
     });
-    this.store.commitScope();
+    const committed = this.store.commitScope();
     this.scopeDrawerOpen.set(false);
+    if (committed.ok) this.store.requestChartRefresh();
   }
 
   // ── Indicators drawer + chips ─────────────────────────────

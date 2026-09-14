@@ -555,6 +555,52 @@ additive `DataLabSession` ms-UTC columns (dual-read).
 - **Responsive overflow assertions need a browser pass (medium).** The §8
   structural rules are in place, but the 320–1920px `scrollWidth === clientWidth`
   checks and AXE scans have not been executed against a live browser.
-- **`active-indicator-card`/`active-indicator-group` are unmounted (low).** The
-  config modal still imports types from the card; delete both once the modal's
-  type imports are inlined.
+- ~~**`active-indicator-card`/`active-indicator-group` are unmounted (low).**~~
+  Resolved 2026-09-13, with a correction to the record: `active-indicator-card`
+  was never dead — research-lab's `feature-runner` and `signal-runner` mount it,
+  so it stays as a shared component (the modal's type imports from it are fine).
+  `active-indicator-group` had no importers at all and is deleted.
+
+## 13a. Data Lab quick ranges + auto-loading chart (2026-09-13)
+
+Follow-up slice (same week as the redesign): calendar-resolved quick-range
+chips (1D/5D/1M/3M/6M/1Y/2Y) resolved server-side by the canonical NYSE
+calendar (`GET /api/chart/range-presets`), a lake-first chart ingest seam
+(ADR 0049 amendment A6), the `HttpErrorResponse` error-gate fix that
+re-arms the server-authored timeframe auto-correct, and numeric
+`start_ms_utc`/`end_ms_utc` declared authoritative-over-ISO on
+`ChartDataRequest`. Residuals:
+
+- **PRD §14's explicit-refresh-only rule is superseded for deliberate
+  actions (decision, not a gap).** Explore auto-loads on mount when a
+  committed scope exists; preset clicks, Apply scope (shell bar and the
+  Edit-scope drawer alike), and the one-shot timeframe auto-correct re-fetch
+  immediately through the store's refresh request. Uncommitted edits still
+  only mark stale, and a fetch that fails to load anything leaves the stale
+  badge on — staleness clears only when replacement data settles. Restored
+  saved sessions keep the cached-snapshot + stale-badge behavior.
+- **Committed-window anchors are day-shaped, not session-shaped (interim,
+  low).** The Data Lab commits `startMsUtc` = UTC midnight of the from-date
+  and `endMsUtc` = the to-date's final UTC instant (23:59:59.999) — applied
+  by every date-intent→ms boundary (quick ranges, From/To inputs, legacy
+  URL ingress, saved-session load, the Edit-scope drawer). The chart floors
+  both to inclusive UTC trading dates; half-open instant readers (the news
+  query, dataset numeric overrides) get a non-degenerate window covering the
+  full end date. The canonical half-open session-open resolution (PRD §13
+  step 6) remains the destination; the store still accepts an equal
+  start/end pair (one trading date) restored from older workspaces, and
+  rejects the uninitialized `{0,0}` sentinel.
+- **Preset bar estimates are fetched for `rth` regardless of the workspace
+  session (low).** The endpoint takes a validated `rth|extended` `session`
+  parameter but the shell always requests `rth`; the estimates are
+  informational only — no client decision reads them.
+- **Preset end anchoring flips at the RTH open for both session arguments
+  (low).** Before 09:30 ET on a trading day, presets end at the previous
+  session (nothing exists for today yet); the calendar's session windows
+  are RTH-shaped, so an `extended` preset does not flip at the 04:00 ET
+  premarket open — premarket-only "today" is not yet a preset target.
+- **Preset chip semantics are trading-session counts, not calendar anchors
+  (low).** "6M" is the last 126 scheduled sessions, matching the repo's
+  `_SESSIONS_PER_UNIT` family. A calendar-month-anchored variant would need
+  a product decision and a resolver change only — the client applies
+  whatever dates Python resolves.

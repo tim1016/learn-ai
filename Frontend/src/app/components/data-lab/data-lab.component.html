@@ -82,6 +82,24 @@
     </label>
     <button type="button" class="dl-shell__apply" (click)="applyScope()">Apply scope</button>
   </div>
+  @if (rangePresets().length > 0) {
+    <div class="dl-shell__presets" role="group" aria-label="Quick ranges">
+      @for (preset of rangePresets(); track preset.key) {
+        <button
+          type="button"
+          class="dl-shell__preset"
+          [class.dl-shell__preset--active]="activePresetKey() === preset.key"
+          [attr.aria-pressed]="activePresetKey() === preset.key"
+          (click)="applyRangePreset(preset)"
+          [title]="
+            presetTooltip(preset)
+          "
+        >
+          {{ preset.key }}
+        </button>
+      }
+    </div>
+  }
   @if (scopeCommitError(); as err) {
     <p class="dl-shell__scope-error" role="alert">{{ err }}</p>
   }

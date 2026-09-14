@@ -22,10 +22,15 @@ import {
   DataLabSessionService,
   DataLabSessionSummary,
 } from '../../services/data-lab-session.service';
+import {
+  ChartRangePreset,
+  DataLabRangePresetsService,
+} from '../../services/data-lab-range-presets.service';
 import { resolveLegacyDataLabUrl } from './data-lab-ingress';
 import { dataLabIndicatorInstanceId } from './data-lab-workspace-store';
-import { utcMsToIsoDate } from './data-lab-request-mapper';
+import { utcDayEndMs, utcMsToIsoDate } from './data-lab-request-mapper';
 import {
+  DataLabDraftScope,
   DataLabWorkspaceStore,
   DEFAULT_DATA_LAB_INDICATORS,
   DATA_LAB_WORKSPACE_SCHEMA_VERSION,
@@ -120,6 +125,14 @@ export const BAR_TIMEFRAMES: readonly BarTimeframeOption[] = [
   { value: '1d', label: '1 day', timespan: 'day', multiplier: 1 },
 ];
 
+/** Display-only default timeframe per short range preset — a UI default so a
+ *  1D window doesn't render as a single daily candle. Longer presets keep the
+ *  current timeframe. */
+const PRESET_DEFAULT_TIMEFRAMES: Record<string, string> = {
+  '1D': '5m',
+  '5D': '30m',
+};
+
 /** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
  *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
  *  MsUtc window boundaries shift with the viewer's timezone — every
@@ -143,11 +156,13 @@ export function parseYmdMsUtc(s: string): number | null {
 /**
  * Data Lab route shell (PRD §7.2).
  *
- * Owns the compact scope bar, the three route tabs, the saved-setups
- * drawer, and one RunDockComponent. All workspace state lives in the
- * route-provided {@link DataLabWorkspaceStore}; child routes inject the
- * same instance. The shell never fetches the chart — URL-supplied state
- * populates the workspace but never auto-fetches (PRD §14).
+ * Owns the compact scope bar (with the calendar-resolved quick-range chips),
+ * the three route tabs, the saved-setups drawer, and one RunDockComponent.
+ * All workspace state lives in the route-provided {@link DataLabWorkspaceStore};
+ * child routes inject the same instance. The shell never fetches the chart
+ * itself — deliberate scope actions (preset click, Apply scope) commit and
+ * request a refresh through the store; URL ingress only populates the
+ * workspace (Explore auto-fetches on mount when a committed scope exists).
  */
 @Component({
   selector: 'app-data-lab',
@@ -172,6 +187,7 @@ export function parseYmdMsUtc(s: string): number | null {
 export class DataLabComponent {
   private readonly router = inject(Router);
   private readonly sessionService = inject(DataLabSessionService);
+  private readonly rangePresetsService = inject(DataLabRangePresetsService);
   readonly store = inject(DataLabWorkspaceStore);
 
   readonly barTimeframes = BAR_TIMEFRAMES;
@@ -200,6 +216,7 @@ export class DataLabComponent {
       )
       .subscribe(() => this.runLegacyIngress());
     this.refreshSessionList();
+    void this.loadRangePresets();
   }
 
   /** True once the ingress has applied a legacy URL's scope params. The
@@ -210,8 +227,9 @@ export class DataLabComponent {
   private ingressApplied = false;
 
   /** If the current URL carries legacy Data Lab query state, resolve it and
-   *  replaceState-navigate to the canonical child route. URL state may
-   *  populate the workspace but NEVER auto-fetches (PRD §14).
+   *  replaceState-navigate to the canonical child route. URL state populates
+   *  and commits the workspace; the fetch decision belongs to Explore's
+   *  mount auto-load, not to the ingress itself.
    *
    *  A child-route redirect rewrites `/data-lab?mode=build` to
    *  `/data-lab/explore?mode=build` before this shell activates, so the
@@ -261,7 +279,7 @@ export class DataLabComponent {
       const draft = this.store.draft();
       patch.window = {
         startMsUtc: from !== null ? from : draft.window.startMsUtc,
-        endMsUtc: to !== null ? to : draft.window.endMsUtc,
+        endMsUtc: to !== null ? utcDayEndMs(to) : draft.window.endMsUtc,
       };
     }
     if (params['trading-session']) {
@@ -319,7 +337,7 @@ export class DataLabComponent {
     if (parsedMs === null) return;
     const draft = this.store.draft();
     this.store.patchDraft({
-      window: { ...draft.window, endMsUtc: parsedMs },
+      window: { ...draft.window, endMsUtc: utcDayEndMs(parsedMs) },
     });
   }
 
@@ -341,10 +359,87 @@ export class DataLabComponent {
     });
   }
 
-  /** Commit the draft scope. Edits before this never trigger fetches. */
+  /** Commit the draft scope. Edits before this never trigger fetches. A
+   *  successful commit requests a chart refresh — the operator applied a
+   *  scope on purpose and expects the chart to follow (2026-09-13 product
+   *  decision, superseding PRD §14's explicit-refresh-only rule). */
   applyScope(): void {
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
+    if (result.ok) this.store.requestChartRefresh();
+  }
+
+  // ── Calendar-resolved quick ranges ─────────────────────────
+  readonly rangePresets = signal<readonly ChartRangePreset[]>([]);
+
+  private async loadRangePresets(): Promise<void> {
+    // A failed or empty load leaves the chip row hidden and the manual
+    // From/To inputs as the path of record. Logged, not silent — a backend
+    // or network regression must be distinguishable from presets not
+    // existing, and an unhandled rejection must not leak from a mount-time
+    // nicety.
+    try {
+      this.rangePresets.set(await this.rangePresetsService.presets('rth'));
+    } catch (err) {
+      console.warn('[DataLab] range presets failed to load; quick ranges hidden', err);
+      this.rangePresets.set([]);
+    }
+  }
+
+  /** Key of the preset whose resolved trading dates equal the committed
+   *  window — null when the window is not preset-shaped. Date comparison,
+   *  not ms equality, so any same-day anchors still match. */
+  readonly activePresetKey = computed<string | null>(() => {
+    const window = this.store.committedWindow();
+    if (!window) return null;
+    const from = utcMsToIsoDate(window.startMsUtc);
+    const to = utcMsToIsoDate(window.endMsUtc);
+    const match = this.rangePresets().find(
+      (p) => utcMsToIsoDate(p.start_ms_utc) === from && utcMsToIsoDate(p.end_ms_utc) === to,
+    );
+    return match ? match.key : null;
+  });
+
+  /** Chip tooltip text — display dates derived from the ms anchors at the
+   *  rendering boundary (the wire contract carries no date strings). */
+  presetTooltip(preset: ChartRangePreset): string {
+    return `${utcMsToIsoDate(preset.start_ms_utc)} → ${utcMsToIsoDate(preset.end_ms_utc)} · ${preset.session_count} sessions`;
+  }
+
+  /** Apply a server-resolved preset: window verbatim from Python, commit,
+   *  refresh. The list is re-resolved first — the service cache is
+   *  five-minute TTL, so a Data Lab left open across an ET trading-date
+   *  boundary would otherwise keep applying the previous day's windows.
+   *  Short windows also get a sensible intraday default timeframe —
+   *  a 1D range on a daily bar chart is one candle, which is technically
+   *  allowed and practically useless. A display default, not math: the chart
+   *  endpoint's own recommendation machinery stays authoritative. */
+  async applyRangePreset(preset: ChartRangePreset): Promise<void> {
+    let target = preset;
+    try {
+      const fresh = await this.rangePresetsService.presets('rth');
+      target = fresh.find(p => p.key === preset.key) ?? preset;
+    } catch (err) {
+      // Offline or transient failure: the clicked preset's resolved window
+      // still applies — a stale-but-correct range beats no action.
+      console.warn(`[DataLab] re-resolving preset ${preset.key} failed; applying cached window`, err);
+    }
+    const patch: Partial<DataLabDraftScope> = {
+      window: { startMsUtc: target.start_ms_utc, endMsUtc: target.end_ms_utc },
+    };
+    const suggested = PRESET_DEFAULT_TIMEFRAMES[target.key];
+    if (suggested) {
+      const parsed = parseChartTimeframe(suggested);
+      if (parsed) {
+        patch.timespan = parsed.timespan;
+        patch.multiplier = parsed.multiplier;
+        patch.timeframe = suggested;
+      }
+    }
+    this.store.patchDraft(patch);
+    const result = this.store.commitScope();
+    this.scopeCommitError.set(result.ok ? null : result.error);
+    if (result.ok) this.store.requestChartRefresh();
   }
 
   // ── Saved setups drawer ───────────────────────────────────
@@ -439,11 +534,13 @@ export class DataLabComponent {
   async loadSession(id: string): Promise<void> {
     const session = await this.sessionService.getSession(id);
     if (!session) return;
+    const fromMs = parseYmdMsUtc(session.config.fromDate);
+    const toMs = parseYmdMsUtc(session.config.toDate);
     this.store.patchDraft({
       ticker: session.config.ticker,
       window: {
-        startMsUtc: parseYmdMsUtc(session.config.fromDate) ?? this.store.draft().window.startMsUtc,
-        endMsUtc: parseYmdMsUtc(session.config.toDate) ?? this.store.draft().window.endMsUtc,
+        startMsUtc: fromMs ?? this.store.draft().window.startMsUtc,
+        endMsUtc: toMs !== null ? utcDayEndMs(toMs) : this.store.draft().window.endMsUtc,
       },
       session: session.config.session,
       forwardFill: session.config.forwardFill,

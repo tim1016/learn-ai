@@ -192,6 +192,11 @@ export class DataLabWorkspaceStore {
   /** Latest chart payload Explore produced — a reference the shell merges
    *  into "Save setup". Never triggers a chart render by itself. */
   private readonly _latestChartSnapshot = signal<unknown | null>(null);
+  /** Monotonic counter of shell-issued chart fetch requests. Explore owns the
+   *  fetch itself; this is the shell's only way to say "the committed scope
+   *  just changed on purpose — fetch it" without the shell reaching into the
+   *  routed child. Restored snapshots never bump it (they render cached bars). */
+  private readonly _chartRefreshRequests = signal(0);
 
   // ── Read-only state surface ─────────────────────────────────
   readonly committedTicker = this._committedTicker.asReadonly();
@@ -210,10 +215,18 @@ export class DataLabWorkspaceStore {
   readonly generationRun = this._generationRun.asReadonly();
   readonly restoredChartSnapshot = this._restoredChartSnapshot.asReadonly();
   readonly latestChartSnapshot = this._latestChartSnapshot.asReadonly();
+  readonly chartRefreshRequests = this._chartRefreshRequests.asReadonly();
 
   // ── Scope ───────────────────────────────────────────────────
   /** Validate and atomically commit the draft scope. Returns an error string
-   *  (draft unchanged) when the ticker is blank or the window is inverted. */
+   *  (draft unchanged) when the ticker is blank or the window is unset or
+   *  inverted. The uninitialized draft window `{0, 0}` is rejected
+   *  explicitly — under the interim date-anchor semantics (known-gaps §13:
+   *  start = UTC midnight of the from-date, end = the to-date's final UTC
+   *  instant) an equal pair names one trading day, but epoch zeros name
+   *  nothing and would fetch 1970. A committed window is otherwise ordered
+   *  `startMsUtc <= endMsUtc`; the canonical half-open resolution (PRD §13
+   *  step 6) will tighten this further. */
   commitScope(): DataLabScopeCommitResult {
     const draft = this._draft();
     const ticker = draft.ticker.trim().toUpperCase();
@@ -221,9 +234,12 @@ export class DataLabWorkspaceStore {
     if (
       !isFiniteInt(draft.window.startMsUtc) ||
       !isFiniteInt(draft.window.endMsUtc) ||
-      draft.window.startMsUtc >= draft.window.endMsUtc
+      (draft.window.startMsUtc === 0 && draft.window.endMsUtc === 0)
     ) {
-      return { ok: false, error: 'Window must satisfy startMsUtc < endMsUtc' };
+      return { ok: false, error: 'Pick a date range before applying the scope' };
+    }
+    if (draft.window.startMsUtc > draft.window.endMsUtc) {
+      return { ok: false, error: 'Window must satisfy startMsUtc <= endMsUtc' };
     }
     const next: DataLabDraftScope = { ...draft, ticker };
     this._draft.set(next);
@@ -404,6 +420,15 @@ export class DataLabWorkspaceStore {
     this._latestChartSnapshot.set(snapshot);
   }
 
+  /** Request that Explore fetch the chart for the CURRENT committed scope.
+   *  Callers: shell actions that change the committed scope on purpose
+   *  (preset click, Apply scope, timeframe auto-correct). Explore consumes
+   *  the latest request when it is not already fetching, so rapid clicks
+   *  coalesce to one fetch that always reflects the newest scope. */
+  requestChartRefresh(): void {
+    this._chartRefreshRequests.update((n) => n + 1);
+  }
+
   // ── Serialization (saved-session JSON, schema v2) ───────────
   /** Pure snapshot of the workspace in the v2 envelope. */
   serialize(): SerializedDataLabWorkspace {
@@ -471,10 +496,13 @@ export class DataLabWorkspaceStore {
     if (typeof rawWindow === 'object' && rawWindow !== null) {
       const w = rawWindow as Record<string, unknown>;
       if (isFiniteInt(w['startMsUtc']) && isFiniteInt(w['endMsUtc'])) {
-        // Same inversion rule as commitScope(): a half-open window requires
-        // start < end; accepting an inverted one would smuggle an invalid
-        // committed scope into the workspace.
-        if (w['startMsUtc'] < w['endMsUtc']) {
+        // Same window rule as commitScope(): only an ordered pair with at
+        // least one nonzero endpoint commits — accepting anything else would
+        // smuggle an invalid committed scope into the workspace.
+        if (
+          w['startMsUtc'] <= w['endMsUtc'] &&
+          !(w['startMsUtc'] === 0 && w['endMsUtc'] === 0)
+        ) {
           window = { startMsUtc: w['startMsUtc'], endMsUtc: w['endMsUtc'] };
         } else {
           warnings.push('Dropped invalid windowMsUtc');

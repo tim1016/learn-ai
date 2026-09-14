@@ -209,3 +209,24 @@ Regression tests pin both halves: a steal that lands before the losing writer re
 - The schema-only `DataLakeRuns` table and its Python mirror are dead code pending removal at #1893; this amendment records the decision to drop them, not the drop itself.
 - The provider-licensing gate (Decision 4) is unaffected by any of the above and remains open, per A4.
 - The expired-lease race (Decision 1b) is **fixed**, per A5, and is struck from the accepted-negatives list. A reader arriving at Decision 1b's "known hazard, named rather than fixed here" paragraph should read A5 for its disposition; that paragraph is retained as the historical account of what was originally decided.
+
+## Amendment 2026-09-13 — the chart seam graduates from split-read to ensure-first ingest
+
+**Provenance:** Data Lab lake-first chart flow (calendar-resolved quick ranges, auto-loading chart). The original decision named the chart routers a v1 adopter with a **split read**: completed sessions from lake artifacts, the forming session and any lake gap from the provider — read-only with respect to the lake. This amendment upgrades that seam: the chart now **ingests first**.
+
+### A6. Chart reads go through `materialize_chart_range` — data flows to the lake, then to the chart
+
+`app/services/chart_service.py::_fetch_chart_bars` now calls `app/data_lake/run_materialization.py::materialize_chart_range` over the warmup-extended window's completed sessions before composing. That function is the chart twin of `materialize_engine_run`: a trade-only, minute-artifact `DataRunSpec` (`run_type="chart"`, no factor/map files, no daily rollup — the rollup is a whole-symbol artifact whose rebuild-on-coverage-growth would hand the next engine run a `data_contract_mismatch`), materialized through the same `ensure_data` claim/lease machinery, so two charts asking for the same day coalesce into one Polygon fetch.
+
+Two posture differences from the engine seam, both deliberate:
+
+- **Best-effort, never a gate.** A chart is not a coverage-gated consumer. Whatever the ingest cannot produce — provider outage, timeout (either a `TimeoutError` raised inside the ingest or the sync bridge's `CallerStoppedWaitingError` when the caller stops waiting while the ingest keeps running), an unconfigured pinned digest, a symbol the writer refuses — the composer fills per-gap from the provider exactly as the pre-amendment seam did, and the receipt's new additive `bar_sources.lake_ingest` block (`status: complete|partial|skipped`, fetched/reused counts) says which. The forming session stays provider-served by design: an immutable day artifact cannot exist for a session that has not closed.
+- **Catalog unavailability degrades instead of failing.** `catalog_client` now raises a typed `CatalogUnavailableError` (subclass of `RuntimeError`, introduced for exactly this catch) for unconfigured/unreachable Postgres — including the `OSError` family (`ConnectionRefusedError`, DNS failures) that `asyncpg.create_pool(min_size=1)` raises at pool creation when the host is unreachable, translated in `init_pool` so every consumer sees one unavailability type — and `materialize_chart_range` narrows on it and on `asyncpg.PostgresError` to return `skipped` with the reason: logged and receipted, never silenced. An engine run still fails hard on the same error: the lake is the sole store and a backtest must refuse. A chart serving provider-fallback bars with an honest receipt is the better outcome for a best-effort consumer.
+
+The chart-scoped `fetch_timeout_seconds` default is 120s (vs the engine's 600s) so a cold symbol bounds operator wait before the fallback path takes over.
+
+### Consequences
+
+- A chart request for a symbol/window the lake does not hold is now a fetch-into-the-lake request: the first load pays the provider cost once, and every later chart (and engine run, and export that adopts the lake) reads the bytes from the lake. Lake coverage grows with chart usage rather than only via explicit backfill.
+- The receipt extension is additive (`lake_ingest` inside `bar_sources`); the retained-but-unproduced `price_adjustment_unsupported` contract codes are untouched.
+- The six direct-Polygon consumers named in Decision 1c are unaffected; the chart was never among them.

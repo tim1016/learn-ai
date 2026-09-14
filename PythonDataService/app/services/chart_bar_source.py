@@ -1,7 +1,9 @@
 """Composed chart bar sourcing: lake history stitched to a live provider tail.
 
-Behind ``DATA_LAKE_ENABLED``. With the flag off, ``chart_service`` never calls
-into this module and its per-request provider fetch is unchanged.
+The lake is the only market-data store (#1893 retired the flag this module
+was once gated behind). ``chart_service`` calls
+:func:`materialize_chart_range` first, so the completed sessions it asks
+about here have already been delta-fetched into the lake on demand.
 
 The split is **calendar-derived, never wall-clock**: every scheduled NYSE
 session in the requested window whose scheduled close has already passed is

@@ -39,6 +39,9 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+import asyncpg
+
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import (
     ArtifactFailure,
@@ -46,9 +49,10 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     PriceAdjustmentMode,
+    is_lake_addressable_symbol,
     trading_date_to_calendar_anchor_ms,
 )
-from app.utils.background_loop import run_on_background_loop
+from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 
 logger = logging.getLogger(__name__)
 
@@ -500,4 +504,214 @@ def materialize_engine_run(
         fetched_artifact_count=result.fetched_artifact_count,
         reused_artifact_count=result.reused_artifact_count,
         incomplete_summary=incomplete_summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chart-range materialization (lake-first chart sourcing)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ChartRangeMaterialization:
+    """What a chart request learned about the lake it is about to read.
+
+    Best-effort by design, unlike :class:`EngineRunMaterialization`: a chart
+    is not a coverage-gated consumer. Whatever the lake could not produce,
+    the composer fetches per-gap from the provider exactly as it did before
+    this seam existed, and says so in the receipt. ``status`` is therefore a
+    provenance report, never a refusal.
+    """
+
+    status: Literal["complete", "partial", "skipped"]
+    fetched_artifact_count: int
+    reused_artifact_count: int
+    # None for complete; why a skip or partial happened, for the log and the
+    # operator receipt.
+    detail: str | None
+
+    def as_receipt(self) -> dict[str, object]:
+        """Wire shape for the chart response's ``bar_sources.lake_ingest``."""
+        receipt: dict[str, object] = {
+            "status": self.status,
+            "fetched_artifact_count": self.fetched_artifact_count,
+            "reused_artifact_count": self.reused_artifact_count,
+        }
+        if self.detail is not None:
+            receipt["detail"] = self.detail
+        return receipt
+
+
+def _build_chart_range_spec(
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    price_adjustment_mode: PriceAdjustmentMode,
+    requester: str | None,
+    fetch_timeout_seconds: int,
+) -> DataRunSpec:
+    """Describe what a chart request needs from the lake.
+
+    Trade bars only, minute artifacts only — the chart reads minute zips and
+    resamples; it never opens the daily rollup, a factor file, or a map file.
+    ``include_daily_trade=False`` matters beyond thrift: the rollup is a
+    whole-symbol artifact rebuilt whenever catalogued coverage changes, so
+    charting with it on would trigger a rebuild on every window growth and
+    hand the next engine run a ``data_contract_mismatch`` (see
+    :func:`_build_engine_run_spec`'s docstring for the contract detail).
+    """
+    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
+
+    if not PINNED_LEAN_IMAGE_DIGEST:
+        raise LakeMaterializationError(
+            "no pinned LEAN image digest; the lake sources its session calendar from that image "
+            "(run scripts/lean_sidecar_pin_image.py)"
+        )
+
+    return DataRunSpec(
+        request_id=uuid4(),
+        run_type="chart",
+        requester=requester,
+        symbols=[symbol.upper()],
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
+        data_types=["trade"],
+        price_adjustment_mode=price_adjustment_mode,
+        include_factor_files=False,
+        include_map_files=False,
+        include_daily_trade=False,
+        lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+        fetch_timeout_seconds=fetch_timeout_seconds,
+    )
+
+
+def materialize_chart_range(
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    price_adjustment_mode: PriceAdjustmentMode = "raw",
+    requester: str | None = None,
+    fetch_timeout_seconds: int = 120,
+) -> ChartRangeMaterialization:
+    """Put a chart window's completed-session bars in the lake, best-effort.
+
+    The lake-first chart flow (ADR 0049 amendment): before the chart composes
+    its stream, the missing minute artifacts for the requested window are
+    delta-fetched through :func:`ensure_data` — catalog claims coalesce two
+    charts asking for the same day into one provider fetch — and the composer
+    then reads the lake first, exactly as it already did for sessions it
+    held. The still-forming session is the caller's business (an immutable
+    day artifact cannot exist for a session that has not closed); the caller
+    clamps ``end`` to the last completed session before calling.
+
+    Never raises for a data reason; every miss degrades to the composer's
+    per-gap provider fallback, which is the pre-lake-first behavior. Skipped
+    (not attempted) for a symbol the writer would refuse anyway — calling
+    that a gap would promise an ingest that cannot happen — and when no
+    pinned LEAN digest is configured. The chart-scoped
+    ``fetch_timeout_seconds`` default (120s, not the engine's 600s) bounds
+    how long an operator waits on a cold symbol before the fallback path
+    takes over.
+    """
+    if end < start:
+        return ChartRangeMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"inverted window {start}..{end}",
+        )
+    canonical = symbol.upper()
+    if not is_lake_addressable_symbol(canonical):
+        return ChartRangeMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"{symbol!r} is not lake-addressable; served provider-only",
+        )
+    try:
+        spec = _build_chart_range_spec(
+            symbol=canonical,
+            start=start,
+            end=end,
+            price_adjustment_mode=price_adjustment_mode,
+            requester=requester,
+            fetch_timeout_seconds=fetch_timeout_seconds,
+        )
+    except LakeMaterializationError as exc:
+        return ChartRangeMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=str(exc),
+        )
+
+    try:
+        result = _materialize_run_data_sync(spec, resolution="minute")
+    except (TimeoutError, CallerStoppedWaitingError):
+        # Two timeout shapes land here: a TimeoutError raised inside the
+        # ingest coroutine itself (its fetch deadline), and
+        # CallerStoppedWaitingError from the sync bridge when the wait bound
+        # expired while the coroutine kept running (#1977's uncancellable
+        # shared-loop work). Both mean "did not finish in the chart's
+        # budget" — degrade, never fail the chart.
+        logger.warning(
+            "data_lake.run_materialization: chart ingest for %s %s..%s exceeded %ds; "
+            "composer will fill gaps from the provider",
+            canonical,
+            start,
+            end,
+            fetch_timeout_seconds,
+        )
+        return ChartRangeMaterialization(
+            status="partial",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"ingest did not finish within {fetch_timeout_seconds}s",
+        )
+    except (CatalogUnavailableError, asyncpg.PostgresError) as exc:
+        # The catalog's Postgres being down is the one failure a chart must
+        # ride out provider-only rather than 500: this consumer is best-effort
+        # by contract, the miss is logged, and the receipt carries the reason.
+        # Narrow on purpose — a genuine bug still propagates.
+        logger.warning(
+            "data_lake.run_materialization: catalog unavailable for chart ingest of %s %s..%s "
+            "(%s: %s); composer will serve the window from the provider",
+            canonical,
+            start,
+            end,
+            type(exc).__name__,
+            exc,
+        )
+        return ChartRangeMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"catalog unavailable ({type(exc).__name__}); provider fallback",
+        )
+
+    withheld = [f for f in result.failures if _withholds_bars_the_run_reads(f, resolution="minute")]
+    if not withheld:
+        detail = _describe_failures(result.failures) if result.failures else None
+        return ChartRangeMaterialization(
+            status="complete",
+            fetched_artifact_count=result.fetched_artifact_count,
+            reused_artifact_count=result.reused_artifact_count,
+            detail=detail,
+        )
+    logger.warning(
+        "data_lake.run_materialization: chart ingest for %s %s..%s left %d session(s) "
+        "unmaterialized (%s); composer will fill them from the provider",
+        canonical,
+        start,
+        end,
+        len(withheld),
+        _describe_failures(withheld),
+    )
+    return ChartRangeMaterialization(
+        status="partial",
+        fetched_artifact_count=result.fetched_artifact_count,
+        reused_artifact_count=result.reused_artifact_count,
+        detail=_describe_failures(withheld),
     )

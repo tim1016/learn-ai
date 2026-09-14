@@ -21,6 +21,17 @@ export function utcMsToIsoDate(msUtc: number): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Final instant of the UTC day starting at `dayStartMsUtc` (23:59:59.999) —
+ *  the window END anchor. The chart floors both endpoints to UTC dates
+ *  (inclusive), while the news query and dataset requests read the same
+ *  committed numbers as half-open instants; a midnight end makes a
+ *  single-day window degenerate for those readers and drops the end date's
+ *  data, so every date-intent → ms conversion here anchors the TO date at
+ *  its day's end. Pure. */
+export function utcDayEndMs(dayStartMsUtc: number): number {
+  return dayStartMsUtc + 86_400_000 - 1;
+}
+
 export interface ChartRequestMapperInput {
   ticker: string;
   window: DataLabWindowMsUtc;
