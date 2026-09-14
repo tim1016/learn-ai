@@ -10,7 +10,11 @@ import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 import type { GalleryBotView, GalleryLiveStatus, GalleryResolution } from '../lib/gallery.types';
 import { BotGalleryPageComponent } from './bot-gallery-page.component';
-import { provideFleetDirectory } from '../../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../../fleet/fleet-directory-testing';
 
 const BROKER = 'alpaca';
 const ACCOUNT_ID = 'PA3';
@@ -77,6 +81,7 @@ function fakeGalleryStore(overrides: {
 interface PanelServiceOverrides {
   getPanel?: ReturnType<typeof vi.fn>;
   runBotAction?: ReturnType<typeof vi.fn>;
+  directory?: FleetDirectoryDouble;
 }
 
 async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverrides = {}) {
@@ -94,9 +99,20 @@ async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverri
   };
   const messageService = { add: vi.fn() };
 
+  // The double's default lane must resolve for this file's routed clerkId
+  // ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the fence tests
+  // exercise a real lane rather than a permanently-missing one.
+  const directory =
+    overrides.directory ??
+    provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+
   TestBed.overrideComponent(BotGalleryPageComponent, {
     set: { providers: [
-      provideFleetDirectory(),{ provide: GalleryLiveStore, useValue: store }] },
+      { provide: directory.provide, useValue: directory.useValue },
+      { provide: GalleryLiveStore, useValue: store }] },
   });
 
   const view = await render(BotGalleryPageComponent, {
@@ -117,7 +133,7 @@ describe('BotGalleryPageComponent', () => {
 
     await renderPage(store);
 
-    expect(store.start).toHaveBeenCalledWith(BROKER, 'clrk_spec', ACCOUNT_ID, null, null);
+    expect(store.start).toHaveBeenCalledWith(BROKER, 'clrk_spec', ACCOUNT_ID, 3, 4);
   });
 
   it('shows a loading skeleton while connecting with no bots yet', async () => {
@@ -250,5 +266,37 @@ describe('BotGalleryPageComponent', () => {
     fixture.destroy();
 
     expect(store.stop).toHaveBeenCalled();
+  });
+
+  it('refuses a gallery action whose lane rebound while the tile was on screen', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const { panelService, messageService } = await renderPage(store, { directory, runBotAction });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they confirm the tile action — exactly what refresh() will start
+    // doing.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(panelService.getPanel).not.toHaveBeenCalled();
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warn',
+        detail: expect.stringMatching(/rebound while the action was open/i),
+      }),
+    );
   });
 });

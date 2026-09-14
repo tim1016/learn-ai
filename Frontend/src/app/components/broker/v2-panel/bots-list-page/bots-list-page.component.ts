@@ -5,10 +5,13 @@ import {
   Injector,
   afterNextRender,
   computed,
+  effect,
   inject,
   input,
+  linkedSignal,
   resource,
   signal,
+  untracked,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
@@ -28,6 +31,13 @@ import {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand, withEntity } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
+import {
+  fencedTarget,
+  freezeLaneFence,
+  laneFenceDrifted,
+  LANE_FENCE_CONFLICT_MESSAGE,
+  type LaneFence,
+} from '../../../../fleet/lane-fence';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
@@ -106,6 +116,16 @@ export class BotsListPageComponent {
       routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
     }),
   );
+
+  /** The fence the operator was shown. Captured when the roster renders the
+   * lane and again only when the route identity changes; never at click time
+   * (#2068). The directory read is `untracked` so this fence does not become
+   * a dependent of the live directory resource and re-derive on refresh(). */
+  private readonly openFence = linkedSignal({
+    source: () => `${this.broker()}::${this.clerkId()}`,
+    computation: (): LaneFence =>
+      untracked(() => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId()))),
+  });
 
   /**
    * Values may only be rendered for the exact routed lane that produced them.
@@ -266,6 +286,13 @@ export class BotsListPageComponent {
   constructor() {
     afterNextRender(() => this.mark('alpaca-bots-route-shell'));
 
+    // Materialize the fence as soon as the lane renders. linkedSignal is
+    // lazy: a value only ever read inside runAction() would first compute at
+    // CLICK time, not OPEN time, silently freezing nothing (#2068).
+    effect(() => {
+      this.openFence();
+    });
+
     const catalogTimer = setInterval(() => {
       if (this.document.visibilityState === 'visible' && !this.catalog.isLoading()) {
         this.catalog.reload();
@@ -350,7 +377,13 @@ export class BotsListPageComponent {
     // Freeze the lane before any await. A roster action may outlive a route
     // reuse or a binding replacement; it must conflict rather than following
     // the operator to whatever lane happens to be current at submission time.
-    const laneTarget = withEntity(this.target(), sid);
+    const fence = this.openFence();
+    if (laneFenceDrifted(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()))) {
+      this.actionNotice.set({ tone: 'danger', message: LANE_FENCE_CONFLICT_MESSAGE });
+      this.messageService.add(actionOutcomeToast('conflict', LANE_FENCE_CONFLICT_MESSAGE));
+      return;
+    }
+    const laneTarget = withEntity(fencedTarget(this.target(), fence), sid);
     const target = withCommand(laneTarget, 'bot_action', crypto.randomUUID());
     const scope = this.fleetScope();
     const startedAt = this.performanceNow();

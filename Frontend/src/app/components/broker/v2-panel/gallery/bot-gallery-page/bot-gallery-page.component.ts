@@ -6,7 +6,9 @@ import {
   effect,
   inject,
   input,
+  linkedSignal,
   signal,
+  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
@@ -14,6 +16,12 @@ import { MessageService } from 'primeng/api';
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
+import {
+  freezeLaneFence,
+  laneFenceDrifted,
+  LANE_FENCE_CONFLICT_MESSAGE,
+  type LaneFence,
+} from '../../../../../fleet/lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
@@ -55,16 +63,17 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
   host: { class: 'block h-full' },
 })
 export class BotGalleryPageComponent {
-  /** Frozen lane context for the gallery's reads and actions (FR-094). */
-  private readonly galleryTarget = (sid: string) =>
-    resourceTarget(this.broker(), this.clerkId(), {
+  /** Frozen lane context for the gallery's reads and actions (FR-094). Reads
+   * the fence captured at open, not the live directory (#2068). */
+  private readonly galleryTarget = (sid: string) => {
+    const fence = this.openFence();
+    return resourceTarget(this.broker(), this.clerkId(), {
       accountId: this.accountId(),
       entityId: sid,
-      bindingGeneration:
-        this.fleetDirectory.lane(this.broker(), this.clerkId())
-          ?.effective_binding_generation ?? null,
-      routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+      bindingGeneration: fence.bindingGeneration,
+      routingEpoch: fence.routingEpoch,
     });
+  };
 
   readonly broker = input.required<string>();
   readonly clerkId = input.required<string>();
@@ -75,6 +84,16 @@ export class BotGalleryPageComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
+
+  /** The fence the operator was shown. Captured when the gallery renders the
+   * lane and again only when the route identity changes; never at click time
+   * (#2068). The directory read is `untracked` so this fence does not become
+   * a dependent of the live directory resource and re-derive on refresh(). */
+  private readonly openFence = linkedSignal({
+    source: () => `${this.broker()}::${this.clerkId()}`,
+    computation: (): LaneFence =>
+      untracked(() => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId()))),
+  });
 
   /**
    * Sids with a confirmed quick action in flight. Drives two things off the
@@ -98,7 +117,15 @@ export class BotGalleryPageComponent {
   });
 
   constructor() {
+    // Materialize the fence as soon as the lane renders. linkedSignal is
+    // lazy: a value only ever read inside onAction() would first compute at
+    // CLICK time, not OPEN time, silently freezing nothing (#2068).
     effect(() => {
+      this.openFence();
+    });
+    effect(() => {
+      // The stream address is a read, not a command: it must keep following
+      // the live lane, unlike the fence above.
       const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
       void this.store.start(
         this.broker(),
@@ -113,6 +140,10 @@ export class BotGalleryPageComponent {
 
   protected async onAction(event: { sid: string; actionId: string }): Promise<void> {
     if (this.pendingSids().has(event.sid)) return;
+    if (laneFenceDrifted(this.openFence(), this.fleetDirectory.lane(this.broker(), this.clerkId()))) {
+      this.messageService.add(actionOutcomeToast('conflict', LANE_FENCE_CONFLICT_MESSAGE));
+      return;
+    }
     // Capture once at presentation/submission time. In particular, do not
     // rebuild from route signals after the authoritative panel read returns.
     const target = withCommand(this.galleryTarget(event.sid), 'bot_action', crypto.randomUUID());

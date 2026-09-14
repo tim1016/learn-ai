@@ -15,7 +15,11 @@ import {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../fleet/fleet-directory-testing';
 import type { ResourceTarget } from '../../../../fleet/resource-target';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -59,6 +63,8 @@ async function renderPage(
     clerk?: ClerkStatus;
     getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
     panelActions?: PanelAction[];
+    directory?: FleetDirectoryDouble;
+    runBotAction?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const account = overrides.account ?? fakeAccount();
@@ -80,22 +86,34 @@ async function renderPage(
     getEvidence: vi.fn((_target: ResourceTarget, _sid: string) =>
       Promise.resolve({ entries: [], next_cursor: null }),
     ),
-    runBotAction: vi.fn(() =>
-      Promise.resolve({
-        action_id: 'resume',
-        applied: true,
-        revision: 1,
-        concurrency_token: 'next-token',
-        message: 'ok',
-      }),
-    ),
+    runBotAction:
+      overrides.runBotAction ??
+      vi.fn(() =>
+        Promise.resolve({
+          action_id: 'resume',
+          applied: true,
+          revision: 1,
+          concurrency_token: 'next-token',
+          message: 'ok',
+        }),
+      ),
   };
 
   const mockMessageService = { add: vi.fn() };
 
+  // The double's default lane must resolve for this file's routed clerkId
+  // ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the fence tests
+  // exercise a real lane rather than a permanently-missing one.
+  const directory =
+    overrides.directory ??
+    provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+
   const view = await render(BotsListPageComponent, {
     providers: [
-      provideFleetDirectory(),
+      { provide: directory.provide, useValue: directory.useValue },
       provideRouter([]),
       { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
@@ -464,6 +482,35 @@ describe('BotsListPageComponent', () => {
         detail:
           'This bot is no longer ready to resume. Its custody state changed after this button was shown.',
       }),
+    );
+  });
+
+  it('refuses a roster action whose lane rebound while the row was on screen', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+    await screen.findByRole('button', { name: 'Stop' });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they press the button — exactly what refresh() will start doing.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn' }),
     );
   });
 });
