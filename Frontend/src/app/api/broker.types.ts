@@ -14942,6 +14942,8 @@ export interface components {
              * @default 0
              */
             successful_reconnect_count?: number;
+            /** Unreachable Since Ms */
+            unreachable_since_ms?: number | null;
         };
         /**
          * IbkrMinuteBar

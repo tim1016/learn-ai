@@ -25,6 +25,7 @@ from app.broker.ibkr.auto_reconnect_monitor import (
     jittered_backoff_delay,
 )
 from app.broker.ibkr.client import get_client_lifecycle_lock
+from tests.broker.ibkr._support import _FakeClient
 
 
 @pytest.fixture(autouse=True)
@@ -42,93 +43,6 @@ def _fresh_lifecycle_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.broker.ibkr import client as client_module
 
     monkeypatch.setattr(client_module, "_client_lifecycle_lock", asyncio.Lock())
-
-
-class _FakeClient:
-    """Just enough surface for the monitor: ``is_connected``,
-    ``connection_lost``, ``connect()``, ``disconnect()``. Notably no
-    monitor-related bookkeeping fields — that state lives entirely on
-    ``AutoReconnectMonitor`` now."""
-
-    def __init__(
-        self,
-        *,
-        is_connected: bool = True,
-        connection_lost: bool = False,
-        connect_outcomes: list[bool | Exception] | None = None,
-        desired_connected: bool = True,
-        probe_outcomes: list[bool | Exception] | None = None,
-        subscriptions_stale: bool = False,
-        last_ibkr_code: int | None = None,
-    ) -> None:
-        self._is_connected = is_connected
-        self._connection_lost = connection_lost
-        # Each outcome is True (success) or an exception instance (raised).
-        # After exhausting the list, defaults to True so a long-running
-        # test doesn't need to enumerate every tick.
-        self._connect_outcomes = list(connect_outcomes or [])
-        self.connect_calls = 0
-        self.disconnect_calls = 0
-        self.probe_calls = 0
-        self._probe_outcomes = list(probe_outcomes or [])
-        # Operator-intended state. True is the common case for monitor
-        # tests (we're testing recovery); set False to exercise the
-        # short-circuit on intentional disconnects.
-        self._desired_connected = desired_connected
-        self._subscriptions_stale = subscriptions_stale
-        self._last_ibkr_code = last_ibkr_code
-        self.recovery_succeeded_calls = 0
-        self.recovery_failed_calls = 0
-
-    def is_connected(self) -> bool:
-        return self._is_connected
-
-    @property
-    def connection_lost(self) -> bool:
-        return self._connection_lost
-
-    @property
-    def desired_connected(self) -> bool:
-        return self._desired_connected
-
-    @property
-    def subscriptions_stale(self) -> bool:
-        return self._subscriptions_stale
-
-    @property
-    def last_ibkr_code(self) -> int | None:
-        return self._last_ibkr_code
-
-    def set_desired_connected(self, value: bool) -> None:
-        self._desired_connected = value
-
-    def mark_recovery_succeeded(self) -> None:
-        self.recovery_succeeded_calls += 1
-        self._subscriptions_stale = False
-
-    def mark_recovery_failed(self, exc: Exception) -> None:
-        self.recovery_failed_calls += 1
-
-    async def connect(self):
-        self.connect_calls += 1
-        outcome = (
-            self._connect_outcomes.pop(0) if self._connect_outcomes else True
-        )
-        if isinstance(outcome, Exception):
-            raise outcome
-        self._is_connected = True
-        self._connection_lost = False
-        return None
-
-    async def disconnect(self):
-        self.disconnect_calls += 1
-        self._is_connected = False
-
-    async def probe(self, *, timeout_s: float = 4.0) -> None:
-        self.probe_calls += 1
-        outcome = self._probe_outcomes.pop(0) if self._probe_outcomes else True
-        if isinstance(outcome, Exception):
-            raise outcome
 
 
 # ──────────────────────────── lifecycle ──────────────────────────────

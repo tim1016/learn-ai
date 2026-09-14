@@ -83,6 +83,7 @@ def build_broker_health(
             }
         ),
         operator_disconnected=operator_disconnected,
+        unreachable_since_ms=getattr(monitor, "unreachable_since_ms", None),
     )
 
 
@@ -126,13 +127,15 @@ def _with_condition(
     health: IbkrConnectionHealth,
     *,
     operator_disconnected: bool = False,
+    unreachable_since_ms: int | None = None,
 ) -> IbkrConnectionHealth:
     return health.model_copy(
         update={
             "condition": _broker_health_condition(
                 health,
                 operator_disconnected=operator_disconnected,
-            )
+            ),
+            "unreachable_since_ms": unreachable_since_ms,
         }
     )
 
