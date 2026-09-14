@@ -9,7 +9,13 @@ import pytest
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import IbkrSettings
-from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
+from app.broker.ibkr.connect_log_budget import (
+    CONNECT_LOG_BUDGET,
+    SUPPRESSION_WINDOW_MS,
+    ConnectLogBudget,
+    _IbAsyncConnectNoiseFilter,
+    install_ib_async_noise_filter,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +44,9 @@ async def test_a_sustained_outage_logs_once_not_once_per_attempt(
 
     with patch("ib_async.IB", fake_class):
         client = IbkrClient(settings)
-        for _ in range(10):
+        # 3 is enough to prove "once, not once per attempt" — the assertion
+        # below is len == 1 regardless of how many attempts run.
+        for _ in range(3):
             with pytest.raises(BrokerError):
                 await client.connect()
 
@@ -47,33 +55,27 @@ async def test_a_sustained_outage_logs_once_not_once_per_attempt(
     assert failures[0].__dict__["action"] == "ibkr_connect_failed"
 
 
-@pytest.mark.asyncio
-async def test_the_suppressed_count_is_reported_when_the_window_elapses(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    settings = IbkrSettings(mode="paper", port=4002, connect_attempts=1, _env_file=None)
-    _fake_ib, fake_class = _refusing_ib()
+def test_the_suppressed_count_is_reported_when_the_window_elapses() -> None:
+    """Direct against ``ConnectLogBudget`` — no ``IbkrClient``, no socket,
+    no ``asyncio.sleep``. Five failures inside the window: one
+    ``report_first`` then four ``suppress``. A sixth failure after the
+    window elapses reports the summary, naming the 4 it suppressed."""
     clock = {"now": 1_700_000_000_000}
-    CONNECT_LOG_BUDGET.reset_for_testing(now_ms=lambda: clock["now"])
-    caplog.set_level(logging.WARNING, logger="app.broker.ibkr.client")
+    budget = ConnectLogBudget(now_ms=lambda: clock["now"])
+    exc = ConnectionRefusedError(111, "Connection refused")
 
-    with patch("ib_async.IB", fake_class):
-        client = IbkrClient(settings)
-        for _ in range(5):
-            with pytest.raises(BrokerError):
-                await client.connect()
-        clock["now"] += 15 * 60 * 1000
-        with pytest.raises(BrokerError):
-            await client.connect()
+    verdicts = [budget.note_failure(exc) for _ in range(5)]
+    clock["now"] += SUPPRESSION_WINDOW_MS
+    verdicts.append(budget.note_failure(exc))
 
-    summaries = [r for r in caplog.records if r.__dict__.get("action") == "ibkr_connect_still_failing"]
-    assert len(summaries) == 1
-    assert summaries[0].__dict__["suppressed_attempts"] == 4
+    assert verdicts == ["report_first", "suppress", "suppress", "suppress", "suppress", "report_summary"]
+    assert budget.suppressed_attempts == 4
 
 
 def test_the_ib_async_duplicate_errors_are_dropped_only_while_suppressed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    install_ib_async_noise_filter()
     ib_logger = logging.getLogger("ib_async.client")
     caplog.set_level(logging.ERROR, logger="ib_async.client")
 
@@ -87,3 +89,15 @@ def test_the_ib_async_duplicate_errors_are_dropped_only_while_suppressed(
     messages = [r.getMessage() for r in caplog.records]
     assert messages.count("Make sure API port on TWS/IBG is open") == 1
     assert "API connection failed: TimeoutError()" in messages
+
+
+def test_installing_the_noise_filter_twice_leaves_exactly_one() -> None:
+    ib_logger = logging.getLogger("ib_async.client")
+    for existing in [f for f in ib_logger.filters if isinstance(f, _IbAsyncConnectNoiseFilter)]:
+        ib_logger.removeFilter(existing)
+
+    install_ib_async_noise_filter()
+    install_ib_async_noise_filter()
+
+    installed = [f for f in ib_logger.filters if isinstance(f, _IbAsyncConnectNoiseFilter)]
+    assert len(installed) == 1

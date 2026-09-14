@@ -47,6 +47,11 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
+# Shared by the WARNING (report_first) and DEBUG (suppressed) branches of a
+# failed connect attempt in ``_connect_with_retries`` — same message, two
+# different log levels depending on CONNECT_LOG_BUDGET's verdict (#2080).
+_CONNECT_ATTEMPT_FAILED_MSG = "IBKR connect attempt %d failed: %s"
+
 # Conservative headroom below IBKR's default 50 requests/second connection
 # pace. Pin the ib_async transport explicitly so a dependency-default change
 # cannot silently turn startup fan-out into broker error 100/disconnect risk.
@@ -454,7 +459,7 @@ class IbkrClient:
                 verdict = CONNECT_LOG_BUDGET.note_failure(exc)
                 if verdict == "report_first":
                     logger.warning(
-                        "IBKR connect attempt %d failed: %s",
+                        _CONNECT_ATTEMPT_FAILED_MSG,
                         attempt,
                         exc,
                         extra={
@@ -475,7 +480,7 @@ class IbkrClient:
                     )
                 else:
                     logger.debug(
-                        "IBKR connect attempt %d failed: %s",
+                        _CONNECT_ATTEMPT_FAILED_MSG,
                         attempt,
                         exc,
                     )

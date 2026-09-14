@@ -13,6 +13,13 @@ INFO when the gateway becomes reachable again.
 clock, mirroring the pattern ``AutoReconnectMonitor`` uses
 (``app/broker/ibkr/auto_reconnect_monitor.py``) so tests can freeze
 time via ``reset_for_testing(now_ms=...)``.
+
+The ``ib_async.client`` noise filter is installed by the FastAPI
+lifespan (``app/main.py``), not at import time — this module is
+imported unconditionally by ``client.py``, including by roles with
+IBKR disabled and by every pytest process, and none of those should
+silently acquire a filter on a logger they don't own. Call
+``install_ib_async_noise_filter()`` to attach it; it's idempotent.
 """
 
 from __future__ import annotations
@@ -135,4 +142,11 @@ class _IbAsyncConnectNoiseFilter(logging.Filter):
 
 
 CONNECT_LOG_BUDGET = ConnectLogBudget()
-logging.getLogger("ib_async.client").addFilter(_IbAsyncConnectNoiseFilter())
+
+
+def install_ib_async_noise_filter() -> None:
+    """Attach the outage noise filter to ib_async's client logger once."""
+    target = logging.getLogger("ib_async.client")
+    if any(isinstance(existing, _IbAsyncConnectNoiseFilter) for existing in target.filters):
+        return
+    target.addFilter(_IbAsyncConnectNoiseFilter())

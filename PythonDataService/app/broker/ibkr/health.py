@@ -80,10 +80,10 @@ def build_broker_health(
                 "reconnect_attempt": monitor.current_attempt or None,
                 "successful_reconnect_count": monitor.successful_reconnect_count,
                 "last_transition_ms": max(base.last_transition_ms, monitor.last_transition_ms),
+                "unreachable_since_ms": getattr(monitor, "unreachable_since_ms", None),
             }
         ),
         operator_disconnected=operator_disconnected,
-        unreachable_since_ms=getattr(monitor, "unreachable_since_ms", None),
     )
 
 
@@ -127,7 +127,6 @@ def _with_condition(
     health: IbkrConnectionHealth,
     *,
     operator_disconnected: bool = False,
-    unreachable_since_ms: int | None = None,
 ) -> IbkrConnectionHealth:
     return health.model_copy(
         update={
@@ -135,7 +134,6 @@ def _with_condition(
                 health,
                 operator_disconnected=operator_disconnected,
             ),
-            "unreachable_since_ms": unreachable_since_ms,
         }
     )
 

@@ -634,9 +634,9 @@ class IbkrConnectionHealth(BaseModel):
     Composed by ``build_broker_health`` as the max of the client's own
     event timestamp and the monitor's last attempt-boundary timestamp."""
     unreachable_since_ms: int | None = None
-    """int64 ms UTC of the first failed connect of the current outage;
-    ``None`` when reachable. Unlike ``last_transition_ms``, an open-breaker
-    probe does not reset it."""
+    """int64 ms UTC of the first failed reconnect attempt of the current
+    outage; ``None`` when reachable. Unlike ``last_transition_ms``, an
+    open-breaker probe does not reset it."""
     recovery_state: RecoveryState | None = None
     """ADR 0018 recovery state. Monitor-owned when the auto-reconnect
     monitor is installed; otherwise projected from ``connection_state`` for
