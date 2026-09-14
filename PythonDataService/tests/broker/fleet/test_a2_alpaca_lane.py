@@ -918,6 +918,50 @@ async def test_an_enrolled_agent_without_any_coordinator_destination_refuses(
         service.close()
 
 
+async def test_a_lane_root_outside_the_clerk_volume_refuses_before_authority(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writable-root fence is load-bearing: an escaping root refuses."""
+    from app.broker.ibkr import config as ibkr_config
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        root = Path(provisioned.clerk.volume_root)
+        shared = tmp_path / "shared-artifacts"
+        # The deployment default: both roots on the shared artifacts tree,
+        # which is exactly the two-lanes-one-root posture the fleet prevents.
+        monkeypatch.setattr(
+            ibkr_config,
+            "get_settings",
+            lambda: ibkr_config.IbkrSettings(
+                live_runs_root=str(shared / "live_runs" / "runs"),
+                live_bars_root=str(shared / "live_bars"),
+            ),
+        )
+        (shared / "live_runs" / "runs").mkdir(parents=True)
+        (shared / "live_bars").mkdir(parents=True)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
+
+        with pytest.raises(FleetBootRefused, match="escapes the clerk volume"):
+            await open_fleet_lane(settings=settings, volume_root=root)
+        # The refusal precedes session registration: nothing was registered.
+        assert service._store.read_session(provisioned.clerk.clerk_id) is None
+    finally:
+        service.close()
+
+
 async def test_a_malformed_200_from_the_coordinator_is_presence_unavailability() -> None:
     """A heartbeat response that is not JSON translates to the presence
     family, so the heartbeat loop logs and re-registers instead of dying on
