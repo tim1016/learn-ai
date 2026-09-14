@@ -92,11 +92,16 @@ def test_importing_the_spine_loads_no_provider_execution_module() -> None:
     assert json.loads(result.stdout) == [], result.stdout
 
 
-def test_the_production_adapter_registry_stays_empty_until_phase_2() -> None:
+def test_the_fleet_packages_own_registry_is_not_the_production_composition() -> None:
+    """The fleet package's own adapter mapping stays empty; the real
+    production registry is owned by ``fleet_composition``, not the package
+    (PRD FR-001)."""
     from app.broker.fleet.errors import BrokerNotSupported
     from app.broker.fleet.provider import PRODUCTION_PROVIDER_ADAPTERS, production_adapter
+    from app.broker.fleet_composition import production_provider_adapters
 
     assert dict(PRODUCTION_PROVIDER_ADAPTERS) == {}
+    assert set(production_provider_adapters()) == {"alpaca"}
     try:
         production_adapter("alpaca")
     except BrokerNotSupported:

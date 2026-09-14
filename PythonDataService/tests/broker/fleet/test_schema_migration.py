@@ -180,18 +180,32 @@ def test_a_v1_registry_migrates_preserving_every_row(control_dir: Path) -> None:
         store.close()
 
 
+def _snapshot_all_rows(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
+    """Every row of every table, for a before/after idempotence comparison."""
+    tables = [
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    ]
+    return {
+        table: sorted(tuple(row) for row in conn.execute(f"SELECT * FROM {table}"))
+        for table in tables
+    }
+
+
 def test_the_migration_is_idempotent_and_reopening_changes_nothing(
     control_dir: Path,
 ) -> None:
-    """Reopening a migrated registry neither re-migrates nor disturbs rows."""
+    """Reopening a migrated registry neither re-migrates nor disturbs a row."""
     _build_v1_registry(control_dir)
     first = FleetRegistryStore.open(control_dir=control_dir)
     registry_id = first.registry_id
+    before = _snapshot_all_rows(first._conn)
     first.close()
     second = FleetRegistryStore.open(control_dir=control_dir)
     try:
         assert second.schema_version == schema.SCHEMA_VERSION
         assert second.registry_id == registry_id
+        assert _snapshot_all_rows(second._conn) == before
     finally:
         second.close()
 

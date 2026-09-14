@@ -42,6 +42,7 @@ class _InternalServer:
 
     def __init__(self) -> None:
         self.first_event_seen = asyncio.Event()
+        self.hold_open = asyncio.Event()
         self.disconnect_seen = asyncio.Event()
         self.server: asyncio.AbstractServer | None = None
         self.base_url = ""
@@ -69,11 +70,12 @@ class _InternalServer:
                 writer.write(b"event: snapshot\ndata: first\n\n")
                 await writer.drain()
                 self.first_event_seen.set()
-                # Hold the stream open: a buffering transport never yields
-                # even the first event before this server finishes.
-                await self.first_event_seen.wait()
+                # Hold the stream open until the test releases it: a
+                # buffering transport never yields even the first event
+                # before this server finishes.
+                await self.hold_open.wait()
                 await asyncio.sleep(0.05)
-                writer.write(b"id: 42\nevent: update\ndata: second\ndata: cont\n\n")
+                writer.write(b": keepalive\nid: 42\nevent: update\ndata: second\ndata: cont\n\n")
                 await writer.drain()
                 await asyncio.sleep(10)
             elif request.startswith("GET /redirect"):
@@ -120,9 +122,12 @@ async def test_sse_events_arrive_incrementally_over_a_real_socket(
             async for event in iter_sse_from_response(response):
                 events.append(event)
                 if len(events) == 1:
-                    # Prove incrementality: the second event has not been
-                    # written yet, and the response is far from complete.
-                    assert internal_server.first_event_seen.is_set()
+                    # Prove incrementality: the server is still genuinely
+                    # blocked before writing anything further — the second
+                    # event cannot yet have been written — not merely that
+                    # the first event happened to arrive.
+                    assert not internal_server.hold_open.is_set()
+                    internal_server.hold_open.set()
                     break
             assert events[0].event == "snapshot"
             assert events[0].data == "first"
@@ -134,6 +139,7 @@ async def test_multi_data_lines_join_and_comments_are_ignored(
     internal_server: _InternalServer,
 ) -> None:
     """Complete framing: joined data lines, ids, comments and default names."""
+    internal_server.hold_open.set()
     client = build_internal_client()
     try:
         async with client.stream("GET", f"{internal_server.base_url}/events") as response:
@@ -192,7 +198,7 @@ async def test_an_oversized_event_refuses_instead_of_buffering(
 async def test_cancellation_propagates_to_the_open_stream(
     internal_server: _InternalServer,
 ) -> None:
-    """Cancelling the consumer cancels the stream and disconnects the server."""
+    """Cancelling the consumer cancels the open stream at the client."""
     client = build_internal_client()
 
     async def consume() -> None:
@@ -206,6 +212,9 @@ async def test_cancellation_propagates_to_the_open_stream(
     with pytest.raises(asyncio.CancelledError):
         await task
     await client.aclose()
+    # Release the server's connection handler so fixture teardown does not
+    # wait on a stream this test intentionally never finishes reading.
+    internal_server.hold_open.set()
 
 
 async def test_the_asgi_transport_buffers_and_must_not_carry_streams() -> None:
@@ -283,7 +292,7 @@ async def test_a_leading_bom_is_stripped_and_truncated_utf8_refuses() -> None:
 
     bommed = "﻿data: clean\n\n".encode()
     events = [event async for event in iter_sse_events(_chunks_of(bommed, split_at=3))]
-    assert events == [events[0]]
+    assert len(events) == 1
     assert events[0].data == "clean"
 
     async def truncated():

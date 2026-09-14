@@ -166,7 +166,9 @@ def test_an_adapter_registered_under_another_provider_id_refuses(
             broker="fake_beta",
             display_label="misregistered",
             volume_root=control_dir.parent / "volumes" / "mis",
-        ) or misregistered._adapter("fake_beta")
+        )
+    with pytest.raises(BrokerNotSupported, match="own identity"):
+        misregistered._adapter("fake_beta")
 
 
 def test_a_failed_marker_write_retires_the_partial_clerk(
