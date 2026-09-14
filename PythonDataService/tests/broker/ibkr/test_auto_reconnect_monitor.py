@@ -655,6 +655,10 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     try:
         monitor.start()
         await asyncio.sleep(0.05)  # let monitor reach the lock acquire and wait
+        # #2080 — seed a stale anchor so the post-adoption assertion below
+        # is falsifiable (this scenario never fails a connect() itself, so
+        # nothing would otherwise set it).
+        monitor._unreachable_since_ms = 1_700_000_000_000
         # Simulate the operator's reconnect having succeeded.
         client._is_connected = True
         client._connection_lost = False
@@ -672,6 +676,10 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     # not monitor-driven.)
     assert client.connect_calls == 0
     assert monitor.successful_reconnect_count == 0
+    # #2080 — the adoption-success path (_adopt_externally_restored_socket)
+    # must clear the outage anchor via the same recovery_succeeded ->
+    # HEALTHY chokepoint every other recovery path uses.
+    assert monitor.unreachable_since_ms is None
 
 
 @pytest.mark.asyncio

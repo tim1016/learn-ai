@@ -420,10 +420,10 @@ class AutoReconnectMonitor:
                 self._link_interrupted_since_ms = None
                 return await self._adopt_externally_restored_socket()
             if await self._run_one_attempt(attempt):
-                self._unreachable_since_ms = None
                 return "succeeded"
             await self._drop_half_recovered_socket()
-            self._unreachable_since_ms = self._unreachable_since_ms or self._now_ms()
+            if self._unreachable_since_ms is None:
+                self._unreachable_since_ms = self._now_ms()
             return "failed"
 
     async def _adopt_externally_restored_socket(self) -> AttemptOutcome:
@@ -609,6 +609,13 @@ class AutoReconnectMonitor:
         self._recovery_state = transition_recovery_state(previous, signal)
         if self._recovery_state != previous:
             self._last_transition_ms = self._now_ms()
+        # Single chokepoint (#2080): every path that lands on HEALTHY —
+        # the fast ladder, the open-breaker probe, the HARD_DOWN tick
+        # shortcut, and the externally-restored-socket adoption path —
+        # passes through here. Clearing the anchor anywhere else would
+        # leave it duplicated and risk drifting out of sync.
+        if self._recovery_state == "HEALTHY":
+            self._unreachable_since_ms = None
 
     def _mark_hard_down(self, attempts: int) -> None:
         self._advance_recovery("reconnect_exhausted")
