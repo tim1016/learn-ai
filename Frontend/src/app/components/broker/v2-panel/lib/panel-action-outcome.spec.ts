@@ -129,6 +129,40 @@ describe('fleet refusals (flat body, no `detail` envelope)', () => {
   });
 });
 
+describe('nested legacy bodies that carry next_step', () => {
+  // `next_step` is read for BOTH shapes, so this also changes existing nested
+  // emitters — `_historical_recovery_refusal` and the coverage-proof refusals
+  // in `alpaca_clerk_sqlite.py`. They previously rendered a formatted reason
+  // code as remediation; they now render the server's own prose, which is what
+  // CLAUDE.md requires of backend-authored operator copy.
+  it('prefers server prose over a formatted reason code', () => {
+    const legacy = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason: 'coverage_proof_insufficient',
+          message: 'The recovery evidence does not cover this run.',
+          next_step: 'Keep new exposure blocked and refresh the recovery evidence.',
+        },
+      },
+    });
+
+    const rejection = deriveActionRejection(legacy, 'fallback');
+
+    expect(rejection.why).toBe('Keep new exposure blocked and refresh the recovery evidence.');
+    expect(rejection.why).not.toBe('Coverage Proof Insufficient');
+  });
+
+  it('still formats the reason code when a nested body carries no prose', () => {
+    const terse = new HttpErrorResponse({
+      status: 409,
+      error: { detail: { reason: 'coverage_proof_insufficient', message: 'Not covered.' } },
+    });
+
+    expect(deriveActionRejection(terse, 'fallback').why).toBe('Coverage Proof Insufficient');
+  });
+});
+
 describe('actionOutcomeToast', () => {
   it('appends why to the detail when present', () => {
     const toast = actionOutcomeToast('failure', 'Resume failed.', 'Refresh and try again.');

@@ -88,16 +88,37 @@ if [[ -n "$STUCK" ]]; then
   echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
 fi
 
+# What Compose says should exist. The health verdict below compares against
+# this, not against however many containers happen to be running: `podman ps`
+# lists running containers only, so a service that crashed on boot is absent
+# from BOTH the healthy count and the total, the ratio stays balanced, and the
+# script reports "All N services healthy!" while a live execution lane is
+# simply gone. Counting what should be there is what makes a missing clerk
+# visible.
+EXPECTED_SERVICES=$(podman compose config --services 2>/dev/null | sort || true)
+
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
 # frontend at 120s; backend cold compile pushes 60–90s on top. Poll for
 # 240s (80 x 3s) so the script's verdict matches reality on cold builds.
+# Poll budget is injectable so a test can drive the verdict without waiting
+# the full production budget; unset, it is the 80 x 3s described above.
+RESTART_HEALTH_ATTEMPTS="${RESTART_HEALTH_ATTEMPTS:-80}"
+RESTART_HEALTH_INTERVAL="${RESTART_HEALTH_INTERVAL:-3}"
 echo "==> Waiting for services to become healthy..."
-for i in {1..80}; do
+for i in $(seq 1 "$RESTART_HEALTH_ATTEMPTS"); do
   HEALTHY=$(podman ps --filter "label=${COMPOSE_LABEL}" \
     --filter health=healthy --format "{{.Names}}" | wc -l)
   TOTAL=$(podman ps --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" | wc -l)
-  echo "    [$i] $HEALTHY/$TOTAL healthy"
-  if [[ "$HEALTHY" -ge "$TOTAL" && "$TOTAL" -gt 0 ]]; then
+  RUNNING_SERVICES=$(podman ps --filter "label=${COMPOSE_LABEL}" \
+    --format '{{index .Labels "com.docker.compose.service"}}' | sort -u || true)
+  MISSING=$(comm -23 <(printf '%s\n' "$EXPECTED_SERVICES") \
+    <(printf '%s\n' "$RUNNING_SERVICES") | grep -v '^$' || true)
+  if [[ -n "$MISSING" ]]; then
+    echo "    [$i] $HEALTHY/$TOTAL healthy; not running: $(echo $MISSING | tr '\n' ' ')"
+  else
+    echo "    [$i] $HEALTHY/$TOTAL healthy"
+  fi
+  if [[ -z "$MISSING" && "$HEALTHY" -ge "$TOTAL" && "$TOTAL" -gt 0 ]]; then
     echo "==> All $TOTAL services healthy!"
     podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     exit 0
@@ -110,9 +131,12 @@ for i in {1..80}; do
   if [[ -n "$STUCK" ]]; then
     echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
   fi
-  sleep 3
+  sleep "$RESTART_HEALTH_INTERVAL"
 done
 
-echo "==> WARNING: Not all services healthy after 240s"
+echo "==> WARNING: Not all services healthy after $((RESTART_HEALTH_ATTEMPTS * RESTART_HEALTH_INTERVAL))s"
+if [[ -n "${MISSING:-}" ]]; then
+  echo "==> Declared by compose but NOT RUNNING: $(echo $MISSING | tr '\n' ' ')"
+fi
 podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 exit 1
