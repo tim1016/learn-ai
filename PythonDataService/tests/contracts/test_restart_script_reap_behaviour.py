@@ -188,3 +188,47 @@ def test_a_wrong_project_name_can_never_destroy_compose_containers(tmp_path: Pat
     assert destroyed <= {"sleep-probe-9"}, (
         f"A wrong project name destroyed compose-managed containers: {destroyed}"
     )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_a_missing_service_is_never_reported_as_a_healthy_stack(tmp_path: Path) -> None:
+    """`podman ps` lists running containers only, so a crashed service is absent
+    from BOTH the healthy count and the total and the ratio stays balanced. The
+    verdict must therefore compare against what compose declares, or it reports
+    success with a live execution lane simply gone.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "podman"
+    fake.write_text(_FAKE_PODMAN, encoding="utf-8")
+    fake.chmod(0o755)
+
+    # `alpaca-live-clerk` is declared by compose but is not running at all —
+    # it did not merely fail its healthcheck, it is absent.
+    state = tmp_path / "state.json"
+    calls = tmp_path / "calls.json"
+    state.write_text(json.dumps([
+        {"name": "polygon-data-service", "status": "running", "project": _PROJECT,
+         "service": "python-service", "healthy": True},
+        {"name": "alpaca-live-clerk", "status": "exited", "project": _PROJECT,
+         "service": "alpaca-live-clerk", "healthy": False},
+    ]), encoding="utf-8")
+    calls.write_text("{}", encoding="utf-8")
+
+    completed = subprocess.run(
+        ["bash", str(RESTART_SCRIPT)],
+        capture_output=True, text=True, timeout=60, cwd=REPOSITORY_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FAKE_PODMAN_STATE": str(state), "FAKE_PODMAN_CALLS": str(calls),
+             "COMPOSE_PROJECT_NAME": _PROJECT,
+             "RESTART_HEALTH_ATTEMPTS": "2", "RESTART_HEALTH_INTERVAL": "0"},
+    )
+
+    assert completed.returncode != 0, (
+        "restart.sh reported success while a declared service was not running. "
+        f"stdout:\n{completed.stdout[-2000:]}"
+    )
+    assert "alpaca-live-clerk" in completed.stdout, (
+        "The operator must be told which declared service is missing."
+    )
+    assert "All 1 services healthy" not in completed.stdout
