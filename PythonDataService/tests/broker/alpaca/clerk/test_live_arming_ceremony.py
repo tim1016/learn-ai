@@ -216,10 +216,10 @@ def test_a_graduated_live_binding_arms_without_a_shadow_activation_record(
     """A Live successor proves its own cutover instead of discovering any Shadow fence."""
     artifacts_root, live_state_root = roots
     from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
-        test_a_never_legacy_live_account_graduates_end_to_end,
+        test_a_never_legacy_account_graduates_end_to_end,
     )
 
-    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
         live_state_root,
         strategy_instance_id="graduated",
@@ -252,10 +252,10 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
     artifacts_root, live_state_root = roots
     rehearsal = arming_ready(artifacts_root, live_state_root, strategy_instance_id="rehearsal")
     from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
-        test_a_never_legacy_live_account_graduates_end_to_end,
+        test_a_never_legacy_account_graduates_end_to_end,
     )
 
-    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
         live_state_root,
         strategy_instance_id="live-successor",
@@ -353,10 +353,10 @@ def test_a_shadow_rehearsal_with_a_different_quantity_cannot_promote(
     artifacts_root, live_state_root = roots
     arming_ready(artifacts_root, live_state_root, strategy_instance_id="rehearsal")
     from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
-        test_a_never_legacy_live_account_graduates_end_to_end,
+        test_a_never_legacy_account_graduates_end_to_end,
     )
 
-    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
         live_state_root,
         strategy_instance_id="larger-live-successor",
