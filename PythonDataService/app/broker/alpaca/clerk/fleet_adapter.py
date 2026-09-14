@@ -1,7 +1,7 @@
 """The Alpaca provider adapter — the first production fleet provider.
 
 Provider-owned declarations only (PRD FR-003/004): the immutable provider
-identity, the typed operation catalog the Alpaca clerk serves, UUID account
+identity, the typed operation catalog the Alpaca clerk serves, account ID
 canonicalization, and the provider-authored summary projection. Every
 execution, custody, arming and recovery decision stays in the existing Alpaca
 authority machinery this adapter never imports — the fleet spine routes and
@@ -10,7 +10,6 @@ verifies, it does not trade (ADR 0062 Decision 6).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -24,10 +23,6 @@ from app.broker.fleet.provider import (
 )
 
 _ADAPTER_VERSION = "alpaca-fleet.4"
-
-_ALPACA_UUID = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
 
 
 def _op(
@@ -727,10 +722,12 @@ class AlpacaProviderAdapter:
     def canonical_account_id(self, external_account_id: str) -> str:
         """Canonicalize one external Alpaca account ID.
 
-        Alpaca account identities are UUIDs; canonicity is strip + lowercase,
-        so `` ABC-… `` and ``abc-…`` are one broker-qualified account. A
-        well-formed UUID is not *required* here — the registry treats the
-        result as opaque and provider verification owns real account
+        The Alpaca account identity this system binds is the account number
+        the clerk reports (``app/broker/alpaca/adapter.py``'s ``account_id``,
+        set from ``account_number``), not a UUID; canonicity is strip +
+        lowercase, so `` ABC123 `` and ``abc123`` are one broker-qualified
+        account. No shape is required or checked here — the registry treats
+        the result as opaque and provider verification owns real account
         discovery (PRD FR-051).
         """
         return external_account_id.strip().lower()
@@ -760,11 +757,9 @@ class AlpacaProviderAdapter:
         """Refuse served contexts the Alpaca authority machinery cannot honor.
 
         The heavy provider gates (mode agreement, arming, envelope, lease)
-        already run inside the clerk's own handlers; this hook adds the two
-        fleet-visible invariants the generic layer cannot check: a bot action
-        names the effective account it targets, and every served account id
-        is a canonical Alpaca UUID, because the Alpaca authority keys every
-        custody path by that exact value.
+        already run inside the clerk's own handlers; this hook adds the one
+        fleet-visible invariant the generic layer cannot check: a bot action
+        names the effective account it targets.
         """
         if (
             context.capability == Capability.BOT_ACTION
@@ -772,14 +767,6 @@ class AlpacaProviderAdapter:
         ):
             raise LookupError(
                 "an Alpaca bot action requires the effective account it targets"
-            )
-        uuid_text = (context.account_id or "").strip().lower()
-        if uuid_text and _ALPACA_UUID.fullmatch(uuid_text) is None:
-            # Not a refusal about shape alone: the Alpaca authority keys every
-            # custody path by the exact UUID, so an uncanonicalizable target
-            # cannot be honored on any path.
-            raise LookupError(
-                f"an Alpaca served context requires a UUID account id, got {context.account_id!r}"
             )
 
 

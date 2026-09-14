@@ -59,17 +59,28 @@ from tests.broker.fleet.conftest import FrozenClock
 # ---------------------------------------------------------------------------
 
 
-def test_the_alpaca_adapter_declares_a_valid_catalog_and_canonical_uuids() -> None:
-    """The first production provider: validated catalog, UUID canonicity."""
+def test_the_alpaca_adapter_declares_a_valid_catalog_and_canonical_account_ids() -> None:
+    """The first production provider: validated catalog, account-id canonicity.
+
+    Both live registry bindings are account numbers, not UUIDs (see
+    ``canonical_account_id``'s docstring) — the served-context gate must
+    accept them.
+    """
     adapter = AlpacaProviderAdapter()
     validate_operation_catalog(adapter.operations())
     assert adapter.operations() == ALPACA_OPERATIONS
     assert adapter.canonical_account_id("  ABCDEF01-1234-ABCD-5678-EF0123456789 ") == (
         "abcdef01-1234-abcd-5678-ef0123456789"
     )
+    adapter.validate_served_context(
+        _served_context(account_id="123456789", capability="bot_action")
+    )
+    adapter.validate_served_context(
+        _served_context(account_id="pa3abcdefghi", capability="bot_action")
+    )
     with pytest.raises(LookupError):
         adapter.validate_served_context(
-            _served_context(account_id="not-a-uuid", capability="bot_action")
+            _served_context(account_id=None, capability="bot_action")
         )
 
 
