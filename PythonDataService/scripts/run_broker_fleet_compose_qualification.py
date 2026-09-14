@@ -576,6 +576,9 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
                 "Paper-only fake provider was physically killed; Live retained its independent market read.",
                 _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
             )
+            # Restore only the Paper test dependency before subsequent Paper
+            # restart faults; Live remained independently available throughout.
+            compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "fleet-fake-paper-provider"], timeout_s=30.0)
 
             compose.run(project, ["kill", "alpaca-paper-clerk"])
             compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
