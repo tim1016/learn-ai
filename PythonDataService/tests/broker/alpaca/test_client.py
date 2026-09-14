@@ -9,22 +9,29 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from http.client import RemoteDisconnected
+from pathlib import Path
 from threading import Event
 from typing import Any
 
 import anyio
 import pytest
+import responses
 from alpaca.common.enums import Sort
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
+from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.sessions import Session
+from urllib3.exceptions import ProtocolError
 
 from app.broker.alpaca.client import (
     _MAX_RATE_LIMIT_RETRIES,
     _RATE_LIMIT_RETRY_CAP_S,
     AlpacaTradingClient,
     _install_session_timeout,
+    _install_stale_connection_retry,
 )
-from app.broker.alpaca.config import reset_alpaca_settings_for_testing
+from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_testing
+from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerOrderRejected,
@@ -691,3 +698,99 @@ async def test_seam_off_does_not_inject(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert result == {"id": "broker-order-1", "status": "accepted"}
     assert fake.post_call == ("/orders", _INJECT_ORDER)
+
+
+# ── Stale pooled connection retry (idempotent reads only, #2082) ───────────
+
+_BASE = "https://paper-api.alpaca.markets"
+_FIXED_MS = 1_700_000_000_000
+
+
+def test_stale_pooled_connection_retries_reads_but_never_writes() -> None:
+    """Alpaca closes idle keep-alives; urllib3 hands the dead socket to the
+    next request and it fails with RemoteDisconnected before the request was
+    answered at all. Observed 16 times in 6 hours on the Live lane, each pair
+    degrading the clerk's posture to evidence-unavailable.
+
+    A GET is safe to re-issue. A POST through the SAME session is not — and
+    alpaca-py gives order submission and cancellation that same session — so
+    this test is the guarantee that the retry can never resubmit an order.
+    """
+    session = Session()
+    attempts: list[str] = []
+
+    def request(method: str, url: str, **kwargs: Any) -> str:
+        attempts.append(method)
+        if attempts.count(method) == 1:
+            raise RequestsConnectionError(
+                ProtocolError(
+                    "Connection aborted.",
+                    RemoteDisconnected("Remote end closed connection without response"),
+                )
+            )
+        return "ok"
+
+    session.request = request  # type: ignore[method-assign]
+    _install_stale_connection_retry(session)
+
+    assert session.get(f"{_BASE}/v2/account") == "ok"
+    with pytest.raises(RequestsConnectionError):
+        session.post(f"{_BASE}/v2/orders", json={"symbol": "SPY"})
+
+    assert attempts == ["GET", "GET", "POST"]
+
+
+@responses.activate
+async def test_account_read_recovers_from_a_stale_pooled_connection(tmp_path: Path) -> None:
+    """End-to-end over the real client the service builds, so the wiring in
+    ``_build_default_client`` is covered and not just the helper."""
+    responses.add(
+        responses.GET,
+        f"{_BASE}/v2/account",
+        body=RequestsConnectionError(
+            ProtocolError(
+                "Connection aborted.",
+                RemoteDisconnected("Remote end closed connection without response"),
+            )
+        ),
+    )
+    responses.add(
+        responses.GET,
+        f"{_BASE}/v2/account",
+        json={"account_number": "PA1", "status": "ACTIVE"},
+        status=200,
+    )
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+
+    payload = await client.get_account()
+
+    assert payload["account_number"] == "PA1"
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+async def test_order_submission_is_not_retried_when_the_connection_drops(tmp_path: Path) -> None:
+    """The write path shares the pool. One dropped connection must surface as
+    one failed submission, never as a second order on the wire."""
+    responses.add(
+        responses.POST,
+        f"{_BASE}/v2/orders",
+        body=RequestsConnectionError(
+            ProtocolError(
+                "Connection aborted.",
+                RemoteDisconnected("Remote end closed connection without response"),
+            )
+        ),
+    )
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+
+    with pytest.raises(BrokerUnavailable):
+        await client.submit_order({"symbol": "SPY", "qty": "1", "side": "buy"})
+
+    assert len(responses.calls) == 1
