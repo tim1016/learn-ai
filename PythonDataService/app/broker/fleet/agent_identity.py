@@ -217,9 +217,15 @@ class FleetIdentityMiddleware:
         provider = getattr(state, SERVED_IDENTITY_STATE_KEY, None) if state else None
         identity = provider() if callable(provider) else None
         if not isinstance(identity, Mapping) or identity.get("clerk_id") is None:
+            # Reaching here means a lane-serving process has not installed its
+            # served identity yet — a real condition worth surfacing. It no
+            # longer fires for agent-to-coordinator traffic, which pins a clerk
+            # id on a process that serves no lane and never owed an echo.
             logger.warning(
-                "A fleet-addressed request reached a runtime serving no fleet "
-                "identity; the response will fail the coordinator's echo check."
+                "A fleet-addressed request reached a lane process that is "
+                "serving no fleet identity; its response cannot carry the "
+                "identity echo the coordinator verifies.",
+                extra={"action": "fleet_identity_echo_unavailable"},
             )
             await self.app(scope, receive, send)
             return
