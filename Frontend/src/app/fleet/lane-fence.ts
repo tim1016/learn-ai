@@ -90,14 +90,6 @@ export function laneFenceVerdict(frozen: LaneFence, lane: LaneDescriptor | undef
   return { ok: true };
 }
 
-/** Whether a target still matches the fence it was frozen against. */
-export function targetMatchesFence(target: ResourceTarget, fence: LaneFence): boolean {
-  return (
-    target.bindingGeneration === fence.bindingGeneration &&
-    target.routingEpoch === fence.routingEpoch
-  );
-}
-
 /** Re-stamp a target's binding-generation fence with what the operator was
  * shown, without re-deriving any other dimension. */
 export function fencedTarget(target: ResourceTarget, fence: LaneFence): ResourceTarget {

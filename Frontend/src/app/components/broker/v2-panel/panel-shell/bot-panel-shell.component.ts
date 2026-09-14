@@ -9,7 +9,6 @@ import {
   linkedSignal,
   resource,
   signal,
-  untracked,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -43,8 +42,8 @@ import {
   freezeLaneFence,
   laneFenceVerdict,
   LANE_FENCE_REFRESH_FAILED_MESSAGE,
-  type LaneFence,
 } from '../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
@@ -154,19 +153,14 @@ export class BotPanelShellComponent {
   /** The fence the operator was shown. Captured when the shell renders the
    * lane and again only when the route identity changes; never at click time.
    * The backend can refuse only a generation we send, so re-reading it here
-   * would make the fence structurally unable to fire (#2068).
-   *
-   * The directory read is `untracked`: `linkedSignal`'s `computation` runs
-   * with itself as the active consumer, so an ordinary read of
-   * `fleetDirectory.lane()` (which is signal-backed) would silently make this
-   * fence a dependent of the live directory resource and re-derive on every
-   * `refresh()` — the same live-read bug this fence exists to close, one
-   * layer down. Only the `source` key (route identity) may retrigger it. */
-  private readonly openFence = linkedSignal({
-    source: () => `${this.broker()}::${this.clerkId()}`,
-    computation: (): LaneFence =>
-      untracked(() => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId()))),
-  });
+   * would make the fence structurally unable to fire (#2068). Wiring is the
+   * shared `openLaneFence` helper — see its doc for why both the `untracked`
+   * directory read and the eager materialization it performs are
+   * load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
+  );
 
   // ── Internal state ────────────────────────────────────────────────────────
 
@@ -250,12 +244,6 @@ export class BotPanelShellComponent {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   constructor() {
-    // Materialize the fence as soon as the lane renders. linkedSignal is
-    // lazy: a value only ever read inside onActionRequested() would first
-    // compute at CLICK time, not OPEN time, silently freezing nothing (#2068).
-    effect(() => {
-      this.openFence();
-    });
     effect(() => {
       const target = this.target();
       void this.liveStore.start({
@@ -380,6 +368,11 @@ export class BotPanelShellComponent {
       // operator's last-seen panel state is now stale relative to whatever
       // changed underneath it — refresh so "Ready to resume" doesn't linger
       // after a resume was just refused for no longer being ready.
+      //
+      // No .catch() here, unlike fleetDirectory.refresh() above: BotPanelLiveStore.refresh()
+      // catches internally and stores the failure as error state (it never rejects), while
+      // FleetDirectoryService.refresh() deliberately does reject — this asymmetry is correct,
+      // not an oversight.
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);

@@ -6,9 +6,7 @@ import {
   effect,
   inject,
   input,
-  linkedSignal,
   signal,
-  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
@@ -19,8 +17,9 @@ import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.serv
 import {
   freezeLaneFence,
   laneFenceVerdict,
-  type LaneFence,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
 } from '../../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../../fleet/open-lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
@@ -86,13 +85,13 @@ export class BotGalleryPageComponent {
 
   /** The fence the operator was shown. Captured when the gallery renders the
    * lane and again only when the route identity changes; never at click time
-   * (#2068). The directory read is `untracked` so this fence does not become
-   * a dependent of the live directory resource and re-derive on refresh(). */
-  private readonly openFence = linkedSignal({
-    source: () => `${this.broker()}::${this.clerkId()}`,
-    computation: (): LaneFence =>
-      untracked(() => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId()))),
-  });
+   * (#2068). Wiring is the shared `openLaneFence` helper — see its doc for
+   * why both the `untracked` directory read and the eager materialization
+   * it performs are load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
+  );
 
   /**
    * Sids with a confirmed quick action in flight. Drives two things off the
@@ -116,12 +115,6 @@ export class BotGalleryPageComponent {
   });
 
   constructor() {
-    // Materialize the fence as soon as the lane renders. linkedSignal is
-    // lazy: a value only ever read inside onAction() would first compute at
-    // CLICK time, not OPEN time, silently freezing nothing (#2068).
-    effect(() => {
-      this.openFence();
-    });
     effect(() => {
       // The stream address is a read, not a command: it must keep following
       // the live lane, unlike the fence above.
@@ -168,6 +161,14 @@ export class BotGalleryPageComponent {
         `Could not run ${event.actionId} on ${event.sid}.`,
       );
       this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
+      }
     } finally {
       this.pendingSids.update((current) => {
         const next = new Set(current);

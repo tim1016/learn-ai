@@ -5,13 +5,10 @@ import {
   Injector,
   afterNextRender,
   computed,
-  effect,
   inject,
   input,
-  linkedSignal,
   resource,
   signal,
-  untracked,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
@@ -36,8 +33,8 @@ import {
   freezeLaneFence,
   laneFenceVerdict,
   LANE_FENCE_REFRESH_FAILED_MESSAGE,
-  type LaneFence,
 } from '../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
@@ -119,13 +116,13 @@ export class BotsListPageComponent {
 
   /** The fence the operator was shown. Captured when the roster renders the
    * lane and again only when the route identity changes; never at click time
-   * (#2068). The directory read is `untracked` so this fence does not become
-   * a dependent of the live directory resource and re-derive on refresh(). */
-  private readonly openFence = linkedSignal({
-    source: () => `${this.broker()}::${this.clerkId()}`,
-    computation: (): LaneFence =>
-      untracked(() => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId()))),
-  });
+   * (#2068). Wiring is the shared `openLaneFence` helper — see its doc for
+   * why both the `untracked` directory read and the eager materialization
+   * it performs are load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
+  );
 
   /**
    * Values may only be rendered for the exact routed lane that produced them.
@@ -285,13 +282,6 @@ export class BotsListPageComponent {
   });
   constructor() {
     afterNextRender(() => this.mark('alpaca-bots-route-shell'));
-
-    // Materialize the fence as soon as the lane renders. linkedSignal is
-    // lazy: a value only ever read inside runAction() would first compute at
-    // CLICK time, not OPEN time, silently freezing nothing (#2068).
-    effect(() => {
-      this.openFence();
-    });
 
     const catalogTimer = setInterval(() => {
       if (this.document.visibilityState === 'visible' && !this.catalog.isLoading()) {

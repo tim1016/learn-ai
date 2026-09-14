@@ -1,5 +1,6 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
@@ -15,6 +16,7 @@ import {
   testLane,
   type FleetDirectoryDouble,
 } from '../../../../../fleet/fleet-directory-testing';
+import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../../fleet/lane-fence';
 
 const BROKER = 'alpaca';
 const ACCOUNT_ID = 'PA3';
@@ -327,5 +329,70 @@ describe('BotGalleryPageComponent', () => {
         detail: expect.stringMatching(/no known binding when the action was opened/i),
       }),
     );
+  });
+
+  /**
+   * `FleetDirectoryService.refresh()` had no caller before this fix, which is
+   * the only reason the pre-freeze click-time fence read was harmless. Now
+   * that the fence is frozen at open, a stale-generation refusal must refresh
+   * the directory so the operator's next action is minted against a lane
+   * they have actually been shown (#2068). `bots-list-page` and
+   * `bot-panel-shell` already carried this mitigation; the gallery runs the
+   * identical getPanel -> runBotAction round trip and can hit the identical
+   * refusal, so it must carry it too.
+   */
+  it('refreshes the directory after the coordinator refuses a stale generation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * `refresh()` is a proven-rejecting call (`FleetDirectoryService.refresh` ->
+   * `awaitLoaded` throws whenever `/api/broker-clerks` fails). Firing it
+   * fire-and-forget with no rejection handler would leave the operator with
+   * no signal that the mitigation for a stale-generation refusal didn't
+   * take — the directory's `response()` signal stays exactly as stale as it
+   * was, and the next action hits the identical refusal with no warning.
+   */
+  it('tells the operator when the mitigating directory refresh itself fails', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    directory.useValue.refresh = vi.fn().mockRejectedValue(new Error('directory reload failed'));
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const { messageService } = await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await vi.waitFor(() =>
+      expect(messageService.add).toHaveBeenCalledWith(
+        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
+      ),
+    );
+    expect(runBotAction).toHaveBeenCalledTimes(1);
   });
 });

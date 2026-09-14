@@ -6,7 +6,14 @@
  * must list `bot-panel-shell.component.ts`, `bots-list-page.component.ts`
  * and `bot-gallery-page.component.ts` as offenders — see
  * `docs/references/reconciliations` note for the exact command and output,
- * or the PR body for #2068. */
+ * or the PR body for #2068.
+ *
+ * Known limitation: this is a file-level, textual co-occurrence check, not a
+ * data-flow one. It passes as soon as `freezeLaneFence(` appears anywhere in
+ * a file that also contains `withCommand(` and a live `.lane(` read — it does
+ * not prove the freeze gates the *particular* read that reaches
+ * `withCommand(`. A file that added a second, genuinely-unfenced lane read
+ * alongside a correctly-fenced one would still pass. */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
