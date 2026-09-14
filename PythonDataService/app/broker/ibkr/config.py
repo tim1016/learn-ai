@@ -105,6 +105,9 @@ class IbkrSettings(BaseSettings):
     # Artifact root for live-run directories. Host path differs from container
     # path due to the compose volume mount; surfaced as config so tests can
     # parameterise it. Container default: /app/artifacts/live_runs.
+    # The ``IBKR_`` prefix is a deliberate legacy name, not a scope: this root
+    # is Alpaca-lane-local artifact storage, and IBKR is its live market-data
+    # source, not its owner (#2077).
     live_runs_root: str = "/app/artifacts/live_runs"
 
     # Persistent JSONL + Parquet root for live bars (Slice 4). The
@@ -113,6 +116,9 @@ class IbkrSettings(BaseSettings):
     # today's bars before the stream produces a single new one. Shares the
     # ``artifacts/`` mount so retention and disk-usage live with the run
     # artifacts.
+    # The ``IBKR_`` prefix is a deliberate legacy name, not a scope: this root
+    # is Alpaca-lane-local artifact storage, and IBKR is its live market-data
+    # source, not its owner (#2077).
     live_bars_root: str = "/app/artifacts/live_bars"
 
     # Retention window for the live-bar persistence layer. Files older than

@@ -19,7 +19,7 @@ Set these before connecting the app:
 | Setting                           | Paper expectation                        | Why it matters                                                                                                                                             |
 | --------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Enable ActiveX and Socket Clients | Enabled                                  | The TWS API socket must be enabled before any client can connect.                                                                                          |
-| Read-Only API                     | Disabled for order-capable paper testing | IBKR enables read-only mode by default in some flows. Leave it enabled only for read-only diagnostics; disable it before order-capable paper tests.        |
+| Read-Only API                     | Enabled — IBKR order actuation is retired (#1583); this connection is read-only evidence and market data | IBKR enables read-only mode by default in some flows. Leave it enabled; there is no order-capable paper-testing path to disable it for.        |
 | Socket port                       | TWS paper: `7497`; Gateway paper: `4002` | IBKR's standard paper ports differ between TWS and Gateway.                                                                                                |
 | Socket port, live reference only  | TWS live: `7496`; Gateway live: `4001`   | The repo's paper guardrails should prevent live-port order paths. Treat a live port as a safety incident unless explicitly testing a read-only diagnostic. |
 | Client ID                         | Unique per simultaneous API client       | IBKR rejects or drops sessions when another API client is already using the same client ID.                                                                |
@@ -33,7 +33,6 @@ IBKR_MODE=paper
 IBKR_HOST=host.containers.internal
 IBKR_PORT=4002
 IBKR_CLIENT_ID=7
-IBKR_READONLY=false
 ```
 
 Notes:
@@ -55,6 +54,16 @@ IBKR's API connection signature includes host, port, and client ID. The client I
 
 If the selected Account Desk reports a client-ID overlap, do not retry blindly. Stop the duplicate client, choose another client ID, or restart Gateway/TWS to clear stale sessions.
 
+## Relogin cadence
+
+IB Gateway logs itself out on its own nightly schedule. In IB Gateway, open Configure -> Settings -> Lock and Exit, and enable **Auto restart**. This is IBKR-side configuration, not a repo `.env` setting.
+
+Auto restart is not the complete remedy. It preserves the session across the nightly logout, but IBKR still forces a weekly re-login regardless of Auto restart (see `docs/audits/bot-fleet-stress-2026-08-25.md`, S1 finding). Before the first bot launch after that weekly window, confirm Gateway shows a logged-in session and Account Desk reports the market-data feed connected — do not assume Auto restart alone carried the session through it.
+
+While the Gateway is logged out (nightly without Auto restart, or the weekly forced re-login), the reconnect breaker keeps attempting a connect roughly once a minute, indefinitely — that attempt cadence is not the same as the visible log cadence. The data-plane clerk logs one connect-failure warning when the outage starts, then only a periodic summary every 15 minutes; quiet minutes between summaries are not a stopped monitor. Any bot still running (including Alpaca bots — the IBKR feed supplies their live bars) dies at its next decision trigger because the feed it streams from is gone.
+
+Do not respond to this by disabling `IBKR_BROKER_ENABLED`; that flag controls whether the shared market-data feed exists at all and is load-bearing for Alpaca execution (see `docs/ibkr-integration-authority.md`). Fix the Gateway-side login/Auto restart setting instead.
+
 ## Diagnostic flow
 
 1. Open the selected account in Account Desk.
@@ -70,7 +79,6 @@ If the selected Account Desk reports a client-ID overlap, do not retry blindly. 
 | ------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Connection refused                    | Gateway/TWS is not running, wrong host, or wrong port                | Start the IBKR app and confirm the configured paper port.                                              |
 | Socket connects then drops            | API setting rejection, Trusted IP issue, or duplicate client ID      | Recheck API settings and choose a unique client ID.                                                    |
-| Orders are rejected as read-only      | Read-Only API is still enabled or `IBKR_READONLY=true`               | Keep diagnostics read-only, but switch both IBKR and `.env` to order-capable before paper order tests. |
 | App shows live mode or non-DU account | Wrong IBKR session or live port/account                              | Stop. Disconnect and reconnect to the intended paper account before using broker pages.                |
 | Account Monitor remains frozen        | Open or unattributed exposure still exists, or account proof expired | Flatten/audit exposure, then run account reconciliation again.                                         |
 
@@ -85,4 +93,4 @@ Before enabling any real code path that depends on live broker evidence:
 - Unattributed exposure is flat or has an audited accepted override.
 - Any retired-bot recovery row is resolved or deliberately left frozen.
 
-Do not replace these checks with dummy production code. Pre-market work can add read-only display and disabled affordances; order-changing paths should wait for market-hours evidence.
+Do not replace these checks with dummy production code. Pre-market work can add read-only display and disabled affordances; Alpaca Broker V2 order-changing paths that depend on this IBKR evidence should wait for market-hours evidence.
