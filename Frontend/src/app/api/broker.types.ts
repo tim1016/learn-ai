@@ -1605,8 +1605,7 @@ export interface paths {
         /** List bots whose durable binding carries this broker tag */
         get: operations["list_bots_api_brokers__broker__bots_get"];
         put?: never;
-        /** Deploy and start a log-only bot bound to this broker */
-        post: operations["deploy_bot_api_brokers__broker__bots_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1624,23 +1623,6 @@ export interface paths {
         get: operations["get_catalog_unscoped_api_brokers__broker__bots_catalog_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/actions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execute one presented action (single-account alias) (§11) */
-        post: operations["run_action_unscoped_api_brokers__broker__bots__sid__actions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1778,23 +1760,6 @@ export interface paths {
         put?: never;
         /** Recompute one completed run's replay-parity receipt from its retained bars */
         post: operations["generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Stop a running bot (durable STOPPED intent first, then reap) */
-        post: operations["stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12307,32 +12272,6 @@ export interface components {
              */
             valid?: boolean;
         };
-        /**
-         * DeployBotRequest
-         * @description Deploy (and start) a bot bound to ``{broker}``.
-         */
-        DeployBotRequest: {
-            /**
-             * Mode
-             * @default log_only
-             * @enum {string}
-             */
-            mode?: "log_only" | "dry_run" | "trade";
-            /**
-             * Quantity
-             * @default 1
-             */
-            quantity?: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Use Rth
-             * @default true
-             */
-            use_rth?: boolean;
-        };
         /** DesignateGoldenRunRequest */
         DesignateGoldenRunRequest: {
             /** Command Id */
@@ -22420,14 +22359,6 @@ export interface components {
             updated?: number | null;
         };
         /**
-         * StopBotRequest
-         * @description Button-Rule exit: stop a running bot (durable desired-state first).
-         */
-        StopBotRequest: {
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
          * StopRunRequest
          * @description ``lifecycle_run_id`` is required (corrective foundation slice): Stop
          *     is no longer resolved from the currently active run, since that made a
@@ -28614,43 +28545,6 @@ export interface operations {
             };
         };
     };
-    deploy_bot_api_brokers__broker__bots_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeployBotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_catalog_unscoped_api_brokers__broker__bots_catalog_get: {
         parameters: {
             query?: never;
@@ -28680,62 +28574,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_action_unscoped_api_brokers__broker__bots__sid__actions_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PanelActionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PanelActionResult"];
-                };
-            };
-            /** @description The action's revision/concurrency token is stale, or it is no longer available. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PanelActionErrorResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description The performer began but did not return a terminal command receipt. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PanelActionErrorResponse"];
                 };
             };
         };
@@ -29067,44 +28905,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunReplayReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["StopBotRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"];
                 };
             };
             /** @description Validation Error */

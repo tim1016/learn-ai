@@ -80,31 +80,6 @@ def _normalized_symbol(value: str) -> str:
     return normalized
 
 
-class DeployBotRequest(BaseModel):
-    """Deploy (and start) a bot bound to ``{broker}``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    symbol: str = Field(min_length=1, max_length=12)
-    use_rth: bool = True
-    mode: Literal["log_only", "dry_run", "trade"] = "log_only"
-    quantity: int = Field(default=1, ge=1, le=100)
-
-    @field_validator("strategy_instance_id")
-    @classmethod
-    def _validate_strategy_instance_id(cls, value: str) -> str:
-        # Canonical path-segment validation — same rule every artifact path
-        # builder enforces, applied at the API boundary so a bad id fails as
-        # 422 instead of a 500 from a path builder.
-        return _validated_strategy_instance_id(value)
-
-    @field_validator("symbol")
-    @classmethod
-    def _normalize_symbol(cls, value: str) -> str:
-        return _normalized_symbol(value)
-
-
 class AlpacaPaperSizingSelection(BaseModel):
     """One closed sizing choice for the Alpaca paper canary workflow."""
 
@@ -376,14 +351,6 @@ class AlpacaPaperDeployView(BaseModel):
     carryover_label: str
     carryover_explanation: str
     allowed_actions: tuple[Literal["deploy"], ...]
-
-
-class StopBotRequest(BaseModel):
-    """Button-Rule exit: stop a running bot (durable desired-state first)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    reason: str | None = Field(default=None, max_length=256)
 
 
 class BotStatusView(BaseModel):

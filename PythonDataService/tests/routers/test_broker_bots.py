@@ -122,58 +122,27 @@ async def test_unknown_broker_is_typed_404(api) -> None:
 
 @pytest.mark.asyncio
 async def test_deploy_stop_button_rule_end_to_end(api) -> None:
-    app, _registry = api
-    async with _client(app) as client:
-        deployed = await client.post(
-            "/api/brokers/alpaca/bots",
-            json={"strategy_instance_id": _SID, "symbol": "spy"},
-        )
-        assert deployed.status_code == 201
-        body = deployed.json()
-        assert body["running"] is True
-        assert body["phase"] == "ON_DUTY"
-        assert body["broker"] == "alpaca"
-        assert body["symbol"] == "SPY"  # normalized at the boundary
+    app, registry = api
+    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    assert deployed.running is True
+    assert deployed.phase == "ON_DUTY"
+    assert deployed.broker == "alpaca"
+    assert deployed.symbol == "SPY"
 
+    async with _client(app) as client:
         listed = await client.get("/api/brokers/alpaca/bots")
         assert listed.status_code == 200
         assert [row["strategy_instance_id"] for row in listed.json()] == [_SID]
 
-        stopped = await client.post(
-            f"/api/brokers/alpaca/bots/{_SID}/stop", json={"reason": "drill"}
-        )
-        assert stopped.status_code == 200
-        stopped_body = stopped.json()
-        assert stopped_body["running"] is False
-        assert stopped_body["phase"] == "OFF_DUTY"
-        assert stopped_body["desired_state"] == "STOPPED"
-        assert stopped_body["duty_outcome"]["kind"] == "STOPPED"
+        stopped = await registry.stop("alpaca", _SID, reason="drill")
+        assert stopped.running is False
+        assert stopped.phase == "OFF_DUTY"
+        assert stopped.desired_state == "STOPPED"
+        assert stopped.duty_outcome.kind == "STOPPED"
 
         status = await client.get(f"/api/brokers/alpaca/bots/{_SID}")
         assert status.status_code == 200
         assert status.json()["running"] is False
-
-
-@pytest.mark.asyncio
-async def test_stop_unknown_bot_is_404(api) -> None:
-    app, _registry = api
-    async with _client(app) as client:
-        response = await client.post(f"/api/brokers/alpaca/bots/{_SID}/stop", json={})
-
-    assert response.status_code == 404
-    assert "not running" in response.json()["detail"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_invalid_strategy_instance_id_is_422(api) -> None:
-    app, _registry = api
-    async with _client(app) as client:
-        response = await client.post(
-            "/api/brokers/alpaca/bots",
-            json={"strategy_instance_id": "  padded  ", "symbol": "SPY"},
-        )
-
-    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -189,15 +158,12 @@ async def test_registry_not_installed_is_503(api) -> None:
 @pytest.mark.asyncio
 async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     app, registry = api
-    async with _client(app) as client:
-        deployed = await client.post(
-            "/api/brokers/alpaca/bots",
-            json={"strategy_instance_id": _SID, "symbol": "SPY"},
-        )
-        first_run_id = deployed.json()["active_run_id"]
-        await client.post(f"/api/brokers/alpaca/bots/{_SID}/stop", json={})
-        resumed = await registry.resume_existing("alpaca", _SID)
+    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    first_run_id = deployed.active_run_id
+    await registry.stop("alpaca", _SID)
+    resumed = await registry.resume_existing("alpaca", _SID)
 
+    async with _client(app) as client:
         current = await client.get(
             f"/api/brokers/alpaca/bots/{_SID}/runs/current"
         )
@@ -243,13 +209,10 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
 @pytest.mark.asyncio
 async def test_run_reads_reject_unknown_bot_and_foreign_cursor(api) -> None:
     app, registry = api
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     async with _client(app) as client:
         missing = await client.get(
             "/api/brokers/alpaca/bots/missing/runs/current"
-        )
-        await client.post(
-            "/api/brokers/alpaca/bots",
-            json={"strategy_instance_id": _SID, "symbol": "SPY"},
         )
         foreign_cursor = await client.get(
             f"/api/brokers/alpaca/bots/{_SID}/runs/history",

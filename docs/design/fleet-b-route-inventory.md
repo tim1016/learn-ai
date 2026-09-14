@@ -191,21 +191,62 @@ path-style `order_ref` parameter rides the catalog's `:path` form.
 
 ## Retained-legacy (unchanged in B; retirement is E)
 
-Unscoped reads the compatibility window keeps, per D14 — each row keeps its
-consumers until the route-hit telemetry and consumer inventory say otherwise:
+`_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:35`)
+is what `compatibility_route_family` matches against, so this whole section is
+**unscoped reads only** — the mechanism can never reach a mutation, retired or
+not. Each row keeps its consumers until the route-hit telemetry and consumer
+inventory say otherwise (D14):
 
-- `broker_bots` — `/api/brokers/{broker}/bots` (list/create/stop, runs
-  current/history, instance read).
-- `run_replay` — `/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt`.
+- `broker_bots` — `/api/brokers/{broker}/bots` (list, runs current/history,
+  instance read). The unscoped `create` (`deploy_bot`) and `stop` mutations
+  that used to sit on this same router were **deleted outright by #2069**,
+  not retained: neither had a catalog operation, a frontend caller, or a
+  script caller.
+- `run_replay` — `GET /api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt`
+  (the durable-receipt read only; the `POST` on the same path is a mutation
+  and is listed under "Stranded unscoped mutations" below, not here).
 - `broker_v2_panel` unscoped aliases — `/api/brokers/{broker}/bots/catalog`,
-  `/bots/{sid}/(panel|actions|chart/*|evidence)`, `/panel-profile`.
-- `brokers` lane extras — `/api/brokers/{broker}/(assets|activities|clock|`
-  `order-groups|portfolio-history|portfolio-history-proof|live-verdict|`
-  `fees/session-reconciliation|live-envelope/loss-hold|clerk/status|clerk/custody-diagnosis)`.
-- `/api/brokers/alpaca/configuration/**` direct (unscoped) — stays until the
-  frontend cutover (C) moves consumers to the clerk-scoped surface.
+  `/bots/{sid}/(panel|chart/*|evidence)`, `/panel-profile`. The unscoped
+  `/bots/{sid}/actions` mutation alias (`run_action_unscoped`) was also
+  **deleted by #2069** — it had no caller anywhere (frontend, script, or
+  test).
+- `brokers` lane extras (reads only) — `/api/brokers/{broker}/(assets|`
+  `activities|clock|order-groups|portfolio-history|portfolio-history-proof|`
+  `live-verdict|fees/session-reconciliation|clerk/status|`
+  `clerk/custody-diagnosis)`. The `POST .../live-envelope/loss-hold/clear`
+  mutation that lives on the same router is **not** a compatibility read; see
+  "Stranded unscoped mutations" below.
+- `/api/brokers/alpaca/configuration/**` **reads** — stay unscoped until the
+  frontend cutover (C) moves consumers to the clerk-scoped surface. The
+  `configuration/**` **write** half (`PUT .../selection`,
+  `POST .../selection/apply`) does not belong in this list at all: it is not
+  a retirable browser alias, it is the agent surface the coordinator's
+  `configuration_selection_stage` / `configuration_selection_apply` catalog
+  operations forward to. Deleting it would sever fleet routing — it is two of
+  the 22 unscoped mutation routes in this file (of 27 total) that are the
+  coordinator's own transport (alongside `bot_create`, panel actions, both
+  cohort operations, manual-order tickets), not compatibility debt.
 
-None of these gain new behavior in B; none is developed further.
+None of the reads above gain new behavior in B; none is developed further.
+
+### Stranded unscoped mutations (no fleet successor, retained deliberately)
+
+Two unscoped **mutations** were measured with the same absence pattern that
+got the other three deleted by #2069 — no catalog operation resolves to
+either, and neither has a frontend or script caller — but no fleet-scoped
+route exists to route them to instead, so both stay and are named here
+rather than folded into the reads list above:
+
+- `POST /api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt`
+  (`app/routers/run_replay.py`) — the only way to (re)generate a run's replay
+  receipt; the sibling `GET` on the same path tells a 404 caller to POST it.
+- `POST /api/brokers/{broker}/live-envelope/loss-hold/clear`
+  (`app/routers/brokers.py`) — the guarded real-money loss-hold clear (ADR
+  0059 D4): re-observes the account and refuses while the breach still
+  stands.
+
+They join `GET /api/brokers/{broker}/order-groups` (listed under `brokers`
+lane extras above) as routes with no fleet-scoped path today.
 
 ## Coordinator-owned (not fleet families)
 

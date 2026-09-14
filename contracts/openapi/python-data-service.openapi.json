@@ -12420,52 +12420,6 @@
         "title": "DeflatedSharpeResponse",
         "type": "object"
       },
-      "DeployBotRequest": {
-        "additionalProperties": false,
-        "description": "Deploy (and start) a bot bound to ``{broker}``.",
-        "properties": {
-          "mode": {
-            "default": "log_only",
-            "enum": [
-              "log_only",
-              "dry_run",
-              "trade"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "quantity": {
-            "default": 1,
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Quantity",
-            "type": "integer"
-          },
-          "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "symbol": {
-            "maxLength": 12,
-            "minLength": 1,
-            "title": "Symbol",
-            "type": "string"
-          },
-          "use_rth": {
-            "default": true,
-            "title": "Use Rth",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "symbol"
-        ],
-        "title": "DeployBotRequest",
-        "type": "object"
-      },
       "DesignateGoldenRunRequest": {
         "properties": {
           "command_id": {
@@ -35181,26 +35135,6 @@
         "title": "StockTickerSnapshot",
         "type": "object"
       },
-      "StopBotRequest": {
-        "additionalProperties": false,
-        "description": "Button-Rule exit: stop a running bot (durable desired-state first).",
-        "properties": {
-          "reason": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          }
-        },
-        "title": "StopBotRequest",
-        "type": "object"
-      },
       "StopRunRequest": {
         "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see the pinned contract's \u00a73a.",
         "properties": {
@@ -48940,72 +48874,6 @@
         "tags": [
           "broker-bots"
         ]
-      },
-      "post": {
-        "operationId": "deploy_bot_api_brokers__broker__bots_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeployBotRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BotStatusView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Deploy and start a log-only bot bound to this broker",
-        "tags": [
-          "broker-bots"
-        ]
       }
     },
     "/api/brokers/{broker}/bots/catalog": {
@@ -49065,103 +48933,6 @@
           }
         },
         "summary": "Bots-list roster (single-account alias of the scoped route) (\u00a75)",
-        "tags": [
-          "broker-v2-panel"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/bots/{sid}/actions": {
-      "post": {
-        "operationId": "run_action_unscoped_api_brokers__broker__bots__sid__actions_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PanelActionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PanelActionResult"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PanelActionErrorResponse"
-                }
-              }
-            },
-            "description": "The action's revision/concurrency token is stale, or it is no longer available."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PanelActionErrorResponse"
-                }
-              }
-            },
-            "description": "The performer began but did not return a terminal command receipt."
-          }
-        },
-        "summary": "Execute one presented action (single-account alias) (\u00a711)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -49940,90 +49711,6 @@
         "summary": "Recompute one completed run's replay-parity receipt from its retained bars",
         "tags": [
           "run-replay"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
-      "post": {
-        "operationId": "stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "strategy_instance_id",
-            "required": true,
-            "schema": {
-              "title": "Strategy Instance Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/StopBotRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Request"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BotStatusView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stop a running bot (durable STOPPED intent first, then reap)",
-        "tags": [
-          "broker-bots"
         ]
       }
     },
