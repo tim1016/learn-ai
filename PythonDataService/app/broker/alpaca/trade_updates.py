@@ -398,9 +398,11 @@ class TradeUpdatesConsumer:
         one" (i.e. whether ``_consume_once`` should REST gap-reconcile).
         ``attempt`` is the backoff input only, and resets to zero after any
         cycle that reached the connection watermark — so a stream healthy for
-        hours does not pay the 30s backoff ceiling for a blip long past. The
-        same split exists in ``AlpacaMarketLivenessConsumer._consume_statuses``
-        and ``ReconciliationSweep._run_forever``.
+        hours does not pay the 30s backoff ceiling for a blip long past.
+        ``ReconciliationSweep.run`` (``passes`` / ``consecutive_failures``) is
+        the in-repo precedent for this two-counter split; the market-status
+        stream (``AlpacaMarketLivenessConsumer._consume_statuses``) gets the
+        same backoff reset in PR #2081.
         """
         cycles = 0
         attempt = 0
