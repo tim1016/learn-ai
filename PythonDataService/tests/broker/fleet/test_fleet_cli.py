@@ -252,9 +252,14 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
 ) -> None:
     """The host command retains aliases by default and refuses an incomplete retirement proof."""
     # One anchor, explicit offsets: nothing in this test depends on wall-clock
-    # milliseconds elapsing between two CLI invocations. The evidence-age and
-    # window bounds are 24h / 7d (compatibility_retirement.py:28-29), so these
-    # offsets are inside every limit while still ordering strictly.
+    # milliseconds elapsing between two CLI invocations. anchor_ms stays a
+    # live now_ms_utc() read, not a hardcoded or frozen value, because the
+    # CLI computes evaluated_at internally (scripts/manage_broker_fleet.py
+    # exposes no --evaluated-at-ms) and a stale anchor would age past the
+    # limits within a day. The evidence-age and window bounds are
+    # DEFAULT_MAX_EVIDENCE_AGE_MS (24h) / DEFAULT_MAX_WINDOW_DURATION_MS (7d)
+    # in compatibility_retirement.py, so these offsets are inside every
+    # limit while still ordering strictly.
     anchor_ms = now_ms_utc()
     window_start_ms = anchor_ms - 3_000
     window_end_ms = anchor_ms - 2_000

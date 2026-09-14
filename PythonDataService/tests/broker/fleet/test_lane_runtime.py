@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from app.broker.fleet import lane_runtime
 from app.broker.fleet.compatibility_retirement import (
     CompatibilityRouteState,
     write_route_state,
@@ -31,10 +32,11 @@ Send = Callable[[AsgiMessage], Awaitable[None]]
 AsgiApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
 
 #: How long the injected slow export blocks. Must-timeout side of the budget.
-_SLOW_EXPORT_SECONDS = 2.0
+_SLOW_EXPORT_SECONDS = 1.0
 #: The response must return well inside this. Must-succeed side of the budget.
-#: The two are an order of magnitude apart on purpose: one small shared
-#: constant makes a loaded runner fail a test that is not about timing.
+#: The invariant, not a ratio: the sleep must exceed the budget (a real
+#: on-loop regression makes elapsed time track the sleep), and the budget
+#: must exceed worst-case scheduling jitter on a loaded runner.
 _RESPONSE_BUDGET_SECONDS = 0.5
 
 
@@ -92,8 +94,6 @@ def _scoped_os(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
     every thread and every other test in the session. Rebinding the module
     attribute cannot leak: only ``lane_runtime``'s own lookups see the shim.
     """
-    from app.broker.fleet import lane_runtime
-
     shim = SimpleNamespace(
         fsync=os.fsync, replace=os.replace, open=os.open, close=os.close, O_RDONLY=os.O_RDONLY
     )
