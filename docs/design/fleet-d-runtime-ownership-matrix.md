@@ -18,7 +18,7 @@ surface and this delivery must not revive one.
 
 | Role | Compose service / role | Owns | Must not own | External exposure |
 |---|---|---|---|---|
-| Coordinator | `fleet-coordinator` / `fleet_coordinator` | Registry, directory, approved endpoint mapping, assignment fence, session facts, routing-attempt correlation | Broker credentials, lane profiles, custody, orders, fills, positions, arming, runner state, market-data clients | The backend's Python ingress terminates here; it is the only fleet ingress |
+| Coordinator | `fleet-coordinator` / `fleet_coordinator` | Registry, directory, approved endpoint mapping, assignment fence, session facts, routing-attempt correlation, and the existing research/data-lake plane | Alpaca execution credentials, a Clerk-local IBKR live-feed client, lane profiles/custody/orders/fills/positions/arming/runner state | The backend's Python ingress terminates here; it is the only fleet ingress |
 | Paper lane | `alpaca-paper-clerk` / `clerk_agent` | One opaque Clerk identity; Paper profile/custody/lease/ledger/streams/runner state/backups; its two transport tokens and Paper broker credential slot | Live root, Live credentials, coordinator registry write access other than authenticated presence protocol, container socket | Internal-only private network |
 | Live lane | `alpaca-live-clerk` / `clerk_agent` | One opaque Clerk identity; Live profile/custody/lease/ledger/streams/runner state/backups; its two transport tokens and Live broker credential slot | Paper root, Paper credentials, coordinator registry write access other than authenticated presence protocol, container socket | Internal-only private network |
 
@@ -35,7 +35,7 @@ attestation must refuse before a database writer or broker client opens.
 | Writable roots | Registry and coordinator-local routing evidence only | Profile selection, custody, lease, receipts, streams, bot bindings, runner/arming evidence, backups, recovery | Same classes, but only for Live | Root fence reports each writable root under that lane's verified volume; no shared `/app/artifacts` writer path |
 | Broker credentials | None | Only the Paper credential slot in its uncommitted env file | Only the Live credential slot in its uncommitted env file | Secret-absence scan and redacted service inspection; no values, names, lengths, or hashes copied to registry/log/receipt |
 | Fleet transport credentials | Per-Clerk coordinator maps are environment-only | Its agent-to-coordinator and coordinator-to-agent tokens only | Its agent-to-coordinator and coordinator-to-agent tokens only | Separate files/slots; a Paper token is rejected by Live and vice versa |
-| Market data | No broker or market-data client, credential, or custody mount | Egress only to the approved Alpaca API and retained read-only IBKR market-data source; unique client ID; clerk-scoped market-status source | The same permitted egress, but with a distinct client ID and lane-local state | Rendered egress policy plus lane-local status evidence; a fake source can exercise wiring but cannot qualify a production upstream |
+| Research/data lake and market data | Existing research/data-lake ownership; it may require Polygon, data-lake, Postgres, and Redis configuration, but has no Alpaca execution credential, Clerk-local IBKR live-feed client, or lane custody mount | Egress only to the approved Alpaca API and retained read-only IBKR market-data source; unique client ID; clerk-scoped market-status source | The same permitted egress, but with a distinct client ID and lane-local state | Rendered dependency/egress policy plus lane-local status evidence; a fake source can exercise wiring but cannot qualify a production upstream |
 | Capacity | Its own CPU/memory/PID/tmpfs limits | Its own CPU/memory/PID/tmpfs limits, request budget, SSE budget, and queue limit | Its own CPU/memory/PID/tmpfs limits, request budget, SSE budget, and queue limit | Rendered configuration and probe results; actual host contention/fault isolation needs a separately recorded deployment qualification |
 
 The host and the upstream feed remain shared failure domains. Delivery D claims
@@ -76,24 +76,20 @@ read-only evidence, never a Compose setting.
 The only compatibility behavior observed in D is a browser-direct, unscoped **read**
 route. Fleet mutations never have an implicit target. Start the observation while the
 existing combined role is still serving retained reads, before its traffic is cut over.
-The Clerk-agent collector cannot retroactively observe that combined period, so the
-pre-cutover aggregate is produced from the approved ingress/access-log exporter and
-retains no raw request log.
+The same runtime collector is installed directly in both `combined` and
+`clerk_agent` roles, so the evidence continues across the cutover without an
+access-log-exporter substitute.
 
-The pre-cutover artifact records: exporter version and configuration digest; combined
-deployment image/commit; start and end `int64` UTC milliseconds; the fixed
-`GET`/`HEAD` route-family inventory; per-family HTTP response class/count/first and
-last observation; the consumer-inventory reference; and a redaction attestation. It
-contains no account or Clerk ID, URL/query value, header, token, request body, broker
-credential, or raw access log. Retain the aggregate and its inventory reference in the
-restricted rollout record until E's retirement decision is closed; discard raw source
-logs under the normal platform retention policy rather than copying them into fleet
-evidence.
-
-After the fleet cutover, each Clerk agent writes the same bounded aggregate to
-`$ALPACA_CLERK_DIR/compatibility/route_hits.json`. Its schema is `schema_version`,
-`updated_at_ms`, and sorted `route_hits` entries with `method`, `route_family`,
-`response_class`, `count`, `first_observed_at_ms`, and `last_observed_at_ms`.
+The combined role writes the compact aggregate to
+`$ALPACA_CLERK_DIR/compatibility/route_hits.json` before cutover; each Clerk agent
+writes the same artifact in its own lane after cutover. Schema v2 contains
+`schema_version`, `updated_at_ms`, and sorted `route_hits` entries with
+`route_family`, `response_class`, `count`, `first_observed_at_ms`, and
+`last_observed_at_ms`. `method` is intentionally absent because only `GET` and `HEAD`
+are eligible. The artifact contains no account or Clerk ID, URL/query value, header,
+token, request body, broker credential, or raw access log. Retain the combined and
+lane aggregates plus their consumer-inventory reference in the restricted rollout
+record until E's retirement decision is closed.
 
 Zero hits in an idle deployment do not qualify retirement. E owns the representative
 window decision, consumer-inventory reconciliation, acceptance decision, and final

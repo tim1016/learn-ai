@@ -58,7 +58,7 @@ Rollback must never:
 - return an enrolled production volume to `combined` mode;
 - bypass existing Live envelope, arming, custody, risk, capability, binding, idempotency, or outcome-reconciliation gates.
 
-The Live safety invariant survives every rollback state: the coordinator has no broker credential or lane custody, assignment ownership never expires into takeover, and a Live mutation is admitted only by the original provider-owned Live authority after its host-only arming and all existing gates. An older binary is eligible only after its schema compatibility is proven. A failed rollback attempt remains an incident: leave routing closed where required, retain the artifacts, and escalate rather than attempting a destructive repair.
+The Live safety invariant survives every rollback state: the coordinator has no Alpaca execution credential or lane custody (its existing research/data-lake dependencies remain separate), assignment ownership never expires into takeover, and a Live mutation is admitted only by the original provider-owned Live authority after its host-only arming and all existing gates. An older binary is eligible only after its schema compatibility is proven. A failed rollback attempt remains an incident: leave routing closed where required, retain the artifacts, and escalate rather than attempting a destructive repair.
 
 ## Evidence handoff to Delivery E
 
