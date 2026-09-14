@@ -51,6 +51,7 @@ from app.routers import (
     dataset,
     edge,
     engine,
+    fleet_compatibility_reads,
     golden_fixtures,
     golden_validation,
     grid_search,
@@ -85,6 +86,7 @@ from app.routers import (
 from app.routers import (
     data_lake as data_lake_router,
 )
+from app.routers.fleet_qualification import qualification_router_from_environment
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -336,11 +338,19 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     if _ROLE_RUNS_CLERK:
         from app.broker.alpaca.broker import register_default_brokers
         from app.broker.contract.registry import get_broker_registry
+        from app.routers.fleet_qualification import (
+            install_qualification_bindings_from_environment,
+        )
 
         register_default_brokers()
+        qualification_bindings_installed = install_qualification_bindings_from_environment(
+            _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+        )
         logger.info(
             "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
         )
+        if qualification_bindings_installed:
+            logger.info("Compose qualification Alpaca read/status seams installed.")
 
     # Alpaca Clerk (phase 2) — the in-process single-writer for order
     # submission. Installed only when Alpaca keys are present, independent of
@@ -917,6 +927,39 @@ app.add_middleware(
     allowed_hosts=settings.get_trusted_hosts(),
 )
 
+# Compose qualification is an opt-in clerk-only surface.  It remains absent
+# from normal and coordinator processes and does not participate in providers.
+_fleet_qualification_router = qualification_router_from_environment(
+    _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+)
+if _fleet_qualification_router is not None:
+    app.include_router(_fleet_qualification_router)
+
+# Delivery D: combined and clerk-agent processes measure the retained
+# browser-direct compatibility reads during the pre-cutover window. Only a
+# separately deployed clerk agent receives the explicit bounded resource pools.
+# Keep this inside the identity middleware so capacity cannot grant, retarget,
+# or weaken a fleet identity pin.
+if _ROLE_RUNS_CLERK:
+    from app.broker.fleet.lane_runtime import (
+        CompatibilityReadEvidence,
+        FleetLaneRuntimeMiddleware,
+        LaneRuntimeConfig,
+    )
+    from app.broker_configuration.runtime import resolve_clerk_dir
+
+    _fleet_lane_runtime_config = (
+        LaneRuntimeConfig.from_settings(fleet_settings)
+        if _FLEET_ROLE == "clerk_agent"
+        else None
+    )
+    _fleet_lane_compatibility_evidence = CompatibilityReadEvidence(resolve_clerk_dir())
+    app.add_middleware(
+        FleetLaneRuntimeMiddleware,
+        config=_fleet_lane_runtime_config,
+        evidence=_fleet_lane_compatibility_evidence,
+    )
+
 # The serving runtime's identity echo (fleet delivery B): fleet-addressed
 # requests — the ones a coordinator pins — are answered with the identity
 # this runtime actually serves, per response and per streamed event. Browser
@@ -1185,6 +1228,16 @@ if _FLEET_COORDINATOR_SURFACE:
         }
     )
     app.include_router(broker_clerks.router)
+
+# The production coordinator is the browser ingress during the narrow
+# unscoped-read compatibility window.  It deliberately receives only these
+# two read aliases; no agent, generic broker router, or mutation surface is
+# exposed by that compatibility bridge.
+if _FLEET_ROLE == "fleet_coordinator":
+    app.include_router(
+        fleet_compatibility_reads.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 
 # Exception handlers. Register request validation separately so rejected
 # non-finite JSON numbers cannot make FastAPI's own 422 body non-serializable.
