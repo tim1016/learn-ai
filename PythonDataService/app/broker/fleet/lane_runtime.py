@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from starlette.requests import Request
+
 from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
@@ -29,6 +31,21 @@ _COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 _COMPATIBILITY_EVIDENCE_RELATIVE_PATH = Path("compatibility") / "route_hits.json"
 _COMPATIBILITY_ROUTE_STATE_RELATIVE_PATH = Path("compatibility") / "route_state.json"
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
+
+
+def _is_authenticated_coordinator_forward(scope: dict[str, Any]) -> bool:
+    """Whether this request proves itself as the coordinator's own forward.
+
+    Reuses ``app.security.data_plane_control``'s unforgeable pair check — the
+    coordinator service token plus the pinned lane identity — instead of
+    minting a second definition of "this is the fleet's own transport, not a
+    browser". A header alone is client-forgeable and must stay retirable.
+    """
+    from app.security.data_plane_control import _lane_forward_is_authorized
+
+    return _lane_forward_is_authorized(Request(scope))
+
+
 _COMPATIBILITY_ROUTE_FAMILIES = RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
 _MAX_FLUSH_ATTEMPTS = 3
@@ -515,9 +532,14 @@ class FleetLaneRuntimeMiddleware:
             for name, value in scope.get("headers", [])
         }
         method = str(scope["method"]).upper()
-        family = compatibility_route_family(method, str(scope.get("path", "")))
-        # Coordinator forwarding carries this header. It must not double-count
-        # D's aggregate, but a client-supplied copy cannot bypass E retirement.
+        forwarded = _is_authenticated_coordinator_forward(scope)
+        family = (
+            None
+            if forwarded
+            else compatibility_route_family(method, str(scope.get("path", "")))
+        )
+        # An unauthenticated copy of the pin must not bypass E retirement, so
+        # measurement drops only what the proven forward already excluded.
         measurement_family = None if b"x-fleet-clerk-id" in headers else family
         if family is not None:
             from app.broker.fleet.compatibility_retirement import CompatibilityRetirementRefusal

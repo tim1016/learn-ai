@@ -11,7 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
 
 from app.broker.fleet.compatibility_retirement import (
     CompatibilityRouteState,
@@ -444,30 +447,35 @@ async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> Non
     assert evidence.snapshot()["route_hits"][0]["route_family"] == "broker_bots"
 
 
+def _eligible_receipt() -> dict[str, Any]:
+    """A minimal retirement receipt that passes eligibility validation."""
+    return {
+        "schema_version": 1,
+        "decision": "eligible",
+        "measurement_window": {"start_ms": 1, "end_ms": 2},
+        "operator_receipt_id": "receipt-1",
+        "scoped_route_evidence": {"unresolved_scoped_route_failures": 0},
+        "consumer_inventory": {
+            "consumers": ["alpaca-desk"],
+            "attested_route_families": [
+                "broker_bots",
+                "broker_configuration",
+                "broker_v2_panel",
+                "brokers_lane_extras",
+                "run_replay",
+            ],
+        },
+        "route_deltas": [],
+    }
+
+
 async def test_retired_state_refuses_only_retained_unscoped_reads(tmp_path: Path) -> None:
     """A retirement receipt cannot affect canonical scoped reads or mutations."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
     write_route_state(
         state_path=evidence.route_state_path,
         state=CompatibilityRouteState.RETIRED,
-        retirement_receipt={
-            "schema_version": 1,
-            "decision": "eligible",
-            "measurement_window": {"start_ms": 1, "end_ms": 2},
-            "operator_receipt_id": "receipt-1",
-            "scoped_route_evidence": {"unresolved_scoped_route_failures": 0},
-            "consumer_inventory": {
-                "consumers": ["alpaca-desk"],
-                "attested_route_families": [
-                    "broker_bots",
-                    "broker_configuration",
-                    "broker_v2_panel",
-                    "brokers_lane_extras",
-                    "run_replay",
-                ],
-            },
-            "route_deltas": [],
-        },
+        retirement_receipt=_eligible_receipt(),
     )
     calls = 0
 
@@ -680,3 +688,49 @@ def test_lane_runtime_config_rejects_partial_or_negative_sizing() -> None:
 
     with pytest.raises(ValueError, match="must both be positive"):
         LaneRuntimeConfig.from_settings(PartialSettings())
+
+
+async def test_a_retired_lane_still_serves_an_authenticated_coordinator_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delivery E retires the browser alias, never the fleet's own transport."""
+    from app.broker.fleet.delivery import COORDINATOR_TOKEN_HEADER
+    from app.config import fleet_settings
+
+    evidence = CompatibilityReadEvidence(tmp_path)
+    write_route_state(
+        state_path=tmp_path / "compatibility" / "route_state.json",
+        state=CompatibilityRouteState.RETIRED,
+        retirement_receipt=_eligible_receipt(),
+    )
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", "svct_" + "a" * 32)
+
+    inner = FastAPI()
+
+    @inner.get("/api/brokers/alpaca/clerk/status")
+    async def _status() -> dict[str, str]:
+        return {"state": "ready"}
+
+    inner.add_middleware(FleetLaneRuntimeMiddleware, config=None, evidence=evidence)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        browser = await client.get("/api/brokers/alpaca/clerk/status")
+        forwarded = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+        spoofed = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={"X-Fleet-Broker": "alpaca", "X-Fleet-Clerk-Id": "clk_test"},
+        )
+
+    assert browser.status_code == 410
+    assert browser.json()["reason"] == "compatibility_read_retired"
+    assert forwarded.status_code == 200
+    assert spoofed.status_code == 410
