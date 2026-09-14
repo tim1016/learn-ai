@@ -24,6 +24,10 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from starlette.datastructures import Headers
+
+from app.broker.fleet.delivery import lane_forward_is_authorized
+from app.broker.fleet.errors import BrokerAndClerkRequired, FleetControlError
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,11 @@ logger = logging.getLogger(__name__)
 #: identity (broker, clerk_id, routing_epoch, binding_generation), or None
 #: while no fleet lane is open.
 SERVED_IDENTITY_STATE_KEY = "fleet_served_identity"
+
+#: Methods a lane agent's unpinned-mutation fence applies to (#2075). Reads
+#: stay servable unpinned — health checks, the qualification router, and
+#: diagnostic reads keep working.
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _served_header_values(identity: Mapping[str, Any]) -> list[tuple[bytes, bytes]]:
@@ -118,6 +127,37 @@ def _pin_mismatch(
     return None
 
 
+async def _send_refusal(
+    send: Callable[[dict[str, Any]], Awaitable[None]], error: FleetControlError
+) -> None:
+    """Write one typed refusal as a complete ASGI JSON response."""
+    await send(
+        {
+            "type": "http.response.start",
+            "status": error.status_code,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
+    await send(
+        {
+            "type": "http.response.body",
+            "body": json.dumps(error.detail()).encode(),
+            "more_body": False,
+        }
+    )
+
+
+def _unpinned_mutation_refusal() -> BrokerAndClerkRequired:
+    """The FR-070 family a lane agent answers an unpinned mutation with."""
+    return BrokerAndClerkRequired(
+        "This process serves one clerk lane and accepts mutations only from "
+        "the fleet coordinator, which pins the broker and clerk it "
+        "dispatched.",
+        next_step="Send the command to the coordinator's clerk-scoped route "
+        "at /api/brokers/{broker}/clerks/{clerk_id}/... instead.",
+    )
+
+
 class _FrameInjector:
     """Re-frame a streamed body, injecting provenance into each SSE event.
 
@@ -181,12 +221,16 @@ class FleetIdentityMiddleware:
 
     Fleet-addressed traffic only: browser-direct requests carry no pinned
     identity and their responses are untouched — the echo is the forwarded
-    lane's contract, not the public API's.
+    lane's contract, not the public API's. A separately deployed lane agent
+    may also fence unpinned mutations (``refuse_unpinned_mutations``, #2075):
+    on that posture, browser-direct reads still pass untouched, but a
+    browser-direct mutation is refused rather than served.
     """
 
-    def __init__(self, app: Any) -> None:
-        """Wrap one ASGI app."""
+    def __init__(self, app: Any, *, refuse_unpinned_mutations: bool = False) -> None:
+        """Wrap one ASGI app; a lane agent may also fence unpinned mutations."""
         self.app = app
+        self._refuse_unpinned_mutations = refuse_unpinned_mutations
 
     async def __call__(
         self,
@@ -210,7 +254,21 @@ class FleetIdentityMiddleware:
         }
         if "x-fleet-clerk-id" not in request_headers:
             # Browser-direct traffic carries no pinned identity; the echo is
-            # the forwarded lane's contract, not the public API's.
+            # the forwarded lane's contract, not the public API's. On a lane
+            # agent, though, an unpinned *mutation* has no legitimate caller:
+            # the coordinator always pins both x-fleet-clerk-id and
+            # x-fleet-broker on its own forwards (lane_forward_is_authorized
+            # requires the pair), so a request reaching this branch is never
+            # a proven coordinator dispatch. Refusing here makes the
+            # composed-auth claim code, not a property of a gitignored
+            # compose overlay (#2075).
+            if (
+                self._refuse_unpinned_mutations
+                and str(scope.get("method", "GET")).upper() in _MUTATING_METHODS
+                and not lane_forward_is_authorized(Headers(scope=scope))
+            ):
+                await _send_refusal(send, _unpinned_mutation_refusal())
+                return
             await self.app(scope, receive, send)
             return
         state = getattr(scope.get("app"), "state", None)

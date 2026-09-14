@@ -999,10 +999,17 @@ if _ROLE_RUNS_CLERK:
 # coordinator, tripping a warning whose message describes the opposite
 # direction — roughly twelve a minute per lane, drowning the warnings that
 # mean something.
+#
+# Only a separately deployed lane agent fences unpinned mutations. The
+# combined posture IS the browser's data plane and must stay byte-for-byte
+# the historical single process (#2075).
 from app.broker.fleet.agent_identity import FleetIdentityMiddleware  # noqa: E402
 
 if _ROLE_RUNS_CLERK:
-    app.add_middleware(FleetIdentityMiddleware)
+    app.add_middleware(
+        FleetIdentityMiddleware,
+        refuse_unpinned_mutations=_FLEET_ROLE == "clerk_agent",
+    )
 
 
 # CORS middleware for C# backend

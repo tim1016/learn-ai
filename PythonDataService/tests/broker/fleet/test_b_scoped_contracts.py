@@ -47,6 +47,7 @@ def _build_agent_app(
     *,
     flip_identity_after_first_event: bool = False,
     minted_receipts: list[str] | None = None,
+    refuse_unpinned_mutations: bool = False,
 ) -> FastAPI:
     """A production-shaped agent serving one lane's identity.
 
@@ -54,7 +55,9 @@ def _build_agent_app(
     so the stale-stream test can move it the way a re-registration would.
     ``minted_receipts`` is the agent's own durable-receipt ledger — shared by
     reference so a caller can assert against what the agent actually minted,
-    not a string reflected back from the request.
+    not a string reflected back from the request. ``refuse_unpinned_mutations``
+    mirrors the ``clerk_agent`` posture (#2075); the default mirrors
+    ``combined``, where the browser legitimately mutates without a pin.
     """
     from app.broker.fleet.agent_identity import (
         SERVED_IDENTITY_STATE_KEY,
@@ -63,7 +66,9 @@ def _build_agent_app(
     from app.security.data_plane_control import require_data_plane_control_secret_always
 
     agent = FastAPI()
-    agent.add_middleware(FleetIdentityMiddleware)
+    agent.add_middleware(
+        FleetIdentityMiddleware, refuse_unpinned_mutations=refuse_unpinned_mutations
+    )
     ledger = minted_receipts if minted_receipts is not None else []
 
     def _served() -> dict[str, object] | None:
@@ -771,6 +776,64 @@ async def test_the_composed_auth_policy_honors_both_caller_families(
     finally:
         settings.DATA_PLANE_CONTROL_SECRET = original_secret
         settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL = original_allow
+        fleet_settings.COORDINATOR_SERVICE_TOKEN = original_token
+        server.stop()
+
+
+async def test_a_clerk_agent_refuses_an_unpinned_mutation_in_code() -> None:
+    """Topology is the second layer, not the only one (#2075).
+
+    ``combined`` is proven byte-for-byte unchanged by
+    ``test_the_composed_auth_policy_honors_both_caller_families`` above,
+    which builds its agent with the default ``refuse_unpinned_mutations=False``
+    and is untouched by this change. This test is the ``clerk_agent`` half.
+    """
+    from app.broker.fleet.errors import BrokerAndClerkRequired
+    from app.config import fleet_settings, settings
+
+    agent = _build_agent_app(
+        {"broker": "alpaca", "clerk_id": CLERK_ID,
+         "routing_epoch": EPOCH, "binding_generation": 3},
+        refuse_unpinned_mutations=True,
+    )
+
+    @agent.post("/guarded")
+    async def guarded() -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    @agent.get("/guarded")
+    async def guarded_read() -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    server = _RealServer(agent)
+    server.start()
+    original_secret = settings.DATA_PLANE_CONTROL_SECRET
+    original_token = fleet_settings.COORDINATOR_SERVICE_TOKEN
+    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
+    fleet_settings.COORDINATOR_SERVICE_TOKEN = COORDINATOR_TOKEN
+    try:
+        async with httpx.AsyncClient(base_url=server.base_url, timeout=5.0) as client:
+            unpinned = await client.post(
+                "/guarded", headers={"X-Data-Plane-Control-Secret": "test-plane-secret"}
+            )
+            assert unpinned.status_code == BrokerAndClerkRequired.status_code
+            assert unpinned.json()["reason"] == BrokerAndClerkRequired.reason
+            assert unpinned.json()["next_step"]
+
+            unpinned_read = await client.get("/guarded")
+            assert unpinned_read.status_code == 200
+
+            forwarded = await client.post(
+                "/guarded",
+                headers={
+                    COORDINATOR_TOKEN_HEADER: COORDINATOR_TOKEN,
+                    "X-Fleet-Broker": "alpaca",
+                    "X-Fleet-Clerk-Id": CLERK_ID,
+                },
+            )
+            assert forwarded.status_code == 200
+    finally:
+        settings.DATA_PLANE_CONTROL_SECRET = original_secret
         fleet_settings.COORDINATOR_SERVICE_TOKEN = original_token
         server.stop()
 
