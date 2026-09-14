@@ -531,6 +531,13 @@ class FleetControlService:
         registering against a newer coordinator's expanded catalog) refuses
         at registration instead of failing per-operation later (audit
         2026-09-13, finding 6).
+
+        ``volume_root`` is the co-located caller's re-proof of the mounted
+        root. It is optional because the coordinator process may not have
+        the volume mounted at all; the agent's own gate
+        (``fleet_boot.open_fleet_lane``) is the authority, and
+        ``LocalPresence`` — the one transport that does share the filesystem
+        — always supplies it.
         """
         clerk = self._require_clerk(clerk_id)
         if not hmac.compare_digest(clerk.worker_key, worker_key):
@@ -701,6 +708,13 @@ class FleetControlService:
         both live states: a reserved row returns as-is, and an effective row
         is the same-owner resume of a restarted clerk, returning the
         confirmed facts untouched (audit 2026-09-13, finding 1).
+
+        ``volume_root`` is the co-located caller's re-proof of the mounted
+        root. It is optional because the coordinator process may not have
+        the volume mounted at all; the agent's own gate
+        (``fleet_boot.open_fleet_lane``) is the authority, and
+        ``LocalPresence`` — the one transport that does share the filesystem
+        — always supplies it.
         """
         self._require_registry_recovery_open()
         if not broker:

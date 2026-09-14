@@ -126,9 +126,18 @@ class FleetPresence(Protocol):
 class LocalPresence:
     """Presence over the in-process control service (one host)."""
 
-    def __init__(self, service: FleetControlService) -> None:
-        """Bind the control service this process shares with the registry."""
+    def __init__(self, service: FleetControlService, *, volume_root: Path) -> None:
+        """Bind the control service and the mounted root this process serves.
+
+        Required, not optional: the in-process transport is the one that
+        provably shares a filesystem with the volume, so it re-proves the
+        root on every registration and reservation rather than trusting an
+        adjacent call to have done it. ``RemotePresence`` supplies none by
+        design — the coordinator never inspects an agent-local path (ADR 0062
+        addendum 6); its agent proves the root locally in ``verify_volume``.
+        """
         self._service = service
+        self._volume_root = volume_root
 
     async def expectation(self, *, clerk_id: str) -> dict[str, object]:
         """The registry's expected identity, including its own registry id."""
@@ -153,6 +162,7 @@ class LocalPresence:
             clerk_id=clerk_id,
             worker_key=worker_key,
             agent_instance_id=agent_instance_id,
+            volume_root=self._volume_root,
             endpoint_ref=endpoint_ref,
             adapter_version=adapter_version,
             fleet_protocol_version=fleet_protocol_version,
@@ -167,7 +177,10 @@ class LocalPresence:
     ) -> AccountAssignmentRecord:
         """Reserve through the service."""
         return self._service.reserve_assignment(
-            broker=broker, clerk_id=clerk_id, external_account_id=external_account_id
+            broker=broker,
+            clerk_id=clerk_id,
+            external_account_id=external_account_id,
+            volume_root=self._volume_root,
         )
 
     async def confirm(

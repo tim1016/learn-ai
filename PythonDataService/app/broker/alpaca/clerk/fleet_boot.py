@@ -160,7 +160,7 @@ async def open_fleet_lane(
             store=FleetRegistryStore.open(control_dir=settings.CONTROL_DIR),
             provider_adapters=production_provider_adapters(),
         )
-        presence = LocalPresence(owned_service)
+        presence = LocalPresence(owned_service, volume_root=volume_root)
 
     boot = FleetLaneBoot(
         presence=presence,

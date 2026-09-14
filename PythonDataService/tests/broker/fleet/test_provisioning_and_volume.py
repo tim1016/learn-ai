@@ -242,3 +242,29 @@ def test_a_wrong_worker_key_never_registers(control_dir: Path, fleet_service) ->
         fleet_service.register_agent_session(
             fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key="wkrk_00000000000000000000000000000000"
         )
+
+
+async def test_local_presence_reverifies_the_volume_at_registration_and_reservation(
+    control_dir: Path, fleet_service
+) -> None:
+    """The co-located transport cannot register a lane it has not re-proven."""
+    from app.broker.fleet.presence import LocalPresence
+
+    lane: Lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="structural", tmp_path=control_dir.parent
+    )
+    presence = LocalPresence(fleet_service, volume_root=lane.volume_root)
+    marker_path(lane.volume_root).unlink()
+    with pytest.raises(ClerkVolumeIdentityMissing):
+        await presence.register(
+            clerk_id=lane.clerk_id,
+            worker_key=lane.worker_key,
+            agent_instance_id="agnt_bbbb0000bbbb0000bbbb0000",
+            endpoint_ref=None,
+            adapter_version="test.1",
+            fleet_protocol_version=2,
+        )
+    with pytest.raises(ClerkVolumeIdentityMissing):
+        await presence.reserve(
+            broker="fake_alpha", clerk_id=lane.clerk_id, external_account_id="acct-1"
+        )
