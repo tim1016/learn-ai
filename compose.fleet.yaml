@@ -107,6 +107,10 @@ services:
       - "127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}:8000"
     networks:
       - fleet-private
+      # The full-stack overlay joins this existing application network so the
+      # Backend and Frontend can use the coordinator as their sole data-plane
+      # ingress. Clerk agents never join it.
+      - app-network
     depends_on:
       fleet-db:
         condition: service_healthy
@@ -143,6 +147,29 @@ services:
     volumes:
       - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
 
+  # Full-stack overlay only: keep the historical combined process available
+  # for rollback, but never start it in a fleet deployment.
+  python-service:
+    profiles: ["legacy-combined"]
+
+  backend:
+    environment:
+      PolygonService__BaseUrl: http://fleet-coordinator:8000
+    depends_on: !override
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      fleet-coordinator:
+        condition: service_healthy
+
+  frontend:
+    environment:
+      DATA_PLANE_PROXY_TARGET: http://fleet-coordinator:8000
+    depends_on: !override
+      backend:
+        condition: service_healthy
+
 volumes:
   fleet-coordinator-control:
   fleet-coordinator-artifacts:
@@ -153,6 +180,10 @@ volumes:
   fleet-alpaca-live-data:
 
 networks:
+  # Defined in compose.yaml for the full stack; repeated identically so this
+  # fleet file can still render as its own deployment topology.
+  app-network:
+    driver: bridge
   fleet-private:
     driver: bridge
     # Agents publish no ports but retain outbound broker/market-data egress.

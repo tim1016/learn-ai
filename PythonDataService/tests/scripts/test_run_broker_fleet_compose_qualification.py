@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -58,6 +60,67 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
     assert "alpaca-live-clerk:\n    profiles" in overlay
     assert '"--container-role", "coordinator"' not in overlay
     assert '"--container-role", "lane"' not in overlay
+
+
+def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
+    """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
+    environment = {
+        **os.environ,
+        "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",
+        "POSTGRES_PASSWORD": "qualification-postgres-password",
+        "REDIS_PASSWORD": "qualification-redis-password",
+        "DATA_PLANE_CONTROL_SECRET": "qualification-control-secret",
+        "POLYGON_API_KEY": "qualification-polygon-placeholder",
+    }
+    result = subprocess.run(
+        [
+            "podman",
+            "compose",
+            "--project-name",
+            "fleet-overlay-test",
+            "--file",
+            str(qualification.REPOSITORY_ROOT / "compose.yaml"),
+            "--file",
+            str(qualification.REPOSITORY_ROOT / "compose.fleet.yaml"),
+            "--profile",
+            "fleet",
+            "config",
+            "--services",
+        ],
+        cwd=qualification.REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+    services = set(result.stdout.splitlines())
+    assert "python-service" not in services
+    assert {"fleet-coordinator", "backend", "frontend"} <= services
+
+    rendered = subprocess.run(
+        [
+            "podman",
+            "compose",
+            "--project-name",
+            "fleet-overlay-test",
+            "--file",
+            str(qualification.REPOSITORY_ROOT / "compose.yaml"),
+            "--file",
+            str(qualification.REPOSITORY_ROOT / "compose.fleet.yaml"),
+            "--profile",
+            "fleet",
+            "config",
+        ],
+        cwd=qualification.REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=30,
+    ).stdout
+    assert "PolygonService__BaseUrl: http://fleet-coordinator:8000" in rendered
+    assert "DATA_PLANE_PROXY_TARGET: http://fleet-coordinator:8000" in rendered
 
 
 def test_assert_no_custody_root_refuses_custody_named_artifact(tmp_path: Path) -> None:
