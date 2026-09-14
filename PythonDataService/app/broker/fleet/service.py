@@ -89,7 +89,7 @@ from app.broker.fleet.records import (
     StoredLifecycleState,
     VolumeMarker,
 )
-from app.broker.fleet.recovery import require_routing_open
+from app.broker.fleet.recovery import require_recovery_hold_clear
 from app.broker.fleet.store import FleetRegistryStore
 from app.utils.timestamps import now_ms_utc
 
@@ -168,7 +168,7 @@ class FleetControlService:
 
     def _require_registry_recovery_open(self) -> None:
         """Reject routing and assignment mutation during a restore ceremony."""
-        require_routing_open(
+        require_recovery_hold_clear(
             self._store.db_path.parent.parent,
             registry_id=self._store.registry_id,
         )

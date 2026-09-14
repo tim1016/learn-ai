@@ -16,7 +16,7 @@ from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
 from app.utils.timestamps import now_ms_utc
 from scripts.manage_broker_fleet import main
-from tests.broker.fleet.conftest import FrozenClock
+from tests.broker.fleet.conftest import FrozenClock, downgrade_backup_to_v2
 
 
 def _argv(*args: str) -> list[str]:
@@ -468,9 +468,28 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
         == 0
     )
     restored = json.loads(capsys.readouterr().out)
-    assert restored["routing_closed"] is True
-    assert restored["assignment_mutation_closed"] is True
+    assert restored["mutations_closed"] is True
+    # One hold, reported once: the CLI never claims two independent fences
+    # over a single RegistryRecoveryState bit.
+    assert "assignment_mutation_closed" not in restored
     assert restored["rollback_topology"] == "current"
+    downgrade_backup_to_v2(backup_dir)
+    assert (
+        main(
+            _argv(
+                "rollback-d-compatible",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 0
+    )
+    rolled_back = json.loads(capsys.readouterr().out)
+    assert rolled_back["mutations_closed"] is True
+    assert "assignment_mutation_closed" not in rolled_back
+    assert rolled_back["rollback_topology"] == "d_compatible"
     assert (
         main(
             _argv(
@@ -486,6 +505,6 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
         == 0
     )
     closeout = json.loads(capsys.readouterr().out)
-    assert closeout["routing_closed"] is False
-    assert closeout["assignment_mutation_closed"] is False
+    assert closeout["mutations_closed"] is False
+    assert "assignment_mutation_closed" not in closeout
     assert closeout["empty_inventory_attestation"]["operator"] == "fleet-owner"

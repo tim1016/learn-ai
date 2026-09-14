@@ -357,8 +357,7 @@ def _restore_registry(args: argparse.Namespace) -> int:
             "registry_id": manifest.registry_id,
             "schema_version": manifest.registry_schema_version,
             "required_clerk_ids": manifest.active_clerk_ids,
-            "routing_closed": state.routing_closed,
-            "assignment_mutation_closed": state.routing_closed,
+            "mutations_closed": state.mutations_closed,
             "rollback_topology": "d_compatible" if args.d_compatible else "current",
         }
     )
@@ -405,7 +404,7 @@ def _reconcile_registry(args: argparse.Namespace) -> int:
                 "clerk_id": args.clerk_id,
                 "reconciled_clerk_ids": state.reconciled_clerk_ids,
                 "required_clerk_ids": state.required_clerk_ids,
-                "routing_closed": state.routing_closed,
+                "mutations_closed": state.mutations_closed,
             }
         )
     finally:
@@ -426,8 +425,7 @@ def _closeout_empty_registry(args: argparse.Namespace) -> int:
         _write(
             {
                 "registry_id": state.registry_id,
-                "routing_closed": state.routing_closed,
-                "assignment_mutation_closed": state.routing_closed,
+                "mutations_closed": state.mutations_closed,
                 "empty_inventory_attestation": state.empty_inventory_attestation,
             }
         )
