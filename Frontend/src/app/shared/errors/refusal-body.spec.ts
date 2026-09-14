@@ -46,6 +46,18 @@ describe('refusalBody', () => {
     expect(refusalBody(httpError([{ reason: 'nope' }]))).toBeNull();
   });
 
+  it("returns null for FastAPI's validation envelope, whose `detail` is a list", () => {
+    // A 422 body is `{detail: [{loc, msg, type}, ...]}`. `typeof [] === 'object'`,
+    // so a naive nested check hands the caller an array and it reads
+    // `.reason`/`.message` off it as undefined. There is no operator-facing
+    // refusal here, so the honest answer is null.
+    const validationError = {
+      detail: [{ loc: ['body', 'symbol'], msg: 'field required', type: 'value_error.missing' }],
+    };
+
+    expect(refusalBody(httpError(validationError, 422))).toBeNull();
+  });
+
   it('returns null for anything that is not an HttpErrorResponse', () => {
     expect(refusalBody(new Error('boom'))).toBeNull();
     expect(refusalBody(undefined)).toBeNull();
