@@ -67,6 +67,21 @@ describe("dataPlaneControlIntentInterceptor", () => {
     req.flush({});
   });
 
+  it("marks fleet directory reads that the data plane always protects", () => {
+    // /api/broker-clerks sits outside the /api/brokers prefix and carries
+    // the always-on control-secret guard server-side; without a manifest
+    // entry the proxy never attaches the secret and the lane directory
+    // 403s in every secret-configured deployment.
+    const url = "/api/broker-clerks";
+    http.get(url).subscribe();
+
+    const req = httpMock.expectOne(url);
+    expect(req.request.headers.get(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(
+      DATA_PLANE_CONTROL_INTENT_VALUE,
+    );
+    req.flush({});
+  });
+
   it("does not mark unprotected control reads", () => {
     http.get("/api/broker/health").subscribe();
 
