@@ -29,6 +29,7 @@ from app.data_lake.types import polygon_mode_for
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
     is_trading_day,
+    session_open_ms_utc,
     session_window_for_date,
     session_windows_ms_utc,
 )
@@ -272,8 +273,22 @@ _MS_PER_DAY = 86_400_000
 
 
 def _utc_midnight_ms(d: date) -> int:
-    """UTC-midnight anchor of ``d`` — the Data Lab window convention (PRD §12)."""
+    """UTC-midnight anchor of ``d`` — the window START convention (PRD §12)."""
     return (d - _UNIX_EPOCH).days * _MS_PER_DAY
+
+
+def _utc_day_end_ms(d: date) -> int:
+    """Last instant of ``d`` in UTC (23:59:59.999) — the window END anchor.
+
+    The Data Lab commits one numeric window that every surface reads. The
+    chart floors both endpoints to UTC calendar dates (inclusive trading
+    dates); the news query and the dataset endpoints read the same numbers
+    as half-open instants. Anchoring the end at UTC midnight would make a
+    single-day window degenerate ([x, x)) for the half-open readers and drop
+    the entire end date from their results — anchoring it at the end of the
+    UTC day keeps all three readings correct for the same committed pair.
+    """
+    return _utc_midnight_ms(d) + _MS_PER_DAY - 1
 
 
 def _utc_date_of_ms(ms: int) -> date:
@@ -307,21 +322,32 @@ def resolve_request_dates(
 def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
     """Resolve every :data:`RANGE_PRESETS` entry against the canonical calendar.
 
-    Each preset is the last N **scheduled NYSE sessions**: the end date is
-    the New York trading date of ``now_ms`` when that date is a session
-    (the chart serves its forming tail from the provider by design), else
-    the previous session — a 1D preset on a Saturday resolves to Friday,
-    and holidays never appear at either end. The start is the Nth session
+    Each preset is the last N **scheduled NYSE sessions**. The end date is
+    the New York trading date of ``now_ms`` once that session has begun
+    (the chart serves its forming tail from the provider by design) —
+    before the 09:30 ET open nothing exists for today, so the preset ends
+    at the previous session; on non-trading days likewise. A 1D preset on
+    a Saturday morning or a Tuesday pre-market both resolve to Friday, and
+    holidays never appear at either end. The start is the Nth session
     back, so weekends and holidays are simply absent from the window.
+
+    Anchors: start = UTC midnight of the first trading date, end = the
+    last UTC instant of the end trading date (see :func:`_utc_day_end_ms`)
+    — the chart's date-floor resolution reads both as inclusive trading
+    dates, and half-open instant consumers get a non-degenerate window.
 
     Pure calendar arithmetic: one ``expected_sessions`` call covers the
     deepest preset, and per-preset bar estimates come from the same
     estimator ``/allowed-timeframes`` uses. No fetching.
     """
     ny_today = pd.Timestamp(now_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
-    if is_trading_day(ny_today):
+    end_date: date | None = None
+    if is_trading_day(ny_today) and now_ms >= session_open_ms_utc(ny_today):
+        # Session windows are RTH-shaped, so the begun-at test is the RTH
+        # open for both session arguments; the extended-hours premarket
+        # (04:00–09:30 ET) edge is recorded in known-gaps §13a.
         end_date = ny_today
-    else:
+    if end_date is None:
         prior = expected_sessions(ny_today - timedelta(days=10), ny_today - timedelta(days=1))
         if not prior:
             raise ValueError(f"no NYSE session in the 10 days before {ny_today.isoformat()}")
@@ -347,10 +373,8 @@ def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str
             {
                 "key": key,
                 "label": label,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
                 "start_ms_utc": _utc_midnight_ms(start_date),
-                "end_ms_utc": _utc_midnight_ms(end_date),
+                "end_ms_utc": _utc_day_end_ms(end_date),
                 "session_count": len(window),
                 "estimated_bars_per_timeframe": estimate_bars_per_timeframe(
                     start_date.isoformat(), end_date.isoformat(), session

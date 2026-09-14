@@ -28,7 +28,7 @@ import {
 } from '../../services/data-lab-range-presets.service';
 import { resolveLegacyDataLabUrl } from './data-lab-ingress';
 import { dataLabIndicatorInstanceId } from './data-lab-workspace-store';
-import { utcMsToIsoDate } from './data-lab-request-mapper';
+import { utcDayEndMs, utcMsToIsoDate } from './data-lab-request-mapper';
 import {
   DataLabDraftScope,
   DataLabWorkspaceStore,
@@ -279,7 +279,7 @@ export class DataLabComponent {
       const draft = this.store.draft();
       patch.window = {
         startMsUtc: from !== null ? from : draft.window.startMsUtc,
-        endMsUtc: to !== null ? to : draft.window.endMsUtc,
+        endMsUtc: to !== null ? utcDayEndMs(to) : draft.window.endMsUtc,
       };
     }
     if (params['trading-session']) {
@@ -337,7 +337,7 @@ export class DataLabComponent {
     if (parsedMs === null) return;
     const draft = this.store.draft();
     this.store.patchDraft({
-      window: { ...draft.window, endMsUtc: parsedMs },
+      window: { ...draft.window, endMsUtc: utcDayEndMs(parsedMs) },
     });
   }
 
@@ -374,39 +374,60 @@ export class DataLabComponent {
 
   private async loadRangePresets(): Promise<void> {
     // A failed or empty load leaves the chip row hidden and the manual
-    // From/To inputs as the path of record — handled, never an unhandled
-    // rejection leaking into the app from a mount-time nicety.
+    // From/To inputs as the path of record. Logged, not silent — a backend
+    // or network regression must be distinguishable from presets not
+    // existing, and an unhandled rejection must not leak from a mount-time
+    // nicety.
     try {
       this.rangePresets.set(await this.rangePresetsService.presets('rth'));
-    } catch {
+    } catch (err) {
+      console.warn('[DataLab] range presets failed to load; quick ranges hidden', err);
       this.rangePresets.set([]);
     }
   }
 
   /** Key of the preset whose resolved trading dates equal the committed
    *  window — null when the window is not preset-shaped. Date comparison,
-   *  not ms equality, so any same-day anchor still matches. */
+   *  not ms equality, so any same-day anchors still match. */
   readonly activePresetKey = computed<string | null>(() => {
     const window = this.store.committedWindow();
     if (!window) return null;
     const from = utcMsToIsoDate(window.startMsUtc);
     const to = utcMsToIsoDate(window.endMsUtc);
     const match = this.rangePresets().find(
-      (p) => p.start_date === from && p.end_date === to,
+      (p) => utcMsToIsoDate(p.start_ms_utc) === from && utcMsToIsoDate(p.end_ms_utc) === to,
     );
     return match ? match.key : null;
   });
 
+  /** Chip tooltip text — display dates derived from the ms anchors at the
+   *  rendering boundary (the wire contract carries no date strings). */
+  presetTooltip(preset: ChartRangePreset): string {
+    return `${utcMsToIsoDate(preset.start_ms_utc)} → ${utcMsToIsoDate(preset.end_ms_utc)} · ${preset.session_count} sessions`;
+  }
+
   /** Apply a server-resolved preset: window verbatim from Python, commit,
-   *  refresh. Short windows also get a sensible intraday default timeframe —
+   *  refresh. The list is re-resolved first — the service cache is
+   *  five-minute TTL, so a Data Lab left open across an ET trading-date
+   *  boundary would otherwise keep applying the previous day's windows.
+   *  Short windows also get a sensible intraday default timeframe —
    *  a 1D range on a daily bar chart is one candle, which is technically
    *  allowed and practically useless. A display default, not math: the chart
    *  endpoint's own recommendation machinery stays authoritative. */
-  applyRangePreset(preset: ChartRangePreset): void {
+  async applyRangePreset(preset: ChartRangePreset): Promise<void> {
+    let target = preset;
+    try {
+      const fresh = await this.rangePresetsService.presets('rth');
+      target = fresh.find(p => p.key === preset.key) ?? preset;
+    } catch (err) {
+      // Offline or transient failure: the clicked preset's resolved window
+      // still applies — a stale-but-correct range beats no action.
+      console.warn(`[DataLab] re-resolving preset ${preset.key} failed; applying cached window`, err);
+    }
     const patch: Partial<DataLabDraftScope> = {
-      window: { startMsUtc: preset.start_ms_utc, endMsUtc: preset.end_ms_utc },
+      window: { startMsUtc: target.start_ms_utc, endMsUtc: target.end_ms_utc },
     };
-    const suggested = PRESET_DEFAULT_TIMEFRAMES[preset.key];
+    const suggested = PRESET_DEFAULT_TIMEFRAMES[target.key];
     if (suggested) {
       const parsed = parseChartTimeframe(suggested);
       if (parsed) {
@@ -513,11 +534,13 @@ export class DataLabComponent {
   async loadSession(id: string): Promise<void> {
     const session = await this.sessionService.getSession(id);
     if (!session) return;
+    const fromMs = parseYmdMsUtc(session.config.fromDate);
+    const toMs = parseYmdMsUtc(session.config.toDate);
     this.store.patchDraft({
       ticker: session.config.ticker,
       window: {
-        startMsUtc: parseYmdMsUtc(session.config.fromDate) ?? this.store.draft().window.startMsUtc,
-        endMsUtc: parseYmdMsUtc(session.config.toDate) ?? this.store.draft().window.endMsUtc,
+        startMsUtc: fromMs ?? this.store.draft().window.startMsUtc,
+        endMsUtc: toMs !== null ? utcDayEndMs(toMs) : this.store.draft().window.endMsUtc,
       },
       session: session.config.session,
       forwardFill: session.config.forwardFill,

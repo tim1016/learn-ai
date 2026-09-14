@@ -98,11 +98,13 @@ class ChartDataRequest(BaseModel):
     Temporal authority (data-lab workspace redesign PRD §12): the numeric
     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
     each field takes precedence over its date-string counterpart when
-    supplied. The anchor is the Data Lab surface's stated convention —
-    UTC midnight of the intended trading date (the exact inverse of the
-    frontend's ``utcMsToIsoDate``), so a numeric window and the string the
-    same request carries never disagree. Both endpoints of the resolved
-    window are inclusive trading dates, matching ``from_date``/``to_date``.
+    supplied. Each value resolves by flooring to its UTC calendar date —
+    the exact inverse of the frontend's ``utcMsToIsoDate`` — so a numeric
+    window and the date string the same request carries never disagree,
+    whatever instant inside the day the anchors name (the Data Lab commits
+    UTC midnight for the start and the day's final UTC instant for the
+    end). Both endpoints of the resolved window are inclusive trading
+    dates, matching ``from_date``/``to_date``.
     """
 
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
@@ -112,15 +114,15 @@ class ChartDataRequest(BaseModel):
         None,
         ge=0,
         le=MAX_TIMESTAMP_MS,
-        description="Canonical numeric window start (int64 ms UTC, UTC-midnight trading-date anchor, "
-        "inclusive). Takes precedence over from_date when supplied.",
+        description="Canonical numeric window start (int64 ms UTC); resolves to the UTC calendar "
+        "date it falls in, inclusive. Takes precedence over from_date when supplied.",
     )
     end_ms_utc: int | None = Field(
         None,
         ge=0,
         le=MAX_TIMESTAMP_MS,
-        description="Canonical numeric window end (int64 ms UTC, UTC-midnight trading-date anchor, "
-        "inclusive). Takes precedence over to_date when supplied.",
+        description="Canonical numeric window end (int64 ms UTC); resolves to the UTC calendar "
+        "date it falls in, inclusive. Takes precedence over to_date when supplied.",
     )
     timeframe: str = Field("1D", description="Timeframe: 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, 1M")
     session: str = Field("rth", description="'rth' for regular trading hours, 'extended' for all hours")
@@ -137,23 +139,27 @@ class ChartDataRequest(BaseModel):
 
 
 class ChartRangePreset(BaseModel):
-    """One calendar-resolved quick range ("last N trading sessions")."""
+    """One calendar-resolved quick range ("last N trading sessions").
+
+    Temporal values are int64 ms UTC only — start anchors the first trading
+    date at UTC midnight, end anchors the last trading date's final UTC
+    instant; clients derive any display strings at the rendering boundary.
+    """
 
     key: str = Field(..., description="Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y")
     label: str = Field(..., description="Human label for the preset")
-    start_date: str = Field(..., description="Resolved start trading date (YYYY-MM-DD)")
-    end_date: str = Field(..., description="Resolved end trading date (YYYY-MM-DD)")
     start_ms_utc: int = Field(
         ...,
         ge=0,
         le=MAX_TIMESTAMP_MS,
-        description="UTC-midnight anchor of start_date (int64 ms UTC, inclusive)",
+        description="UTC-midnight anchor of the first trading date (int64 ms UTC)",
     )
     end_ms_utc: int = Field(
         ...,
         ge=0,
         le=MAX_TIMESTAMP_MS,
-        description="UTC-midnight anchor of end_date (int64 ms UTC, inclusive)",
+        description="Final UTC instant of the last trading date, 23:59:59.999 (int64 ms UTC) "
+        "— pairs with start_ms_utc as an inclusive trading-date window",
     )
     session_count: int = Field(..., ge=1, description="Scheduled NYSE sessions in the window")
     estimated_bars_per_timeframe: dict[str, int] = Field(

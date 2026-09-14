@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildChartRequestBody,
   buildGenerateZipPayload,
+  utcDayEndMs,
   utcMsToIsoDate,
 } from './data-lab-request-mapper';
 import { DataLabIndicatorInstance } from './data-lab-workspace-store';
@@ -19,6 +20,19 @@ describe('utcMsToIsoDate', () => {
   it('formats int64 ms UTC instants as UTC calendar dates', () => {
     expect(utcMsToIsoDate(Date.UTC(2026, 0, 2))).toBe('2026-01-02');
     expect(utcMsToIsoDate(Date.UTC(2026, 5, 30, 23, 59, 59))).toBe('2026-06-30');
+  });
+});
+
+describe('utcDayEndMs', () => {
+  it('anchors a TO date at its final UTC instant — same date, non-degenerate window', () => {
+    const dayStart = Date.UTC(2026, 8, 11);
+    const dayEnd = utcDayEndMs(dayStart);
+    // Still the same UTC trading date for the chart's date-floor resolution…
+    expect(utcMsToIsoDate(dayEnd)).toBe('2026-09-11');
+    // …but strictly after the start, so half-open readers (news query,
+    // dataset numeric overrides) never see an empty single-day window.
+    expect(dayEnd).toBe(dayStart + 86_400_000 - 1);
+    expect(dayEnd).toBeGreaterThan(dayStart);
   });
 });
 

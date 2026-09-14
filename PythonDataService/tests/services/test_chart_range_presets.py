@@ -6,7 +6,12 @@ Two contracts live here:
   sessions**, so weekends, holidays, and the forming session are decided by
   the canonical calendar, never by client arithmetic. The goldens pin ``now``
   instants chosen to sit on the awkward edges: a Saturday, a Monday
-  mid-session, and a week containing Labor Day 2026.
+  mid-session, a Monday before the open, and a week containing Labor Day
+  2026. Anchors are ms-only: start = UTC midnight of the first trading date,
+  end = the final UTC instant of the last trading date (23:59:59.999), so the
+  same committed pair reads correctly for the chart's date-floor resolution
+  AND for half-open instant consumers (the news query, dataset numeric
+  overrides).
 * ``resolve_request_dates`` — the ``start_ms_utc``/``end_ms_utc`` fields on
   ``POST /api/chart/data`` take per-field precedence over the date strings
   and floor to UTC calendar dates, the exact inverse of the Data Lab
@@ -21,6 +26,8 @@ import pytest
 
 from app.services.chart_service import (
     RANGE_PRESETS,
+    _utc_date_of_ms,
+    _utc_day_end_ms,
     _utc_midnight_ms,
     resolve_range_presets,
     resolve_request_dates,
@@ -31,10 +38,13 @@ from app.services.chart_service import (
 SATURDAY_MS = int(datetime(2026, 9, 12, 18, 0, tzinfo=UTC).timestamp() * 1000)
 # 2026-09-14 is a Monday, 15:00 UTC == 11:00 ET — mid regular session.
 MONDAY_MID_SESSION_MS = int(datetime(2026, 9, 14, 15, 0, tzinfo=UTC).timestamp() * 1000)
+# 2026-09-14 12:00 UTC == 08:00 ET (EDT) — a trading day whose session has
+# not opened yet; nothing exists for today, so presets end at Friday.
+MONDAY_PRE_OPEN_MS = int(datetime(2026, 9, 14, 12, 0, tzinfo=UTC).timestamp() * 1000)
 
 
-def _by_key(now_ms: int) -> dict[str, dict]:
-    return {preset["key"]: preset for preset in resolve_range_presets(now_ms)}
+def _by_key(now_ms: int, *, session: str = "rth") -> dict[str, dict]:
+    return {preset["key"]: preset for preset in resolve_range_presets(now_ms, session=session)}
 
 
 def test_presets_cover_the_full_key_table() -> None:
@@ -42,10 +52,18 @@ def test_presets_cover_the_full_key_table() -> None:
     assert [p["key"] for p in presets] == [key for key, _label, _count in RANGE_PRESETS]
 
 
+def test_preset_wire_dicts_carry_no_date_strings() -> None:
+    """Temporal wire values are int64 ms UTC only (AGENTS.md hard rule);
+    display strings are derived at the rendering boundary."""
+    for preset in resolve_range_presets(SATURDAY_MS):
+        assert "start_date" not in preset
+        assert "end_date" not in preset
+
+
 def test_one_day_preset_on_a_saturday_resolves_to_friday() -> None:
     preset = _by_key(SATURDAY_MS)["1D"]
-    assert preset["start_date"] == "2026-09-11"
-    assert preset["end_date"] == "2026-09-11"
+    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 11))
+    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
     assert preset["session_count"] == 1
 
 
@@ -53,10 +71,11 @@ def test_one_week_preset_skips_the_labor_day_holiday() -> None:
     """The week of 2026-09-07 has four sessions (Labor Day Monday) plus the
     prior Friday — five sessions with a holiday simply absent from the span."""
     preset = _by_key(SATURDAY_MS)["5D"]
-    assert preset["start_date"] == "2026-09-04"
-    assert preset["end_date"] == "2026-09-11"
+    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 4))
+    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
     assert preset["session_count"] == 5
-    assert "2026-09-07" not in (preset["start_date"], preset["end_date"])
+    assert _utc_date_of_ms(preset["start_ms_utc"]) == date(2026, 9, 4)
+    assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 11)
 
 
 def test_session_counts_follow_the_preset_table() -> None:
@@ -69,14 +88,30 @@ def test_mid_session_preset_includes_today() -> None:
     """The forming session is part of the window — the chart serves its live
     tail from the provider by design."""
     preset = _by_key(MONDAY_MID_SESSION_MS)["1D"]
-    assert preset["start_date"] == "2026-09-14"
-    assert preset["end_date"] == "2026-09-14"
+    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 14))
+    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 14))
 
 
-def test_preset_ms_anchors_are_utc_midnight_and_round_trip() -> None:
+def test_pre_open_trading_day_resolves_to_the_prior_session() -> None:
+    """Before the 09:30 ET open no bar exists for today; a preset pointing
+    at the empty session would be NO_DATA waiting to happen."""
+    for preset in resolve_range_presets(MONDAY_PRE_OPEN_MS):
+        assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 11)
+
+
+def test_extended_session_arg_flips_at_the_rth_open_too() -> None:
+    """The calendar's session windows are RTH-shaped, so the begun-at test is
+    the RTH open for both session arguments; the extended premarket edge is
+    recorded in known-gaps §13a. Pinned here so the day it flips is a
+    deliberate decision, not drift."""
+    preset = _by_key(MONDAY_PRE_OPEN_MS, session="extended")["1D"]
+    assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 11)
+    preset = _by_key(MONDAY_MID_SESSION_MS, session="extended")["1D"]
+    assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 14)
+
+
+def test_preset_ms_anchors_round_trip_through_the_chart_resolution() -> None:
     for preset in resolve_range_presets(SATURDAY_MS):
-        assert preset["start_ms_utc"] == _utc_midnight_ms(date.fromisoformat(preset["start_date"]))
-        assert preset["end_ms_utc"] == _utc_midnight_ms(date.fromisoformat(preset["end_date"]))
         # The exact inverse the chart request performs: a preset applied to a
         # Data Lab window resolves back to the same trading dates.
         from_date, to_date = resolve_request_dates(
@@ -85,7 +120,17 @@ def test_preset_ms_anchors_are_utc_midnight_and_round_trip() -> None:
             preset["start_ms_utc"],
             preset["end_ms_utc"],
         )
-        assert (from_date, to_date) == (preset["start_date"], preset["end_date"])
+        assert date.fromisoformat(from_date) == _utc_date_of_ms(preset["start_ms_utc"])
+        assert date.fromisoformat(to_date) == _utc_date_of_ms(preset["end_ms_utc"])
+
+
+def test_every_preset_window_is_non_degenerate_for_half_open_readers() -> None:
+    """The news query and the dataset endpoints read the same committed ms
+    pair as half-open instants; equal endpoints would make a single-day
+    window empty there (and trip DatasetGenerationRequest's
+    start-before-end validator)."""
+    for preset in resolve_range_presets(SATURDAY_MS):
+        assert preset["end_ms_utc"] > preset["start_ms_utc"]
 
 
 def test_preset_estimates_come_from_the_shared_estimator() -> None:

@@ -13,16 +13,17 @@ import { environment } from '../../environments/environment';
  * row doesn't refetch per click while still tracking "now" across a long-lived
  * tab. */
 
-/** One calendar-resolved quick range, exactly as Python resolved it. */
+/** One calendar-resolved quick range, exactly as Python resolved it.
+ *  Temporal values are int64 ms UTC only; display strings are derived at
+ *  the rendering boundary via utcMsToIsoDate. */
 export interface ChartRangePreset {
   key: string;
   label: string;
-  /** YYYY-MM-DD trading dates, inclusive. */
-  start_date: string;
-  end_date: string;
-  /** UTC-midnight anchors of the trading dates above — the Data Lab window
-   *  convention, applied to the store unchanged. */
+  /** UTC-midnight anchor of the first trading date — the Data Lab window
+   *  start convention, applied to the store unchanged. */
   start_ms_utc: number;
+  /** Final UTC instant of the last trading date (23:59:59.999) — pairs
+   *  with start_ms_utc as an inclusive trading-date window. */
   end_ms_utc: number;
   session_count: number;
   estimated_bars_per_timeframe: Record<string, number>;
@@ -37,8 +38,6 @@ function isChartRangePreset(value: unknown): value is ChartRangePreset {
   const preset = value as Record<string, unknown>;
   return typeof preset['key'] === 'string'
     && typeof preset['label'] === 'string'
-    && typeof preset['start_date'] === 'string'
-    && typeof preset['end_date'] === 'string'
     && typeof preset['start_ms_utc'] === 'number'
     && Number.isFinite(preset['start_ms_utc'])
     && typeof preset['end_ms_utc'] === 'number'

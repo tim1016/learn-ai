@@ -1573,6 +1573,23 @@ def test_materialize_chart_range_partial_on_ingest_timeout(monkeypatch):
     assert "120s" in (result.detail or "")
 
 
+def test_materialize_chart_range_partial_when_the_caller_stops_waiting(monkeypatch):
+    """The sync bridge raises CallerStoppedWaitingError — not TimeoutError —
+    when its wait bound expires while the ingest keeps running on the shared
+    loop (#1977); the chart must degrade, not 500."""
+    from app.utils.background_loop import CallerStoppedWaitingError
+
+    def _fake(spec, *, resolution):
+        raise CallerStoppedWaitingError("still running on the background-loop after 120s")
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END, fetch_timeout_seconds=120
+    )
+    assert result.status == "partial"
+    assert "120s" in (result.detail or "")
+
+
 def test_materialize_chart_range_skips_when_catalog_unavailable(monkeypatch):
     from app.data_lake.catalog_client import CatalogUnavailableError
 
@@ -1585,3 +1602,27 @@ def test_materialize_chart_range_skips_when_catalog_unavailable(monkeypatch):
     )
     assert result.status == "skipped"
     assert "catalog unavailable" in (result.detail or "")
+
+
+def test_init_pool_translates_connection_refused_to_catalog_unavailable(monkeypatch):
+    """asyncpg.create_pool(min_size=1) dials Postgres at creation; an
+    unreachable host surfaces as OSError there and must reach the chart's
+    best-effort handler as CatalogUnavailableError, not escape as a 500."""
+    import asyncio
+
+    import asyncpg
+
+    from app.data_lake import catalog_client
+    from app.data_lake.catalog_client import CatalogUnavailableError
+
+    async def _refuse(*_args, **_kwargs):
+        raise ConnectionRefusedError("connect ECONNREFUSED 127.0.0.1:5432")
+
+    monkeypatch.setattr(asyncpg, "create_pool", _refuse)
+    monkeypatch.setattr(catalog_client.settings, "POSTGRES_URL", "postgresql://x/y", raising=False)
+
+    async def _init() -> None:
+        await catalog_client.init_pool()
+
+    with pytest.raises(CatalogUnavailableError, match="could not reach the catalog"):
+        asyncio.run(_init())

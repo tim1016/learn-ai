@@ -3610,7 +3610,9 @@ export interface paths {
          *
          *     Every preset's start/end is computed by the canonical NYSE calendar —
          *     weekends, holidays, and the forming session are handled server-side, so
-         *     the client applies dates verbatim and computes nothing.
+         *     the client applies the ms anchors verbatim and computes nothing. The
+         *     ``session`` argument shapes only the bar estimates; any other value is
+         *     rejected by validation rather than silently taking a branch.
          */
         get: operations["range_presets_api_chart_range_presets_get"];
         put?: never;
@@ -9749,11 +9751,13 @@ export interface components {
          *     Temporal authority (data-lab workspace redesign PRD §12): the numeric
          *     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
          *     each field takes precedence over its date-string counterpart when
-         *     supplied. The anchor is the Data Lab surface's stated convention —
-         *     UTC midnight of the intended trading date (the exact inverse of the
-         *     frontend's ``utcMsToIsoDate``), so a numeric window and the string the
-         *     same request carries never disagree. Both endpoints of the resolved
-         *     window are inclusive trading dates, matching ``from_date``/``to_date``.
+         *     supplied. Each value resolves by flooring to its UTC calendar date —
+         *     the exact inverse of the frontend's ``utcMsToIsoDate`` — so a numeric
+         *     window and the date string the same request carries never disagree,
+         *     whatever instant inside the day the anchors name (the Data Lab commits
+         *     UTC midnight for the start and the day's final UTC instant for the
+         *     end). Both endpoints of the resolved window are inclusive trading
+         *     dates, matching ``from_date``/``to_date``.
          */
         ChartDataRequest: {
             /**
@@ -9770,7 +9774,7 @@ export interface components {
             compute_all_indicators?: boolean;
             /**
              * End Ms Utc
-             * @description Canonical numeric window end (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over to_date when supplied.
+             * @description Canonical numeric window end (int64 ms UTC); resolves to the UTC calendar date it falls in, inclusive. Takes precedence over to_date when supplied.
              */
             end_ms_utc?: number | null;
             /**
@@ -9797,7 +9801,7 @@ export interface components {
             session?: string;
             /**
              * Start Ms Utc
-             * @description Canonical numeric window start (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over from_date when supplied.
+             * @description Canonical numeric window start (int64 ms UTC); resolves to the UTC calendar date it falls in, inclusive. Takes precedence over from_date when supplied.
              */
             start_ms_utc?: number | null;
             /**
@@ -10017,16 +10021,15 @@ export interface components {
         /**
          * ChartRangePreset
          * @description One calendar-resolved quick range ("last N trading sessions").
+         *
+         *     Temporal values are int64 ms UTC only — start anchors the first trading
+         *     date at UTC midnight, end anchors the last trading date's final UTC
+         *     instant; clients derive any display strings at the rendering boundary.
          */
         ChartRangePreset: {
             /**
-             * End Date
-             * @description Resolved end trading date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
              * End Ms Utc
-             * @description UTC-midnight anchor of end_date (int64 ms UTC, inclusive)
+             * @description Final UTC instant of the last trading date, 23:59:59.999 (int64 ms UTC) — pairs with start_ms_utc as an inclusive trading-date window
              */
             end_ms_utc: number;
             /**
@@ -10052,13 +10055,8 @@ export interface components {
              */
             session_count: number;
             /**
-             * Start Date
-             * @description Resolved start trading date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
              * Start Ms Utc
-             * @description UTC-midnight anchor of start_date (int64 ms UTC, inclusive)
+             * @description UTC-midnight anchor of the first trading date (int64 ms UTC)
              */
             start_ms_utc: number;
         };
@@ -32575,7 +32573,7 @@ export interface operations {
     range_presets_api_chart_range_presets_get: {
         parameters: {
             query?: {
-                session?: string;
+                session?: "rth" | "extended";
             };
             header?: never;
             path?: never;

@@ -75,12 +75,23 @@ async def init_pool() -> None:
             "The lake is the sole market-data store, so there is no store to "
             "fall back to — set POSTGRES_URL."
         )
-    _pools[loop] = await asyncpg.create_pool(
-        settings.POSTGRES_URL,
-        min_size=1,
-        max_size=10,
-        command_timeout=30,
-    )
+    try:
+        pool = await asyncpg.create_pool(
+            settings.POSTGRES_URL,
+            min_size=1,
+            max_size=10,
+            command_timeout=30,
+        )
+    except OSError as exc:
+        # min_size=1 means create_pool establishes a real connection, so an
+        # unreachable Postgres surfaces here as ConnectionRefusedError /
+        # gaierror — both OSError — before any query runs. Translated here so
+        # every consumer sees one unavailability type; asyncpg auth/protocol
+        # failures arrive as PostgresError and pass through untouched.
+        raise CatalogUnavailableError(
+            f"could not reach the catalog Postgres ({type(exc).__name__}: {exc})"
+        ) from exc
+    _pools[loop] = pool
     logger.info("data_lake.catalog_client: asyncpg pool initialized for loop %s", id(loop))
 
 

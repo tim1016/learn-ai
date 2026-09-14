@@ -219,13 +219,14 @@ export class DataLabWorkspaceStore {
 
   // ── Scope ───────────────────────────────────────────────────
   /** Validate and atomically commit the draft scope. Returns an error string
-   *  (draft unchanged) when the ticker is blank or the window is inverted.
-   *  Equality is a valid single-day window: in the interim date-anchor
-   *  semantics (known-gaps §13 — UTC-midnight anchors, inclusive trading
-   *  dates) the pair names two trading dates, and a 1D quick range names the
-   *  same date twice. Only a strictly inverted pair is refused; the canonical
-   *  half-open resolution (PRD §13 step 6) will make windows strictly
-   *  increasing again. */
+   *  (draft unchanged) when the ticker is blank or the window is unset or
+   *  inverted. The uninitialized draft window `{0, 0}` is rejected
+   *  explicitly — under the interim date-anchor semantics (known-gaps §13:
+   *  start = UTC midnight of the from-date, end = the to-date's final UTC
+   *  instant) an equal pair names one trading day, but epoch zeros name
+   *  nothing and would fetch 1970. A committed window is otherwise ordered
+   *  `startMsUtc <= endMsUtc`; the canonical half-open resolution (PRD §13
+   *  step 6) will tighten this further. */
   commitScope(): DataLabScopeCommitResult {
     const draft = this._draft();
     const ticker = draft.ticker.trim().toUpperCase();
@@ -233,8 +234,11 @@ export class DataLabWorkspaceStore {
     if (
       !isFiniteInt(draft.window.startMsUtc) ||
       !isFiniteInt(draft.window.endMsUtc) ||
-      draft.window.startMsUtc > draft.window.endMsUtc
+      (draft.window.startMsUtc === 0 && draft.window.endMsUtc === 0)
     ) {
+      return { ok: false, error: 'Pick a date range before applying the scope' };
+    }
+    if (draft.window.startMsUtc > draft.window.endMsUtc) {
       return { ok: false, error: 'Window must satisfy startMsUtc <= endMsUtc' };
     }
     const next: DataLabDraftScope = { ...draft, ticker };
@@ -492,11 +496,13 @@ export class DataLabWorkspaceStore {
     if (typeof rawWindow === 'object' && rawWindow !== null) {
       const w = rawWindow as Record<string, unknown>;
       if (isFiniteInt(w['startMsUtc']) && isFiniteInt(w['endMsUtc'])) {
-        // Same inversion rule as commitScope(): equality is a valid
-        // single-day window under the interim date-anchor semantics, so only
-        // a strictly inverted pair is refused — accepting one would smuggle
-        // an invalid committed scope into the workspace.
-        if (w['startMsUtc'] <= w['endMsUtc']) {
+        // Same window rule as commitScope(): only an ordered pair with at
+        // least one nonzero endpoint commits — accepting anything else would
+        // smuggle an invalid committed scope into the workspace.
+        if (
+          w['startMsUtc'] <= w['endMsUtc'] &&
+          !(w['startMsUtc'] === 0 && w['endMsUtc'] === 0)
+        ) {
           window = { startMsUtc: w['startMsUtc'], endMsUtc: w['endMsUtc'] };
         } else {
           warnings.push('Dropped invalid windowMsUtc');

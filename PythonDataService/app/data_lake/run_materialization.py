@@ -52,7 +52,7 @@ from app.data_lake.types import (
     is_lake_addressable_symbol,
     trading_date_to_calendar_anchor_ms,
 )
-from app.utils.background_loop import run_on_background_loop
+from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 
 logger = logging.getLogger(__name__)
 
@@ -649,7 +649,13 @@ def materialize_chart_range(
 
     try:
         result = _materialize_run_data_sync(spec, resolution="minute")
-    except TimeoutError:
+    except (TimeoutError, CallerStoppedWaitingError):
+        # Two timeout shapes land here: a TimeoutError raised inside the
+        # ingest coroutine itself (its fetch deadline), and
+        # CallerStoppedWaitingError from the sync bridge when the wait bound
+        # expired while the coroutine kept running (#1977's uncancellable
+        # shared-loop work). Both mean "did not finish in the chart's
+        # budget" — degrade, never fail the chart.
         logger.warning(
             "data_lake.run_materialization: chart ingest for %s %s..%s exceeded %ds; "
             "composer will fill gaps from the provider",

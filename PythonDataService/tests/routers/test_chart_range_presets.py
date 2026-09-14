@@ -117,10 +117,23 @@ async def test_range_presets_endpoint_returns_the_resolver_output(api: FastAPI) 
         assert preset["session_count"] >= 1
         assert isinstance(preset["start_ms_utc"], int)
         assert isinstance(preset["end_ms_utc"], int)
+        # Temporal wire values are ms-only: no date strings may appear on the
+        # contract (AGENTS.md hard rule on ISO-free wire).
+        assert "start_date" not in preset
+        assert "end_date" not in preset
         # Same estimator /allowed-timeframes uses; a window of all full
         # sessions yields exactly session_count daily bars (rth), an
         # early-close half-day one fewer.
         assert 0 < preset["estimated_bars_per_timeframe"]["1D"] <= preset["session_count"]
+
+
+@pytest.mark.asyncio
+async def test_range_presets_endpoint_rejects_unknown_session_values(api: FastAPI) -> None:
+    """`?session=typo` is a validation error, not a silent trip into the
+    extended-hours estimate branch."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.get("/api/chart/range-presets", params={"session": "regular"})
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

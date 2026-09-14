@@ -93,14 +93,13 @@ function baseProviders(runSession = idleRunSession()) {
 
 /** Calendar-resolved presets as Python would resolve them for a Saturday
  *  (2026-09-12): both windows end Friday 2026-09-11, the 1D window is that
- *  single session, 6M is 126 sessions back. */
+ *  single session, 6M is 126 sessions back. Anchors are ms-only: start at
+ *  UTC midnight, end at the trading date's final UTC instant. */
 const preset1D: ChartRangePreset = {
   key: '1D',
   label: 'Past day',
-  start_date: '2026-09-11',
-  end_date: '2026-09-11',
   start_ms_utc: Date.UTC(2026, 8, 11),
-  end_ms_utc: Date.UTC(2026, 8, 11),
+  end_ms_utc: Date.UTC(2026, 8, 11) + 86_400_000 - 1,
   session_count: 1,
   estimated_bars_per_timeframe: { '1m': 390, '5m': 78, '1D': 1 },
 };
@@ -108,10 +107,8 @@ const preset1D: ChartRangePreset = {
 const preset6M: ChartRangePreset = {
   key: '6M',
   label: 'Past 6 months',
-  start_date: '2026-03-13',
-  end_date: '2026-09-11',
   start_ms_utc: Date.UTC(2026, 2, 13),
-  end_ms_utc: Date.UTC(2026, 8, 11),
+  end_ms_utc: Date.UTC(2026, 8, 11) + 86_400_000 - 1,
   session_count: 126,
   estimated_bars_per_timeframe: { '1m': 49_140, '5m': 9_828, '1D': 126 },
 };
@@ -217,8 +214,10 @@ describe('DataLabComponent (shell)', () => {
     expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
       Date.UTC(2026, 3, 15),
     );
+    // The TO date anchors at its UTC day's end — same trading date for the
+    // chart, non-degenerate for half-open readers.
     expect(fixture.componentInstance.store.committedWindow()?.endMsUtc).toBe(
-      Date.UTC(2026, 4, 15),
+      Date.UTC(2026, 4, 15) + 86_400_000 - 1,
     );
   });
 
@@ -270,9 +269,58 @@ describe('DataLabComponent (shell)', () => {
       endMsUtc: preset6M.end_ms_utc,
     });
     expect(store.chartRefreshRequests()).toBe(1);
-    // The matching chip is marked active; the other is not.
+    // The matching chip is marked active — visually and for assistive
+    // technology; the other is not.
+    expect(screen.getByRole('button', { name: '6M' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '1D' }).getAttribute('aria-pressed')).toBe('false');
     const active = document.querySelector('.dl-shell__preset--active');
     expect(active?.textContent?.trim()).toBe('6M');
+  });
+
+  it('re-resolves the preset list on apply so a long-lived tab tracks the trading date', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    // The mount-time load used the stub; the apply-time re-resolve returns
+    // windows one calendar day later (a tab left open across an ET
+    // trading-date boundary must not keep applying yesterday's anchors).
+    const moved6M: ChartRangePreset = {
+      ...preset6M,
+      start_ms_utc: preset6M.start_ms_utc + 86_400_000,
+      end_ms_utc: preset6M.end_ms_utc + 86_400_000,
+    };
+    const presetsService = fixture.componentRef.injector.get(DataLabRangePresetsService);
+    vi.spyOn(presetsService, 'presets').mockResolvedValue([moved6M]);
+
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toEqual({
+      startMsUtc: moved6M.start_ms_utc,
+      endMsUtc: moved6M.end_ms_utc,
+    });
+    expect(store.chartRefreshRequests()).toBe(1);
+  });
+
+  it('still applies the clicked preset when the apply-time re-resolve fails', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    const presetsService = fixture.componentRef.injector.get(DataLabRangePresetsService);
+    vi.spyOn(presetsService, 'presets').mockRejectedValue(new Error('network down'));
+
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    fixture.detectChanges();
+
+    // The clicked preset's already-resolved window still applies — handled,
+    // never an unhandled rejection from the click handler.
+    expect(store.committedWindow()).toEqual({
+      startMsUtc: preset6M.start_ms_utc,
+      endMsUtc: preset6M.end_ms_utc,
+    });
+    expect(store.chartRefreshRequests()).toBe(1);
   });
 
   it('gives the 1D preset an intraday default timeframe so it is not one candle', async () => {
@@ -286,9 +334,9 @@ describe('DataLabComponent (shell)', () => {
     const draft = store.draft();
     expect(draft.timespan).toBe('minute');
     expect(draft.multiplier).toBe(5);
-    // A single-day window (start == end) must commit — equality names one
-    // trading date under the interim date-anchor semantics, not an empty
-    // range — and trigger the chart refresh.
+    // A single-day window must commit — its ms anchors name one trading
+    // date (midnight → 23:59:59.999 UTC), not an empty range — and trigger
+    // the chart refresh.
     expect(store.committedWindow()).toEqual({
       startMsUtc: preset1D.start_ms_utc,
       endMsUtc: preset1D.end_ms_utc,

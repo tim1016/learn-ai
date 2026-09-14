@@ -573,14 +573,32 @@ re-arms the server-authored timeframe auto-correct, and numeric
 
 - **PRD §14's explicit-refresh-only rule is superseded for deliberate
   actions (decision, not a gap).** Explore auto-loads on mount when a
-  committed scope exists; preset clicks, Apply scope, and the one-shot
-  timeframe auto-correct re-fetch immediately through the store's refresh
-  request. Uncommitted edits still only mark stale. Restored saved sessions
-  keep the cached-snapshot + stale-badge behavior.
+  committed scope exists; preset clicks, Apply scope (shell bar and the
+  Edit-scope drawer alike), and the one-shot timeframe auto-correct re-fetch
+  immediately through the store's refresh request. Uncommitted edits still
+  only mark stale, and a fetch that fails to load anything leaves the stale
+  badge on — staleness clears only when replacement data settles. Restored
+  saved sessions keep the cached-snapshot + stale-badge behavior.
+- **Committed-window anchors are day-shaped, not session-shaped (interim,
+  low).** The Data Lab commits `startMsUtc` = UTC midnight of the from-date
+  and `endMsUtc` = the to-date's final UTC instant (23:59:59.999) — applied
+  by every date-intent→ms boundary (quick ranges, From/To inputs, legacy
+  URL ingress, saved-session load, the Edit-scope drawer). The chart floors
+  both to inclusive UTC trading dates; half-open instant readers (the news
+  query, dataset numeric overrides) get a non-degenerate window covering the
+  full end date. The canonical half-open session-open resolution (PRD §13
+  step 6) remains the destination; the store still accepts an equal
+  start/end pair (one trading date) restored from older workspaces, and
+  rejects the uninitialized `{0,0}` sentinel.
 - **Preset bar estimates are fetched for `rth` regardless of the workspace
-  session (low).** The endpoint takes a `session` parameter but the shell
-  always requests `rth`; the estimates are informational only — no client
-  decision reads them.
+  session (low).** The endpoint takes a validated `rth|extended` `session`
+  parameter but the shell always requests `rth`; the estimates are
+  informational only — no client decision reads them.
+- **Preset end anchoring flips at the RTH open for both session arguments
+  (low).** Before 09:30 ET on a trading day, presets end at the previous
+  session (nothing exists for today yet); the calendar's session windows
+  are RTH-shaped, so an `extended` preset does not flip at the 04:00 ET
+  premarket open — premarket-only "today" is not yet a preset target.
 - **Preset chip semantics are trading-session counts, not calendar anchors
   (low).** "6M" is the last 126 scheduled sessions, matching the repo's
   `_SESSIONS_PER_UNIT` family. A calendar-month-anchored variant would need

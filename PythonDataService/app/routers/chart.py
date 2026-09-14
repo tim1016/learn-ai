@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -182,12 +183,14 @@ async def allowed_timeframes(request: AllowedTimeframesRequest):
 
 
 @router.get("/range-presets", response_model=ChartRangePresetsResponse)
-async def range_presets(session: str = "rth"):
+async def range_presets(session: Literal["rth", "extended"] = "rth") -> ChartRangePresetsResponse:
     """Calendar-resolved quick ranges ("last N trading sessions") for chart scope UIs.
 
     Every preset's start/end is computed by the canonical NYSE calendar —
     weekends, holidays, and the forming session are handled server-side, so
-    the client applies dates verbatim and computes nothing.
+    the client applies the ms anchors verbatim and computes nothing. The
+    ``session`` argument shapes only the bar estimates; any other value is
+    rejected by validation rather than silently taking a branch.
     """
     try:
         result = await asyncio.to_thread(resolve_range_presets, now_ms_utc(), session=session)

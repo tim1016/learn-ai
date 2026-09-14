@@ -47,10 +47,22 @@ describe('DataLabWorkspaceStore scope', () => {
     expect(store.committedWindow()).toBeNull();
   });
 
+  it('rejects the uninitialized {0,0} window — a ticker alone must not fetch 1970', () => {
+    const store = createDataLabWorkspaceStore();
+    store.patchDraft({ ticker: 'SPY' }); // draft window still the {0,0} initial sentinel
+    const result = store.commitScope();
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Pick a date range before applying the scope');
+    expect(store.committedTicker()).toBe('');
+    expect(store.committedWindow()).toBeNull();
+  });
+
   it('commits a single-day window — equality names one trading date, not an empty range', () => {
     // The interim date-anchor semantics (known-gaps §13) make the pair two
-    // inclusive UTC-midnight trading-date anchors; a 1D quick range resolves
-    // to the same session on both ends.
+    // inclusive UTC trading-date anchors; equality names one session. (Live
+    // presets anchor the end at 23:59:59.999 UTC so half-open consumers stay
+    // non-degenerate, but an equal pair restored from an older workspace
+    // remains valid.)
     const store = createDataLabWorkspaceStore();
     const day = Date.UTC(2026, 8, 11);
     store.patchDraft({ ticker: 'SPY', window: { startMsUtc: day, endMsUtc: day } });
@@ -240,6 +252,17 @@ describe('DataLabWorkspaceStore serialization', () => {
     expect(store.committedWindow()).toBeNull();
     expect(store.committedTicker()).toBe('');
     expect(store.committedScope()).toBeNull();
+  });
+
+  it('refuses the uninitialized {0,0} window on restore', () => {
+    const store = createDataLabWorkspaceStore();
+    const result = store.restore({
+      schemaVersion: 2,
+      ticker: 'AAPL',
+      windowMsUtc: { startMsUtc: 0, endMsUtc: 0 },
+    });
+    expect(result.warnings.some(w => w.includes('invalid windowMsUtc'))).toBe(true);
+    expect(store.committedWindow()).toBeNull();
   });
 
   it('restores a single-day window as a committed scope', () => {

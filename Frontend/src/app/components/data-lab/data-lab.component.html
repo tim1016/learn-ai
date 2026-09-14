@@ -89,8 +89,11 @@
           type="button"
           class="dl-shell__preset"
           [class.dl-shell__preset--active]="activePresetKey() === preset.key"
+          [attr.aria-pressed]="activePresetKey() === preset.key"
           (click)="applyRangePreset(preset)"
-          [title]="preset.start_date + ' → ' + preset.end_date + ' · ' + preset.session_count + ' sessions'"
+          [title]="
+            presetTooltip(preset)
+          "
         >
           {{ preset.key }}
         </button>
