@@ -100,6 +100,23 @@ _FAKE_BETA_OPERATIONS = frozenset(
 )
 
 
+def _alpha_canonical_account_id(raw: str) -> str:
+    """Alpha's canonical key: strip and upper-case."""
+    return raw.strip().upper()
+
+
+def _beta_canonical_account_id(raw: str) -> str:
+    """Beta's canonical key: strip, lower-case, and fold ``-`` to ``_``.
+
+    Deliberately different from alpha's in *shape* as well as case, so no
+    case-insensitive comparison can collapse the two back together. A blank
+    input still canonicalizes to the empty identity the service refuses
+    (``app/broker/fleet/service.py:726``), so the empty-canonical gate stays
+    reachable for both providers.
+    """
+    return raw.strip().lower().replace("-", "_")
+
+
 class FrozenClock:
     """A clock the tests advance explicitly; nothing here reads wall time."""
 
@@ -124,7 +141,7 @@ class FakeProviderAdapter:
     adapter_version: str = "test.1"
     capabilities: frozenset[Capability] = FAKE_ALPHA_CAPABILITIES
     declared_operations: frozenset[ProviderOperation] = _FAKE_ALPHA_OPERATIONS
-    canonical_rule: Callable[[str], str] = lambda raw: raw.strip().upper()
+    canonical_rule: Callable[[str], str] = _alpha_canonical_account_id
     refused_accounts: frozenset[str] = field(default_factory=frozenset)
     served_context_refusals: list[str] = field(default_factory=list)
     summaries: list[Mapping[str, object]] = field(default_factory=list)
@@ -170,6 +187,7 @@ def fake_beta() -> FakeProviderAdapter:
         provider_id="fake_beta",
         capabilities=FAKE_BETA_CAPABILITIES,
         declared_operations=_FAKE_BETA_OPERATIONS,
+        canonical_rule=_beta_canonical_account_id,
     )
 
 
@@ -275,6 +293,8 @@ __all__ = [
     "FakeProviderAdapter",
     "FrozenClock",
     "Lane",
+    "_alpha_canonical_account_id",
+    "_beta_canonical_account_id",
     "bind_lane",
     "fake_alpha",
     "fake_beta",
