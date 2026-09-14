@@ -311,6 +311,42 @@ describe('CohortArchiveDrawerComponent', () => {
     expect(service.runCohortArchive).not.toHaveBeenCalled();
   });
 
+  it('does not flag a conflict when the directory refreshes with the identical lane', async () => {
+    // `FleetDirectoryService.lanesOf()` `.filter()`s a fresh array on every
+    // response tick, and the parent `target()` computed rebuilds a fresh
+    // `resourceTarget(...)` object literal from it — so a directory refresh
+    // that changes nothing about the lane (an unrelated poll, or the #2068
+    // mitigating `refresh()` this branch itself arms) must not read as a
+    // rebind just because the object identity changed.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const service = fakeService([leg()]);
+    const { fixture } = await open(service, { directory });
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    expect((screen.getByRole('button', { name: /Archive 1/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    // Same generation, same epoch — only the poll's observed_at_ms moved.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', observed_at_ms: 1_757_000_000_001 })],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByText(/rebound while the action was open/i)).toBeNull();
+    expect((screen.getByRole('button', { name: /Archive 1/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+    expect(service.runCohortArchive).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses to submit when the drawer opened against a cold directory, and dispatches nothing', async () => {
     // Cold directory: the lane is present but its binding is unconfirmed, so
     // `freezeLaneFence` yields a null generation (#2068, decision 15). A

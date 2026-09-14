@@ -15,7 +15,12 @@ import { Drawer } from 'primeng/drawer';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
-import { freezeLaneFence, LANE_FENCE_CONFLICT_MESSAGE, laneFenceVerdict } from '../../../../fleet/lane-fence';
+import {
+  freezeLaneFence,
+  LANE_FENCE_CONFLICT_MESSAGE,
+  laneFenceDrifted,
+  laneFenceVerdict,
+} from '../../../../fleet/lane-fence';
 import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
 import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
 import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
@@ -158,7 +163,12 @@ export class CohortArchiveDrawerComponent {
           return;
         }
         this.presentedTarget.set(withCommand(target, 'bot_action', crypto.randomUUID()));
-      } else if (openedTarget !== target) {
+      } else if (
+        laneFenceDrifted(
+          { bindingGeneration: openedTarget.bindingGeneration, routingEpoch: openedTarget.routingEpoch },
+          this.liveLane(),
+        )
+      ) {
         this.laneConflict.set(true);
         this.laneConflictMessage.set(LANE_FENCE_CONFLICT_MESSAGE);
       }
