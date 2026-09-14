@@ -649,6 +649,147 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 
 ---
 
+### Task 5a — A command with no enforceable fence is refused, not dispatched (decision 15)
+
+**This task exists because of decision 15, answered by the owner on 2026-09-14: refuse, loudly, client-side.** Tasks 3–5 freeze the fence and surface *drift*. None of them handles the state Task 2's `laneFenceIsEnforceable` names: a fence whose `bindingGeneration` is `null`, which `commandContextOf` omits from the envelope (`resource-target.ts:139-141`) and which both backend checks then skip (`service.py:1283-1284`, `routing.py:328-329`). Today that command dispatches **unfenced**. After this task it does not dispatch at all.
+
+This is the correction to #2068's premise. The issue says the fence "fails closed, but silently"; it fails **open**. Freezing alone does not close the hole — it only names it.
+
+**Accepted cost, from the decision:** a cold directory now refuses commands until it warms. That is a self-announcing failure with a stated remedy, chosen deliberately over an invisible unfenced dispatch.
+
+**Files**
+- modify `Frontend/src/app/fleet/lane-fence.ts`
+- modify `Frontend/src/app/fleet/lane-fence.spec.ts`
+- modify the five command seams Tasks 3–5 touched, so each routes its check through the shared verdict rather than calling `laneFenceDrifted` directly:
+  - `Frontend/src/app/components/broker/v2-panel/panel-shell/bot-panel-shell.component.ts`
+  - `Frontend/src/app/components/broker/v2-panel/bots-list-page/bots-list-page.component.ts`
+  - `Frontend/src/app/components/broker/bot-gallery/bot-gallery-page.component.ts`
+  - `Frontend/src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.component.ts`
+  - `Frontend/src/app/components/broker/v2-panel/cohort-archive/cohort-archive-drawer.component.ts`
+- modify each of their `.spec.ts` siblings
+
+**Sequencing.** Task 5a lands **after Task 5** (all five seams must already freeze) and **before Task 6** (which adds the first `refresh()` caller — an unfenced dispatch racing a refresh is the exact pair decision 15 forecloses).
+
+**One verdict, not five checks.** Each surface asking two questions in its own order is five chances to get the order wrong. One function answers both, and the surfaces consume a verdict:
+
+```ts
+export type LaneFenceVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
+
+/** The one sentence a surface shows when the lane was never fenceable. */
+export const LANE_FENCE_UNENFORCEABLE_MESSAGE =
+  'This clerk lane had no known binding when the action was opened, so the command ' +
+  'was not sent — it would have dispatched with no binding check at all. Reopen the ' +
+  'action once the fleet directory has loaded.';
+
+/**
+ * Whether a frozen fence may still be acted on.
+ *
+ * Enforceability is checked BEFORE drift, and the order is load-bearing. A
+ * fence frozen against a cold directory holds `bindingGeneration: null`; if the
+ * directory has since warmed, `laneFenceDrifted` also reports true (null !== 3).
+ * Both statements are accurate, but only one is actionable: the operator was
+ * shown a lane whose binding was unknown, and the remedy is to reopen now that
+ * it is known — not to reason about a lane that "moved".
+ */
+export function laneFenceVerdict(frozen: LaneFence, lane: LaneDescriptor | undefined): LaneFenceVerdict {
+  if (!laneFenceIsEnforceable(frozen)) {
+    return { ok: false, message: LANE_FENCE_UNENFORCEABLE_MESSAGE };
+  }
+  if (laneFenceDrifted(frozen, lane)) {
+    return { ok: false, message: LANE_FENCE_CONFLICT_MESSAGE };
+  }
+  return { ok: true };
+}
+```
+
+`LANE_FENCE_UNENFORCEABLE_MESSAGE` is client-authored prose about the *request*, like `LANE_FENCE_CONFLICT_MESSAGE` in Task 2 — the `broker-configuration-refusal.ts:40-45` carve-out. Not piped through `receiptLabel`.
+
+**Failing regression test — the one that proves the hole is closed.** It must assert the command was *not dispatched*, not merely that a message rendered. A test that only checks copy passes against a build that shows the banner and submits anyway.
+
+```ts
+it('refuses the command when the directory was cold at open, and dispatches nothing', async () => {
+  const directory = provideFleetDirectory({ lanes: [] }); // cold: no lane, so no generation
+  const runBotAction = vi.fn();
+  await renderPanel({ directory, runBotAction });
+
+  await userEvent.click(screen.getByRole('button', { name: /stop bot/i }));
+
+  expect(runBotAction).not.toHaveBeenCalled();
+  expect(screen.getByText(/no known binding when the action was opened/i)).toBeVisible();
+});
+```
+
+**Prove it can fail.** Before committing, delete the `laneFenceIsEnforceable` branch from `laneFenceVerdict` and confirm this test goes red on the `not.toHaveBeenCalled()` line — not on the copy assertion. A test that only reddens on the copy is pinning a string, not the refusal. Revert the mutation.
+
+**Unit tests on the verdict itself** — add to `lane-fence.spec.ts`:
+
+```ts
+it('refuses an unenforceable fence before it reports drift', () => {
+  const frozen = freezeLaneFence(undefined); // bindingGeneration: null
+  const warmLane = { effective_binding_generation: 3, routing_epoch: 4 } as LaneDescriptor;
+
+  // Both statements are true of this pair; the unenforceable one is the one shown.
+  expect(laneFenceDrifted(frozen, warmLane)).toBe(true);
+  expect(laneFenceVerdict(frozen, warmLane)).toEqual({
+    ok: false,
+    message: LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  });
+});
+
+it('reports drift when the fence was enforceable and the lane moved', () => {
+  const frozen = { bindingGeneration: 3, routingEpoch: 4 } as LaneFence;
+  const moved = { effective_binding_generation: 4, routing_epoch: 4 } as LaneDescriptor;
+
+  expect(laneFenceVerdict(frozen, moved)).toEqual({
+    ok: false,
+    message: LANE_FENCE_CONFLICT_MESSAGE,
+  });
+});
+
+it('passes an enforceable fence against an unmoved lane', () => {
+  const frozen = { bindingGeneration: 3, routingEpoch: 4 } as LaneFence;
+  const same = { effective_binding_generation: 3, routing_epoch: 4 } as LaneDescriptor;
+
+  expect(laneFenceVerdict(frozen, same)).toEqual({ ok: true });
+});
+```
+
+**What this task must NOT do.** Do not add a sentinel to `commandContextOf`, and do not relax the `is not None` gates in `service.py` / `routing.py`. Decision 15 rejected the backend-sentinel route explicitly: the client already knows it has nothing to send, so the refusal belongs where the knowledge is. Backend changes here would widen the wire contract for an outcome the client can reach on its own.
+
+**Run / expected pass**
+```
+podman exec my-frontend npx ng test --watch=false --include='src/app/fleet/lane-fence.spec.ts'
+podman exec my-frontend npx ng test --watch=false --include='src/app/components/broker/v2-panel/panel-shell/bot-panel-shell.component.spec.ts'
+npx eslint Frontend/src/ --max-warnings 0
+```
+Expected: `lane-fence.spec.ts` 7 tests pass (4 from Task 2 + 3 here).
+
+**Commit**
+```
+fix(fleet): refuse a command whose fence cannot be enforced (#2068)
+
+#2068 says the binding fence "fails closed, but silently". It fails OPEN. A
+cold directory yields a null generation, commandContextOf omits
+expected_effective_binding_generation entirely (resource-target.ts:139-141),
+and both backend checks are `is not None`-gated (service.py:1283-1284,
+routing.py:328-329) — so the command routed with no binding check at all.
+
+Tasks 3-5 froze the fence and surfaced drift; none of them handled the
+unfenceable state laneFenceIsEnforceable names. laneFenceVerdict now answers
+both questions in one place, enforceability first, and the five command seams
+consume the verdict instead of asking about drift alone.
+
+Per the owner's decision 15: refuse, loudly, client-side. A cold directory
+refuses commands until it warms — a self-announcing failure with a remedy,
+chosen over an invisible unfenced dispatch.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+```
+
+---
+
 ### Task 6 — `refresh()` gains its first caller, behind the landed freeze
 
 **This task is last, and it is the only task that may add a `refresh()` caller.** Adding one before Tasks 3–5 would activate the dormant bug on every unfrozen surface.
@@ -1287,7 +1428,7 @@ File it as its own issue referencing this paragraph.
 
 | PR | Tasks | Why it stands alone | Regenerates contracts? | Deploy |
 |---|---|---|---|---|
-| **E-A** | 1–6 | Pure frontend. Depends on nothing still open and is **unblocked today**. Task 1 must land before 3–5 or their tests are unfalsifiable; Task 6 must land after 3–5 or it activates the dormant bug. | No | frontend rebuild |
+| **E-A** | 1–5, 5a, 6 | Pure frontend. Depends on nothing still open and is **unblocked today**. Task 1 must land before 3–5 or their tests are unfalsifiable; Task 5a must land after 3–5 (all five seams must freeze first) and before Task 6; Task 6 must land last or it activates the dormant bug. | No | frontend rebuild |
 | **E-B** | 7 | Backend vocabulary, `next_step` backfill, refusal-body wrap, CI. | **Yes** | restart |
 | **E-C** | 8–9 | Frontend copy map + `authority_state`. Imports E-B's committed snapshot. | No | frontend rebuild |
 | **E-D** | 10–11 | Catalog snapshot + `operationUrl` + migration + the dead-method delete. | **Yes** | frontend rebuild |
@@ -1300,7 +1441,7 @@ File it as its own issue referencing this paragraph.
 4. **E-B and E-D each regenerate both contract files. Never two regenerating PRs in flight unrebased.** (Master plan; confirmed.)
 5. **NEW — E-B and E-D both extend `.github/workflows/ci.yml`'s `broker-v2-vocabulary-contract` job** (`:203-236`). The master's `ci.yml` rebase chain is #2078 → Lane F A3 → E-B; **E-D must be appended after E-B**, or the two regenerate-and-diff blocks conflict. Add E-D to that chain.
 6. **NEW — E-D Task 11 and Lane D's PR B both edit `docs/design/fleet-b-route-inventory.md`.** Lane D PR B rewrites the stranded-route section wholesale (its Task 2 step 5); E-D Task 11 adds one line to it. **Land Lane D PR B first; E-D rebases.** Neither plan recorded this.
-7. **Within E-A: 1 → 2 → {3, 4, 5} → 6, strictly.** Task 1 is the falsifiability precondition; Task 6 is the only task that may add a `refresh()` caller.
+7. **Within E-A: 1 → 2 → {3, 4, 5} → 5a → 6, strictly.** Task 1 is the falsifiability precondition; Task 5a needs all five seams frozen before it can route them through one verdict; Task 6 is the only task that may add a `refresh()` caller, and an unfenced dispatch racing a refresh is exactly what decision 15 forecloses — so 5a precedes it.
 
 **Parallelism.** E-A runs in parallel with everything — it touches no file any other lane touches and needs no restart. E-B, E-C and E-D are strictly sequential with each other and sit behind D-D in Track C of the close-out plan.
 
@@ -1314,7 +1455,7 @@ File it as its own issue referencing this paragraph.
 
 ## 5. Risks the issue text missed
 
-1. **The fence fails open, not closed, and shipping the freeze does not close that hole.** A cold or failed directory yields `bindingGeneration: null`; `commandContextOf` omits the envelope field (`resource-target.ts:139-141`); and both backend checks are `is not None`-gated (`service.py:1283-1284`, `routing.py:328-329`). The command routes **unfenced**. `laneFenceIsEnforceable` (Task 2) names the state but no task in this lane refuses on it, because refusing every command while the directory is cold is a policy change the owner has not been asked about. **Raise it as decision 15:** should a command with no enforceable fence be refused client-side, or dispatched unfenced as today? The freeze alone leaves it dispatched.
+1. **The fence fails open, not closed — and Task 5a is the task that closes it.** A cold or failed directory yields `bindingGeneration: null`; `commandContextOf` omits the envelope field (`resource-target.ts:139-141`); and both backend checks are `is not None`-gated (`service.py:1283-1284`, `routing.py:328-329`). The command routed **unfenced**. `laneFenceIsEnforceable` (Task 2) named the state; no task originally consumed it, because refusing every command while the directory is cold is a policy change the owner had not been asked about. **Decision 15, answered 2026-09-14: refuse, loudly, client-side.** Task 5a consumes the predicate at all five command seams. The accepted cost is that a cold directory refuses commands until it warms.
 
 2. **A fake that cannot change makes three green tests that prove nothing.** `provideFleetDirectory` (`fleet-directory-testing.ts:45-73`) closes over one immutable response, and 28 spec files depend on it. Any implementer who writes Task 3's test before Task 1 will see it pass on unmodified code and conclude the fence is already frozen. Task 1 is not housekeeping; it is the only thing that makes Tasks 3–5 falsifiable at all.
 

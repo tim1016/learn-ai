@@ -42,7 +42,7 @@ remaining fix is a checkbox in the IB Gateway UI) and **#2070** (the nightly CI 
 
 ## 2. The gap: Lane E was never planned — CLOSED 2026-09-14
 
-**Resolved.** `2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md` now exists (11 tasks +
+**Resolved.** `2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md` now exists (12 tasks +
 1 deferred). It corrected the issue text, the master plan, **and this document** — see §7. The
 section below is kept as the record of why the pass was commissioned.
 
@@ -104,7 +104,7 @@ Each opens with its own thermo by a fresh independent reviewer. #2074 closes on 
 
 Produce `2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md` to the same standard as the other
 six: every `file:line` claim verified against `cec92fcf`, a failing test per task, PR boundaries,
-and the risks the issue text missed. Scope = master plan Tasks 1–11 (Task 12 stays deferred).
+and the risks the issue text missed. Scope = master plan Tasks 1–11 plus Task 5a, added by decision 15 (Task 12 stays deferred).
 
 Honour the corrections already recorded, so they are not re-derived:
 - #2068 — freeze-at-open is correctness, not UX. **Never add a `refresh()` caller before the freeze.**
@@ -187,7 +187,7 @@ here and are corrected above:
 | Was | Is |
 |---|---|
 | Track A target "321 passed" | **342 passed** on `cec92fcf` — the figure came from the Lane G brief and was stale by four merged PRs |
-| Lane E "12 tasks" | **11 tasks + 1 deferred** |
+| Lane E "12 tasks" | **11 tasks + 1 deferred**; now **12 + 1 deferred** — decision 15 added Task 5a |
 | Master's "#2067 is 29 codes, 95 of 184 sites, five families" (repeated here) | **30 codes, 97 of 187 sites, six families**; 3 subclasses outside `errors.py`, not 4 |
 
 **And one correction that changes what gets built:** #2068 states the binding-generation fence
@@ -196,13 +196,29 @@ generation, `commandContextOf` then omits `expected_effective_binding_generation
 both backend checks are `is not None`-gated — so the command routes with **no fence at all**.
 Freezing the generation at open does not close that hole; it only names the state.
 
-### Decision 15 — new, and the owner's to make
+### Decision 15 — ANSWERED 2026-09-14: refuse, loudly, client-side
 
 **When a command has no enforceable fence (cold or failed directory), should the client refuse it,
 or dispatch it unfenced as today?** Lane E Task 2 ships `laneFenceIsEnforceable`, which names the
-state, but no task in the lane refuses on it: refusing every command while the directory is cold is
-a policy change, not a bug fix. **E-A can start either way**, but the answer is needed before Task 2
-lands. No default is assumed.
+state, but no task in the lane refused on it: refusing every command while the directory is cold is
+a policy change, not a bug fix.
+
+**The owner's answer: refuse.** A command with no enforceable fence is blocked client-side with a
+stated reason; nothing dispatches unfenced. This is the same principle the owner stated over the
+conformance ceremony — *"if it does not add value, failing loudly is much better than silently"* —
+applied to a fence instead of a check. An `is not None` gate that skips when the field is absent is
+the silent pass wearing a type check.
+
+**Accepted cost, stated so it is not a surprise:** real commands are refused during a cold
+directory until the generation warms. That is a visible, self-announcing failure with a remedy,
+which is the trade the owner chose over an invisible unfenced dispatch.
+
+**Rejected alternatives:** dispatch-and-flag (keeps the unsafe path open and makes the receipt the
+only witness); backend-sentinel refusal (identical outcome, more wire surface, and the client
+already knows it has nothing to send — the refusal belongs where the knowledge is).
+
+**Consequence for the lane:** Task 2 no longer merely *names* the state. A new task must consume
+`laneFenceIsEnforceable` at the command seam and refuse. See §3a below.
 
 ### Two follow-ups Lane E found and deliberately did not take
 
