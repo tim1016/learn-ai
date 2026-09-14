@@ -42,6 +42,10 @@
         </p>
       }
 
+      @if (laneConflict()) {
+        <p role="alert">{{ laneConflictMessage }}</p>
+      }
+
       @if (emptyMessage(); as message) {
         <p role="status">{{ message }}</p>
       } @else {

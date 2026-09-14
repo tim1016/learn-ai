@@ -15,6 +15,7 @@ import { Drawer } from 'primeng/drawer';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
+import { LANE_FENCE_CONFLICT_MESSAGE } from '../../../../fleet/lane-fence';
 import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
 import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
 import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
@@ -81,6 +82,12 @@ export class CohortArchiveDrawerComponent {
   protected readonly confirmText = signal('');
   /** Target rendered when the destructive drawer was opened. */
   private readonly presentedTarget = signal<ResourceTarget | null>(null);
+  /** Set when the lane rebinds under an open confirmation. The typed
+   * confirmation and presented target stay frozen rather than being
+   * silently re-minted against a lane the operator never saw (#2068,
+   * decision 10) — the operator must close and reopen to act again. */
+  protected readonly laneConflict = signal(false);
+  protected readonly laneConflictMessage = LANE_FENCE_CONFLICT_MESSAGE;
 
   /**
    * Clear everything that could act on a bot.
@@ -115,9 +122,11 @@ export class CohortArchiveDrawerComponent {
   });
 
   constructor() {
-    // Keep the command target bound to the drawer presentation. A route reuse
-    // or lane rebinding while it is open invalidates its typed confirmation
-    // instead of allowing the old selection to follow the new lane.
+    // Keep the command target bound to the drawer presentation. A lane
+    // rebinding while it is open states a conflict (laneConflict) rather
+    // than re-minting: the operator's typed confirmation must not be
+    // silently discarded against a lane they never saw change (#2068,
+    // decision 10). Only a route reuse (visible false→true again) clears it.
     let openedTarget: ResourceTarget | null = null;
     effect(() => {
       const visible = this.visible();
@@ -125,12 +134,14 @@ export class CohortArchiveDrawerComponent {
       if (!visible) {
         openedTarget = null;
         this.presentedTarget.set(null);
+        this.laneConflict.set(false);
         return;
       }
-      if (openedTarget !== target) {
-        if (openedTarget !== null) this.clearDestructiveState();
+      if (openedTarget === null) {
         openedTarget = target;
         this.presentedTarget.set(withCommand(target, 'bot_action', crypto.randomUUID()));
+      } else if (openedTarget !== target) {
+        this.laneConflict.set(true);
       }
     });
   }
@@ -179,7 +190,8 @@ export class CohortArchiveDrawerComponent {
   );
 
   protected readonly canSubmit = computed(
-    () => this.selectedCount() > 0 && this.confirmed() && !this.submitting(),
+    () =>
+      this.selectedCount() > 0 && this.confirmed() && !this.submitting() && !this.laneConflict(),
   );
 
   /**

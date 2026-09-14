@@ -33,6 +33,7 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
+import { LANE_FENCE_CONFLICT_MESSAGE } from '../../../fleet/lane-fence';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -583,14 +584,39 @@ export class AlpacaDeployWorkflowComponent {
       if (symbol !== current.symbol) this.applySymbol(symbol);
     });
 
-    effect(() => {
-      const frozen = this.frozenCommand();
-      if (frozen === null) return;
-      const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
-      if (frozen.ticketKey !== this.ticketKey(this.ticket()) || frozen.routeKey !== routeKey) {
-        this.frozenCommand.set(null);
-      }
-    });
+    effect(() => this.syncFrozenCommandDrift());
+  }
+
+  /**
+   * Abandon the frozen preview/apply command when it no longer matches what
+   * would be sent now — a legitimate ticket edit silently invalidates it (a
+   * fresh preview is expected), but a route-key change is the account moving
+   * under a frozen preview, never the directory: the deploy drawer's own
+   * `target` is captured once, on the false→true visibility edge
+   * (`alpaca-deploy-drawer.component.ts:96-102`), and never recomputed while
+   * this workflow stays open. Silently discarding the frozen command there
+   * let the next submit mint a new durable identity against an account the
+   * operator never saw change out from under them (#2068, decision 10) —
+   * surface the conflict instead of re-adopting it.
+   */
+  private syncFrozenCommandDrift(): void {
+    const frozen = this.frozenCommand();
+    if (frozen === null) return;
+    const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
+    if (frozen.routeKey !== routeKey) {
+      this.frozenCommand.set(null);
+      this.submitError.set({
+        outcome: 'conflict',
+        title: this.errorTitle('conflict'),
+        message: LANE_FENCE_CONFLICT_MESSAGE,
+        explanation: null,
+        nextAction: null,
+        receiptId: null,
+        recordedAtMs: null,
+      });
+    } else if (frozen.ticketKey !== this.ticketKey(this.ticket())) {
+      this.frozenCommand.set(null);
+    }
   }
 
   protected setInstanceId(value: string): void {

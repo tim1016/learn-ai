@@ -9,7 +9,7 @@ import type {
   CohortArchiveView,
 } from '../lib/broker-v2-panel.types';
 import { CohortArchiveDrawerComponent } from './cohort-archive-drawer.component';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
 
 function leg(overrides: Partial<CohortArchiveLeg> = {}): CohortArchiveLeg {
   return {
@@ -61,11 +61,25 @@ function fakeService(legs: CohortArchiveLeg[], batch = result()) {
   };
 }
 
-async function open(service: ReturnType<typeof fakeService>) {
-  await render(CohortArchiveDrawerComponent, {
+function open(
+  service: ReturnType<typeof fakeService>,
+  overrides: { directory?: ReturnType<typeof provideFleetDirectory> } = {},
+) {
+  // The double's default lane must resolve for this file's routed clerkId
+  // ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the fence
+  // checks exercise a real lane rather than a permanently-missing one.
+  const directory =
+    overrides.directory ??
+    provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+  return render(CohortArchiveDrawerComponent, {
     inputs: { clerkId: 'clrk_spec', visible: true, broker: 'alpaca', accountId: 'PA1' },
     providers: [
-      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: service }],
+      { provide: directory.provide, useValue: directory.useValue },
+      { provide: BrokerV2PanelService, useValue: service },
+    ],
   });
 }
 
@@ -257,5 +271,43 @@ describe('CohortArchiveDrawerComponent', () => {
     await user.click(screen.getByRole('button', { name: /Archive 1/ }));
 
     expect(await screen.findByRole('button', { name: /Archive 0/ })).toBeTruthy();
+  });
+
+  it('states the conflict when the lane rebinds under an open archive confirmation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const service = fakeService([leg()]);
+    const { fixture } = await open(service, { directory });
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    // Proves the button would otherwise be enabled: without this, a
+    // still-disabled button after rebind would pass whether or not the
+    // drift check does anything.
+    expect((screen.getByRole('button', { name: /Archive 1/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+    // A signal-backed rebind can transiently unmount and remount other
+    // reactive consumers; stabilize and re-query rather than reuse a stale
+    // element handle.
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Archive 1/ }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    // The typed confirmation is not silently discarded.
+    expect((screen.getByLabelText(/Type ARCHIVE to confirm/) as HTMLInputElement).value)
+      .toBe('ARCHIVE');
+
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+    expect(service.runCohortArchive).not.toHaveBeenCalled();
   });
 });

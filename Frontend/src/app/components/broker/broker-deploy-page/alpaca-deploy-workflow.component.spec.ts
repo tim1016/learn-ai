@@ -1116,4 +1116,30 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const [secondTarget] = service.deployBot.mock.calls[1];
     expect(firstTarget.idempotencyKey).not.toBe(secondTarget.idempotencyKey);
   });
+
+  it('states the conflict, instead of silently minting a new command, when the account rebinds under a frozen preview', async () => {
+    // The deploy drawer's own target is frozen on open and cannot drift
+    // while visible; only the account can move under an already-previewed
+    // command. Leaving the preview `allowed: false` keeps frozenCommand set
+    // (only a successful deploy nulls it), so a following drift is on a
+    // command that is actually still pending.
+    const denied = { ...ADMISSION, allowed: false } satisfies RunAdmissionDecision;
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(denied);
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'drift-01' }));
+
+    await component['submit']();
+    fixture.detectChanges();
+    expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fixture.componentRef.setInput('accountId', 'PA10');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect(service.deployBot).not.toHaveBeenCalled();
+  });
 });
