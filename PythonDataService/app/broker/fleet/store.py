@@ -25,7 +25,10 @@ from threading import RLock
 from typing import Any
 
 from app.broker.fleet import schema
-from app.broker.fleet.errors import FleetRegistryUnavailable
+from app.broker.fleet.errors import (
+    FleetRegistryRecoveryPending,
+    FleetRegistryUnavailable,
+)
 from app.broker.fleet.records import (
     AccountAssignmentRecord,
     ApprovedEndpointRecord,
@@ -36,6 +39,7 @@ from app.broker.fleet.records import (
     RoutingReceiptState,
     StoredLifecycleState,
 )
+from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import now_ms_utc
 
 DATABASE_DIRECTORY = "fleet"
@@ -60,14 +64,14 @@ class FleetRegistryStore:
         self._conn = conn
         self._lock = RLock()
         self.db_path = db_path
+        self._operation_depth = 0
+        self._database_identity = self._path_identity()
 
     # ---- lifecycle ------------------------------------------------------
 
     @classmethod
     def open(cls, *, control_dir: Path) -> FleetRegistryStore:
         """Open, creating and migrating under a cross-process advisory lock."""
-        from app.utils.advisory_lock import advisory_file_lock
-
         db_path = registry_database_path(control_dir)
         try:
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,10 +175,57 @@ class FleetRegistryStore:
         with self._lock:
             self._conn.close()
 
+    def _path_identity(self) -> tuple[int, int]:
+        """Return the filesystem identity backing the live registry path."""
+        try:
+            stat = self.db_path.stat()
+        except OSError as exc:
+            raise FleetRegistryUnavailable(
+                f"The fleet registry path {self.db_path} is unavailable: {exc}",
+                next_step="Keep routing closed and inspect the coordinator control volume.",
+            ) from exc
+        return stat.st_dev, stat.st_ino
+
+    def _require_current_database(self) -> None:
+        """Refuse a connection whose database path was replaced by recovery."""
+        if self._path_identity() != self._database_identity:
+            raise FleetRegistryRecoveryPending(
+                "This coordinator still holds the pre-restore fleet registry connection.",
+                next_step="Restart the coordinator so it opens the restored registry before "
+                "routing or assignment mutation resumes.",
+            )
+
+    @contextmanager
+    def _current_database_operation(self) -> Iterator[None]:
+        """Serialize path replacement and reject stale open SQLite handles."""
+        with self._lock:
+            if self._operation_depth:
+                self._require_current_database()
+                yield
+                self._require_current_database()
+                return
+            with advisory_file_lock(self.db_path):
+                self._operation_depth = 1
+                try:
+                    self._require_current_database()
+                    yield
+                    self._require_current_database()
+                finally:
+                    self._operation_depth = 0
+
+    def backup_to(self, database: Path) -> None:
+        """Write a consistent SQLite snapshot under the connection lock."""
+        with self._current_database_operation():
+            destination = sqlite3.connect(database)
+            try:
+                self._conn.backup(destination)
+            finally:
+                destination.close()
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """One serialized write; nested operations stay inside the outer commit."""
-        with self._lock:
+        with self._current_database_operation():
             savepoint = f"fleet_{secrets.token_hex(8)}" if self._conn.in_transaction else None
             self._conn.execute(f"SAVEPOINT {savepoint}" if savepoint else "BEGIN IMMEDIATE")
             try:
@@ -194,7 +245,7 @@ class FleetRegistryStore:
     @contextmanager
     def read_snapshot(self) -> Iterator[None]:
         """Keep a multi-query read on one WAL snapshot without reserving a write."""
-        with self._lock:
+        with self._current_database_operation():
             if self._conn.in_transaction:
                 yield
                 return
@@ -206,12 +257,12 @@ class FleetRegistryStore:
 
     def _query(self, sql: str, parameters: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         """Run one read query under the connection lock."""
-        with self._lock:
+        with self._current_database_operation():
             return self._conn.execute(sql, parameters).fetchall()
 
     def _query_one(self, sql: str, parameters: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         """Run one single-row read query under the connection lock."""
-        with self._lock:
+        with self._current_database_operation():
             return self._conn.execute(sql, parameters).fetchone()
 
     @property
@@ -513,6 +564,17 @@ class FleetRegistryStore:
         )
         return [_assignment_from_row(row) for row in rows]
 
+    def list_assignments_for_clerk_on(
+        self, conn: sqlite3.Connection, clerk_id: str
+    ) -> list[AccountAssignmentRecord]:
+        """List one clerk's assignments inside a caller's write transaction."""
+        rows = conn.execute(
+            f"SELECT {self._ASSIGNMENT_COLUMNS} FROM account_assignments WHERE clerk_id = ? "
+            "ORDER BY recorded_at_ms ASC, broker ASC, canonical_external_account_id ASC",
+            (clerk_id,),
+        ).fetchall()
+        return [_assignment_from_row(row) for row in rows]
+
     def list_active_assignments(self) -> list[AccountAssignmentRecord]:
         """List every non-released assignment row."""
         rows = self._query(
@@ -585,6 +647,36 @@ class FleetRegistryStore:
         if cursor.rowcount == 1:
             self.append_assignment_history(conn, assignment)
         return cursor.rowcount == 1
+
+    def reassign_assignment(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        released: AccountAssignmentRecord,
+        reserved_successor: AccountAssignmentRecord,
+        previous_state: AssignmentState,
+    ) -> None:
+        """Release then reserve inside one caller-owned SQLite transaction.
+
+        Both rows address the same broker-qualified account. A failure to
+        install the successor raises while the transaction is still active so
+        the release rolls back with it; reassignment can never leave a split
+        two-commit handover behind.
+        """
+        if not self.cas_update_assignment(
+            conn,
+            released,
+            previous_generation=released.assignment_generation,
+            previous_state=previous_state,
+        ):
+            raise sqlite3.IntegrityError("assignment changed before release")
+        if not self.cas_update_assignment(
+            conn,
+            reserved_successor,
+            previous_generation=released.assignment_generation,
+            previous_state=AssignmentState.RELEASED,
+        ):
+            raise sqlite3.IntegrityError("successor reservation refused")
 
     # ---- assignment history ----------------------------------------------
 

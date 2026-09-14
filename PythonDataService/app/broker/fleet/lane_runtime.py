@@ -21,21 +21,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 _COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 _COMPATIBILITY_EVIDENCE_RELATIVE_PATH = Path("compatibility") / "route_hits.json"
+_COMPATIBILITY_ROUTE_STATE_RELATIVE_PATH = Path("compatibility") / "route_state.json"
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
-_COMPATIBILITY_ROUTE_FAMILIES = frozenset(
-    {
-        "broker_bots",
-        "broker_configuration",
-        "broker_v2_panel",
-        "brokers_lane_extras",
-        "run_replay",
-    }
-)
+_COMPATIBILITY_ROUTE_FAMILIES = RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
 _MAX_FLUSH_ATTEMPTS = 3
 logger = logging.getLogger(__name__)
@@ -150,14 +144,14 @@ class _CapacityPool:
             self._condition.notify(1)
 
 
-def compatibility_route_family(method: str, path: str, *, pinned: bool) -> str | None:
+def compatibility_route_family(method: str, path: str) -> str | None:
     """Return the fixed inventory family for an eligible legacy read.
 
     This deliberately matches only the Delivery-B retained-unscoped inventory.
     It retains no raw route parameter (account, strategy, ticket, or order ID)
     and excludes canonical clerk paths and all internal traffic.
     """
-    if pinned or method.upper() not in _SAFE_METHODS or not path.startswith("/api/brokers/"):
+    if method.upper() not in _SAFE_METHODS or not path.startswith("/api/brokers/"):
         return None
     parts = tuple(segment for segment in path.split("/") if segment)
     # api, brokers, broker, ...; the broker value is intentionally discarded.
@@ -220,6 +214,19 @@ class CompatibilityReadEvidence:
     def path(self) -> Path:
         """The stable lane-local file which Delivery E can inspect or export."""
         return self._path
+
+    @property
+    def route_state_path(self) -> Path:
+        """The local, host-written state that can retire only retained reads."""
+        return self._path.parent.parent / _COMPATIBILITY_ROUTE_STATE_RELATIVE_PATH
+
+    def compatibility_route_state(self) -> str:
+        """Read the local route state; absence alone defaults to measurement."""
+        from app.broker.fleet.compatibility_retirement import (
+            read_route_state,
+        )
+
+        return str(read_route_state(self.route_state_path))
 
     def schedule(self, *, route_family: str, response_class: str) -> None:
         """Schedule a bounded lane-local export without delaying an HTTP response."""
@@ -508,11 +515,55 @@ class FleetLaneRuntimeMiddleware:
             for name, value in scope.get("headers", [])
         }
         method = str(scope["method"]).upper()
-        family = compatibility_route_family(
-            method,
-            str(scope.get("path", "")),
-            pinned=b"x-fleet-clerk-id" in headers,
-        )
+        family = compatibility_route_family(method, str(scope.get("path", "")))
+        # Coordinator forwarding carries this header. It must not double-count
+        # D's aggregate, but a client-supplied copy cannot bypass E retirement.
+        measurement_family = None if b"x-fleet-clerk-id" in headers else family
+        if family is not None:
+            from app.broker.fleet.compatibility_retirement import CompatibilityRetirementRefusal
+
+            try:
+                route_state = self._evidence.compatibility_route_state()
+            except CompatibilityRetirementRefusal:
+                logger.error(
+                    "Compatibility route state is invalid; refusing retained compatibility read.",
+                    extra={"evidence_kind": "compatibility_route_state"},
+                )
+                body = json.dumps(
+                    {
+                        "reason": "compatibility_retirement_state_invalid",
+                        "message": "Compatibility retirement state is invalid; host operator action is required.",
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 503,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body, "more_body": False})
+                return
+        else:
+            route_state = "measurement"
+        if family is not None and route_state == "retired":
+            body = json.dumps(
+                {
+                    "reason": "compatibility_read_retired",
+                    "message": "This compatibility read has retired; use its canonical broker and clerk route.",
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 410,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+            return
         request_lease: _CapacityLease | None = None
         stream_lease: _CapacityLease | None = None
         refusal_sent = False
@@ -521,11 +572,14 @@ class FleetLaneRuntimeMiddleware:
         def record_response(status: int) -> None:
             """Record one emitted response class only after its start line."""
             nonlocal measurement_recorded
-            if family is None or measurement_recorded:
+            if measurement_family is None or measurement_recorded:
                 return
             response_class = f"{status // 100}xx"
             if response_class in _COMPATIBILITY_RESPONSE_CLASSES:
-                self._evidence.schedule(route_family=family, response_class=response_class)
+                self._evidence.schedule(
+                    route_family=measurement_family,
+                    response_class=response_class,
+                )
             measurement_recorded = True
 
         async def refuse(pool: str) -> None:

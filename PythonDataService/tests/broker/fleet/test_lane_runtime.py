@@ -13,6 +13,10 @@ from typing import Any
 
 import pytest
 
+from app.broker.fleet.compatibility_retirement import (
+    CompatibilityRouteState,
+    write_route_state,
+)
 from app.broker.fleet.lane_runtime import (
     CompatibilityEvidenceFlushError,
     CompatibilityReadEvidence,
@@ -225,19 +229,18 @@ async def test_stream_queue_wait_releases_request_capacity_for_ordinary_reads(
 
 def test_compatibility_inventory_is_fixed_and_excludes_canonical_internal_and_mutations() -> None:
     """Only retained, unpinned read families may enter the D measurement."""
-    assert compatibility_route_family("GET", "/api/brokers/alpaca/assets", pinned=False) == "brokers_lane_extras"
+    assert compatibility_route_family("GET", "/api/brokers/alpaca/assets") == "brokers_lane_extras"
     assert compatibility_route_family(
-        "HEAD", "/api/brokers/alpaca/configuration/selection", pinned=False
+        "HEAD", "/api/brokers/alpaca/configuration/selection"
     ) == "broker_configuration"
     assert compatibility_route_family(
-        "GET", "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt", pinned=False
+        "GET", "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt"
     ) == "run_replay"
     assert compatibility_route_family(
-        "GET", "/api/brokers/alpaca/clerks/clrk_abc/account", pinned=False
+        "GET", "/api/brokers/alpaca/clerks/clrk_abc/account"
     ) is None
-    assert compatibility_route_family("GET", "/internal/fleet/sessions", pinned=False) is None
-    assert compatibility_route_family("POST", "/api/brokers/alpaca/bots", pinned=False) is None
-    assert compatibility_route_family("GET", "/api/brokers/alpaca/bots", pinned=True) is None
+    assert compatibility_route_family("GET", "/internal/fleet/sessions") is None
+    assert compatibility_route_family("POST", "/api/brokers/alpaca/bots") is None
 
 
 async def test_measurement_persists_only_safe_aggregate_and_never_mutations(
@@ -439,6 +442,106 @@ async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> Non
     assert _status(await _invoke(runtime)) == 200
     await evidence.flush()
     assert evidence.snapshot()["route_hits"][0]["route_family"] == "broker_bots"
+
+
+async def test_retired_state_refuses_only_retained_unscoped_reads(tmp_path: Path) -> None:
+    """A retirement receipt cannot affect canonical scoped reads or mutations."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    write_route_state(
+        state_path=evidence.route_state_path,
+        state=CompatibilityRouteState.RETIRED,
+        retirement_receipt={
+            "schema_version": 1,
+            "decision": "eligible",
+            "measurement_window": {"start_ms": 1, "end_ms": 2},
+            "operator_receipt_id": "receipt-1",
+            "scoped_route_evidence": {"unresolved_scoped_route_failures": 0},
+            "consumer_inventory": {
+                "consumers": ["alpaca-desk"],
+                "attested_route_families": [
+                    "broker_bots",
+                    "broker_configuration",
+                    "broker_v2_panel",
+                    "brokers_lane_extras",
+                    "run_replay",
+                ],
+            },
+            "route_deltas": [],
+        },
+    )
+    calls = 0
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        nonlocal calls
+        calls += 1
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    retired = await _invoke(runtime, path="/api/brokers/alpaca/bots")
+    assert _status(retired) == 410
+    assert json.loads(retired[-1]["body"])["reason"] == "compatibility_read_retired"
+    arbitrary_header = await _invoke(
+        runtime,
+        path="/api/brokers/alpaca/bots",
+        headers=[(b"x-fleet-clerk-id", b"clrk_arbitrary")],
+    )
+    assert _status(arbitrary_header) == 410
+
+    from app.broker.fleet.agent_identity import (
+        SERVED_IDENTITY_STATE_KEY,
+        FleetIdentityMiddleware,
+    )
+
+    identity = {
+        "broker": "alpaca",
+        "clerk_id": "clrk_serving",
+        "routing_epoch": 4,
+        "binding_generation": 9,
+    }
+    app_state = SimpleNamespace(state=SimpleNamespace())
+    setattr(app_state.state, SERVED_IDENTITY_STATE_KEY, lambda: identity)
+    matching_header = await _invoke(
+        FleetIdentityMiddleware(runtime),
+        path="/api/brokers/alpaca/bots",
+        headers=[
+            (b"x-fleet-broker", b"alpaca"),
+            (b"x-fleet-clerk-id", b"clrk_serving"),
+        ],
+        app_state=app_state,
+    )
+    assert _status(matching_header) == 410
+    assert calls == 0
+
+    canonical = await _invoke(runtime, path="/api/brokers/alpaca/clerks/clrk_paper/bots")
+    mutation = await _invoke(runtime, method="POST", path="/api/brokers/alpaca/bots")
+    assert _status(canonical) == 200
+    assert _status(mutation) == 200
+    assert calls == 2
+
+
+async def test_corrupt_route_state_refuses_compatibility_alias_without_blocking_canonical_route(
+    tmp_path: Path,
+) -> None:
+    """An existing corrupt state file does not silently re-enable an alias."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    evidence.route_state_path.parent.mkdir(parents=True)
+    evidence.route_state_path.write_text("{not-json", encoding="utf-8")
+    calls = 0
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        nonlocal calls
+        calls += 1
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    refused = await _invoke(runtime, path="/api/brokers/alpaca/bots")
+    canonical = await _invoke(runtime, path="/api/brokers/alpaca/clerks/clrk_paper/bots")
+    assert _status(refused) == 503
+    assert json.loads(refused[-1]["body"])["reason"] == "compatibility_retirement_state_invalid"
+    assert _status(canonical) == 200
+    assert calls == 1
 
 
 async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying_count(

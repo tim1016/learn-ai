@@ -14,6 +14,7 @@ from pathlib import Path
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
+from app.utils.timestamps import now_ms_utc
 from scripts.manage_broker_fleet import main
 from tests.broker.fleet.conftest import FrozenClock
 
@@ -244,3 +245,232 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
     )
     released = json.loads(capsys.readouterr().out)
     assert released["state"] == "released"
+
+
+def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement(
+    tmp_path: Path, capsys
+) -> None:
+    """The host command retains aliases by default and refuses an incomplete retirement proof."""
+    aggregate = {
+        "schema_version": 2,
+        "updated_at_ms": now_ms_utc(),
+        "route_hits": [],
+    }
+    start_evidence = tmp_path / "start-evidence.json"
+    end_evidence = tmp_path / "end-evidence.json"
+    start_evidence.write_text(json.dumps(aggregate), encoding="utf-8")
+    end_evidence.write_text(json.dumps(aggregate), encoding="utf-8")
+    start_snapshot = tmp_path / "start.json"
+    end_snapshot = tmp_path / "end.json"
+    assert (
+        main(
+            _argv(
+                "compatibility-snapshot",
+                "--evidence-path",
+                str(start_evidence),
+                "--snapshot-path",
+                str(start_snapshot),
+                "--source-label",
+                "paper",
+            )
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            _argv(
+                "compatibility-snapshot",
+                "--evidence-path",
+                str(end_evidence),
+                "--snapshot-path",
+                str(end_snapshot),
+                "--source-label",
+                "paper",
+            )
+        )
+        == 0
+    )
+    capsys.readouterr()
+    start_payload = json.loads(start_snapshot.read_text(encoding="utf-8"))
+    end_payload = json.loads(end_snapshot.read_text(encoding="utf-8"))
+    end_payload["captured_at_ms"] = start_payload["captured_at_ms"] + 1
+    end_snapshot.write_text(json.dumps(end_payload), encoding="utf-8")
+    evidence_time = now_ms_utc()
+    inventory = tmp_path / "inventory.json"
+    scoped = tmp_path / "scoped.json"
+    operator = tmp_path / "operator.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "complete": True,
+                "generated_at_ms": evidence_time,
+                "consumers": [
+                    {
+                        "consumer": "alpaca-desk",
+                        "attestation": "all-retained-reads-scoped",
+                        "route_families": [
+                            "broker_bots",
+                            "broker_configuration",
+                            "broker_v2_panel",
+                            "brokers_lane_extras",
+                            "run_replay",
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scoped.write_text(
+        json.dumps(
+            {"schema_version": 1, "observed_at_ms": evidence_time, "unresolved_scoped_route_failures": 0}
+        ),
+        encoding="utf-8",
+    )
+    operator.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "receipt_id": "operator-acceptance-1",
+                "operator": "fleet-owner",
+                "issued_at_ms": now_ms_utc(),
+                "representative_window": True,
+                "retire_compatibility_reads": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    decision = tmp_path / "decision.json"
+    rollout = tmp_path / "retirement-rollout.json"
+    route_state = tmp_path / "compatibility" / "route_state.json"
+    common = _argv(
+        "--start-snapshot",
+        str(start_snapshot),
+        "--end-snapshot",
+        str(end_snapshot),
+        "--consumer-inventory",
+        str(inventory),
+        "--scoped-route-evidence",
+        str(scoped),
+        "--operator-receipt",
+        str(operator),
+        "--decision-receipt-path",
+        str(decision),
+    )
+    assert main(["compatibility-evaluate", *common]) == 0
+    evaluated = json.loads(capsys.readouterr().out)
+    assert evaluated["state"] == "measurement"
+    assert decision.exists()
+
+    assert (
+        main(
+            [
+                "compatibility-retire",
+                *common,
+                "--route-state-path",
+                str(route_state),
+                "--retirement-rollout-path",
+                str(rollout),
+            ]
+        )
+        == 0
+    )
+    retired = json.loads(capsys.readouterr().out)
+    assert retired["state"] == "retired"
+    assert retired["rollout_state"] == "complete"
+    assert json.loads(route_state.read_text(encoding="utf-8"))["state"] == "retired"
+
+    inventory.write_text(json.dumps({"schema_version": 1, "complete": False}), encoding="utf-8")
+    assert (
+        main(
+            [
+                "compatibility-retire",
+                *common,
+                "--route-state-path",
+                str(tmp_path / "bad.json"),
+                "--retirement-rollout-path",
+                str(tmp_path / "bad-rollout.json"),
+            ]
+        )
+        == 2
+    )
+    assert "compatibility_retirement_refused:" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
+    tmp_path: Path, capsys
+) -> None:
+    """The operator surface never restores a registry into immediately routable state."""
+    control_dir = tmp_path / "control"
+    volume_root = tmp_path / "volumes" / "paper"
+    volume_root.mkdir(parents=True)
+    backup_dir = tmp_path / "backup"
+    assert main(_argv("init", "--control-dir", str(control_dir))) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            _argv(
+                "provision",
+                "--control-dir",
+                str(control_dir),
+                "--broker",
+                "alpaca",
+                "--label",
+                "Paper",
+                "--volume-root",
+                str(volume_root),
+            )
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["clerk_id"].startswith("clrk_")
+    assert (
+        main(
+            _argv(
+                "backup-registry",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 0
+    )
+    backup = json.loads(capsys.readouterr().out)
+    assert backup["active_clerk_ids"] == []
+    assert (
+        main(
+            _argv(
+                "rollback-d-compatible",
+                "--control-dir",
+                str(control_dir),
+                "--backup-dir",
+                str(backup_dir),
+            )
+        )
+        == 0
+    )
+    restored = json.loads(capsys.readouterr().out)
+    assert restored["routing_closed"] is True
+    assert restored["assignment_mutation_closed"] is True
+    assert restored["rollback_topology"] == "d_compatible"
+    assert (
+        main(
+            _argv(
+                "closeout-empty-registry",
+                "--control-dir",
+                str(control_dir),
+                "--operator",
+                "fleet-owner",
+                "--change-ref",
+                "incident-2049",
+            )
+        )
+        == 0
+    )
+    closeout = json.loads(capsys.readouterr().out)
+    assert closeout["routing_closed"] is False
+    assert closeout["assignment_mutation_closed"] is False
+    assert closeout["empty_inventory_attestation"]["operator"] == "fleet-owner"

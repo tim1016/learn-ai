@@ -248,3 +248,20 @@ def test_the_generic_spine_survives_a_provider_adapter_refusal(
         service._store.read_assignment(broker="fake_alpha", canonical_account_id="ACCT-BAD")
         is None
     )
+
+
+def test_test_fakes_are_absent_from_production_composition_and_openapi() -> None:
+    """The two conformance fakes never become deployable providers or API surface."""
+    from app.broker.fleet_composition import production_provider_adapters
+
+    repository_root = Path(__file__).resolve().parents[4]
+    assert set(production_provider_adapters()) == {"alpaca"}
+    for relative_path in (
+        "compose.yaml",
+        "compose.fleet.yaml",
+        "PythonDataService/app/broker/fleet_composition.py",
+        "contracts/openapi/python-data-service.openapi.json",
+    ):
+        artifact = (repository_root / relative_path).read_text(encoding="utf-8")
+        assert "fake_alpha" not in artifact
+        assert "fake_beta" not in artifact

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.broker.fleet.errors import FleetControlError
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 EVIDENCE_FILENAME = "confirmation.json"
 EVIDENCE_DIRECTORY = "fleet"
@@ -115,18 +116,31 @@ def read_confirmation_evidence(clerk_root: Path) -> ConfirmationEvidence | None:
             raise ConfirmationEvidenceError(
                 f"The confirmation evidence at {target} carries an invalid {field}.",
             )
-    for field in ("assignment_generation", "binding_generation", "confirmed_at_ms", "routing_epoch"):
+    for field in ("assignment_generation", "binding_generation", "routing_epoch"):
         value = raw[field]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ConfirmationEvidenceError(
                 f"The confirmation evidence at {target} carries an invalid {field}.",
             )
+    confirmed_at_ms = raw["confirmed_at_ms"]
+    if (
+        isinstance(confirmed_at_ms, bool)
+        or not isinstance(confirmed_at_ms, int)
+        or not 0 <= confirmed_at_ms <= MAX_TIMESTAMP_MS
+    ):
+        raise ConfirmationEvidenceError(
+            f"The confirmation evidence at {target} carries an invalid confirmed_at_ms.",
+        )
     for field in ("effective_profile_id", "effective_revision"):
         value = raw[field]
         if value is not None and (isinstance(value, bool) or not isinstance(value, int if field == "effective_revision" else str)):
             raise ConfirmationEvidenceError(
                 f"The confirmation evidence at {target} carries an invalid {field}.",
             )
+    if (raw["effective_profile_id"] is None) != (raw["effective_revision"] is None):
+        raise ConfirmationEvidenceError(
+            f"The confirmation evidence at {target} carries an incomplete effective tuple.",
+        )
     return ConfirmationEvidence(
         clerk_id=raw["clerk_id"],
         volume_id=raw["volume_id"],

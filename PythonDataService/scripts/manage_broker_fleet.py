@@ -38,12 +38,31 @@ import json
 import sys
 from pathlib import Path
 
+from app.broker.fleet.compatibility_retirement import (
+    CompatibilityRetirementRefusal,
+    CompatibilityRouteState,
+    apply_retirement_rollout,
+    capture_snapshot,
+    evaluate_retirement,
+    read_retirement_receipt,
+    read_retirement_rollout,
+    write_retirement_receipt,
+)
 from app.broker.fleet.errors import (
     ClerkVolumeCloneDetected,
     FleetControlError,
     FleetRegistryUnavailable,
 )
 from app.broker.fleet.identity import new_service_token
+from app.broker.fleet.recovery import (
+    D_COMPATIBLE_SCHEMA_VERSION,
+    closeout_empty_registry_recovery,
+    create_registry_backup,
+    read_recovery_state,
+    reconcile_restored_lane,
+    restore_registry_backup,
+)
+from app.broker.fleet.schema import SCHEMA_VERSION
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
@@ -217,6 +236,203 @@ def _release(args: argparse.Namespace) -> int:
         )
     finally:
         service.close()
+    return 0
+
+
+def _compatibility_snapshot(args: argparse.Namespace) -> int:
+    """Capture one privacy-preserving compatibility aggregate snapshot."""
+    snapshot = capture_snapshot(
+        evidence_path=Path(args.evidence_path),
+        snapshot_path=Path(args.snapshot_path),
+        source_label=args.source_label,
+    )
+    _write(snapshot)
+    return 0
+
+
+def _compatibility_evaluate(args: argparse.Namespace) -> int:
+    """Evaluate retirement evidence but leave all aliases in measurement mode."""
+    receipt = _evaluate_compatibility(args)
+    _write_compatibility_receipt(args, receipt)
+    _write({"state": CompatibilityRouteState.MEASUREMENT.value, "receipt": receipt})
+    return 0
+
+
+def _compatibility_retire(args: argparse.Namespace) -> int:
+    """Start or resume an evidence-pinned, journaled multi-lane retirement."""
+    state_paths = [Path(path) for path in args.route_state_path]
+    if not state_paths:
+        raise CompatibilityRetirementRefusal(
+            "Retirement needs at least one lane-local compatibility route state path."
+        )
+    if len(set(state_paths)) != len(state_paths):
+        raise CompatibilityRetirementRefusal("Retirement route state paths must be unique.")
+    rollout_path = Path(args.retirement_rollout_path)
+    existing = read_retirement_rollout(rollout_path)
+    if existing is None:
+        receipt = _evaluate_compatibility(args)
+        _write_compatibility_receipt(args, receipt)
+    else:
+        receipt = read_retirement_receipt(Path(args.decision_receipt_path))
+        if receipt != existing.retirement_receipt:
+            raise CompatibilityRetirementRefusal(
+                "The rollout journal and durable retirement receipt disagree."
+            )
+    rollout = apply_retirement_rollout(
+        rollout_path=rollout_path,
+        state_paths=state_paths,
+        retirement_receipt=receipt,
+    )
+    _write(
+        {
+            "state": CompatibilityRouteState.RETIRED.value,
+            "rollout_state": rollout.state.value,
+            "rollout_id": rollout.rollout_id,
+            "operator_receipt_id": receipt["operator_receipt_id"],
+            "route_state_count": len(rollout.retired_route_state_paths),
+        }
+    )
+    return 0
+
+
+def _reassign(args: argparse.Namespace) -> int:
+    """Handle ``reassign-assignment``: verify then transfer one ownership fence."""
+    service = _service(args)
+    try:
+        assigned = service.reassign_assignment(
+            broker=args.broker,
+            external_account_id=args.account_id,
+            expected_assignment_generation=args.expected_generation,
+            proof=args.proof,
+            successor_clerk_id=args.successor_clerk_id,
+            successor_volume_root=Path(args.successor_volume_root),
+        )
+        _write(
+            {
+                "broker": assigned.broker,
+                "canonical_external_account_id": assigned.canonical_external_account_id,
+                "clerk_id": assigned.clerk_id,
+                "assignment_generation": assigned.assignment_generation,
+                "state": str(assigned.state),
+                "routing_open": False,
+                "note": "The successor remains unroutable until its own agent "
+                "confirms the exact binding and existing provider gates admit it.",
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _backup_registry(args: argparse.Namespace) -> int:
+    """Handle ``backup-registry``: snapshot nonsecret coordinator evidence."""
+    service = _service(args)
+    try:
+        manifest = create_registry_backup(service._store, backup_dir=Path(args.backup_dir))
+        _write(
+            {
+                "registry_id": manifest.registry_id,
+                "schema_version": manifest.registry_schema_version,
+                "database_sha256": manifest.database_sha256,
+                "active_clerk_ids": manifest.active_clerk_ids,
+                "backup_dir": args.backup_dir,
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _restore_registry(args: argparse.Namespace) -> int:
+    """Restore a registry without ever opening a blank replacement registry."""
+    manifest = restore_registry_backup(
+        control_dir=Path(args.control_dir),
+        backup_dir=Path(args.backup_dir),
+        max_schema_version=D_COMPATIBLE_SCHEMA_VERSION if args.d_compatible else SCHEMA_VERSION,
+    )
+    state = read_recovery_state(Path(args.control_dir))
+    assert state is not None
+    _write(
+        {
+            "registry_id": manifest.registry_id,
+            "schema_version": manifest.registry_schema_version,
+            "required_clerk_ids": manifest.active_clerk_ids,
+            "routing_closed": state.routing_closed,
+            "assignment_mutation_closed": state.routing_closed,
+            "rollback_topology": "d_compatible" if args.d_compatible else "current",
+        }
+    )
+    return 0
+
+
+def _evaluate_compatibility(args: argparse.Namespace) -> dict[str, object]:
+    """Build the shared fail-closed compatibility retirement receipt."""
+    return evaluate_retirement(
+        start_snapshot_paths=[Path(path) for path in args.start_snapshot],
+        end_snapshot_paths=[Path(path) for path in args.end_snapshot],
+        consumer_inventory_path=Path(args.consumer_inventory),
+        scoped_route_evidence_path=Path(args.scoped_route_evidence),
+        operator_receipt_path=Path(args.operator_receipt),
+        max_evidence_age_ms=args.max_evidence_age_ms,
+        max_window_duration_ms=args.max_window_duration_ms,
+    )
+
+
+def _write_compatibility_receipt(args: argparse.Namespace, receipt: dict[str, object]) -> None:
+    """Write the durable restricted-record receipt before changing route state."""
+    write_retirement_receipt(Path(args.decision_receipt_path), receipt)
+
+
+def _reconcile_registry(args: argparse.Namespace) -> int:
+    """Handle one lane of a restored-registry reconciliation ceremony."""
+    try:
+        provider_summary = json.loads(args.provider_summary)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--provider-summary must be JSON: {exc}") from exc
+    if not isinstance(provider_summary, dict):
+        raise ValueError("--provider-summary must be a JSON object")
+    service = _service(args)
+    try:
+        state = reconcile_restored_lane(
+            service,
+            clerk_id=args.clerk_id,
+            volume_root=Path(args.volume_root),
+            provider_summary=provider_summary,
+        )
+        _write(
+            {
+                "registry_id": state.registry_id,
+                "clerk_id": args.clerk_id,
+                "reconciled_clerk_ids": state.reconciled_clerk_ids,
+                "required_clerk_ids": state.required_clerk_ids,
+                "routing_closed": state.routing_closed,
+            }
+        )
+    finally:
+        service.close()
+    return 0
+
+
+def _closeout_empty_registry(args: argparse.Namespace) -> int:
+    """Close an empty-active-inventory restore with named host evidence."""
+    store = FleetRegistryStore.open(control_dir=Path(args.control_dir))
+    try:
+        state = closeout_empty_registry_recovery(
+            store,
+            control_dir=Path(args.control_dir),
+            operator=args.operator,
+            change_ref=args.change_ref,
+        )
+        _write(
+            {
+                "registry_id": state.registry_id,
+                "routing_closed": state.routing_closed,
+                "assignment_mutation_closed": state.routing_closed,
+                "empty_inventory_attestation": state.empty_inventory_attestation,
+            }
+        )
+    finally:
+        store.close()
     return 0
 
 
@@ -573,6 +789,135 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Offline-and-obligations-clear proof token",
     )
     release.set_defaults(func=_release)
+
+    compatibility_snapshot = subparsers.add_parser(
+        "compatibility-snapshot",
+        help="Capture one privacy-preserving compatibility aggregate snapshot",
+    )
+    compatibility_snapshot.add_argument("--evidence-path", required=True)
+    compatibility_snapshot.add_argument("--snapshot-path", required=True)
+    compatibility_snapshot.add_argument(
+        "--source-label",
+        required=True,
+        help="Short aggregate source name, such as combined, paper, or live",
+    )
+    compatibility_snapshot.set_defaults(func=_compatibility_snapshot)
+
+    def _with_compatibility_evidence(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--start-snapshot", action="append", required=True)
+        sp.add_argument("--end-snapshot", action="append", required=True)
+        sp.add_argument("--consumer-inventory", required=True)
+        sp.add_argument("--scoped-route-evidence", required=True)
+        sp.add_argument("--operator-receipt", required=True)
+        sp.add_argument(
+            "--decision-receipt-path",
+            required=True,
+            help="Restricted-record path for the durable retirement decision",
+        )
+        sp.add_argument(
+            "--max-evidence-age-ms",
+            type=int,
+            default=86_400_000,
+            help="Maximum allowed age of end, inventory, health, and operator evidence",
+        )
+        sp.add_argument(
+            "--max-window-duration-ms",
+            type=int,
+            default=604_800_000,
+            help="Maximum bounded representative measurement-window duration",
+        )
+
+    compatibility_evaluate = subparsers.add_parser(
+        "compatibility-evaluate",
+        help="Evaluate evidence and leave compatibility reads in measurement mode",
+    )
+    _with_compatibility_evidence(compatibility_evaluate)
+    compatibility_evaluate.set_defaults(func=_compatibility_evaluate)
+
+    compatibility_retire = subparsers.add_parser(
+        "compatibility-retire",
+        help="Host-only retirement of eligible unscoped compatibility reads",
+    )
+    _with_compatibility_evidence(compatibility_retire)
+    compatibility_retire.add_argument(
+        "--route-state-path",
+        action="append",
+        required=True,
+        help="Lane-local compatibility/route_state.json path; repeat for each serving lane",
+    )
+    compatibility_retire.add_argument(
+        "--retirement-rollout-path",
+        required=True,
+        help="Restricted host journal for resumable per-lane retirement acknowledgements",
+    )
+    compatibility_retire.set_defaults(func=_compatibility_retire)
+
+    reassign = subparsers.add_parser(
+        "reassign-assignment", help="Proof-driven host reassignment to an original successor volume"
+    )
+    _with_control(reassign)
+    reassign.add_argument("--broker", required=True)
+    reassign.add_argument("--account-id", required=True)
+    reassign.add_argument("--expected-generation", type=int, required=True)
+    reassign.add_argument("--proof", required=True)
+    reassign.add_argument("--successor-clerk-id", required=True)
+    reassign.add_argument("--successor-volume-root", required=True)
+    reassign.set_defaults(func=_reassign)
+
+    backup = subparsers.add_parser(
+        "backup-registry", help="Create a nonsecret fleet-registry backup and manifest"
+    )
+    _with_control(backup)
+    backup.add_argument("--backup-dir", required=True)
+    backup.set_defaults(func=_backup_registry)
+
+    restore = subparsers.add_parser(
+        "restore-registry", help="Restore a registry backup with routing and assignments closed"
+    )
+    _with_control(restore)
+    restore.add_argument("--backup-dir", required=True)
+    restore.add_argument(
+        "--d-compatible",
+        action="store_true",
+        help="Refuse anything newer than the Delivery-D registry schema",
+    )
+    restore.set_defaults(func=_restore_registry)
+
+    rollback = subparsers.add_parser(
+        "rollback-d-compatible",
+        help="Restore a Delivery-D-compatible registry topology with recovery hold enabled",
+    )
+    _with_control(rollback)
+    rollback.add_argument("--backup-dir", required=True)
+    rollback.set_defaults(
+        func=lambda args: _restore_registry(argparse.Namespace(**vars(args), d_compatible=True))
+    )
+
+    reconcile = subparsers.add_parser(
+        "reconcile-registry", help="Reconcile one original Clerk volume after registry restore"
+    )
+    _with_control(reconcile)
+    reconcile.add_argument("--clerk-id", required=True)
+    reconcile.add_argument("--volume-root", required=True)
+    reconcile.add_argument(
+        "--provider-summary",
+        required=True,
+        help="Bounded provider summary JSON from the original lane's recovery observation",
+    )
+    reconcile.set_defaults(func=_reconcile_registry)
+
+    closeout_empty = subparsers.add_parser(
+        "closeout-empty-registry",
+        help="Attest and close a restored registry with no effective assignments",
+    )
+    _with_control(closeout_empty)
+    closeout_empty.add_argument("--operator", required=True)
+    closeout_empty.add_argument(
+        "--change-ref",
+        required=True,
+        help="Restricted incident or change record proving the host inventory closeout",
+    )
+    closeout_empty.set_defaults(func=_closeout_empty_registry)
     return parser
 
 
@@ -581,8 +926,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except FleetControlError as exc:
-        _write({"error": f"{exc.reason}: {exc.message}"})
+    except (FleetControlError, CompatibilityRetirementRefusal) as exc:
+        reason = exc.reason if isinstance(exc, FleetControlError) else "compatibility_retirement_refused"
+        message = exc.message if isinstance(exc, FleetControlError) else str(exc)
+        _write({"error": f"{reason}: {message}"})
         return 2
     except (argparse.ArgumentError, OSError, ValueError) as exc:
         _write({"error": str(exc)})

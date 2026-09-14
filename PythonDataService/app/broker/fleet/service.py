@@ -89,6 +89,7 @@ from app.broker.fleet.records import (
     StoredLifecycleState,
     VolumeMarker,
 )
+from app.broker.fleet.recovery import require_routing_open
 from app.broker.fleet.store import FleetRegistryStore
 from app.utils.timestamps import now_ms_utc
 
@@ -165,6 +166,13 @@ class FleetControlService:
         """Close the underlying registry store."""
         self._store.close()
 
+    def _require_registry_recovery_open(self) -> None:
+        """Reject routing and assignment mutation during a restore ceremony."""
+        require_routing_open(
+            self._store.db_path.parent.parent,
+            registry_id=self._store.registry_id,
+        )
+
     # ---- provider adapters ----------------------------------------------
 
     def _adapter(self, broker: str) -> BrokerProviderAdapter:
@@ -208,6 +216,7 @@ class FleetControlService:
         namespaces are different mounts, and different strings do not prove
         different volumes (audit 2026-09-13, finding 4).
         """
+        self._require_registry_recovery_open()
         if not broker or not display_label:
             raise BrokerAndClerkRequired(
                 "Provisioning requires a broker and a display label.",
@@ -416,6 +425,7 @@ class FleetControlService:
         "no assignments" and leave a retired clerk owning an active
         assignment.
         """
+        self._require_registry_recovery_open()
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
@@ -460,6 +470,7 @@ class FleetControlService:
         points at. The reference and the clerk binding are stable; only the
         destination moves, by re-running this ceremony.
         """
+        self._require_registry_recovery_open()
         clerk = self._require_clerk(clerk_id)
         if _ENDPOINT_REF_PATTERN.fullmatch(endpoint_ref) is None:
             raise ValueError(
@@ -691,6 +702,7 @@ class FleetControlService:
         is the same-owner resume of a restarted clerk, returning the
         confirmed facts untouched (audit 2026-09-13, finding 1).
         """
+        self._require_registry_recovery_open()
         if not broker:
             raise BrokerAndClerkRequired("A reservation requires a broker.")
         clerk = self._require_clerk(clerk_id)
@@ -836,6 +848,7 @@ class FleetControlService:
         effective tuple; this row is the coordinator's confirmed observation
         of it and the fence routed commands are checked against.
         """
+        self._require_registry_recovery_open()
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
@@ -980,6 +993,7 @@ class FleetControlService:
         its evidence was prepared against, so release evidence prepared for
         generation N cannot silently release generation N+1's new owner.
         """
+        self._require_registry_recovery_open()
         if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
                 "The release ceremony requires the offline-and-obligations-clear proof.",
@@ -1042,6 +1056,113 @@ class FleetControlService:
         )
         return released
 
+    def reassign_assignment(
+        self,
+        *,
+        broker: str,
+        external_account_id: str,
+        expected_assignment_generation: int,
+        proof: str,
+        successor_clerk_id: str,
+        successor_volume_root: Path,
+    ) -> AccountAssignmentRecord:
+        """Transfer an account only through the proof-driven host ceremony.
+
+        The successor's marked volume is verified before the old assignment is
+        released. The successor is reserved, not confirmed or routed: its
+        agent must still pass its provider-owned binding and arming gates.
+        """
+        self._require_registry_recovery_open()
+        successor = self._require_clerk(successor_clerk_id)
+        if successor.broker != broker:
+            raise ClerkBrokerMismatch(
+                f"Successor clerk {successor_clerk_id} belongs to broker "
+                f"{successor.broker!r}, not {broker!r}.",
+            )
+        if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
+            raise ClerkAssignmentConflict(
+                "The reassignment ceremony requires the offline-and-obligations-clear proof.",
+                next_step="Prove the old agent and volume are offline and the provider's "
+                "obligations are clear, then re-run with the proof token.",
+            )
+        self._verify_volume(successor, successor_volume_root)
+        canonical = self._adapter(broker).canonical_account_id(external_account_id)
+        now = self._clock()
+        try:
+            with self._store.transaction() as conn:
+                existing = self._store.read_assignment_on(
+                    conn, broker=broker, canonical_account_id=canonical
+                )
+                if existing is None:
+                    raise ClerkAssignmentConflict(
+                        f"Account {canonical} under broker {broker!r} has no assignment to reassign.",
+                    )
+                if existing.clerk_id == successor_clerk_id:
+                    raise ClerkAssignmentConflict(
+                        "A reassignment requires a distinct successor clerk.",
+                        next_step="Use normal same-owner recovery for the original clerk.",
+                    )
+                live_successor = self._store.read_clerk_on(conn, successor_clerk_id)
+                if (
+                    live_successor is None
+                    or live_successor.lifecycle_state != StoredLifecycleState.PROVISIONED
+                ):
+                    raise ClerkAssignmentConflict(
+                        f"Successor clerk {successor_clerk_id} is no longer provisioned; "
+                        "it cannot receive a reassignment.",
+                    )
+                active_successor_assignments = [
+                    assignment
+                    for assignment in self._store.list_assignments_for_clerk_on(
+                        conn, successor_clerk_id
+                    )
+                    if assignment.state != AssignmentState.RELEASED
+                ]
+                if active_successor_assignments:
+                    raise ClerkAssignmentConflict(
+                        f"Successor clerk {successor_clerk_id} already holds an active "
+                        "assignment; one lane cannot acquire a second account during "
+                        "reassignment.",
+                    )
+                if existing.assignment_generation != expected_assignment_generation:
+                    raise ClerkAssignmentConflict(
+                        f"Account {canonical} under broker {broker!r} is at assignment "
+                        f"generation {existing.assignment_generation}, not the pinned "
+                        f"{expected_assignment_generation}; reassignment evidence cannot cross "
+                        "an ownership change.",
+                    )
+                if existing.state == AssignmentState.RELEASED:
+                    raise ClerkAssignmentConflict(
+                        f"Account {canonical} under broker {broker!r} is already released; "
+                        "a completed ceremony is never silently continued.",
+                    )
+                released = replace(existing, state=AssignmentState.RELEASED, updated_at_ms=now)
+                reserved = AccountAssignmentRecord(
+                    broker=broker,
+                    canonical_external_account_id=canonical,
+                    clerk_id=successor_clerk_id,
+                    assignment_generation=existing.assignment_generation + 1,
+                    state=AssignmentState.RESERVED,
+                    recorded_at_ms=now,
+                    updated_at_ms=now,
+                )
+                self._store.reassign_assignment(
+                    conn,
+                    released=released,
+                    reserved_successor=reserved,
+                    previous_state=existing.state,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} changed while reassignment "
+                "was preparing the successor; the original ownership remains intact.",
+            ) from exc
+        logger.info(
+            "fleet account assignment reassigned",
+            extra={"broker": broker, "clerk_id": successor_clerk_id},
+        )
+        return reserved
+
     # ---- routing -----------------------------------------------------------
 
     def resolve_route(
@@ -1069,6 +1190,7 @@ class FleetControlService:
         a provisioned lane whose binding is missing or broken, so the operator
         can reach the configuration surface that would produce one.
         """
+        self._require_registry_recovery_open()
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
                 "A clerk-scoped operation requires both broker and clerk identity.",
