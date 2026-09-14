@@ -27,6 +27,11 @@ export interface ActionRejection {
   readonly outcome: 'conflict' | 'failure' | 'unknown';
   readonly message: string;
   readonly why: string | null;
+  /** The raw refusal code (`reason`, then `reason_code`), never passed through
+   * `formatReceiptLabel`, for a caller that needs to branch on the refusal
+   * kind rather than render it (e.g. a stale-generation refusal triggering a
+   * directory refresh, #2068). */
+  readonly reasonCode: string | null;
 }
 
 /** Parses a rejected `runBotAction` call's outcome, message, and remediation. */
@@ -58,6 +63,7 @@ export function deriveActionRejection(error: unknown, fallbackMessage: string): 
             : typeof reasonCode === 'string'
               ? formatReceiptLabel(reasonCode)
               : null,
+    reasonCode: typeof reason === 'string' ? reason : typeof reasonCode === 'string' ? reasonCode : null,
   };
 }
 

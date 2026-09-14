@@ -1,5 +1,6 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
@@ -10,7 +11,12 @@ import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 import type { GalleryBotView, GalleryLiveStatus, GalleryResolution } from '../lib/gallery.types';
 import { BotGalleryPageComponent } from './bot-gallery-page.component';
-import { provideFleetDirectory } from '../../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../../fleet/fleet-directory-testing';
+import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../../fleet/lane-fence';
 
 const BROKER = 'alpaca';
 const ACCOUNT_ID = 'PA3';
@@ -77,6 +83,7 @@ function fakeGalleryStore(overrides: {
 interface PanelServiceOverrides {
   getPanel?: ReturnType<typeof vi.fn>;
   runBotAction?: ReturnType<typeof vi.fn>;
+  directory?: FleetDirectoryDouble;
 }
 
 async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverrides = {}) {
@@ -94,9 +101,20 @@ async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverri
   };
   const messageService = { add: vi.fn() };
 
+  // The double's default lane must resolve for this file's routed clerkId
+  // ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the fence tests
+  // exercise a real lane rather than a permanently-missing one.
+  const directory =
+    overrides.directory ??
+    provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+
   TestBed.overrideComponent(BotGalleryPageComponent, {
     set: { providers: [
-      provideFleetDirectory(),{ provide: GalleryLiveStore, useValue: store }] },
+      { provide: directory.provide, useValue: directory.useValue },
+      { provide: GalleryLiveStore, useValue: store }] },
   });
 
   const view = await render(BotGalleryPageComponent, {
@@ -117,7 +135,7 @@ describe('BotGalleryPageComponent', () => {
 
     await renderPage(store);
 
-    expect(store.start).toHaveBeenCalledWith(BROKER, 'clrk_spec', ACCOUNT_ID, null, null);
+    expect(store.start).toHaveBeenCalledWith(BROKER, 'clrk_spec', ACCOUNT_ID, 3, 4);
   });
 
   it('shows a loading skeleton while connecting with no bots yet', async () => {
@@ -250,5 +268,131 @@ describe('BotGalleryPageComponent', () => {
     fixture.destroy();
 
     expect(store.stop).toHaveBeenCalled();
+  });
+
+  it('refuses a gallery action whose lane rebound while the tile was on screen', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const { panelService, messageService } = await renderPage(store, { directory, runBotAction });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they confirm the tile action — exactly what refresh() will start
+    // doing.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(panelService.getPanel).not.toHaveBeenCalled();
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warn',
+        detail: expect.stringMatching(/rebound while the action was open/i),
+      }),
+    );
+  });
+
+  it('refuses a gallery action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const { panelService, messageService } = await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(panelService.getPanel).not.toHaveBeenCalled();
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warn',
+        detail: expect.stringMatching(/no known binding when the action was opened/i),
+      }),
+    );
+  });
+
+  /**
+   * `FleetDirectoryService.refresh()` had no caller before this fix, which is
+   * the only reason the pre-freeze click-time fence read was harmless. Now
+   * that the fence is frozen at open, a stale-generation refusal must refresh
+   * the directory so the operator's next action is minted against a lane
+   * they have actually been shown (#2068). `bots-list-page` and
+   * `bot-panel-shell` already carried this mitigation; the gallery runs the
+   * identical getPanel -> runBotAction round trip and can hit the identical
+   * refusal, so it must carry it too.
+   */
+  it('refreshes the directory after the coordinator refuses a stale generation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * `refresh()` is a proven-rejecting call (`FleetDirectoryService.refresh` ->
+   * `awaitLoaded` throws whenever `/api/broker-clerks` fails). Firing it
+   * fire-and-forget with no rejection handler would leave the operator with
+   * no signal that the mitigation for a stale-generation refusal didn't
+   * take — the directory's `response()` signal stays exactly as stale as it
+   * was, and the next action hits the identical refusal with no warning.
+   */
+  it('tells the operator when the mitigating directory refresh itself fails', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    directory.useValue.refresh = vi.fn().mockRejectedValue(new Error('directory reload failed'));
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const { messageService } = await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await vi.waitFor(() =>
+      expect(messageService.add).toHaveBeenCalledWith(
+        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
+      ),
+    );
+    expect(runBotAction).toHaveBeenCalledTimes(1);
   });
 });

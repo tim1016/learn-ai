@@ -1116,4 +1116,83 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const [secondTarget] = service.deployBot.mock.calls[1];
     expect(firstTarget.idempotencyKey).not.toBe(secondTarget.idempotencyKey);
   });
+
+  it('blocks resubmission, not just the banner, when the account rebinds under a frozen preview', async () => {
+    // The deploy drawer's own target is frozen on open and cannot drift
+    // while visible; only the account can move under an already-previewed
+    // command. Leaving the preview `allowed: false` keeps frozenCommand set
+    // (only a successful deploy nulls it), so a following drift is on a
+    // command that is actually still pending.
+    const denied = { ...ADMISSION, allowed: false } satisfies RunAdmissionDecision;
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(denied);
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'drift-01' }));
+
+    await component['submit']();
+    fixture.detectChanges();
+    expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fixture.componentRef.setInput('accountId', 'PA10');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+
+    // The operator, reading the retry as a resume, clicks Deploy again. A
+    // banner alone would leave the button live and a second `submit()` would
+    // mint a fresh idempotency key against the rebound account — the defect
+    // a message-only test cannot catch, since it only proves the *first*,
+    // already-denied submission didn't fire.
+    await component['submit']();
+    fixture.detectChanges();
+
+    expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
+    expect(service.deployBot).not.toHaveBeenCalled();
+    // The conflict survives the second attempt instead of being silently
+    // cleared by submit()'s own `this.submitError.set(null)`.
+    expect(screen.getByText(/rebound while the action was open/i)).toBeTruthy();
+  });
+
+  it('refuses to submit when the drawer opened against a cold directory, and dispatches nothing', async () => {
+    // A cold or failed fleet directory yields a null generation. The drawer
+    // wrapper freezes `target` once, on open, for this component's whole
+    // lifetime — so an unenforceable fence here is a static fact of how the
+    // drawer opened, not something that could later "warm up" in place
+    // (#2068, decision 15).
+    const coldTarget = resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'PA9',
+      bindingGeneration: null,
+      routingEpoch: null,
+    });
+    const service = mockService();
+    const { fixture } = await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { target: coldTarget, accountId: 'PA9' },
+    });
+    await screen.findByRole('heading', { name: 'Bot binding' });
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'cold-open-01' },
+    });
+
+    // Calls the real submit() guard directly rather than clicking the
+    // button: the dispatch assertion below must be provable independently of
+    // whether the button's [disabled] binding happens to read correctly, so
+    // it cannot be masked by a DOM-level click no-op on a disabled control.
+    await component['submit']();
+
+    expect(service.previewStartAdmission).not.toHaveBeenCalled();
+    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
 });

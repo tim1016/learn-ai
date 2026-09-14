@@ -14,6 +14,12 @@ import { MessageService } from 'primeng/api';
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
+import {
+  freezeLaneFence,
+  laneFenceVerdict,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
+} from '../../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../../fleet/open-lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
@@ -55,16 +61,17 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
   host: { class: 'block h-full' },
 })
 export class BotGalleryPageComponent {
-  /** Frozen lane context for the gallery's reads and actions (FR-094). */
-  private readonly galleryTarget = (sid: string) =>
-    resourceTarget(this.broker(), this.clerkId(), {
+  /** Frozen lane context for the gallery's reads and actions (FR-094). Reads
+   * the fence captured at open, not the live directory (#2068). */
+  private readonly galleryTarget = (sid: string) => {
+    const fence = this.openFence();
+    return resourceTarget(this.broker(), this.clerkId(), {
       accountId: this.accountId(),
       entityId: sid,
-      bindingGeneration:
-        this.fleetDirectory.lane(this.broker(), this.clerkId())
-          ?.effective_binding_generation ?? null,
-      routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
+      bindingGeneration: fence.bindingGeneration,
+      routingEpoch: fence.routingEpoch,
     });
+  };
 
   readonly broker = input.required<string>();
   readonly clerkId = input.required<string>();
@@ -75,6 +82,16 @@ export class BotGalleryPageComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
+
+  /** The fence the operator was shown. Captured when the gallery renders the
+   * lane and again only when the route identity changes; never at click time
+   * (#2068). Wiring is the shared `openLaneFence` helper — see its doc for
+   * why both the `untracked` directory read and the eager materialization
+   * it performs are load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
+  );
 
   /**
    * Sids with a confirmed quick action in flight. Drives two things off the
@@ -99,6 +116,8 @@ export class BotGalleryPageComponent {
 
   constructor() {
     effect(() => {
+      // The stream address is a read, not a command: it must keep following
+      // the live lane, unlike the fence above.
       const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
       void this.store.start(
         this.broker(),
@@ -113,6 +132,11 @@ export class BotGalleryPageComponent {
 
   protected async onAction(event: { sid: string; actionId: string }): Promise<void> {
     if (this.pendingSids().has(event.sid)) return;
+    const verdict = laneFenceVerdict(this.openFence(), this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
+      return;
+    }
     // Capture once at presentation/submission time. In particular, do not
     // rebuild from route signals after the authoritative panel read returns.
     const target = withCommand(this.galleryTarget(event.sid), 'bot_action', crypto.randomUUID());
@@ -137,6 +161,14 @@ export class BotGalleryPageComponent {
         `Could not run ${event.actionId} on ${event.sid}.`,
       );
       this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
+      }
     } finally {
       this.pendingSids.update((current) => {
         const next = new Set(current);

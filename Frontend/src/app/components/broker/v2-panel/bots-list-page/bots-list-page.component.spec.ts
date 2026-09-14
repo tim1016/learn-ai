@@ -15,7 +15,12 @@ import {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../fleet/fleet-directory-testing';
+import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
 import type { ResourceTarget } from '../../../../fleet/resource-target';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -59,6 +64,8 @@ async function renderPage(
     clerk?: ClerkStatus;
     getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
     panelActions?: PanelAction[];
+    directory?: FleetDirectoryDouble;
+    runBotAction?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const account = overrides.account ?? fakeAccount();
@@ -80,22 +87,34 @@ async function renderPage(
     getEvidence: vi.fn((_target: ResourceTarget, _sid: string) =>
       Promise.resolve({ entries: [], next_cursor: null }),
     ),
-    runBotAction: vi.fn(() =>
-      Promise.resolve({
-        action_id: 'resume',
-        applied: true,
-        revision: 1,
-        concurrency_token: 'next-token',
-        message: 'ok',
-      }),
-    ),
+    runBotAction:
+      overrides.runBotAction ??
+      vi.fn(() =>
+        Promise.resolve({
+          action_id: 'resume',
+          applied: true,
+          revision: 1,
+          concurrency_token: 'next-token',
+          message: 'ok',
+        }),
+      ),
   };
 
   const mockMessageService = { add: vi.fn() };
 
+  // The double's default lane must resolve for this file's routed clerkId
+  // ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the fence tests
+  // exercise a real lane rather than a permanently-missing one.
+  const directory =
+    overrides.directory ??
+    provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+
   const view = await render(BotsListPageComponent, {
     providers: [
-      provideFleetDirectory(),
+      { provide: directory.provide, useValue: directory.useValue },
       provideRouter([]),
       { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
@@ -464,6 +483,135 @@ describe('BotsListPageComponent', () => {
         detail:
           'This bot is no longer ready to resume. Its custody state changed after this button was shown.',
       }),
+    );
+  });
+
+  /**
+   * `FleetDirectoryService.refresh()` had no caller before this fix, which is
+   * the only reason the pre-freeze click-time fence read was harmless. Now
+   * that the fence is frozen at open, a stale-generation refusal must refresh
+   * the directory so the operator's next action is minted against a lane
+   * they have actually been shown (#2068).
+   */
+  it('refreshes the directory after the coordinator refuses a stale generation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error' }),
+    );
+  });
+
+  /**
+   * `refresh()` is a proven-rejecting call (`FleetDirectoryService.refresh` ->
+   * `awaitLoaded` throws whenever `/api/broker-clerks` fails). Firing it
+   * fire-and-forget with no rejection handler would leave the operator with
+   * no signal that the mitigation for a stale-generation refusal didn't
+   * take — the directory's `response()` signal stays exactly as stale as it
+   * was, and the next action hits the identical refusal with no warning.
+   */
+  it('tells the operator when the mitigating directory refresh itself fails', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    directory.useValue.refresh = vi.fn().mockRejectedValue(new Error('directory reload failed'));
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    await vi.waitFor(() =>
+      expect(view.mockMessageService.add).toHaveBeenCalledWith(
+        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
+      ),
+    );
+    expect(runBotAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a roster action whose lane rebound while the row was on screen', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+    await screen.findByRole('button', { name: 'Stop' });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they press the button — exactly what refresh() will start doing.
+    // The unfenced `target()`/`fleetScope()` reactively follows the rebind
+    // (a read, not a command) and reloads the catalog; let that settle before
+    // re-querying the button so the click lands on the current DOM node.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+    await view.fixture.whenStable();
+    view.fixture.detectChanges();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn' }),
+    );
+  });
+
+  it('refuses a roster action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn' }),
     );
   });
 });

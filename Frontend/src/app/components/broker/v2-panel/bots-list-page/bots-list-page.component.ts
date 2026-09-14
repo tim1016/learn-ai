@@ -28,6 +28,13 @@ import {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand, withEntity } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
+import {
+  fencedTarget,
+  freezeLaneFence,
+  laneFenceVerdict,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
+} from '../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
@@ -105,6 +112,16 @@ export class BotsListPageComponent {
           ?.effective_binding_generation ?? null,
       routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
     }),
+  );
+
+  /** The fence the operator was shown. Captured when the roster renders the
+   * lane and again only when the route identity changes; never at click time
+   * (#2068). Wiring is the shared `openLaneFence` helper — see its doc for
+   * why both the `untracked` directory read and the eager materialization
+   * it performs are load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
   );
 
   /**
@@ -350,7 +367,14 @@ export class BotsListPageComponent {
     // Freeze the lane before any await. A roster action may outlive a route
     // reuse or a binding replacement; it must conflict rather than following
     // the operator to whatever lane happens to be current at submission time.
-    const laneTarget = withEntity(this.target(), sid);
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.actionNotice.set({ tone: 'danger', message: verdict.message });
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
+      return;
+    }
+    const laneTarget = withEntity(fencedTarget(this.target(), fence), sid);
     const target = withCommand(laneTarget, 'bot_action', crypto.randomUUID());
     const scope = this.fleetScope();
     const startedAt = this.performanceNow();
@@ -382,6 +406,14 @@ export class BotsListPageComponent {
       );
       this.actionNotice.set({ tone: 'danger', message: rejection.message });
       this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
+      }
     } finally {
       this.pendingBotIds.update((current) => {
         const next = new Set(current);

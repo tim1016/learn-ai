@@ -37,12 +37,20 @@ import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
+import {
+  fencedTarget,
+  freezeLaneFence,
+  laneFenceVerdict,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
+} from '../../../../fleet/lane-fence';
+import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
   actionOutcomeToast,
   deriveActionRejection,
   extractActionErrorDetail,
+  type ActionRejection,
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
@@ -141,6 +149,18 @@ export class BotPanelShellComponent {
       routingEpoch: lane?.routing_epoch ?? null,
     });
   });
+
+  /** The fence the operator was shown. Captured when the shell renders the
+   * lane and again only when the route identity changes; never at click time.
+   * The backend can refuse only a generation we send, so re-reading it here
+   * would make the fence structurally unable to fire (#2068). Wiring is the
+   * shared `openLaneFence` helper — see its doc for why both the `untracked`
+   * directory read and the eager materialization it performs are
+   * load-bearing. */
+  private readonly openFence = openLaneFence(
+    () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
+    () => `${this.broker()}::${this.clerkId()}`,
+  );
 
   // ── Internal state ────────────────────────────────────────────────────────
 
@@ -291,7 +311,14 @@ export class BotPanelShellComponent {
     if (this.actionPending()) return;
     // An action is bound to the rendered lane, not the reactive route. Capture
     // both before any branch can await or display a confirmation.
-    const target = this.target();
+    const fence = this.openFence();
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.actionReceipt.set(this.conflictReceipt(action, verdict.message));
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
+      return;
+    }
+    const target = fencedTarget(this.target(), fence);
     const sid = this.sid();
     if (action.action_id === 'open_custody_timeline') {
       void this.router.navigate([
@@ -325,13 +352,27 @@ export class BotPanelShellComponent {
       this.messageService.add(actionOutcomeToast('success', receipt.message));
       await this.liveStore.refresh();
     } catch (error) {
-      const receipt = this.errorReceipt(error, action);
+      const rejection = this.describeRejection(error, action);
+      const receipt = this.errorReceipt(error, action, rejection);
       this.actionReceipt.set(receipt);
       this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
+      }
       // The rejection is always pre-execution (see runBotAction's doc), so the
       // operator's last-seen panel state is now stale relative to whatever
       // changed underneath it — refresh so "Ready to resume" doesn't linger
       // after a resume was just refused for no longer being ready.
+      //
+      // No .catch() here, unlike fleetDirectory.refresh() above: BotPanelLiveStore.refresh()
+      // catches internally and stores the failure as error state (it never rejects), while
+      // FleetDirectoryService.refresh() deliberately does reject — this asymmetry is correct,
+      // not an oversight.
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
@@ -496,9 +537,30 @@ export class BotPanelShellComponent {
     return target.accountId;
   }
 
-  private errorReceipt(error: unknown, action: PanelAction): ActionReceiptView {
+  private conflictReceipt(action: PanelAction, message: string): ActionReceiptView {
+    return {
+      actionId: action.action_id,
+      outcome: 'conflict',
+      receiptId: null,
+      recordedAtMs: Date.now(),
+      message,
+      remediation: null,
+    };
+  }
+
+  /** The one place the fallback failure message is built, so a caller that
+   * needs the rejection ahead of the receipt (to branch on `reasonCode`)
+   * derives it the same way `errorReceipt` would have derived it itself. */
+  private describeRejection(error: unknown, action: PanelAction): ActionRejection {
+    return deriveActionRejection(error, `Action "${action.label}" failed.`);
+  }
+
+  private errorReceipt(
+    error: unknown,
+    action: PanelAction,
+    rejection: ActionRejection = this.describeRejection(error, action),
+  ): ActionReceiptView {
     const detail = extractActionErrorDetail(error);
-    const rejection = deriveActionRejection(error, `Action "${action.label}" failed.`);
     return {
       actionId:
         typeof detail?.['action_id'] === 'string'

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,10 +20,16 @@ import type {
   BotPanelLiveSnapshot,
   BotRunView,
   PanelAction,
+  PanelActionResult,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../fleet/fleet-directory-testing';
+import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
 
 const messageService = { add: vi.fn() };
 const chartMocks = vi.hoisted(() => {
@@ -51,7 +58,13 @@ vi.mock('lightweight-charts', () => {
 beforeEach(() => {
   TestBed.configureTestingModule({
     providers: [
-      provideFleetDirectory(),
+      // The double's default lane must resolve for this file's routed
+      // clerkId ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the
+      // fence tests exercise a real lane rather than a permanently-missing one.
+      provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      }),
       { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
       { provide: MarketDataService, useValue: marketDataMock },
     ],
@@ -220,6 +233,17 @@ const OPEN_CUSTODY_TIMELINE_ACTION = {
     'execution:alpaca-execution-1',
     'operation:effect:sid-001:recovery',
   ],
+} satisfies PanelAction;
+
+const STOP_ACTION = {
+  action_id: 'stop',
+  revision: 1,
+  concurrency_token: 'stop-token',
+  enabled: true,
+  label: 'Stop',
+  explanation: 'Stop the bot.',
+  blockers: [],
+  confirmation: null,
 } satisfies PanelAction;
 
 const HISTORICAL_RECOVERY_PLAN: HistoricalExecutionRecoveryPlan = {
@@ -502,6 +526,60 @@ function openDisclosure(label: string): void {
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
   details.open = true;
   fireEvent(details, new Event('toggle'));
+}
+
+function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
+  return {
+    action_id: 'stop',
+    outcome: 'success',
+    receipt_id: 'receipt-001',
+    recorded_at_ms: 1_753_800_000_000,
+    applied: true,
+    revision: 1,
+    concurrency_token: 'stop-token',
+    message: 'Bot stop requested.',
+    ...overrides,
+  };
+}
+
+/** Renders the shell with a single "Stop" action available on the trader
+ * lens, so the fence tests only need to click one button. */
+async function renderShell(
+  overrides: {
+    directory?: FleetDirectoryDouble;
+    runBotAction?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
+  // A persistent mock, not `mockResolvedValueOnce`: a rebind restarts the
+  // live store (its address is a read and must follow the current lane, see
+  // the constructor's second effect), which re-fetches the snapshot. A local
+  // override — not a mutation of the shared `mockService.getLiveSnapshot` —
+  // keeps every fetch, including that restart-triggered one, returning the
+  // Stop-action panel without leaking a persistent mock into later tests.
+  const service = {
+    ...mockService,
+    getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
+      ...PANEL,
+      actions: [STOP_ACTION],
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+    })),
+    ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
+  };
+  const { fixture } = await render(BotPanelShellComponent, {
+    inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+    providers: [
+      provideRouter([]),
+      { provide: BrokerV2PanelService, useValue: service },
+      { provide: BrokersService, useValue: brokersMock },
+      { provide: MessageService, useValue: messageService },
+      ...(overrides.directory
+        ? [{ provide: overrides.directory.provide, useValue: overrides.directory.useValue }]
+        : []),
+    ],
+  });
+  await fixture.whenStable();
+  fixture.detectChanges();
+  return { fixture };
 }
 
 describe('BotPanelShellComponent', () => {
@@ -1382,5 +1460,124 @@ describe('BotPanelShellComponent', () => {
         "Activation failed after Clerk registration for run 'run-2'; the Clerk stop committed.",
       ),
     ).toBeTruthy();
+  });
+
+  /**
+   * `FleetDirectoryService.refresh()` had no caller before this fix, which is
+   * the only reason the pre-freeze click-time fence read was harmless. Now
+   * that the fence is frozen at open, a stale-generation refusal must refresh
+   * the directory so the operator's next action is minted against a lane
+   * they have actually been shown (#2068).
+   */
+  it('refreshes the directory after the coordinator refuses a stale generation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const { fixture } = await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await fixture.whenStable();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `refresh()` is a proven-rejecting call (`FleetDirectoryService.refresh` ->
+   * `awaitLoaded` throws whenever `/api/broker-clerks` fails). Firing it
+   * fire-and-forget with no rejection handler would leave the operator with
+   * no signal that the mitigation for a stale-generation refusal didn't
+   * take — the directory's `response()` signal stays exactly as stale as it
+   * was, and the next action hits the identical refusal with no warning.
+   */
+  it('tells the operator when the mitigating directory refresh itself fails', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    directory.useValue.refresh = vi.fn().mockRejectedValue(new Error('directory reload failed'));
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const { fixture } = await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await fixture.whenStable();
+
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
+    );
+    expect(runBotAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a panel action whose lane rebound while the action was open', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    const { fixture } = await renderShell({ directory, runBotAction });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they press the button — exactly what refresh() will start doing.
+    // The live store's stream address is unfenced (a read, not a command) and
+    // restarts on this rebind; let that settle before re-querying the button
+    // so the click lands on the current DOM node, not one mid-teardown.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+  });
+
+  it('refuses a panel action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
+
+  it('sends the generation the operator was shown, not the one current at click', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
+      expect.anything(), expect.anything(), null,
+    );
   });
 });

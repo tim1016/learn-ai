@@ -33,6 +33,11 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
+import {
+  LANE_FENCE_CONFLICT_MESSAGE,
+  LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  laneFenceIsEnforceable,
+} from '../../../fleet/lane-fence';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -163,6 +168,26 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   /** Retained only while the exact deploy intent has no terminal receipt. */
   private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
+  /** Set when the account moves under a frozen preview/apply command. Blocks
+   * `canSubmit` — not just the banner — until this workflow instance is
+   * replaced by reopening the deploy drawer (#2068, decision 10): resetting
+   * it on any lesser event would let a second click carry a fresh durable
+   * identity into the same silent re-adoption this task closes. */
+  protected readonly laneConflict = signal(false);
+  /** Whether the fence this drawer was opened with can be enforced by the
+   * coordinator at all. `target` is frozen once, by the drawer wrapper, for
+   * this component's entire lifetime (it exists only inside the drawer's
+   * `@if (visible())`, so a reopen mounts a fresh instance) — a cold
+   * directory at that moment yields a null generation, which the coordinator
+   * cannot check (`service.py`/`routing.py` are `is not None`-gated). Refuse
+   * rather than dispatch unfenced (#2068, decision 15). */
+  protected readonly laneUnenforceable = computed(
+    () =>
+      !laneFenceIsEnforceable({
+        bindingGeneration: this.target().bindingGeneration,
+        routingEpoch: this.target().routingEpoch,
+      }),
+  );
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -437,6 +462,15 @@ export class AlpacaDeployWorkflowComponent {
     if (!view) {
       return { canSubmit: false, guidance: 'Loading deployment readiness…' };
     }
+    if (this.laneUnenforceable()) {
+      return { canSubmit: false, guidance: LANE_FENCE_UNENFORCEABLE_MESSAGE };
+    }
+    if (this.laneConflict()) {
+      return {
+        canSubmit: false,
+        guidance: 'Reopen this deployment: the account changed while it was open.',
+      };
+    }
     if (this.admissionIsStale()) {
       return {
         canSubmit: false,
@@ -583,14 +617,40 @@ export class AlpacaDeployWorkflowComponent {
       if (symbol !== current.symbol) this.applySymbol(symbol);
     });
 
-    effect(() => {
-      const frozen = this.frozenCommand();
-      if (frozen === null) return;
-      const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
-      if (frozen.ticketKey !== this.ticketKey(this.ticket()) || frozen.routeKey !== routeKey) {
-        this.frozenCommand.set(null);
-      }
-    });
+    effect(() => this.syncFrozenCommandDrift());
+  }
+
+  /**
+   * Abandon the frozen preview/apply command when it no longer matches what
+   * would be sent now — a legitimate ticket edit silently invalidates it (a
+   * fresh preview is expected), but a route-key change is the account moving
+   * under a frozen preview, never the directory: the deploy drawer's own
+   * `target` is captured once, on the false→true visibility edge
+   * (`alpaca-deploy-drawer.component.ts:96-102`), and never recomputed while
+   * this workflow stays open. Silently discarding the frozen command there
+   * let the next submit mint a new durable identity against an account the
+   * operator never saw change out from under them (#2068, decision 10) —
+   * surface the conflict instead of re-adopting it.
+   */
+  private syncFrozenCommandDrift(): void {
+    const frozen = this.frozenCommand();
+    if (frozen === null) return;
+    const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
+    if (frozen.routeKey !== routeKey) {
+      this.frozenCommand.set(null);
+      this.laneConflict.set(true);
+      this.submitError.set({
+        outcome: 'conflict',
+        title: this.errorTitle('conflict'),
+        message: LANE_FENCE_CONFLICT_MESSAGE,
+        explanation: null,
+        nextAction: null,
+        receiptId: null,
+        recordedAtMs: null,
+      });
+    } else if (frozen.ticketKey !== this.ticketKey(this.ticket())) {
+      this.frozenCommand.set(null);
+    }
   }
 
   protected setInstanceId(value: string): void {
