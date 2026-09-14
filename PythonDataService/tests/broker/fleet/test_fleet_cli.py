@@ -251,11 +251,20 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
     tmp_path: Path, capsys
 ) -> None:
     """The host command retains aliases by default and refuses an incomplete retirement proof."""
-    aggregate = {
-        "schema_version": 2,
-        "updated_at_ms": now_ms_utc(),
-        "route_hits": [],
-    }
+    # One anchor, explicit offsets: nothing in this test depends on wall-clock
+    # milliseconds elapsing between two CLI invocations. anchor_ms stays a
+    # live now_ms_utc() read, not a hardcoded or frozen value, because the
+    # CLI computes evaluated_at internally (scripts/manage_broker_fleet.py
+    # exposes no --evaluated-at-ms) and a stale anchor would age past the
+    # limits within a day. The evidence-age and window bounds are
+    # DEFAULT_MAX_EVIDENCE_AGE_MS (24h) / DEFAULT_MAX_WINDOW_DURATION_MS (7d)
+    # in compatibility_retirement.py, so these offsets are inside every
+    # limit while still ordering strictly.
+    anchor_ms = now_ms_utc()
+    window_start_ms = anchor_ms - 3_000
+    window_end_ms = anchor_ms - 2_000
+    evidence_ms = anchor_ms - 1_000
+    aggregate = {"schema_version": 2, "updated_at_ms": window_start_ms, "route_hits": []}
     start_evidence = tmp_path / "start-evidence.json"
     end_evidence = tmp_path / "end-evidence.json"
     start_evidence.write_text(json.dumps(aggregate), encoding="utf-8")
@@ -294,9 +303,10 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
     capsys.readouterr()
     start_payload = json.loads(start_snapshot.read_text(encoding="utf-8"))
     end_payload = json.loads(end_snapshot.read_text(encoding="utf-8"))
-    end_payload["captured_at_ms"] = start_payload["captured_at_ms"] + 1
+    start_payload["captured_at_ms"] = window_start_ms
+    end_payload["captured_at_ms"] = window_end_ms
+    start_snapshot.write_text(json.dumps(start_payload), encoding="utf-8")
     end_snapshot.write_text(json.dumps(end_payload), encoding="utf-8")
-    evidence_time = now_ms_utc()
     inventory = tmp_path / "inventory.json"
     scoped = tmp_path / "scoped.json"
     operator = tmp_path / "operator.json"
@@ -305,7 +315,7 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
             {
                 "schema_version": 1,
                 "complete": True,
-                "generated_at_ms": evidence_time,
+                "generated_at_ms": evidence_ms,
                 "consumers": [
                     {
                         "consumer": "alpaca-desk",
@@ -325,7 +335,7 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
     )
     scoped.write_text(
         json.dumps(
-            {"schema_version": 1, "observed_at_ms": evidence_time, "unresolved_scoped_route_failures": 0}
+            {"schema_version": 1, "observed_at_ms": evidence_ms, "unresolved_scoped_route_failures": 0}
         ),
         encoding="utf-8",
     )
@@ -335,7 +345,7 @@ def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement
                 "schema_version": 1,
                 "receipt_id": "operator-acceptance-1",
                 "operator": "fleet-owner",
-                "issued_at_ms": now_ms_utc(),
+                "issued_at_ms": evidence_ms,
                 "representative_window": True,
                 "retire_compatibility_reads": True,
             }
