@@ -10,7 +10,8 @@ registry (its WAL/SHM), the broker-neutral directory payload, the debug log,
 the volume identity marker, the clerk's confirmation-evidence checkpoint, the
 routing-receipt projection, and a registry backup's database and manifest.
 The worker key is durable registry identity, so it *is* stored there (and in
-a byte-for-byte backup of it) — it never crosses any of the other six sinks.
+a registry backup, which is a full logical copy of those same rows, not a
+byte-identical file copy) — it never crosses any of the other six sinks.
 """
 
 from __future__ import annotations
@@ -166,14 +167,38 @@ def test_no_secret_reaches_any_sink_the_ceremony_touches(
         "backup_database": (artifacts.backup_dir / BACKUP_DATABASE_FILENAME).read_bytes(),
         "backup_manifest": (artifacts.backup_dir / BACKUP_MANIFEST_FILENAME).read_bytes(),
     }
+
+    # Positive control: every assertion above is a negative, and a sink that
+    # silently degrades to empty or trivial content would satisfy every one
+    # of them by accident — the same defect class as the env canary this
+    # test replaces. Prove each sink actually carries the ceremony's
+    # distinctive, nonsecret content before trusting its absence checks.
+    assert artifacts.receipts, "the ceremony settled at least one routing receipt"
+    assert caplog.records, "the ceremony logged at least one record"
+    assert b"secrets-check" in sinks["directory"], "the label reaches the directory"
+    assert b"secrets-check" in sinks["volume_marker"], "the label reaches the marker"
+    assert b"secrets-check" in sinks["backup_database"], "the label reaches the backup"
+    assert b"strategy/sid-secret" in sinks["routing_receipts"], (
+        "the receipt sink carries operator content"
+    )
+    assert b"strategy/sid-secret" in sinks["backup_database"], (
+        "the target ref reaches the backup"
+    )
+
     for name, blob in sinks.items():
         assert b"svct_" not in blob, name
         if name in ("registry", "backup_database"):
-            # A registry backup is a byte-for-byte snapshot of the live
-            # database (``store.backup_to`` uses SQLite's own backup API):
-            # the worker key is durable registry identity in both, by design.
             continue
         assert artifacts.lane.worker_key.encode("utf-8") not in blob, name
+    # The exclusion above is not an assumption: prove the worker key really
+    # is in the backup, the way it is in the live registry (already proven
+    # by ``test_the_worker_key_is_stored_but_never_projected``) — an empty
+    # or truncated backup file would otherwise satisfy the skipped check for
+    # free. A registry backup is a full logical copy of the same rows the
+    # live database holds (``store.backup_to`` uses SQLite's own page-level
+    # backup API, not a byte-identical file copy), so the worker key is
+    # durable registry identity in both, by design.
+    assert artifacts.lane.worker_key.encode("utf-8") in sinks["backup_database"]
 
 
 def test_the_worker_key_is_stored_but_never_projected(

@@ -210,7 +210,7 @@ class _Lane:
         registration route (``app/routers/internal_fleet.py``, unmodified)
         over the test's own socket and parses the JSON body it returns — the
         same wire contract ``RemotePresence.register`` parses on the agent
-        side (``app/broker/fleet/presence.py:376-377``). Building the served
+        side (``app/broker/fleet/presence.py:377-378``). Building the served
         identity from that body — not from the ``ClerkSessionRecord`` the
         coordinator also reads — is what lets ``verify_identity_echo`` fail
         when the coordinator pins a different epoch than the lane serves. A
@@ -307,6 +307,11 @@ class _Fleet:
         #: The agent's own durable-receipt ledger: what it actually minted,
         #: not a string reflected back from the caller's request.
         self.minted_receipts: list[str] = []
+        # Both servers are constructed (but not yet listening) before the
+        # try below, so the except branch can always reach them — an
+        # exception anywhere from the first socket bind through
+        # registration must not leak a listening server or the lane's
+        # registry connection past this constructor.
         self.agent = _RealServer(
             _build_agent_app(
                 self.identity,
@@ -314,20 +319,18 @@ class _Fleet:
                 minted_receipts=self.minted_receipts,
             )
         )
-        self.agent.start()
-        self.lane.approve(self.agent.base_url)
         self.coordinator = _RealServer(_coordinator_app(self.lane))
-        self.coordinator.start()
         try:
+            self.agent.start()
+            self.lane.approve(self.agent.base_url)
+            self.coordinator.start()
             registration_response = self.lane.register_and_confirm(
                 self.coordinator.base_url
             )
         except Exception:
-            # Both servers are already listening on real sockets by this
-            # point; a registration failure must not leak them past the
-            # constructor.
             self.coordinator.stop()
             self.agent.stop()
+            self.lane.close()
             raise
         self.identity["routing_epoch"] = int(registration_response["routing_epoch"])
 
