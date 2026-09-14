@@ -527,8 +527,8 @@ class FleetLaneRuntimeMiddleware:
         # The pin alone (x-fleet-clerk-id) suppresses double-counting of D's
         # aggregate, proven or not; only the *proven* forward above — the
         # full token-plus-pin pair — suppresses E retirement by clearing
-        # `family`, so a spoofed pin still counts toward measurement and
-        # still retires.
+        # `family`, so a spoofed pin is dropped from measurement like any
+        # pinned request, but still retires.
         measurement_family = None if b"x-fleet-clerk-id" in headers else family
         if family is not None:
             from app.broker.fleet.compatibility_retirement import CompatibilityRetirementRefusal
