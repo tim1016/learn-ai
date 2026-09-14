@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 
 import httpx
@@ -45,11 +46,15 @@ def _build_agent_app(
     identity: dict[str, object],
     *,
     flip_identity_after_first_event: bool = False,
+    minted_receipts: list[str] | None = None,
 ) -> FastAPI:
     """A production-shaped agent serving one lane's identity.
 
     ``identity`` is the runtime's live identity state — shared by reference
     so the stale-stream test can move it the way a re-registration would.
+    ``minted_receipts`` is the agent's own durable-receipt ledger — shared by
+    reference so a caller can assert against what the agent actually minted,
+    not a string reflected back from the request.
     """
     from app.broker.fleet.agent_identity import (
         SERVED_IDENTITY_STATE_KEY,
@@ -59,6 +64,7 @@ def _build_agent_app(
 
     agent = FastAPI()
     agent.add_middleware(FleetIdentityMiddleware)
+    ledger = minted_receipts if minted_receipts is not None else []
 
     def _served() -> dict[str, object] | None:
         return identity
@@ -131,13 +137,18 @@ def _build_agent_app(
     )
     async def action(account_id: str, sid: str, request: Request) -> JSONResponse:
         body = await request.json()
+        # A real provider's durable receipt is minted by the provider. Deriving
+        # it from the caller's idempotency key would make the coordinator's
+        # "carried, never fabricated" contract unfalsifiable.
+        receipt_id = f"provider/receipt-{len(ledger) + 1:04d}-{uuid.uuid4().hex[:8]}"
+        ledger.append(receipt_id)
         return JSONResponse(
             {
                 "outcome": "confirmed",
                 "account_id": account_id,
                 "sid": sid,
                 "idempotency_key": body.get("idempotency_key"),
-                "receipt_id": f"provider/command-{body.get('idempotency_key')}",
+                "receipt_id": receipt_id,
             }
         )
 
@@ -191,14 +202,36 @@ class _Lane:
             clerk_id=self.clerk_id, endpoint_ref="agent:paper-1", base_url=base_url
         )
 
-    def register_and_confirm(self) -> None:
-        session = self.service.register_agent_session(
-            clerk_id=self.clerk_id,
-            worker_key=self.worker_key,
-            agent_instance_id="agnt_b00000000000000000000000a",
-            endpoint_ref="agent:paper-1",
-            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
-        )
+    def register_and_confirm(self, coordinator_base_url: str) -> dict[str, object]:
+        """Register as an agent would and return the *response* it received.
+
+        The agent never reads the registry; it knows only what the
+        registration answered. This calls the coordinator's real internal
+        registration route (``app/routers/internal_fleet.py``, unmodified)
+        over the test's own socket and parses the JSON body it returns — the
+        same wire contract ``RemotePresence.register`` parses on the agent
+        side (``app/broker/fleet/presence.py:363-366``). Building the served
+        identity from that body — not from the ``ClerkSessionRecord`` the
+        coordinator also reads — is what lets ``verify_identity_echo`` fail
+        when the coordinator pins a different epoch than the lane serves. A
+        direct call to ``LocalPresence.register`` would still read the same
+        in-memory session object the confirm below reads; only the real HTTP
+        round trip forces the two paths apart.
+        """
+        with httpx.Client(base_url=coordinator_base_url, timeout=10.0) as client:
+            response = client.post(
+                "/internal/fleet/sessions",
+                headers={"X-Fleet-Agent-Token": AGENT_TOKEN},
+                json={
+                    "clerk_id": self.clerk_id,
+                    "worker_key": self.worker_key,
+                    "agent_instance_id": "agnt_b00000000000000000000000a",
+                    "endpoint_ref": "agent:paper-1",
+                    "fleet_protocol_version": FLEET_PROTOCOL_VERSION,
+                },
+            )
+        response.raise_for_status()
+        registration_response: dict[str, object] = response.json()
         self.service.reserve_assignment(
             broker="alpaca", clerk_id=self.clerk_id, external_account_id=ACCOUNT
         )
@@ -207,21 +240,27 @@ class _Lane:
             clerk_id=self.clerk_id,
             external_account_id=ACCOUNT,
             binding_generation=3,
-            agent_instance_id=session.agent_instance_id,
-            routing_epoch=session.routing_epoch,
+            agent_instance_id=str(registration_response["agent_instance_id"]),
+            routing_epoch=int(registration_response["routing_epoch"]),
             effective_profile_id="prof_b",
             effective_revision=1,
         )
-        return session
+        return registration_response
 
     def close(self) -> None:
         self.service.close()
 
 
 def _coordinator_app(lane: _Lane, agent_base_url: str) -> FastAPI:
-    """The public surface: registry + clerk-scoped router + lane router."""
+    """The public surface: registry + clerk-scoped router + lane router.
+
+    Also mounts the coordinator's real internal registration route
+    (``/internal/fleet``, unmodified) so ``_Lane.register_and_confirm`` can
+    register the way a real agent does — over HTTP, parsing the JSON body —
+    instead of reading the registry's session object directly.
+    """
     from app.broker.fleet.delivery import HttpLaneDelivery
-    from app.routers import broker_clerks
+    from app.routers import broker_clerks, internal_fleet
 
     coordinator = FastAPI()
     coordinator.state.fleet_service = lane.service
@@ -241,6 +280,7 @@ def _coordinator_app(lane: _Lane, agent_base_url: str) -> FastAPI:
         {broker: adapter.operations() for broker, adapter in production_provider_adapters().items()}
     )
     coordinator.include_router(broker_clerks.router)
+    coordinator.include_router(internal_fleet.router)
     return coordinator
 
 
@@ -251,28 +291,36 @@ class _Fleet:
         self, tmp_path: Path, *, flip_identity_after_first_event: bool = False
     ) -> None:
         self.lane = _Lane(tmp_path / "control")
-        # The agent's live identity: starts at the registration the registry
-        # is about to accept, so the echo check pins the real lane.
+        # The agent's live identity: starts at a placeholder epoch until the
+        # coordinator's own registration route (below) answers for real, so
+        # the echo check pins the real lane rather than a value the fixture
+        # read off the registry itself.
         self.identity: dict[str, object] = {
             "broker": "alpaca",
             "clerk_id": self.lane.clerk_id,
             "routing_epoch": 1,
             "binding_generation": 3,
         }
+        #: The agent's own durable-receipt ledger: what it actually minted,
+        #: not a string reflected back from the caller's request.
+        self.minted_receipts: list[str] = []
         self.agent = _RealServer(
             _build_agent_app(
                 self.identity,
                 flip_identity_after_first_event=flip_identity_after_first_event,
+                minted_receipts=self.minted_receipts,
             )
         )
         self.agent.start()
         self.lane.approve(self.agent.base_url)
-        session = self.lane.register_and_confirm()
-        self.identity["routing_epoch"] = session.routing_epoch
         self.coordinator = _RealServer(
             _coordinator_app(self.lane, self.agent.base_url)
         )
         self.coordinator.start()
+        registration_response = self.lane.register_and_confirm(
+            self.coordinator.base_url
+        )
+        self.identity["routing_epoch"] = int(registration_response["routing_epoch"])
 
     @property
     def base(self) -> str:
@@ -469,7 +517,7 @@ async def test_a_delivered_command_persists_its_routing_receipt(fleet: _Fleet) -
             },
         )
         assert delivered.status_code == 200, delivered.text
-        assert delivered.json()["receipt_id"] == "provider/command-dk-42"
+        assert delivered.json()["receipt_id"] == fleet.minted_receipts[-1]
         assert delivered.headers["x-fleet-routing-state"] == "delivered"
         correlation = delivered.headers["x-fleet-correlation-id"]
 
@@ -479,7 +527,8 @@ async def test_a_delivered_command_persists_its_routing_receipt(fleet: _Fleet) -
     receipt = next(r for r in receipts if r.correlation_id == correlation)
     assert receipt.state == RoutingReceiptState.DELIVERED
     assert receipt.idempotency_key == "dk-42"
-    assert receipt.upstream_receipt_ref == "provider/command-dk-42"
+    assert receipt.upstream_receipt_ref == fleet.minted_receipts[-1]
+    assert "dk-42" not in receipt.upstream_receipt_ref
     assert receipt.pinned_routing_epoch is not None
     assert receipt.pinned_binding_generation == 3
 
@@ -921,7 +970,7 @@ async def test_a_settled_attempt_never_redispatches(fleet: _Fleet) -> None:
         assert retry.status_code == 409
         body = retry.json()
         assert body["reason"] == "clerk_routing_attempt_conflict"
-        assert "provider/command-dk-once" in body["message"]
+        assert fleet.minted_receipts[-1] in body["message"]
         assert "reconcile" in body["message"].lower()
         assert "never resubmit" in body["next_step"].lower()
     receipts = [
@@ -987,6 +1036,29 @@ async def test_a_stale_pin_is_refused_before_the_agent_handler(fleet: _Fleet) ->
         assert read.headers["x-fleet-routing-epoch"] == str(
             fleet.identity["routing_epoch"]
         )
+
+
+async def test_a_lane_serving_a_different_epoch_fails_the_coordinators_echo_check(
+    tmp_path: Path,
+) -> None:
+    """FR-076: the echo is a check, not a formality.
+
+    Reads pass the agent-side pin gate (``_pin_mismatch`` compares epoch only
+    for mutations), so a lane serving a stale epoch answers 200 — and the
+    coordinator's ``verify_identity_echo`` is the only thing standing
+    between that answer and the caller.
+    """
+    fleet = _Fleet(tmp_path)
+    try:
+        # The lane re-registered and moved on; the coordinator still pins the
+        # epoch its registry recorded.
+        fleet.identity["routing_epoch"] = int(fleet.identity["routing_epoch"]) + 1
+        async with fleet.client() as client:
+            response = await client.get(f"{fleet.base}/account")
+        assert response.status_code == 409
+        assert response.json()["reason"] == "clerk_identity_mismatch"
+    finally:
+        fleet.stop()
 
 
 async def test_a_refused_stream_keeps_its_refusal_status(fleet: _Fleet) -> None:
