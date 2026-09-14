@@ -121,18 +121,40 @@ def test_qualification_uses_declared_alpaca_reads_not_raw_probe_endpoints() -> N
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
     """D evidence records every Paper fault without claiming an E scenario."""
-    assert set(qualification.FAULT_SCENARIOS) == {
-        "provider_outage",
-        "credential_refusal_restart",
-        "volume_marker_poison_mismount_refusal",
-        "request_queue_saturation",
-        "stream_saturation",
-    }
     assert {"passed", "attempted", "unrun"} == qualification.FAULT_STATES
     result = qualification._fault_result("unrun", "bounded host unavailable", {"clerk_id": "live"})
     assert result["state"] == "unrun"
     with pytest.raises(qualification.QualificationError, match="Unknown fault"):
         qualification._fault_result("failed", "not a vocabulary value", {})
+
+
+def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -> None:
+    """The tuple is a manifest; this asserts the ceremony honours it.
+
+    Comparing FAULT_SCENARIOS to a literal copy of itself cannot catch the one
+    drift that matters — a scenario declared in the vocabulary and never
+    assigned in run_host_qualification, which _assert_all_faults_passed would
+    then fail at runtime on the host, hours into a maintenance window.
+    """
+    import ast
+
+    source = Path(qualification.__file__).read_text(encoding="utf-8")
+    function = next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "run_host_qualification"
+    )
+    populated = {
+        target.slice.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "faults"
+        and isinstance(target.slice, ast.Constant)
+        and isinstance(target.slice.value, str)
+    }
+    assert populated == set(qualification.FAULT_SCENARIOS)
 
 
 def test_partial_fault_matrix_cannot_be_labelled_passed() -> None:
