@@ -16,7 +16,7 @@ audit, and handoff in the repository.
 - `docs/architecture/numerical-authority-migration-plan.md` — active math-authority migration sequence.
 - `.claude/rules/numerical-rigor.md` — tolerances, golden fixtures, timestamp rules, reconciliation taxonomy.
 - `docs/known-gaps.md` — living open-defect backlog: what is still broken or deferred.
-- `docs/broker-v2-operator-manual.md` — current Alpaca Broker V2 operator manual, including activation-selected Clerk authority and recovery actions.
+- `docs/broker-clerk-fleet-authority.md` — current broker clerk fleet control plane and Alpaca Broker V2 operating authority, including the trust risk register and the operator-surface gap catalogue.
 
 ## Current Cleanup Notes
 

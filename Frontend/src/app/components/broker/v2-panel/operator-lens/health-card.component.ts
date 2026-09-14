@@ -11,7 +11,6 @@ import type {
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { BrokerV2CardHelpButtonComponent } from '../help-drawer/broker-v2-card-help-button.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 
 /**
@@ -25,7 +24,6 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
   selector: 'app-health-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    BrokerV2CardHelpButtonComponent,
     KeyValuePipe,
     PanelActionButtonComponent,
     TimestampDisplayComponent,

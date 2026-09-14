@@ -43,32 +43,23 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(svc.anchor()).toBe('intro');
   });
 
-  it('opens the broker-v2-manual document', () => {
+  it('re-opening with a different anchor updates the anchor', () => {
     const { fixture, svc } = setup();
-    svc.open('broker-v2-manual', 'station-1-signal');
+
+    svc.open('methodology', 'intro');
     fixture.detectChanges();
+    expect(svc.anchor()).toBe('intro');
 
-    expect(svc.visible()).toBe(true);
-    expect(svc.activeDocId()).toBe('broker-v2-manual');
-    expect(svc.anchor()).toBe('station-1-signal');
-  });
-
-  it('switching documents closes the previous one', () => {
-    const { fixture, svc } = setup();
-
-    svc.open('methodology');
+    svc.open('methodology', 'glossary');
     fixture.detectChanges();
     expect(svc.activeDocId()).toBe('methodology');
-
-    svc.open('broker-v2-manual', 'glossary');
-    fixture.detectChanges();
-    expect(svc.activeDocId()).toBe('broker-v2-manual');
+    expect(svc.anchor()).toBe('glossary');
     expect(svc.visible()).toBe(true);
   });
 
   it('close sets visible to false', () => {
     const { fixture, svc } = setup();
-    svc.open('broker-v2-manual');
+    svc.open('methodology');
     fixture.detectChanges();
     expect(svc.visible()).toBe(true);
 

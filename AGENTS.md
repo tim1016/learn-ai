@@ -29,7 +29,7 @@ broker-control entry point.
   `/broker/reconciliation`, `/broker/orders`, `/broker/session-mirror`,
   `/broker/paper-run`, `/broker/instances`, `/broker/instances/:id`,
   `/broker/bots`, `/broker/bots/:id`, `/broker/offline-replay`,
-  `/broker/bot-manual`, and `/broker/deploy`
+  and `/broker/deploy`
 
 Those URLs may exist only as redirects to an Alpaca surface for bookmarked
 links. Do not attach a component, provider, guard, API expansion, or new UI

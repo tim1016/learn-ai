@@ -1,6 +1,20 @@
 # ADR 0041: The operator manual's Button Reference is generated from the backend copy map
 
-**Status:** Accepted
+**Status:** Retired 2026-09-14
+
+> **Retired.** This ADR's entire subject — the generator
+> `scripts/regenerate_broker_v2_operator_manual.py`, the document it wrote into
+> (`docs/broker-v2-operator-manual.md` and its served copy), and the
+> `broker-v2-operator-manual-contract` CI regenerate-and-diff step — was deleted on
+> 2026-09-14 when the manual was retired in favour of
+> `docs/broker-clerk-fleet-authority.md` (decision:
+> [#2060](https://github.com/tim1016/learn-ai/issues/2060)).
+>
+> **Decision 6 survives and is still enforced.** The `Literal`↔collection parity rule and
+> the closed-vocabulary invariant live in
+> `PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py`, its two committed
+> snapshots, and the `broker-v2-vocabulary-contract` CI job — none of which were retired.
+> What ended is only the *generated prose* half.
 
 - **Date:** 2026-08-18
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),

@@ -111,7 +111,6 @@ describe('routes', () => {
     ['/broker/bots', '/brokers/alpaca'],
     ['/broker/bots/bot-1', '/brokers/alpaca'],
     ['/broker/offline-replay', '/brokers/alpaca'],
-    ['/broker/bot-manual', '/brokers/alpaca/manual'],
     ['/broker/deploy', '/brokers/alpaca'],
   ])('navigates the deprecated %s URL to %s', async (path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });

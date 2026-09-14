@@ -6,7 +6,7 @@ data, account data, completed orders, and capability diagnostics.
 **Not an operator surface:** The IBKR bot launcher, evaluator, Account Clerk, and
 order-actuation paths are retired. Do not use this guide to deploy, start, stop,
 recover, cancel, or place an IBKR bot order. Current bot control is the Alpaca Broker
-V2 panel and its [operator manual](../broker-v2-operator-manual.md).
+V2 panel and its [broker clerk fleet authority](../broker-clerk-fleet-authority.md).
 
 ## Safe configuration
 

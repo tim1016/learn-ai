@@ -10,7 +10,7 @@ launcher/evaluator operating record, the entire `docs/archive/` tree, shipped
 superpowers plans/specs, retired-protocol reference notes, and dead validation
 artifacts were **hard-deleted to Git history**. Git history
 is their provenance record. Open defects belong in `docs/known-gaps.md`; current
-Alpaca Broker V2 behavior belongs in `docs/broker-v2-operator-manual.md`.
+Alpaca Broker V2 behavior belongs in `docs/broker-clerk-fleet-authority.md`.
 
 **Agent instructions:** `AGENTS.md` is the Codex entry point. The committed
 `CLAUDE.md` / `.claude/**` hierarchy remains the Claude-specific configuration;
@@ -124,7 +124,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
 | 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `historical (ADR 0037/0038)` / `compatibility evidence (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
-| 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
+| 0041 | **RETIRED 2026-09-14** (subject deleted with the manual; Decision 6 survives in test_vocabulary_snapshot.py). The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 | 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
 | 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
 | 0044 | Two strategy-validation categories with a permanent Live ceiling for operational harnesses |
@@ -154,8 +154,8 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `options-routes-research.md` cleanup record (pruned to git history 2026-09-12) | 2026-04-29 |
-| `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-19 |
-| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the Broker V2 manual; no independent policy authority | — | 2026-08-06 |
+| `docs/broker-clerk-fleet-authority.md` | **Current** broker clerk fleet control plane and Alpaca Broker V2 operating authority | `docs/broker-v2-operator-manual.md` and its generated served copy (retired 2026-09-14, #2060) | 2026-09-14 |
+| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by `docs/broker-clerk-fleet-authority.md`; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
