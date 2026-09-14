@@ -241,7 +241,7 @@ def test_a_malformed_marker_field_is_a_typed_refusal(
         fleet_service.verify_clerk_volume(clerk_id=lane.clerk_id, volume_root=lane.volume_root)
 
 
-def test_retirement_races_a_reservation_without_leaving_an_orphan(
+def test_a_retirement_landing_inside_a_reservation_refuses_without_leaving_an_orphan(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """Reservation rechecks the lifecycle inside its write transaction, so a

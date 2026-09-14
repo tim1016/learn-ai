@@ -97,7 +97,7 @@ def test_the_attempt_lifecycle_covers_every_outcome(
         )
 
 
-def test_dispatch_is_one_way_and_recorded_before_settlement(
+def test_a_dispatched_attempt_can_never_present_as_un_sent(
     control_dir: Path, fleet_service
 ) -> None:
     """Once dispatched, an attempt can never present as un-sent."""
@@ -164,7 +164,7 @@ def test_a_mismatched_effective_tuple_refuses_as_input_validation(
         )
 
 
-def test_a_racing_downgrade_after_delivered_refuses_typed(
+def test_a_stale_pre_delivery_read_cannot_downgrade_a_delivered_outcome(
     control_dir: Path, fleet_service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression (independent review): a settlement that loses the race to a

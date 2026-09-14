@@ -27,7 +27,7 @@ from tests.broker.fleet.conftest import FrozenClock, provision_lane
 RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
 
 
-def test_n_clerks_across_two_providers_run_concurrently(
+def test_six_clerks_across_two_providers_hold_distinct_volumes_and_one_registry(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """Six clerks, two providers, distinct volumes, one registry, no cross-talk."""

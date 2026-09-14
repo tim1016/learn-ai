@@ -196,7 +196,7 @@ def test_the_migration_is_idempotent_and_reopening_changes_nothing(
         second.close()
 
 
-def test_an_incomplete_v1_schema_without_a_registered_path_refuses(
+def test_an_amputated_v1_registry_refuses_rather_than_producing_a_broken_v2(
     tmp_path: Path,
 ) -> None:
     """A schema version with no registered upgrade path refuses, never guesses."""

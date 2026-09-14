@@ -50,7 +50,7 @@ def _live(fleet_service, tmp_path: Path, broker: str, label: str):
     return lane
 
 
-def test_every_entry_carries_broker_clerk_identity_and_no_internal_secrets(
+def test_every_entry_carries_only_the_allowed_fields_and_never_the_worker_key(
     control_dir: Path, fleet_service
 ) -> None:
     """Directory entries carry exactly the allowed fields and never the worker key."""

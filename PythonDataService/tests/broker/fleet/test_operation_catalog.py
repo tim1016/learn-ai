@@ -71,7 +71,7 @@ def test_a_well_formed_catalog_passes_and_derives_route_keys() -> None:
     )
 
 
-def test_ambiguous_or_malformed_catalogs_refuse() -> None:
+def test_catalog_validation_refuses_malformed_operation_shapes() -> None:
     """Duplicate ids, duplicate routes and incoherent facts all refuse."""
     with pytest.raises(ValueError, match="declared twice"):
         validate_operation_catalog(
@@ -118,7 +118,7 @@ def test_the_fake_providers_declare_valid_catalogs() -> None:
             assert operation.agent_path_template.startswith("/api/")
 
 
-def test_alpaca_catalog_covers_every_canonical_desk_read() -> None:
+def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
     """C's desk has no operational fallback to a broker-global route."""
     from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 
@@ -164,7 +164,7 @@ def test_protocol_compatibility_refuses_mismatched_builds() -> None:
         )
 
 
-def test_catalog_validation_refuses_ambiguous_and_incoherent_declarations() -> None:
+def test_catalog_validation_refuses_cross_field_incoherence() -> None:
     """Parameter-normalized route uniqueness, public/agent parameter
     agreement, and the configuration/account combination all refuse."""
     with pytest.raises(ValueError, match="declared twice"):
