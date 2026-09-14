@@ -104,6 +104,10 @@ _TERMINAL_STATUSES: frozenset[str] = frozenset(
 )
 
 _DEFAULT_MAX_BACKOFF_S = 30.0
+# A connection must outlive the backoff ceiling before it counts as "held":
+# a socket the server evicts seconds after the auth ack is a flap, and a flap
+# must keep escalating, not reset to the 1s floor every cycle.
+_MIN_HELD_CONNECTION_MS = int(_DEFAULT_MAX_BACKOFF_S * 1000)
 _DEFAULT_BASE_BACKOFF_S = 1.0
 
 # Bounded page of recently closed orders re-pulled on each reconnect to recover
@@ -129,8 +133,8 @@ async def _default_backoff(attempt: int) -> None:
 class TradeUpdateCounters:
     """Observable counters for the live consumer (surface, never silence).
 
-    Every non-happy-path branch increments one of these so a live run can report
-    what happened without it being a fatal event:
+    Every reconnect-loop branch, happy path or not, increments one of these so
+    a live run can report what happened without it being a fatal event:
 
     - ``events_applied`` — distinct events attributed + journaled.
     - ``skipped_duplicate`` — exact redeliveries of an already-seen key.
@@ -323,6 +327,7 @@ class TradeUpdatesConsumer:
         # channel's health fact.
         self._connected = False
         self._connection_changed_at_ms = clock()
+        self._last_connection_held_ms = 0
         # Quiet-after-connect is healthy because Alpaca supplies no lifecycle
         # heartbeat. A received unusable frame flips this false until a later
         # live trade update maps successfully.
@@ -353,10 +358,13 @@ class TradeUpdatesConsumer:
 
     def _mark_connection(self, connected: bool) -> None:
         if self._connected != connected:
-            self._connected = connected
-            self._connection_changed_at_ms = self._clock()
+            now_ms = self._clock()
             if connected:
                 self._counters.connects += 1
+            else:
+                self._last_connection_held_ms = now_ms - self._connection_changed_at_ms
+            self._connected = connected
+            self._connection_changed_at_ms = now_ms
 
     def _mark_evidence_health(self, healthy: bool) -> None:
         self._evidence_health = ExecutionEvidenceHealth(
@@ -397,12 +405,17 @@ class TradeUpdatesConsumer:
         the reconnect budget and answers "does this connect follow an earlier
         one" (i.e. whether ``_consume_once`` should REST gap-reconcile).
         ``attempt`` is the backoff input only, and resets to zero after any
-        cycle that reached the connection watermark — so a stream healthy for
-        hours does not pay the 30s backoff ceiling for a blip long past.
+        cycle that reached the connection watermark AND held the socket for
+        at least ``_MIN_HELD_CONNECTION_MS`` — so a stream healthy for hours
+        does not pay the 30s backoff ceiling for a blip long past, and a
+        connect-then-drop flap keeps escalating instead of hot-looping the
+        reconnect (and its REST gap-reconcile) at the 1s floor.
         ``ReconciliationSweep.run`` (``passes`` / ``consecutive_failures``) is
         the in-repo precedent for this two-counter split; the market-status
-        stream (``AlpacaMarketLivenessConsumer._consume_statuses``) gets the
-        same backoff reset in PR #2081.
+        stream (``AlpacaMarketLivenessConsumer._consume_statuses``) still has
+        the single never-reset counter on this branch; its reset is tracked
+        in PR #2081 and must use the same held-duration predicate, or it
+        inherits the flap hot-loop this module avoids.
         """
         cycles = 0
         attempt = 0
@@ -414,10 +427,15 @@ class TradeUpdatesConsumer:
                 raise
             except Exception:
                 # A frame-source failure is surfaced, then retried under backoff
-                # — never a silent death of the live lifecycle feed.
+                # — never a silent death of the live lifecycle feed. attempt
+                # and cycles here are the pre-increment values for this cycle.
                 logger.warning(
                     "alpaca trade_updates stream errored; will reconnect",
-                    extra={"action": "trade_updates_stream_error"},
+                    extra={
+                        "action": "trade_updates_stream_error",
+                        "attempt": attempt,
+                        "cycles": cycles,
+                    },
                     exc_info=True,
                 )
 
@@ -425,11 +443,30 @@ class TradeUpdatesConsumer:
             # runs the gap-reconcile between the first frame and the connection
             # watermark, so keying the reset on the frame would let a
             # permanently failing reconciler reset the backoff every cycle and
-            # hot-loop this socket at the 1s floor.
-            if self._counters.connects > connects_before:
+            # hot-loop this socket at the 1s floor. Connected alone is not
+            # enough either: a socket the server evicts seconds after the auth
+            # ack reaches the watermark every cycle too, so the reset also
+            # requires the connection to have been held for at least
+            # ``_MIN_HELD_CONNECTION_MS`` — otherwise a connect-then-drop flap
+            # resets to the 1s floor every cycle instead of escalating.
+            connected = self._counters.connects > connects_before
+            held_ms = self._last_connection_held_ms if connected else 0
+            backoff_reset = connected and held_ms >= _MIN_HELD_CONNECTION_MS
+            if backoff_reset:
                 attempt = 0
             attempt += 1
             cycles += 1
+            logger.info(
+                "alpaca trade_updates reconnecting",
+                extra={
+                    "action": "trade_updates_reconnect",
+                    "attempt": attempt,
+                    "cycles": cycles,
+                    "connected": connected,
+                    "held_ms": held_ms,
+                    "backoff_reset": backoff_reset,
+                },
+            )
             self._counters.reconnects += 1
             if self._max_reconnects is not None and cycles > self._max_reconnects:
                 logger.info(
