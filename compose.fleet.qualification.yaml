@@ -1,34 +1,44 @@
 # Test-only overlay for scripts.run_broker_fleet_compose_qualification.
-# It replaces production commands with harmless probe processes and adds fake
-# provider endpoints. Never deploy this overlay or its generated env files.
+# Coordinator and clerk services intentionally retain their production image,
+# command, and fleet roles. Only the external provider/market endpoints below
+# are fake; they are not present in the production topology.
 services:
-  fleet-coordinator:
+  fleet-db:
     profiles: ["fleet-qualification"]
-    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "coordinator"]
+
+  fleet-redis:
+    profiles: ["fleet-qualification"]
+
+  # A host-ceremony helper only. It uses the real provisioning CLI against all
+  # three scoped volumes before the actual roles start; it is not a runtime.
+  fleet-qualification-enroller:
+    image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
+    profiles: ["fleet-qualification"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      POLYGON_API_KEY: ""
+      FLEET_POSTGRES_PASSWORD: qualification-postgres-password
     volumes:
       - fleet-coordinator-control:/app/artifacts/fleet
-      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
-    healthcheck:
-      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
+      - fleet-coordinator-lake:/lean-data-writer
+      - fleet-alpaca-paper-data:/app/artifacts/clerks/paper
+      - fleet-alpaca-live-data:/app/artifacts/clerks/live
+    networks: [fleet-private]
+
+  fleet-coordinator:
+    profiles: ["fleet-qualification"]
+    environment:
+      NUMBA_DISABLE_JIT: "1"
+    stop_grace_period: 2s
 
   alpaca-paper-clerk:
     profiles: ["fleet-qualification"]
-    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "lane"]
     environment:
-      FLEET_PROBE_LANE: paper
+      NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
-    volumes:
-      - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
-      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
-    healthcheck:
-      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
+    stop_grace_period: 2s
     depends_on:
       fleet-fake-paper-provider:
         condition: service_healthy
@@ -37,19 +47,11 @@ services:
 
   alpaca-live-clerk:
     profiles: ["fleet-qualification"]
-    command: ["python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "lane"]
     environment:
-      FLEET_PROBE_LANE: live
+      NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
-    volumes:
-      - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
-      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
-    healthcheck:
-      test: ["CMD", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--health-url", "http://localhost:8000/health"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
+    stop_grace_period: 2s
     depends_on:
       fleet-fake-live-provider:
         condition: service_healthy

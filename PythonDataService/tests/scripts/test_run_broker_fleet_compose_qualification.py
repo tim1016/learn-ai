@@ -23,7 +23,7 @@ def test_compose_topology_declares_distinct_role_env_files_and_lane_volumes() ->
     assert compose.count(":/app/artifacts/alpaca_clerk") == 2
     assert "fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk" in compose
     assert "fleet-alpaca-live-data:/app/artifacts/alpaca_clerk" in compose
-    assert "internal: true" in compose
+    assert "internal: true" not in compose
     assert "/var/run" not in compose
 
 
@@ -38,10 +38,26 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
         "FLEET_REQUEST_QUEUE_TIMEOUT_MS",
     ):
         assert variable in compose
-    assert compose.count("FLEET_ALLOW_LIVE_MUTATIONS: \"false\"") == 2
+    assert "FLEET_ALLOW_LIVE_MUTATIONS" not in compose
     assert "IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-1201}" in compose
     assert "IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1202}" in compose
     assert "ALPACA_MARKET_STATUS_UPSTREAM_URL" not in compose
+    assert "fleet-coordinator-lake:/lean-data-writer" in compose
+    assert "fleet-coordinator-cache:/app/cache" in compose
+
+
+def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_dependencies() -> None:
+    """Qualification may fake providers, never the coordinator or clerk runtime."""
+    overlay = (qualification.REPOSITORY_ROOT / "compose.fleet.qualification.yaml").read_text(encoding="utf-8")
+
+    assert "fleet-qualification-enroller" in overlay
+    assert "fleet-fake-paper-provider" in overlay
+    assert "fleet-fake-live-provider" in overlay
+    assert "fleet-coordinator:\n    profiles" in overlay
+    assert "alpaca-paper-clerk:\n    profiles" in overlay
+    assert "alpaca-live-clerk:\n    profiles" in overlay
+    assert '"--container-role", "coordinator"' not in overlay
+    assert '"--container-role", "lane"' not in overlay
 
 
 def test_assert_no_custody_root_refuses_custody_named_artifact(tmp_path: Path) -> None:

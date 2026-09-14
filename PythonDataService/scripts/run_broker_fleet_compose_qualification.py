@@ -15,9 +15,9 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -31,6 +31,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SUBPROCESS_TIMEOUT_S = 30.0
 COMPOSE_FILES = (
     REPOSITORY_ROOT / "compose.fleet.yaml",
     REPOSITORY_ROOT / "compose.fleet.qualification.yaml",
@@ -54,6 +55,7 @@ class ComposeCommand:
 
     engine: str
     compose: tuple[str, ...]
+    environment: dict[str, str] | None = None
 
     @classmethod
     def discover(cls) -> ComposeCommand:
@@ -68,39 +70,66 @@ class ComposeCommand:
         )
 
     def run(
-        self, project: str, args: list[str], *, check: bool = True
+        self,
+        project: str,
+        args: list[str],
+        *,
+        check: bool = True,
+        timeout_s: float = DEFAULT_SUBPROCESS_TIMEOUT_S,
     ) -> subprocess.CompletedProcess[str]:
         """Invoke Compose against only this repository's two fleet files."""
         command = [*self.compose, "--project-name", project]
         for compose_file in COMPOSE_FILES:
             command.extend(("--file", str(compose_file)))
         command.extend(args)
-        return subprocess.run(
-            command,
-            cwd=REPOSITORY_ROOT,
-            check=check,
-            capture_output=True,
-            text=True,
-        )
+        environment = os.environ.copy()
+        if self.environment is not None:
+            environment.update(self.environment)
+        try:
+            return subprocess.run(
+                command,
+                cwd=REPOSITORY_ROOT,
+                check=check,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise QualificationError(
+                f"Compose command exceeded its {timeout_s:g}s bound: {args[0]!r}."
+            ) from exc
 
     def inspect(self, container_id: str) -> dict[str, Any]:
         """Return one engine inspection document for a known project container."""
-        result = subprocess.run(
-            [self.engine, "inspect", container_id],
-            cwd=REPOSITORY_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [self.engine, "inspect", container_id],
+                cwd=REPOSITORY_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=DEFAULT_SUBPROCESS_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise QualificationError(
+                f"Container inspection exceeded its {DEFAULT_SUBPROCESS_TIMEOUT_S:g}s bound."
+            ) from exc
         payload = json.loads(result.stdout)
         if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
             raise QualificationError(f"Unexpected {self.engine} inspect payload for {container_id!r}.")
         return payload[0]
 
 
-def _request_json(url: str, *, method: str = "GET", timeout_s: float = 3.0) -> tuple[int, dict[str, Any]]:
+def _request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    timeout_s: float = 3.0,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, Any]]:
     """Call one test-only HTTP endpoint without inheriting proxy settings."""
-    request = urllib.request.Request(url, method=method)
+    request = urllib.request.Request(url, method=method, headers=headers or {})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(request, timeout=timeout_s) as response:
@@ -149,73 +178,6 @@ def _run_fake_provider() -> int:
 
 def _run_fake_market_data() -> int:
     _serve_json(8013, _json_handler({"/health": {"ok": True}, "/read": {"market_data": "read_only"}}))
-    return 0
-
-
-def _run_coordinator_probe() -> int:
-    root = Path(os.environ.get("FLEET_CONTROL_DIR", "/app/artifacts/fleet"))
-    root.mkdir(parents=True, exist_ok=True)
-    database = root / "fleet-registry.sqlite"
-    with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS fleet_registry_probe (id INTEGER PRIMARY KEY)")
-    _serve_json(8000, _json_handler({"/health": {"ok": True, "role": "fleet_coordinator"}}))
-    return 0
-
-
-def _run_lane_probe() -> int:
-    lane = os.environ.get("FLEET_PROBE_LANE")
-    if lane not in {"paper", "live"}:
-        raise QualificationError("FLEET_PROBE_LANE must be paper or live for a lane probe.")
-    root = Path(os.environ.get("ALPACA_CLERK_DIR", "/app/artifacts/alpaca_clerk"))
-    root.mkdir(parents=True, exist_ok=True)
-    for relative in ("live_runs", "live_bars", "broker_captures"):
-        (root / relative).mkdir(exist_ok=True)
-    marker = {
-        "deployment_namespace": os.environ.get("FLEET_DEPLOYMENT_NAMESPACE"),
-        "lane": lane,
-        "root": str(root),
-    }
-    (root / "fleet-lane-probe.json").write_text(json.dumps(marker, sort_keys=True), encoding="utf-8")
-    with sqlite3.connect(root / "custody-probe.sqlite") as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS lane_probe (lane TEXT NOT NULL)")
-        connection.execute("INSERT INTO lane_probe(lane) VALUES (?)", (lane,))
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            if self.path == "/health":
-                payload = {"ok": True, "lane": lane}
-            elif self.path == "/read":
-                provider_status, provider = _request_json(os.environ["FLEET_FAKE_BROKER_URL"] + "/read")
-                market_status, market = _request_json(os.environ["FLEET_FAKE_MARKET_DATA_URL"] + "/read")
-                if provider_status != HTTPStatus.OK or market_status != HTTPStatus.OK:
-                    self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
-                    return
-                payload = {"lane": lane, "marker": marker, "provider": provider, "market": market}
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            body = json.dumps(payload, sort_keys=True).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_POST(self) -> None:
-            if self.path != "/mutate":
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            body = json.dumps({"reason": "live_mutation_disabled"}, sort_keys=True).encode("utf-8")
-            self.send_response(HTTPStatus.FORBIDDEN)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    _serve_json(8000, Handler)
     return 0
 
 
@@ -269,6 +231,7 @@ def _assert_private_agent_ports(inspect: dict[str, Any], service: str) -> None:
 
 
 def _exec_probe(compose: ComposeCommand, project: str, service: str, path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+    target = path if path.startswith("http://") or path.startswith("https://") else f"http://localhost:8000{path}"
     result = compose.run(
         project,
         [
@@ -278,7 +241,7 @@ def _exec_probe(compose: ComposeCommand, project: str, service: str, path: str, 
             "python",
             "/app/scripts/run_broker_fleet_compose_qualification.py",
             "--call-url",
-            f"http://localhost:8000{path}",
+            target,
             "--call-method",
             method,
         ],
@@ -306,78 +269,193 @@ def _wait_for_lanes(compose: ComposeCommand, project: str, timeout_s: float) -> 
     raise QualificationError("Fleet qualification services did not become healthy before the deadline.")
 
 
+def _json_line(result: subprocess.CompletedProcess[str], operation: str) -> dict[str, Any]:
+    """Read one operator CLI response without exposing its credentials in logs."""
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise QualificationError(f"{operation} returned invalid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise QualificationError(f"{operation} returned a non-object response.")
+    return payload
+
+
+def _write_env(path: Path, values: dict[str, str]) -> None:
+    """Write a qualification-only env file with restrictive host permissions."""
+    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -> ComposeCommand:
+    """Provision test-only identities and return Compose with their env files."""
+    control = "/app/artifacts/fleet"
+    base = ["run", "--rm", "--no-deps", "fleet-qualification-enroller", "python", "-m", "scripts.manage_broker_fleet"]
+    compose.run(project, ["run", "--rm", "--no-deps", "fleet-qualification-enroller", "python", "-m", "scripts.manage_data_root", "init", "--base-root", "/lean-data-writer", "--root-id", "00000000-0000-0000-0000-000000000000"])
+    compose.run(project, [*base, "init", "--control-dir", control])
+    deployment_namespace = f"compose:{project}"
+    lanes: dict[str, dict[str, Any]] = {}
+    for lane in ("paper", "live"):
+        volume = f"{project}_fleet-alpaca-{lane}-data"
+        result = compose.run(
+            project,
+            [
+                *base,
+                "provision",
+                "--control-dir",
+                control,
+                "--broker",
+                "alpaca",
+                "--label",
+                f"Qualification {lane}",
+                "--volume-root",
+                f"/app/artifacts/clerks/{lane}",
+                "--attestation-id",
+                volume,
+                "--deployment-namespace",
+                deployment_namespace,
+            ],
+        )
+        lane_result = _json_line(result, f"provision {lane}")
+        required = ("clerk_id", "worker_key", "agent_service_token", "coordinator_service_token")
+        if not all(isinstance(lane_result.get(key), str) and lane_result[key] for key in required):
+            raise QualificationError(f"Provisioning {lane} did not issue complete fleet identities.")
+        compose.run(
+            project,
+            [
+                *base,
+                "approve-endpoint",
+                "--control-dir",
+                control,
+                "--clerk-id",
+                str(lane_result["clerk_id"]),
+                "--endpoint-ref",
+                f"alpaca-{lane}-agent",
+                "--base-url",
+                f"http://alpaca-{lane}-clerk:8000",
+            ],
+        )
+        lanes[lane] = lane_result
+    control_secret = "qualification-control-secret"
+    coordinator_env = temporary_dir / "coordinator.env"
+    _write_env(
+        coordinator_env,
+        {
+            "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",
+            "DATA_PLANE_CONTROL_SECRET": control_secret,
+            "FLEET_AGENT_SERVICE_TOKENS_JSON": json.dumps(
+                {entry["clerk_id"]: entry["agent_service_token"] for entry in lanes.values()}, separators=(",", ":")
+            ),
+            "FLEET_COORDINATOR_SERVICE_TOKENS_JSON": json.dumps(
+                {entry["clerk_id"]: entry["coordinator_service_token"] for entry in lanes.values()}, separators=(",", ":")
+            ),
+        },
+    )
+    runtime_environment = {"FLEET_COORDINATOR_ENV_FILE": str(coordinator_env)}
+    for lane, entry in lanes.items():
+        lane_env = temporary_dir / f"{lane}.env"
+        _write_env(
+            lane_env,
+            {
+                "DATA_PLANE_CONTROL_SECRET": control_secret,
+                "FLEET_CLERK_ID": str(entry["clerk_id"]),
+                "FLEET_WORKER_KEY": str(entry["worker_key"]),
+                "FLEET_AGENT_SERVICE_TOKEN": str(entry["agent_service_token"]),
+                "FLEET_COORDINATOR_SERVICE_TOKEN": str(entry["coordinator_service_token"]),
+            },
+        )
+        runtime_environment[f"FLEET_{lane.upper()}_ENV_FILE"] = str(lane_env)
+    return ComposeCommand(engine=compose.engine, compose=compose.compose, environment=runtime_environment)
+
+
+def _wait_for_http(url: str, timeout_s: float, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    """Wait for an actual application HTTP surface, bounded by the ceremony timeout."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            status, body = _request_json(url, headers=headers)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            time.sleep(1)
+            continue
+        if status == HTTPStatus.OK:
+            return body
+        time.sleep(1)
+    raise QualificationError(f"Timed out waiting for {url!r}.")
+
+
 def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path | None) -> dict[str, Any]:
-    """Build a scoped Compose project, assert isolation, then recoverably clean it."""
-    compose = ComposeCommand.discover()
+    """Exercise actual coordinator/agent roles on isolated Compose volumes."""
+    bootstrap_discovered = ComposeCommand.discover()
+    bootstrap = ComposeCommand(engine=bootstrap_discovered.engine, compose=bootstrap_discovered.compose, environment={"FLEET_POSTGRES_PASSWORD": "qualification-postgres-password"})
     project = f"fleetqualification{uuid.uuid4().hex[:12]}"
     evidence: dict[str, Any] = {"project": project, "compose_files": [str(path) for path in COMPOSE_FILES]}
     started = False
-    try:
-        compose.run(project, ["--profile", "fleet-qualification", "config"])
-        compose.run(project, ["--profile", "fleet-qualification", "up", "--build", "--detach"])
-        started = True
-        _wait_for_lanes(compose, project, timeout_s)
+    with tempfile.TemporaryDirectory(prefix="learn-ai-fleet-qualification-") as temporary:
+        try:
+            bootstrap.run(project, ["--profile", "fleet-qualification", "config"])
+            started = True
+            compose = _host_ceremony(bootstrap, project, Path(temporary))
+            compose.run(project, ["build", "fleet-coordinator"], timeout_s=120.0)
+            started = True
+            compose.run(
+                project,
+                ["--profile", "fleet-qualification", "up", "--detach", "fleet-db", "fleet-redis", "fleet-coordinator", "fleet-fake-paper-provider", "fleet-fake-live-provider", "fleet-fake-market-data"],
+                timeout_s=90.0,
+            )
+            started = True
+            _wait_for_http("http://127.0.0.1:8100/health", timeout_s)
+            compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "alpaca-paper-clerk", "alpaca-live-clerk"], timeout_s=60.0)
+            _wait_for_http("http://127.0.0.1:8100/health", timeout_s)
 
-        inspections = {
-            service: compose.inspect(_container_id(compose, project, service))
-            for service in QUALIFICATION_SERVICES
-        }
-        coordinator_mount = _mount_at(inspections["fleet-coordinator"], "/app/artifacts/fleet")
-        paper_mount = _mount_at(inspections["alpaca-paper-clerk"], "/app/artifacts/alpaca_clerk")
-        live_mount = _mount_at(inspections["alpaca-live-clerk"], "/app/artifacts/alpaca_clerk")
-        sources = {"coordinator": coordinator_mount.get("Source"), "paper": paper_mount.get("Source"), "live": live_mount.get("Source")}
-        if len(set(sources.values())) != 3 or not all(isinstance(source, str) and source for source in sources.values()):
-            raise QualificationError(f"Fleet volumes are not physically distinct: {sources!r}")
-        if any(mount.get("RW") is not True for mount in (coordinator_mount, paper_mount, live_mount)):
-            raise QualificationError("Fleet control and lane volumes must be independently writable.")
-        _assert_coordinator_secret_absence(inspections["fleet-coordinator"])
-        resources = {service: _assert_limits(inspections[service], service) for service in QUALIFICATION_SERVICES}
-        for service in LANE_SERVICES:
-            _assert_private_agent_ports(inspections[service], service)
-
-        status, paper_read = _exec_probe(compose, project, "alpaca-paper-clerk", "/read")
-        if status != HTTPStatus.OK or paper_read.get("provider", {}).get("provider") != "paper":
-            raise QualificationError("Paper lane did not read from its own fake provider.")
-        status, live_read_before = _exec_probe(compose, project, "alpaca-live-clerk", "/read")
-        if status != HTTPStatus.OK or live_read_before.get("provider", {}).get("provider") != "live":
-            raise QualificationError("Live lane did not read from its own fake provider.")
-        if live_read_before.get("market", {}).get("market_data") != "read_only":
-            raise QualificationError("Live lane did not retain the supported read-only market-data dependency.")
-        status, refusal = _exec_probe(compose, project, "alpaca-live-clerk", "/mutate", method="POST")
-        if status != HTTPStatus.FORBIDDEN or refusal.get("reason") != "live_mutation_disabled":
-            raise QualificationError("The test topology unexpectedly enabled a Live mutation.")
-
-        compose.run(project, ["kill", "alpaca-paper-clerk"])
-        compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
-        status, live_read_after = _exec_probe(compose, project, "alpaca-live-clerk", "/read")
-        if status != HTTPStatus.OK or live_read_after.get("provider", {}).get("provider") != "live":
-            raise QualificationError("Live read failed after the Paper process was killed.")
-        coordinator_check = compose.run(
-            project,
-            ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"],
-        )
-        evidence.update(
-            {
-                "volume_sources": sources,
-                "resources": resources,
-                "paper_read": paper_read,
-                "live_read_before_paper_kill": live_read_before,
-                "live_read_after_paper_kill": live_read_after,
-                "coordinator_custody_check": json.loads(coordinator_check.stdout),
-                "live_mutation_refusal": refusal,
-                "result": "passed",
+            inspections = {service: compose.inspect(_container_id(compose, project, service)) for service in QUALIFICATION_SERVICES}
+            mounts = {
+                "coordinator": _mount_at(inspections["fleet-coordinator"], "/app/artifacts/fleet"),
+                "paper": _mount_at(inspections["alpaca-paper-clerk"], "/app/artifacts/alpaca_clerk"),
+                "live": _mount_at(inspections["alpaca-live-clerk"], "/app/artifacts/alpaca_clerk"),
             }
-        )
-        return evidence
-    finally:
-        if evidence_path is not None:
-            evidence_path.parent.mkdir(parents=True, exist_ok=True)
-            evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        if started and not keep:
-            try:
-                compose.run(project, ["--profile", "fleet-qualification", "down", "--volumes", "--remove-orphans"])
-            except subprocess.CalledProcessError as exc:
-                logger.error("Scoped fleet qualification cleanup failed: %s", exc.stderr)
+            sources = {role: mount.get("Source") for role, mount in mounts.items()}
+            if len(set(sources.values())) != 3 or not all(isinstance(source, str) and source for source in sources.values()):
+                raise QualificationError(f"Fleet volumes are not physically distinct: {sources!r}")
+            _assert_coordinator_secret_absence(inspections["fleet-coordinator"])
+            resources = {service: _assert_limits(inspections[service], service) for service in QUALIFICATION_SERVICES}
+            for service in LANE_SERVICES:
+                _assert_private_agent_ports(inspections[service], service)
+
+            token = "qualification-control-secret"
+            directory_headers = {"X-Data-Plane-Control-Secret": token}
+            directory = _wait_for_http("http://127.0.0.1:8100/api/broker-clerks", timeout_s, directory_headers)
+            clerks = directory.get("clerks")
+            if not isinstance(clerks, list) or len(clerks) != 2:
+                raise QualificationError("Actual coordinator did not project both enrolled clerk registrations.")
+            live_clerk = next((entry for entry in clerks if entry.get("display_label") == "Qualification live"), None)
+            if not isinstance(live_clerk, dict):
+                raise QualificationError("Actual coordinator directory does not contain the Live qualification lane.")
+            live_id = str(live_clerk["clerk_id"])
+            mutation_status, mutation_refusal = _request_json(
+                f"http://127.0.0.1:8100/api/brokers/alpaca/clerks/{live_id}/orders",
+                method="POST",
+                headers=directory_headers,
+            )
+            if mutation_status < HTTPStatus.BAD_REQUEST:
+                raise QualificationError("Live mutation route unexpectedly accepted an unbound qualification lane.")
+            compose.run(project, ["kill", "alpaca-paper-clerk"])
+            compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
+            live_health = _wait_for_http("http://127.0.0.1:8100/api/broker-clerks", timeout_s, directory_headers)
+            market_status, market_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-market-data:8013/health")
+            provider_status, provider_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-live-provider:8012/health")
+            if market_status != HTTPStatus.OK or provider_status != HTTPStatus.OK:
+                raise QualificationError("Live container lost private market/provider egress after Paper failure.")
+            coordinator_check = compose.run(project, ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"])
+            evidence.update({"volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_market_egress": market_body, "live_provider_egress": provider_body, "coordinator_custody_check": json.loads(coordinator_check.stdout), "bounded_exclusions": ["Fake provider and market endpoints prove private egress only; this qualification does not emulate Alpaca account/profile binding, broker protocol calls, or a Live arming ceremony.", "The runtime currently exposes queue limits as deployment budgets; queue and stream saturation are separately bounded resource checks, not proof of provider stream semantics."], "result": "passed"})
+            return evidence
+        finally:
+            if evidence_path is not None:
+                evidence_path.parent.mkdir(parents=True, exist_ok=True)
+                evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            if started and not keep:
+                try:
+                    bootstrap.run(project, ["--profile", "fleet-qualification", "down", "--volumes", "--remove-orphans"], timeout_s=60.0)
+                except (QualificationError, subprocess.CalledProcessError) as exc:
+                    logger.error("Scoped fleet qualification cleanup failed.", extra={"error": str(exc), "project": project})
 
 
 def _assert_no_custody_root(root: Path) -> dict[str, object]:
@@ -391,7 +469,7 @@ def _assert_no_custody_root(root: Path) -> dict[str, object]:
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--container-role", choices=("coordinator", "lane", "fake-provider", "fake-market-data"))
+    parser.add_argument("--container-role", choices=("fake-provider", "fake-market-data"))
     parser.add_argument("--health-url")
     parser.add_argument("--call-url")
     parser.add_argument("--call-method", choices=("GET", "POST"), default="GET")
@@ -406,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     """Dispatch a container role helper or run the host qualification ceremony."""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.container_role:
-        return {"coordinator": _run_coordinator_probe, "lane": _run_lane_probe, "fake-provider": _run_fake_provider, "fake-market-data": _run_fake_market_data}[args.container_role]()
+        return {"fake-provider": _run_fake_provider, "fake-market-data": _run_fake_market_data}[args.container_role]()
     if args.health_url:
         status, _body = _request_json(args.health_url)
         return 0 if status == HTTPStatus.OK else 1

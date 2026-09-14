@@ -39,6 +39,33 @@ x-fleet-agent: &fleet-agent
     - fleet-private
 
 services:
+  fleet-db:
+    image: docker.io/library/postgres:16
+    profiles: ["fleet"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${FLEET_POSTGRES_PASSWORD:?Set FLEET_POSTGRES_PASSWORD in the coordinator environment}
+    volumes:
+      - fleet-coordinator-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [fleet-private]
+
+  fleet-redis:
+    image: docker.io/library/redis:7-alpine
+    profiles: ["fleet"]
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [fleet-private]
+
   fleet-coordinator:
     build:
       context: ./PythonDataService
@@ -57,6 +84,9 @@ services:
     environment:
       FLEET_ROLE: fleet_coordinator
       FLEET_CONTROL_DIR: /app/artifacts/fleet
+      LEAN_DATA_WRITE_ROOT: /lean-data-writer
+      POSTGRES_URL: postgresql://postgres:${FLEET_POSTGRES_PASSWORD:?Set FLEET_POSTGRES_PASSWORD in the coordinator environment}@fleet-db:5432/postgres
+      REDIS_URL: redis://fleet-redis:6379/0
       # The current process-wide Settings construction requires this value,
       # but the coordinator does not use a market-data client or broker SDK.
       POLYGON_API_KEY: ""
@@ -67,12 +97,21 @@ services:
       FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
     volumes:
       - fleet-coordinator-control:/app/artifacts/fleet
+      - fleet-coordinator-artifacts:/app/artifacts
+      - fleet-coordinator-cache:/app/cache
+      # Coordinator-owned market-data root: never a clerk volume or credential.
+      - fleet-coordinator-lake:/lean-data-writer
     ports:
       # The coordinator is the only public fleet surface. Clerk agents have
       # no host port and are reachable only on fleet-private.
       - "127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}:8000"
     networks:
       - fleet-private
+    depends_on:
+      fleet-db:
+        condition: service_healthy
+      fleet-redis:
+        condition: service_healthy
 
   alpaca-paper-clerk:
     <<: *fleet-agent
@@ -85,7 +124,6 @@ services:
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
       IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-1201}
-      FLEET_ALLOW_LIVE_MUTATIONS: "false"
     volumes:
       - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
 
@@ -102,16 +140,20 @@ services:
       IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1202}
       # This is deliberately not an enablement switch. Existing per-account
       # arming and Live gates remain the sole authority for any mutation.
-      FLEET_ALLOW_LIVE_MUTATIONS: "false"
     volumes:
       - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
 
 volumes:
   fleet-coordinator-control:
+  fleet-coordinator-artifacts:
+  fleet-coordinator-cache:
+  fleet-coordinator-lake:
+  fleet-coordinator-postgres:
   fleet-alpaca-paper-data:
   fleet-alpaca-live-data:
 
 networks:
   fleet-private:
     driver: bridge
-    internal: true
+    # Agents publish no ports but retain outbound broker/market-data egress.
+    # An internal-only network would silently prevent those required dependencies.
