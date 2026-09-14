@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -292,6 +293,8 @@ def test_stream_capacity_client_does_not_parse_held_sse_as_json(
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
     """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
+    if shutil.which("docker") is None and shutil.which("podman") is None:
+        pytest.skip("requires Docker or Podman for a real Compose render")
     environment = {
         **os.environ,
         "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",

@@ -15,7 +15,8 @@ Use exactly one of these status statements: `code complete`, `isolated actual-ro
 Record target commit, image digest, operator, host, expected Clerk IDs, accounts, and planned time window. The clean pre-D integration baseline at `0ca2200e` was:
 
 ```bash
-DATA_PLANE_CONTROL_SECRET="" /Users/inkant/learn-ai/PythonDataService/.venv/bin/python -m pytest tests/broker/fleet -q -p no:cacheprovider
+cd PythonDataService
+DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/fleet -q -p no:cacheprovider
 ```
 
 It passed `175` tests in `69.38s`. This is code baseline evidence only; it is not Compose, broker, Paper, Live, or operator qualification.

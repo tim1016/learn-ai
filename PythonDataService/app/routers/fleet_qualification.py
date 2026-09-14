@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.client import AlpacaTradingClient
@@ -34,6 +36,30 @@ from app.utils.timestamps import now_ms_utc
 _PREFIX = "/internal/fleet-qualification"
 _NAMESPACE_PREFIX = "compose:fleetqualification"
 _STATUS_SNAPSHOT_PATH = "/api/brokers/alpaca/market-status-snapshot"
+
+
+class QualificationMarketDependencyAvailable(BaseModel):
+    """Successful supported-status dependency evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: Literal["alpaca_market_status_consumer"]
+
+
+class QualificationMarketDependencyUnavailable(BaseModel):
+    """Typed absence of the supported status dependency."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: Literal["qualification_market_status_unavailable"]
+
+
+class QualificationHoldRequestResponse(BaseModel):
+    """Typed acknowledgement for the bounded ASGI contention probe."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    held: Literal["request"]
 
 
 def _is_qualification_lane(
@@ -166,31 +192,43 @@ def qualification_router(
         if value != secret:
             raise HTTPException(status_code=404, detail="Not found")
 
-    @router.get("/dependency/market-data")
-    async def market_dependency(x_fleet_qualification_secret: str | None = Header(default=None)) -> JSONResponse:
+    @router.get(
+        "/dependency/market-data",
+        response_model=QualificationMarketDependencyAvailable,
+        responses={503: {"model": QualificationMarketDependencyUnavailable}},
+    )
+    async def market_dependency(
+        x_fleet_qualification_secret: str | None = Header(default=None),
+    ) -> QualificationMarketDependencyAvailable | JSONResponse:
         """Refresh the supported Paper status consumer before its normal read route."""
         require_secret(x_fleet_qualification_secret)
         consumer = get_market_liveness_consumer()
         if consumer is None:
             return JSONResponse(
                 status_code=503,
-                content={"reason": "qualification_market_status_unavailable"},
+                content=QualificationMarketDependencyUnavailable(
+                    reason="qualification_market_status_unavailable"
+                ).model_dump(),
             )
         await consumer.refresh_shared_status()
         snapshot = get_market_liveness_store().status_snapshot(now_ms=now_ms_utc())
         if not snapshot.connected:
             return JSONResponse(
                 status_code=503,
-                content={"reason": "qualification_market_status_unavailable"},
+                content=QualificationMarketDependencyUnavailable(
+                    reason="qualification_market_status_unavailable"
+                ).model_dump(),
             )
-        return JSONResponse(status_code=200, content={"source": "alpaca_market_status_consumer"})
+        return QualificationMarketDependencyAvailable(source="alpaca_market_status_consumer")
 
-    @router.get("/hold/request")
-    async def hold_request(x_fleet_qualification_secret: str | None = Header(default=None)) -> JSONResponse:
+    @router.get("/hold/request", response_model=QualificationHoldRequestResponse)
+    async def hold_request(
+        x_fleet_qualification_secret: str | None = Header(default=None),
+    ) -> QualificationHoldRequestResponse:
         """Hold one ordinary ASGI request long enough for deployed admission to contend."""
         require_secret(x_fleet_qualification_secret)
         await asyncio.sleep(1)
-        return JSONResponse({"held": "request"})
+        return QualificationHoldRequestResponse(held="request")
 
     @router.get("/hold/stream")
     async def hold_stream(x_fleet_qualification_secret: str | None = Header(default=None)) -> StreamingResponse:

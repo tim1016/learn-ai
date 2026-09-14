@@ -10,7 +10,10 @@ Host-only ceremonies are required for volume remount, restore, reassignment, end
 
 Before a restore, reassignment, or lane rollback:
 
-1. Stop the affected Clerk service and every writer to its own lane volume.
+1. Stop the coordinator, both Clerks, and every supporting artifact writer
+   before any restore begins. This applies even when only one artifact is the
+   intended restore target: no process may write coordinator control state,
+   the Paper lane, or the Live lane while an artifact is being restored.
 2. Preserve process-stop evidence and the lane's current fleet directory/assignment observation in the incident record.
 3. Verify the other lane is not mounted, stopped, copied, or modified as part of this work.
 4. Preserve the original opaque Clerk ID, volume ID, account-assignment generation, and deployment-attestation evidence. Do not mint replacement identities to work around a partial operation.

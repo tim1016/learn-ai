@@ -474,13 +474,31 @@ class FleetLaneRuntimeMiddleware:
     ) -> None:
         """Bound one HTTP call and retain only an eligible route-family hit."""
         if scope["type"] == "lifespan":
+            shutdown_requested = False
+            pending_shutdown_complete: dict[str, Any] | None = None
+
             async def receive_flushing_shutdown() -> dict[str, Any]:
+                nonlocal shutdown_requested
                 message = await receive()
                 if message["type"] == "lifespan.shutdown":
-                    await self._evidence.flush()
+                    shutdown_requested = True
                 return message
 
-            await self.app(scope, receive_flushing_shutdown, send)
+            async def send_after_shutdown_teardown(message: dict[str, Any]) -> None:
+                nonlocal pending_shutdown_complete
+                if message["type"] == "lifespan.shutdown.complete" and shutdown_requested:
+                    # The inner lifespan owns coordinator and artifact-writer
+                    # teardown.  Do not publish a completed shutdown until
+                    # it has returned and the aggregate evidence is durable.
+                    pending_shutdown_complete = message
+                    return
+                await send(message)
+
+            await self.app(scope, receive_flushing_shutdown, send_after_shutdown_teardown)
+            if shutdown_requested:
+                await self._evidence.flush()
+            if pending_shutdown_complete is not None:
+                await send(pending_shutdown_complete)
             return
         if scope["type"] != "http":
             await self.app(scope, receive, send)

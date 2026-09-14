@@ -10,7 +10,12 @@ import pytest
 
 import app.routers.fleet_qualification as qualification
 from app.broker.alpaca.broker import AlpacaBroker
-from app.routers.fleet_qualification import qualification_router
+from app.routers.fleet_qualification import (
+    QualificationHoldRequestResponse,
+    QualificationMarketDependencyAvailable,
+    QualificationMarketDependencyUnavailable,
+    qualification_router,
+)
 
 
 def test_qualification_router_is_absent_without_each_strict_guard() -> None:
@@ -38,6 +43,28 @@ def test_qualification_router_has_no_mutation_or_provider_registration_route() -
         "/internal/fleet-qualification/hold/stream",
     }
     assert all("POST" not in route.methods for route in router.routes)
+
+
+def test_qualification_probe_routes_declare_strict_success_and_failure_models() -> None:
+    """The hidden probes still have typed Pydantic-v2 response contracts."""
+    router = qualification_router(
+        role="clerk_agent",
+        namespace="compose:fleetqualificationx",
+        secret="qualification-secret",
+        broker_url="http://fake",
+        market_data_url="http://market",
+    )
+    assert router is not None
+    routes = {route.path: route for route in router.routes}
+    dependency = routes["/internal/fleet-qualification/dependency/market-data"]
+    hold_request = routes["/internal/fleet-qualification/hold/request"]
+
+    assert dependency.response_model is QualificationMarketDependencyAvailable
+    assert dependency.responses[503]["model"] is QualificationMarketDependencyUnavailable
+    assert hold_request.response_model is QualificationHoldRequestResponse
+    assert QualificationMarketDependencyAvailable.model_json_schema()["additionalProperties"] is False
+    assert QualificationMarketDependencyUnavailable.model_json_schema()["additionalProperties"] is False
+    assert QualificationHoldRequestResponse.model_json_schema()["additionalProperties"] is False
 
 
 def test_install_qualification_bindings_default_off_leaves_registry_and_consumer_untouched(

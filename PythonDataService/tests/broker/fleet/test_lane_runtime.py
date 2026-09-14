@@ -483,12 +483,16 @@ async def test_lifespan_shutdown_does_not_complete_when_evidence_flush_fails(
     monkeypatch.setattr(evidence, "_record_batch", refuse_record)
     evidence.schedule(route_family="broker_bots", response_class="2xx")
     inner_received_shutdown = False
+    inner_teardown_complete = False
     messages: list[AsgiMessage] = []
 
     async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
-        nonlocal inner_received_shutdown
+        nonlocal inner_received_shutdown, inner_teardown_complete
         message = await receive()
         inner_received_shutdown = message["type"] == "lifespan.shutdown"
+        # This represents the coordinator and lane-owned writer teardown that
+        # must complete before the middleware attempts its final evidence sync.
+        inner_teardown_complete = True
         await send({"type": "lifespan.shutdown.complete"})
 
     async def receive() -> AsgiMessage:
@@ -500,7 +504,8 @@ async def test_lifespan_shutdown_does_not_complete_when_evidence_flush_fails(
     runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
     with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
         await runtime({"type": "lifespan"}, receive, send)
-    assert not inner_received_shutdown
+    assert inner_received_shutdown
+    assert inner_teardown_complete
     assert messages == []
 
 
