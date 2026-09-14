@@ -55,7 +55,7 @@ def test_created_container_triage_filters_on_the_compose_project_label() -> None
         f"misclassified — which is how a broker clerk agent got destroyed."
     )
 
-    label_filters = script.count(f"label=${{COMPOSE_LABEL}}")
+    label_filters = script.count("label=${COMPOSE_LABEL}")
     assert label_filters >= 2, (
         "Both the orphan-reap and the stuck-restart queries must filter on the "
         f"Compose label; found {label_filters} such filter(s)."
