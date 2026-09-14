@@ -22,6 +22,11 @@ are not mistaken for one physical volume, and approved endpoints are
 deployment-owned rows an agent can cite but never change. Routing receipts
 carry the pinned attempt context and a four-state outcome vocabulary in which
 a delivered outcome is terminal.
+
+Schema v3 (#2073b) puts DDL behind the one structural-isolation invariant that
+had none: a partial UNIQUE index on ``(deployment_namespace, volume_root)`` and
+a BEFORE INSERT trigger doing exact prefix comparison, so "one clerk, one
+physical volume" survives a race the service's pre-check cannot see.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ import sqlite3
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Every ``*_ms`` column carries this bound in the schema, so a corrupt or
 #: hostile write cannot persist a negative or out-of-range instant as fleet
@@ -92,6 +97,12 @@ CREATE UNIQUE INDEX ux_clerks_volume_id
 CREATE UNIQUE INDEX ux_clerks_volume_attestation
     ON clerks(deployment_namespace, volume_attestation_kind, volume_attestation_id)
     WHERE lifecycle_state <> 'retired';
+
+-- FR-020/021: the equal-root half of "one clerk, one physical volume". The
+-- nesting half needs a comparison an index cannot express and lives in
+-- ``trg_clerks_volume_root_not_nested`` below.
+CREATE UNIQUE INDEX ux_clerks_volume_root
+    ON clerks(deployment_namespace, volume_root) WHERE lifecycle_state <> 'retired';
 
 CREATE INDEX ix_clerks_listing ON clerks(broker, created_at_ms, clerk_id);
 
@@ -263,6 +274,25 @@ FOR EACH ROW WHEN
     OR (OLD.lifecycle_state = 'retired' AND NEW.lifecycle_state <> 'retired')
 BEGIN
     SELECT RAISE(ABORT, 'a clerk lifecycle moves forward only');
+END;
+
+-- FR-020/021: writable subtrees of one mounted volume never host two clerks.
+-- The service's pre-check produces the typed refusal; this is the backstop a
+-- race cannot step over. ``substr`` rather than ``LIKE``: a volume root
+-- containing ``_`` or ``%`` must not over-match a wildcard pattern.
+CREATE TRIGGER trg_clerks_volume_root_not_nested
+BEFORE INSERT ON clerks
+FOR EACH ROW WHEN NEW.lifecycle_state <> 'retired' AND EXISTS (
+    SELECT 1 FROM clerks existing
+    WHERE existing.lifecycle_state <> 'retired'
+      AND existing.deployment_namespace = NEW.deployment_namespace
+      AND (substr(NEW.volume_root, 1, length(existing.volume_root) + 1)
+               = existing.volume_root || '/'
+           OR substr(existing.volume_root, 1, length(NEW.volume_root) + 1)
+               = NEW.volume_root || '/')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'one clerk, one physical volume: a volume root never nests inside another active clerk''s root');
 END;
 
 -- The current session's epoch never decreases; history rows never change.
@@ -706,11 +736,37 @@ END""",
     ),
 )
 
+# The v2→v3 upgrade (#2073b): the nested-root fence gains DDL. The statement
+# text is byte-identical to the fresh v3 DDL above — a migrated registry and a
+# fresh one must carry the same ``sqlite_master`` entries, which
+# ``test_a_v2_registry_gains_the_nested_volume_root_fence`` pins. The equal-root
+# index is registered first, so an upgrade over a registry that already
+# violates it fails loudly instead of installing half a fence.
+_MIGRATION_V2_TO_V3: tuple[str, ...] = (
+    """CREATE UNIQUE INDEX ux_clerks_volume_root
+    ON clerks(deployment_namespace, volume_root) WHERE lifecycle_state <> 'retired'""",
+    """CREATE TRIGGER trg_clerks_volume_root_not_nested
+BEFORE INSERT ON clerks
+FOR EACH ROW WHEN NEW.lifecycle_state <> 'retired' AND EXISTS (
+    SELECT 1 FROM clerks existing
+    WHERE existing.lifecycle_state <> 'retired'
+      AND existing.deployment_namespace = NEW.deployment_namespace
+      AND (substr(NEW.volume_root, 1, length(existing.volume_root) + 1)
+               = existing.volume_root || '/'
+           OR substr(existing.volume_root, 1, length(NEW.volume_root) + 1)
+               = NEW.volume_root || '/')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'one clerk, one physical volume: a volume root never nests inside another active clerk''s root');
+END""",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: tuple(
         statement.replace("MAX_TIMESTAMP_MS", str(MAX_TIMESTAMP_MS))
         for statement in _MIGRATION_V1_TO_V2_TEMPLATE
     ),
+    2: _MIGRATION_V2_TO_V3,
 }
 
 

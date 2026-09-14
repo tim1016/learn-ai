@@ -89,7 +89,7 @@ from app.broker.fleet.records import (
     StoredLifecycleState,
     VolumeMarker,
 )
-from app.broker.fleet.recovery import require_routing_open
+from app.broker.fleet.recovery import require_recovery_hold_clear
 from app.broker.fleet.store import FleetRegistryStore
 from app.utils.timestamps import now_ms_utc
 
@@ -166,9 +166,9 @@ class FleetControlService:
         """Close the underlying registry store."""
         self._store.close()
 
-    def _require_registry_recovery_open(self) -> None:
+    def _require_recovery_hold_clear(self) -> None:
         """Reject routing and assignment mutation during a restore ceremony."""
-        require_routing_open(
+        require_recovery_hold_clear(
             self._store.db_path.parent.parent,
             registry_id=self._store.registry_id,
         )
@@ -216,7 +216,7 @@ class FleetControlService:
         namespaces are different mounts, and different strings do not prove
         different volumes (audit 2026-09-13, finding 4).
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker or not display_label:
             raise BrokerAndClerkRequired(
                 "Provisioning requires a broker and a display label.",
@@ -250,28 +250,9 @@ class FleetControlService:
                 "volume, never a second identity onto an existing one.",
                 next_step="Use a fresh named volume for the new clerk.",
             )
-        # FR-020/021: writable subtrees of one mounted volume never host two
-        # clerks. Distinct attestations do not make nested roots distinct
-        # physical volumes, so containment is refused in both directions —
-        # but only within one deployment namespace, where path strings share
-        # a filesystem. ``resolve()`` is pure normalization here — the
-        # canonical-root proof above has already excluded every symlink in
-        # the chain.
+        # ``resolve()`` is pure normalization here — the canonical-root proof
+        # above has already excluded every symlink in the chain.
         new_root = canonical_root.resolve()
-        for active in self._store.list_clerks():
-            if active.deployment_namespace != deployment_namespace:
-                continue
-            existing_root = Path(active.volume_root)
-            if new_root == existing_root or new_root.is_relative_to(
-                existing_root
-            ) or existing_root.is_relative_to(new_root):
-                raise ClerkVolumeAlreadyRegistered(
-                    f"The root {volume_root} shares a mounted volume with active "
-                    f"clerk {active.clerk_id} ({existing_root}) in deployment "
-                    f"namespace {deployment_namespace!r}; one clerk, one "
-                    "physical volume.",
-                    next_step="Mount a separate named volume for the new clerk.",
-                )
 
         clerk_id = new_clerk_id()
         volume_id = new_volume_id()
@@ -320,12 +301,35 @@ class FleetControlService:
             retired_at_ms=None,
         )
         with self._store.transaction() as conn:
+            # FR-020/021: writable subtrees of one mounted volume never host
+            # two clerks. Distinct attestations do not make nested roots
+            # distinct physical volumes, so containment is refused in both
+            # directions — but only within one deployment namespace, where
+            # path strings share a filesystem. The check reads inside the
+            # write transaction so no rival provisioning can commit between it
+            # and the insert it guards; schema v3's index and nesting trigger
+            # are the backstop underneath it.
+            for active in self._store.list_clerks_on(conn):
+                if active.deployment_namespace != deployment_namespace:
+                    continue
+                existing_root = Path(active.volume_root)
+                if new_root == existing_root or new_root.is_relative_to(
+                    existing_root
+                ) or existing_root.is_relative_to(new_root):
+                    raise ClerkVolumeAlreadyRegistered(
+                        f"The root {volume_root} shares a mounted volume with active "
+                        f"clerk {active.clerk_id} ({existing_root}) in deployment "
+                        f"namespace {deployment_namespace!r}; one clerk, one "
+                        "physical volume.",
+                        next_step="Mount a separate named volume for the new clerk.",
+                    )
             try:
                 self._store.insert_clerk(conn, record)
             except sqlite3.IntegrityError as exc:
                 # A rival provisioning committed between the pre-checks and
-                # this insert; the loser gets the typed refusal, never the
-                # constraint traceback.
+                # this insert, or the schema's own nested-root fence fired;
+                # the loser gets the typed refusal, never the constraint
+                # traceback.
                 raise ClerkVolumeAlreadyRegistered(
                     f"Another active clerk already claims this volume's identity "
                     f"in deployment namespace {deployment_namespace!r}.",
@@ -425,7 +429,7 @@ class FleetControlService:
         "no assignments" and leave a retired clerk owning an active
         assignment.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
@@ -470,7 +474,7 @@ class FleetControlService:
         points at. The reference and the clerk binding are stable; only the
         destination moves, by re-running this ceremony.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if _ENDPOINT_REF_PATTERN.fullmatch(endpoint_ref) is None:
             raise ValueError(
@@ -531,6 +535,13 @@ class FleetControlService:
         registering against a newer coordinator's expanded catalog) refuses
         at registration instead of failing per-operation later (audit
         2026-09-13, finding 6).
+
+        ``volume_root`` is the co-located caller's re-proof of the mounted
+        root. It is optional because the coordinator process may not have
+        the volume mounted at all; the agent's own gate
+        (``fleet_boot.open_fleet_lane``) is the authority, and
+        ``LocalPresence`` — the one transport that does share the filesystem
+        — always supplies it.
         """
         clerk = self._require_clerk(clerk_id)
         if not hmac.compare_digest(clerk.worker_key, worker_key):
@@ -701,8 +712,15 @@ class FleetControlService:
         both live states: a reserved row returns as-is, and an effective row
         is the same-owner resume of a restarted clerk, returning the
         confirmed facts untouched (audit 2026-09-13, finding 1).
+
+        ``volume_root`` is the co-located caller's re-proof of the mounted
+        root. It is optional because the coordinator process may not have
+        the volume mounted at all; the agent's own gate
+        (``fleet_boot.open_fleet_lane``) is the authority, and
+        ``LocalPresence`` — the one transport that does share the filesystem
+        — always supplies it.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker:
             raise BrokerAndClerkRequired("A reservation requires a broker.")
         clerk = self._require_clerk(clerk_id)
@@ -848,7 +866,7 @@ class FleetControlService:
         effective tuple; this row is the coordinator's confirmed observation
         of it and the fence routed commands are checked against.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
@@ -993,7 +1011,7 @@ class FleetControlService:
         its evidence was prepared against, so release evidence prepared for
         generation N cannot silently release generation N+1's new owner.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
                 "The release ceremony requires the offline-and-obligations-clear proof.",
@@ -1072,7 +1090,7 @@ class FleetControlService:
         released. The successor is reserved, not confirmed or routed: its
         agent must still pass its provider-owned binding and arming gates.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         successor = self._require_clerk(successor_clerk_id)
         if successor.broker != broker:
             raise ClerkBrokerMismatch(
@@ -1190,7 +1208,7 @@ class FleetControlService:
         a provisioned lane whose binding is missing or broken, so the operator
         can reach the configuration surface that would produce one.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
                 "A clerk-scoped operation requires both broker and clerk identity.",

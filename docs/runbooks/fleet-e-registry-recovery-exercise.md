@@ -61,7 +61,7 @@ Use the provider's actual `paper` or `live` endpoint mode and its bounded author
 
 If the restored registry lacks an assignment, the ceremony may reconstruct only the same effective assignment owned by that original Clerk and exact durable evidence. It cannot release, transfer, rename, or mint an identity. A conflicting owner, newer registry fact, missing marker, missing evidence or bad summary is a hold: recover a matching backup pair and escalate. Do not force progress by deleting a registry row.
 
-Repeat until output reports `routing_closed: false`. Starting an agent creates a new routing epoch, so it must perform its ordinary exact-binding confirmation before it becomes routeable. This is intentionally not a command retry and does not replay a routing receipt.
+Repeat until output reports `mutations_closed: false`. Starting an agent creates a new routing epoch, so it must perform its ordinary exact-binding confirmation before it becomes routeable. This is intentionally not a command retry and does not replay a routing receipt.
 
 If and only if `restore-registry` reports an empty `required_clerk_ids` list, inspect the restored registry and the restricted incident inventory to confirm that no effective assignment existed at capture. Provisioned or reserved rows are not authority, but an empty list never reopens the registry automatically. Record the closeout explicitly:
 
@@ -104,6 +104,8 @@ Use a registry artifact written at schema version 2 when rolling the coordinator
 ```
 
 The command refuses a newer schema rather than guessing a downgrade and enters the same reconciliation hold as a normal registry restore. It never remints a Clerk, worker, volume, account assignment or command identity. Retain routing receipts and provider receipts for read-only reconciliation; an `outcome_unknown` is reconciled by the original provider command identity and is never resubmitted by this rollback.
+
+A backup written by this build (schema v3) is refused by `rollback-d-compatible` with exit code `2` — it is newer than what a Delivery D binary can enforce. The D-compatible rollback therefore needs a registry backup captured *before* the v3 upgrade. Retain that pre-upgrade backup as the rollback evidence; once the coordinator has upgraded, no new v2-eligible backup can be produced.
 
 ## 6. Required exercise record
 

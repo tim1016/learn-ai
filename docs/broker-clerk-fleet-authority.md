@@ -130,34 +130,39 @@ Distinguishing the fences that are **real and tested** from those that are **dec
 - **Depth enforcement of account identity** — `SealedAccountMismatchError`, behind the installed
   binding and the fenced artifacts root (§2).
 - **Volume identity gate** — verified before the broker client opens (`app/main.py:391-393` →
-  `fleet_boot.py:185`, ahead of `:409`). The broker-client half of ADR 0062 Decision 2 holds
-  exactly. The database half does not — see §8.
+  `fleet_boot.py:185`, ahead of `:409`). ADR 0062 Decision 2 **holds**: the broker-client half
+  exactly, and the database half now too — the profiles-DB writer and the installation lock file
+  open only after the gate. See §8's Decision-2 row for the one exception, and why it is
+  structural rather than a violation.
 - **Route-level identity freezing in the browser.** Broker, clerk, account and entity are fixed by
   the route itself, through one URL seam and one immutable `ResourceTarget` — the strongest
   available form ([#2058](https://github.com/tim1016/learn-ai/issues/2058)).
 - **A1, A2 and A7 addendum clauses** — all hold, with real triggers and real tests
   ([#2054](https://github.com/tim1016/learn-ai/issues/2054)).
 
-### Declared, but not in force
+### Declared — three since closed, one still hollow
 
-- **`validate_served_context` has no production caller.** ADR 0062 Decision 5's provider safety
-  gate is declared (`app/broker/fleet/provider.py:283`) and implemented
-  (`app/broker/alpaca/clerk/fleet_adapter.py:759`) and **dispatched nowhere** —
-  `LaneRouter._resolve` (`app/broker/fleet/routing.py:467-491`) builds no `ServedContext`. A
-  repo-wide search finds the symbol in exactly two production files, a test fake
-  (`tests/broker/fleet/conftest.py:151`) and one test calling the adapter method directly
-  (`tests/broker/fleet/test_a2_alpaca_lane.py:71`). `ServedContext` is constructed only in tests.
-  Its docstring further describes a shadow-lane refusal its body does not implement.
-  *Four independent investigations converged on this.*
-- **The nested/shared volume-root refusal is non-transactional** —
-  `app/broker/fleet/service.py:261-274` is a Python loop outside any transaction with no `UNIQUE`
-  index backstop, and is never raced. It is the one structural-isolation fence with no DDL behind
-  it.
-- **The volume gate is caller-opt-in** — `service.py:511` / `:692` declare
-  `volume_root: Path | None = None`, and `RemotePresence.register` passes none. No test asserts
-  that omitting it is refused.
-- **`_fence_writable_roots` has no negative test** — every test monkeypatches roots *inside* the
-  volume, so deleting the fence body would fail nothing.
+- **`validate_served_context` had no production caller; it is now dispatched.** ADR 0062
+  Decision 5's provider safety gate is declared (`app/broker/fleet/provider.py:283`) and
+  implemented (`app/broker/alpaca/clerk/fleet_adapter.py:756`). `LaneRouter._resolve`
+  (`app/broker/fleet/routing.py:469-531`, the `if assignment is not None:` block) now builds a
+  `ServedContext` from the resolved assignment and calls it for execution operations; a provider
+  refusal surfaces as `BrokerClerkCapabilityUnavailable` (409) and is logged with
+  `action=fleet_provider_refused_served_context`. The mechanism is real and tested. What it guards
+  is not: the Alpaca adapter — the only production provider — currently declares no refusal this
+  seam can trigger (§8).
+- **The nested/shared volume-root refusal was non-transactional; it is now backed by DDL.** The
+  Python pre-check in `provision_clerk` (`app/broker/fleet/service.py`) now runs inside the
+  provisioning `BEGIN IMMEDIATE` transaction, backed by schema v3's partial `UNIQUE` index
+  `ux_clerks_volume_root` and the `BEFORE INSERT` trigger `trg_clerks_volume_root_not_nested`. The
+  race is tested (`test_two_racing_provisionings_of_nested_roots_cannot_both_land`).
+- **The volume gate was caller-opt-in; `LocalPresence` now requires and re-proves it.**
+  `LocalPresence.__init__` requires `volume_root` and re-proves it on register and reserve
+  (`test_local_presence_reverifies_the_volume_at_registration_and_reservation`). The
+  `volume_root: Path | None = None` parameters on the service's register/reserve stay optional by
+  design — `RemotePresence` cannot inspect an agent-local path (ADR 0062 addendum 6).
+- **`_fence_writable_roots` had no negative test; it now does** (commit `bc87bfac`) — deleting the
+  fence body fails it.
 - **"The browser secret terminates at the coordinator" is documentation, not code.** An unpinned
   request skips `FleetIdentityMiddleware` entirely
   (`app/broker/fleet/agent_identity.py:211-215`) and the agent accepts the browser control secret
@@ -218,7 +223,7 @@ The register splits three ways, not the expected two:
 
 | Axis | Level | Why |
 |---|---|---|
-| **Structural** — can it keep lanes apart as built? | **Low** | Identity is not a request parameter; the fences are in the database and tested; ADR 0062 scores 14 holds / 4 partial / **0 absent** |
+| **Structural** — can it keep lanes apart as built? | **Low** | Identity is not a request parameter; the fences are in the database and tested; ADR 0062 scores **0 absent**; of the four partials §4 tracked, three are now closed and Decision 5 remains partial (§4, §8) |
 | **State** — is what runs what was designed? | **High** | The posture is untracked, unreviewed, unreproducible, and `restart.sh` can destroy a lane (§5) |
 | **Observability** — if it goes wrong, will you know? | **High** | 25 refusal codes, none renderable; no audit read surface (§7) |
 
@@ -243,8 +248,10 @@ both cheap to fix.
 ### What would change the answer
 
 1. Paper lane activation.
-2. Browser-driven provisioning, or a second concurrent operator — makes the non-transactional
-   volume-root fence reachable.
+2. Browser-driven provisioning, or a second concurrent operator — the volume-root fence is now
+   transactional and DDL-backed (§4), so the registry itself no longer has a race here; the
+   remaining exposure is whatever a second operator does outside the registry, which this
+   document has not audited.
 3. Loss of `compose.override.yaml` — silent, and nothing today would notice.
 4. A real additional broker — both fakes canonicalize identically
    (`tests/broker/fleet/conftest.py:127`), so provider-qualified assignment is effectively
@@ -257,16 +264,12 @@ both cheap to fix.
 | 1 | Fix `restart.sh`'s five-name allowlist (`:28`, `:64-65`) | State |
 | 2 | Fix the three refusal parsers to read the flat body; render the 25 reason codes | Observability |
 | 3 | Commit the fleet topology with credentials externalised | State |
-| 4 | Wire `validate_served_context` into `LaneRouter._resolve`, **or** delete it and amend ADR 0062 Decision 5 | Structural |
-| 5 | Move the profiles-DB open after the volume identity gate; fix the comment at `app/main.py:383-386` | State |
-| 6 | Run `run_host_qualification` once on the host | State |
-| 7 | Give `FleetDirectoryService.refresh()` a caller; freeze binding generation at action open | Observability |
-| 8 | Negative test for `_fence_writable_roots`; race test for the nested-root loop | Structural |
-| 9 | Resolve `assignment_mutation_closed` being a copy of `routing_closed` | State |
-| 10 | Close the unscoped-mutation retirement hole (§8) | Structural |
+| 4 | Run `run_host_qualification` once on the host | State |
+| 5 | Give `FleetDirectoryService.refresh()` a caller; freeze binding generation at action open | Observability |
+| 6 | Close the unscoped-mutation retirement hole (§8) | Structural |
 
-Items 4 and 10 are the two where **an accepted authority asserts something the code does not do**.
-Either resolution is acceptable for each; leaving them is not.
+Item 6 is where **an accepted authority asserts something the code does not do**.
+Resolution is acceptable; leaving it is not.
 
 ## 7. The operator-visible surface, and its gaps
 
@@ -340,12 +343,11 @@ claims to fix.**
 
 | Claim | Where | Reality |
 |---|---|---|
-| ADR 0062 Decision 5's provider gate is in force | ADR 0062 | `validate_served_context` has no production caller (§4) |
-| Decision 2: nothing opens on the volume before the identity gate | ADR 0062; comment at `app/main.py:383-386` | A SQLite writer is created **and migrated** first: `app/main.py:377-382` → `broker_configuration/store.py:140-148`. `installation_worker()` (`main.py:222`) also writes a lock file on the unverified volume, and `fleet_boot.py:159-162` opens a second SQLite 25 lines before its own gate |
+| Decision 2: nothing opens on the volume before the identity gate | ADR 0062; comment at `app/main.py:383-386` | **Holds.** The profiles-DB writer and the installation lock file now open only after the gate. `fleet_boot.py:159-162`'s registry open still precedes it, but that registry lives on the coordinator's **control** volume, not the clerk's lane volume — the gate has to open the registry it is checking the lane volume against, so this one is structurally unavoidable, not a violation |
+| Decision 5: provider safety gates answer before any mutation | ADR 0062 | Dispatched now at the routing seam (§4) — but the Alpaca adapter declares no refusal the seam can currently trigger. The gate is structurally live and semantically empty for the only production provider (owner decision pending) |
 | The coordinator "never serves an unscoped agent family itself" | `CONTEXT.md:2121` | It serves two unscoped agent-family reads |
 | "The browser secret terminates at the coordinator" | `CONTEXT.md`, composed-auth bullet | Documentation, not code (§4) |
 | Retained unscoped **mutations** will retire with the compatibility mechanism | `docs/design/fleet-b-route-inventory.md` | `_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:31`) — the mechanism **can never reach mutations**. Retirement is also all-families-or-nothing despite a per-family constant, and the gate is clerk-agent-only, so it cannot reach the browser's actual compatibility reads |
-| `assignment_mutation_closed` is a second independent fence | ADR 0062 Consequences; `scripts/manage_broker_fleet.py:361,430` | `RegistryRecoveryState` has one bit; the field is a copy of `routing_closed`. The CLI reports a two-fence claim over a one-fence product |
 | The refusal vocabulary has 16 / 21 families | PRD / `app/broker/fleet/errors.py` | The true wire vocabulary is **25** (22 declared + 3 minted inline) |
 | `production_adapter()` resolves live adapters | `app/broker/fleet/provider.py:348-350` | Resolves against a deliberately-empty constant, has no callers, always refuses `"alpaca"`. The live registry is `app/broker/fleet_composition.py:27-29` |
 

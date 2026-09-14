@@ -59,17 +59,28 @@ from tests.broker.fleet.conftest import FrozenClock
 # ---------------------------------------------------------------------------
 
 
-def test_the_alpaca_adapter_declares_a_valid_catalog_and_canonical_uuids() -> None:
-    """The first production provider: validated catalog, UUID canonicity."""
+def test_the_alpaca_adapter_declares_a_valid_catalog_and_canonical_account_ids() -> None:
+    """The first production provider: validated catalog, account-id canonicity.
+
+    Both live registry bindings are account numbers, not UUIDs (see
+    ``canonical_account_id``'s docstring) — the served-context gate must
+    accept them.
+    """
     adapter = AlpacaProviderAdapter()
     validate_operation_catalog(adapter.operations())
     assert adapter.operations() == ALPACA_OPERATIONS
     assert adapter.canonical_account_id("  ABCDEF01-1234-ABCD-5678-EF0123456789 ") == (
         "abcdef01-1234-abcd-5678-ef0123456789"
     )
+    adapter.validate_served_context(
+        _served_context(account_id="123456789", capability="bot_action")
+    )
+    adapter.validate_served_context(
+        _served_context(account_id="pa3abcdefghi", capability="bot_action")
+    )
     with pytest.raises(LookupError):
         adapter.validate_served_context(
-            _served_context(account_id="not-a-uuid", capability="bot_action")
+            _served_context(account_id=None, capability="bot_action")
         )
 
 
@@ -914,6 +925,50 @@ async def test_an_enrolled_agent_without_any_coordinator_destination_refuses(
             await open_fleet_lane(
                 settings=settings, volume_root=Path(provisioned.clerk.volume_root)
             )
+    finally:
+        service.close()
+
+
+async def test_a_lane_root_outside_the_clerk_volume_refuses_before_authority(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writable-root fence is load-bearing: an escaping root refuses."""
+    from app.broker.ibkr import config as ibkr_config
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        root = Path(provisioned.clerk.volume_root)
+        shared = tmp_path / "shared-artifacts"
+        # The deployment default: both roots on the shared artifacts tree,
+        # which is exactly the two-lanes-one-root posture the fleet prevents.
+        monkeypatch.setattr(
+            ibkr_config,
+            "get_settings",
+            lambda: ibkr_config.IbkrSettings(
+                live_runs_root=str(shared / "live_runs" / "runs"),
+                live_bars_root=str(shared / "live_bars"),
+            ),
+        )
+        (shared / "live_runs" / "runs").mkdir(parents=True)
+        (shared / "live_bars").mkdir(parents=True)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
+
+        with pytest.raises(FleetBootRefused, match="escapes the clerk volume"):
+            await open_fleet_lane(settings=settings, volume_root=root)
+        # The refusal precedes session registration: nothing was registered.
+        assert service._store.read_session(provisioned.clerk.clerk_id) is None
     finally:
         service.close()
 

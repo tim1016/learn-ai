@@ -285,7 +285,9 @@ class BrokerProviderAdapter(Protocol):
 
         Provider-owned safety gates (for Alpaca: mode agreement, arming,
         envelope) answer here; the generic layer has already checked broker,
-        clerk, epoch and capability.
+        clerk, epoch and capability. A raised refusal's text reaches the
+        coordinator log, never the public response — it must not carry an
+        account identifier.
         """
         ...
 

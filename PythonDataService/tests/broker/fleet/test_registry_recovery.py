@@ -24,16 +24,18 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.provider import OperationReadiness
 from app.broker.fleet.recovery import (
     BACKUP_MANIFEST_FILENAME,
+    D_COMPATIBLE_SCHEMA_VERSION,
     closeout_empty_registry_recovery,
     create_registry_backup,
     read_recovery_state,
     reconcile_restored_lane,
     restore_registry_backup,
 )
+from app.broker.fleet.schema import SCHEMA_VERSION
 from app.broker.fleet.service import RELEASE_PROOF_TOKEN, FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from tests.broker.fleet.conftest import FrozenClock, bind_lane, provision_lane
+from tests.broker.fleet.conftest import FrozenClock, bind_lane, downgrade_backup_to_v2, provision_lane
 
 
 def _write_lane_evidence(
@@ -68,7 +70,7 @@ def _write_lane_evidence(
     )
 
 
-def test_registry_restore_keeps_routing_and_assignment_mutation_closed_until_all_lanes_reconcile(
+def test_registry_restore_holds_routing_and_assignment_mutation_closed_until_all_lanes_reconcile(
     control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
 ) -> None:
     """An old registry never reopens solely because its SQLite file was restored."""
@@ -102,7 +104,7 @@ def test_registry_restore_keeps_routing_and_assignment_mutation_closed_until_all
     fleet_service.close()
 
     restored = restore_registry_backup(
-        control_dir=control_dir, backup_dir=backup, max_schema_version=2
+        control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION
     )
     assert restored.registry_id == registry_id == manifest.registry_id
     service = FleetControlService(
@@ -124,7 +126,7 @@ def test_registry_restore_keeps_routing_and_assignment_mutation_closed_until_all
             volume_root=first.volume_root,
             provider_summary={"endpoint_mode": "paper", "authority_state": "ready"},
         )
-        assert partial.routing_closed is True
+        assert partial.mutations_closed is True
         with pytest.raises(FleetRegistryRecoveryPending):
             service.resolve_route(broker="fake_alpha", clerk_id=first.clerk_id)
 
@@ -134,7 +136,7 @@ def test_registry_restore_keeps_routing_and_assignment_mutation_closed_until_all
             volume_root=second.volume_root,
             provider_summary={"endpoint_mode": "live", "authority_state": "ready"},
         )
-        assert complete.routing_closed is False
+        assert complete.mutations_closed is False
         assert read_recovery_state(control_dir) == complete
         assignment = service._store.read_assignment(broker="fake_alpha", canonical_account_id="PAPER")
         assert assignment is not None
@@ -180,7 +182,7 @@ def test_pre_restore_store_connection_stays_fenced_after_reconciliation(
 
     # Deliberately violate the runbook's shutdown step. Recovery replaces the
     # path while this simulated old coordinator still owns an open connection.
-    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     replacement = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
         provider_adapters={"fake_alpha": fleet_service._provider_adapters["fake_alpha"]},
@@ -192,7 +194,7 @@ def test_pre_restore_store_connection_stays_fenced_after_reconciliation(
             volume_root=lane.volume_root,
             provider_summary={"endpoint_mode": "paper", "authority_state": "ready"},
         )
-        assert complete.routing_closed is False
+        assert complete.mutations_closed is False
 
         with pytest.raises(FleetRegistryRecoveryPending, match="pre-restore"):
             fleet_service.resolve_route(
@@ -223,7 +225,7 @@ def test_registry_recovery_refuses_corrupted_lane_evidence(
     backup = control_dir.parent / "backup"
     create_registry_backup(fleet_service._store, backup_dir=backup)
     fleet_service.close()
-    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     (lane.volume_root / "fleet" / "confirmation.json").write_text("not-json", encoding="utf-8")
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
@@ -286,7 +288,7 @@ def test_registry_recovery_refuses_semantically_invalid_lane_evidence(
     backup = control_dir.parent / "backup"
     create_registry_backup(fleet_service._store, backup_dir=backup)
     fleet_service.close()
-    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     evidence_path = lane.volume_root / "fleet" / "confirmation.json"
     payload = json.loads(evidence_path.read_text(encoding="utf-8"))
     payload.update(updates)
@@ -335,7 +337,7 @@ def test_registry_recovery_translates_residual_database_constraint_failure(
     backup = control_dir.parent / "backup"
     create_registry_backup(fleet_service._store, backup_dir=backup)
     fleet_service.close()
-    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
         provider_adapters={"fake_alpha": fleet_service._provider_adapters["fake_alpha"]},
@@ -379,10 +381,10 @@ def test_restore_writes_the_recovery_hold_before_database_replacement(
 
     monkeypatch.setattr(recovery_module.os, "replace", fail_database_replace)
     with pytest.raises(OSError, match="injected restore swap failure"):
-        restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+        restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     state = read_recovery_state(control_dir)
     assert state is not None
-    assert state.routing_closed is True
+    assert state.mutations_closed is True
     with pytest.raises(FleetRegistryRecoveryPending):
         fleet_service.resolve_route(broker="fake_alpha", clerk_id=lane.clerk_id)
 
@@ -401,7 +403,7 @@ def test_restore_with_only_provisioned_lane_requires_explicit_host_closeout(
     backup = control_dir.parent / "backup"
     create_registry_backup(fleet_service._store, backup_dir=backup)
     fleet_service.close()
-    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+    restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     store = FleetRegistryStore.open(control_dir=control_dir)
     service = FleetControlService(
         store=store,
@@ -411,7 +413,7 @@ def test_restore_with_only_provisioned_lane_requires_explicit_host_closeout(
         state = read_recovery_state(control_dir)
         assert state is not None
         assert state.required_clerk_ids == ()
-        assert state.routing_closed is True
+        assert state.mutations_closed is True
         with pytest.raises(FleetRegistryRecoveryPending, match="host closeout"):
             service.reserve_assignment(
                 broker="fake_alpha",
@@ -425,7 +427,7 @@ def test_restore_with_only_provisioned_lane_requires_explicit_host_closeout(
             operator="fleet-operator",
             change_ref="incident-2049",
         )
-        assert closed.routing_closed is False
+        assert closed.mutations_closed is False
         assert closed.empty_inventory_attestation is not None
         reserved = service.reserve_assignment(
             broker="fake_alpha",
@@ -458,7 +460,11 @@ def test_restore_refuses_a_manifest_or_database_newer_than_delivery_d(
     manifest["database_sha256"] = _sha256(database)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(FleetRegistryUnavailable, match="newer"):
-        restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
+        restore_registry_backup(
+            control_dir=control_dir,
+            backup_dir=backup,
+            max_schema_version=D_COMPATIBLE_SCHEMA_VERSION,
+        )
 
 
 def test_same_owner_restart_and_explicit_reassignment_preserve_identity_fences(
@@ -550,13 +556,72 @@ def test_d_compatible_rollback_restores_exact_registry_without_reminting_identit
     manifest = create_registry_backup(fleet_service._store, backup_dir=backup)
     original_id = lane.clerk_id
     fleet_service.close()
-    restored = restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=2)
-    assert restored.registry_schema_version == 2
+    downgrade_backup_to_v2(backup)
+    restored = restore_registry_backup(
+        control_dir=control_dir,
+        backup_dir=backup,
+        max_schema_version=D_COMPATIBLE_SCHEMA_VERSION,
+    )
+    # The rollback places the evidence as it stands — a D-era binary opens a v2
+    # registry — and this build migrates the same file forward when it opens it.
+    assert restored.registry_schema_version == D_COMPATIBLE_SCHEMA_VERSION
     store = FleetRegistryStore.open(control_dir=control_dir)
     try:
         clerk = store.read_clerk(original_id)
         assert clerk is not None
         assert clerk.clerk_id == original_id
         assert store.registry_id == manifest.registry_id
+        assert store.schema_version == SCHEMA_VERSION
     finally:
         store.close()
+
+
+def test_normal_restore_accepts_a_v2_backup_without_reminting_identities(
+    control_dir: Path, fleet_service: FleetControlService
+) -> None:
+    """The normal restore path accepts pre-upgrade evidence too; only the max
+    schema bound distinguishes it from a D-compatible rollback."""
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
+    backup = control_dir.parent / "backup"
+    manifest = create_registry_backup(fleet_service._store, backup_dir=backup)
+    original_id = lane.clerk_id
+    fleet_service.close()
+    downgrade_backup_to_v2(backup)
+    restored = restore_registry_backup(
+        control_dir=control_dir,
+        backup_dir=backup,
+        max_schema_version=SCHEMA_VERSION,
+    )
+    # The evidence is placed as it stands — a v2 backup restored under the
+    # normal path still reports v2 — and this build migrates the same file
+    # forward the next time it opens it.
+    assert restored.registry_schema_version == D_COMPATIBLE_SCHEMA_VERSION
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        clerk = store.read_clerk(original_id)
+        assert clerk is not None
+        assert clerk.clerk_id == original_id
+        assert store.registry_id == manifest.registry_id
+        assert store.schema_version == SCHEMA_VERSION
+    finally:
+        store.close()
+
+
+def test_a_current_build_backup_is_not_d_compatible_rollback_evidence(
+    control_dir: Path, fleet_service: FleetControlService
+) -> None:
+    """#2073b: v3 carries a fence a D-era binary cannot enforce, so a backup
+    this build takes is not rollback evidence for that binary — the ceremony
+    refuses rather than reopening a registry whose invariant would go
+    unenforced. A D rollback needs evidence captured before the upgrade."""
+    provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
+    backup = control_dir.parent / "backup"
+    manifest = create_registry_backup(fleet_service._store, backup_dir=backup)
+    assert manifest.registry_schema_version == SCHEMA_VERSION
+    fleet_service.close()
+    with pytest.raises(FleetRegistryUnavailable, match="newer"):
+        restore_registry_backup(
+            control_dir=control_dir,
+            backup_dir=backup,
+            max_schema_version=D_COMPATIBLE_SCHEMA_VERSION,
+        )

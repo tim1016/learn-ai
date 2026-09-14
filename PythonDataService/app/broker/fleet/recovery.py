@@ -82,8 +82,14 @@ class RegistryRecoveryState:
     empty_inventory_attestation: dict[str, str | int] | None
 
     @property
-    def routing_closed(self) -> bool:
-        """Whether any original lane remains unreconciled."""
+    def mutations_closed(self) -> bool:
+        """One hold: routing AND assignment mutation, closed together.
+
+        There is no second bit. ``require_recovery_hold_clear`` is the sole
+        enforcement and every mutating entry point calls it, so a restored
+        registry refuses routing, provisioning, reservation, confirmation,
+        release and retirement off this one derived value.
+        """
         if not self.required_clerk_ids:
             return self.empty_inventory_attestation is None
         return set(self.required_clerk_ids) != set(self.reconciled_clerk_ids)
@@ -391,7 +397,7 @@ def restore_registry_backup(
     return manifest
 
 
-def require_routing_open(control_dir: Path, *, registry_id: str) -> None:
+def require_recovery_hold_clear(control_dir: Path, *, registry_id: str) -> None:
     """Fail closed while a restore ceremony has unresolved original lanes."""
     state = read_recovery_state(control_dir)
     if state is None:
@@ -401,7 +407,7 @@ def require_routing_open(control_dir: Path, *, registry_id: str) -> None:
             "The recovery evidence names a different registry identity.",
             next_step="Keep routing closed and repeat restore from a matching backup pair.",
         )
-    if state.routing_closed:
+    if state.mutations_closed:
         remaining = sorted(set(state.required_clerk_ids) - set(state.reconciled_clerk_ids))
         if not remaining:
             raise FleetRegistryRecoveryPending(
@@ -627,6 +633,6 @@ __all__ = [
     "read_backup_manifest",
     "read_recovery_state",
     "reconcile_restored_lane",
-    "require_routing_open",
+    "require_recovery_hold_clear",
     "restore_registry_backup",
 ]

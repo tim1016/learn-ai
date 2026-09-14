@@ -32,6 +32,7 @@ from app.broker.fleet.delivery import (
     StreamDeliveryResult,
 )
 from app.broker.fleet.errors import (
+    BrokerClerkCapabilityUnavailable,
     ClerkBindingGenerationConflict,
     ClerkIdentityMismatch,
     ClerkRoutingAttemptConflict,
@@ -44,8 +45,10 @@ from app.broker.fleet.provider import (
     OperationIdempotency,
     OperationReadiness,
     ProviderOperation,
+    ServedContext,
 )
 from app.broker.fleet.records import (
+    AccountAssignmentRecord,
     ClerkSessionRecord,
     RoutingReceiptState,
 )
@@ -482,13 +485,66 @@ class LaneRouter:
             if operation.requires_effective_account
             else None
         )
-        return self._service.resolve_route(
+        resolved = self._service.resolve_route(
             broker=broker,
             clerk_id=clerk_id,
             expected_binding_generation=expected_binding_generation,
             expected_account_id=expected_account,
             readiness=operation.readiness,
         )
+        _clerk, session, assignment = resolved
+        if assignment is not None:  # execution operations only; CONFIGURATION_ACCESS resolves with no assignment
+            self._refuse_unservable_context(broker, clerk_id, operation, session, assignment)
+        return resolved
+
+    def _refuse_unservable_context(
+        self,
+        broker: str,
+        clerk_id: str,
+        operation: ProviderOperation,
+        session: ClerkSessionRecord,
+        assignment: AccountAssignmentRecord,
+    ) -> None:
+        """Ask the provider's own safety gate whether it can serve this context.
+
+        ADR 0062 Decision 5 / addendum 3: the provider's own safety gate
+        answers for execution operations only. A configuration-access
+        operation must stay routable for a lane whose binding is broken,
+        which is precisely the lane a provider gate would refuse.
+        """
+        context = ServedContext(
+            broker=broker,
+            clerk_id=clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            account_id=assignment.canonical_external_account_id,
+            capability=operation.capability,
+            effective_binding_generation=assignment.confirmed_binding_generation,
+        )
+        try:
+            self._service.adapters()[broker].validate_served_context(context)
+        except FleetControlError:
+            raise
+        except Exception as exc:
+            # The exception text can carry internal topology; it goes to
+            # the log, never the public refusal.
+            logger.warning(
+                "Provider %s refused to serve %s on %s: %s: %s",
+                broker,
+                operation.operation_id,
+                clerk_id,
+                type(exc).__name__,
+                str(exc)[:200],
+                extra={"action": "fleet_provider_refused_served_context"},
+            )
+            raise BrokerClerkCapabilityUnavailable(
+                f"Provider {broker!r} refuses to serve "
+                f"{operation.operation_id} on clerk {clerk_id}; the "
+                "transport detail is in the coordinator log.",
+                next_step="The provider's own safety gates must pass before "
+                "this operation routes; repair the lane's configuration and "
+                "retry against its current resource.",
+            ) from exc
 
     def _request(
         self,

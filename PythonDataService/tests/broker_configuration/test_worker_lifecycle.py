@@ -33,6 +33,22 @@ def isolated_binding() -> Iterator[None]:
     reset_active_alpaca_binding_for_testing()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_fleet_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let a lifespan test open a real fleet lane from a developer's stray FLEET_ROLE.
+
+    ``_ROLE_RUNS_CLERK`` is fixed at module import time from ``fleet_settings``,
+    so scrubbing ``FLEET_*`` env vars here would not retroactively change it;
+    patching the gate itself is the only fixture-time control that works.
+    """
+    from app import main
+
+    async def _skip_fleet_lane() -> None:
+        return None
+
+    monkeypatch.setattr(main, "_open_verified_fleet_lane", _skip_fleet_lane)
+
+
 def _bound(profile_id: str, generation: int) -> BoundWorker:
     return BoundWorker(
         context=resolve_runtime_context(

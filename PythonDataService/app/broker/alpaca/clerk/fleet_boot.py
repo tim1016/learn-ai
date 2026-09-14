@@ -160,7 +160,7 @@ async def open_fleet_lane(
             store=FleetRegistryStore.open(control_dir=settings.CONTROL_DIR),
             provider_adapters=production_provider_adapters(),
         )
-        presence = LocalPresence(owned_service)
+        presence = LocalPresence(owned_service, volume_root=volume_root)
 
     boot = FleetLaneBoot(
         presence=presence,
@@ -177,15 +177,23 @@ async def open_fleet_lane(
     # opens, not left as a deployment convention. The broker capture
     # directory is deliberately exempt: it is lane evidence on the agent's
     # own container filesystem, never a shared root.
-    _fence_writable_roots(volume_root=volume_root)
+    try:
+        _fence_writable_roots(volume_root=volume_root)
+    except FleetBootRefused:
+        # A refusal here still leaves `owned_service`'s SQLite handle open
+        # (`boot` was constructed above solely to carry it) — close it before
+        # propagating, same as every other pre-registration refusal below.
+        await close_fleet_lane(boot)
+        raise
     try:
         expectation = await presence.expectation(clerk_id=settings.CLERK_ID)
         boot.registry_id = str(expectation["registry_id"])
         boot.volume_id = str(expectation["volume_id"])
         _verify_root_against_expectation(volume_root, expectation, clerk_id=settings.CLERK_ID)
         if isinstance(presence, LocalPresence):
-            # The local transport additionally runs the registry's
-            # clone-ownership check the remote agent cannot see.
+            # `register` re-proves the volume itself, so this is redundant —
+            # deliberately: it is an earlier-failure belt. A wrong volume
+            # fails here, before any registry transaction is opened.
             await presence.verify_volume(clerk_id=settings.CLERK_ID, volume_root=volume_root)
         boot.session = await presence.register(
             clerk_id=settings.CLERK_ID,

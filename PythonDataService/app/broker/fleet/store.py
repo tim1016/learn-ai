@@ -319,6 +319,30 @@ class FleetRegistryStore:
         ).fetchone()
         return None if row is None else _clerk_from_row(row)
 
+    def _clerk_list_sql(self, *, include_retired: bool) -> str:
+        """The listing SQL ``list_clerks`` and ``list_clerks_on`` both need.
+
+        One shared string so the provisioning pre-check's transactional read
+        and the lock-free directory read can never drift apart on their
+        WHERE/ORDER BY.
+        """
+        sql = f"SELECT {self._CLERK_COLUMNS} FROM clerks"
+        if not include_retired:
+            sql += " WHERE lifecycle_state <> 'retired'"
+        sql += " ORDER BY broker ASC, created_at_ms ASC, clerk_id ASC"
+        return sql
+
+    def list_clerks_on(self, conn: sqlite3.Connection) -> list[ClerkRecord]:
+        """List the active clerks on a caller's transaction connection.
+
+        The transactional twin of ``list_clerks``, for pre-checks that must
+        serialize with a concurrent write: reading inside the ``BEGIN
+        IMMEDIATE`` transaction is what excludes a rival provisioning
+        committing between the check and the insert it guards.
+        """
+        rows = conn.execute(self._clerk_list_sql(include_retired=False)).fetchall()
+        return [_clerk_from_row(row) for row in rows]
+
     def read_assignment_on(
         self,
         conn: sqlite3.Connection,
@@ -361,10 +385,7 @@ class FleetRegistryStore:
 
     def list_clerks(self, *, include_retired: bool = False) -> list[ClerkRecord]:
         """List clerks in directory order, optionally including retired ones."""
-        sql = f"SELECT {self._CLERK_COLUMNS} FROM clerks"
-        if not include_retired:
-            sql += " WHERE lifecycle_state <> 'retired'"
-        sql += " ORDER BY broker ASC, created_at_ms ASC, clerk_id ASC"
+        sql = self._clerk_list_sql(include_retired=include_retired)
         return [_clerk_from_row(row) for row in self._query(sql)]
 
     def insert_clerk(self, conn: sqlite3.Connection, clerk: ClerkRecord) -> None:

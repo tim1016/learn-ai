@@ -7,6 +7,7 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -100,6 +101,9 @@ from app.utils.error_handlers import (
     polygon_exception_handler,
     request_validation_exception_handler,
 )
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.fleet_boot import FleetLaneBoot
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -204,6 +208,26 @@ async def _install_alpaca_binding(
     return resolved
 
 
+async def _open_verified_fleet_lane() -> FleetLaneBoot | None:
+    """Run the ADR 0062 Decision 2 gate before any writer opens on the volume."""
+    if not _ROLE_RUNS_CLERK:
+        return None
+    from app.broker.alpaca.clerk.fleet_boot import open_fleet_lane
+    from app.broker.fleet.errors import FleetControlError
+    from app.broker_configuration.runtime import resolve_clerk_dir
+
+    try:
+        return await open_fleet_lane(
+            settings=fleet_settings, volume_root=resolve_clerk_dir()
+        )
+    except FleetControlError as exc:
+        logger.warning(
+            "Fleet boot gate refused before any writer opened on the volume.",
+            extra={"action": "fleet_boot_refused", "reason_code": exc.reason},
+        )
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Retain the installation writer lock until every custody handle closes.
@@ -218,27 +242,39 @@ async def lifespan(app: FastAPI):
             yield
         return
 
+    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane
     from app.broker_configuration.worker_lifecycle import installation_worker
 
-    with installation_worker() as refusal:
-        started = False
-        try:
-            async with _service_lifespan(app, worker_refusal=refusal):
-                started = True
-                yield
-        except BaseException:
-            # The inner shutdown block starts after startup finishes. If an
-            # earlier subsystem fails, release custody before the installation
-            # lock so another process cannot inherit a still-running writer.
-            if not started:
-                from app.broker_configuration.worker_lifecycle import close_failed_startup
+    # ADR 0062 Decision 2: the volume identity gate runs before ANY writer
+    # opens on the clerk volume — before the installation lock file, before
+    # the profiles database, before the broker client.
+    fleet_lane = await _open_verified_fleet_lane()
+    try:
+        with installation_worker() as refusal:
+            started = False
+            try:
+                async with _service_lifespan(
+                    app, worker_refusal=refusal, fleet_lane=fleet_lane
+                ):
+                    started = True
+                    yield
+            except BaseException:
+                # The inner shutdown block starts after startup finishes. If an
+                # earlier subsystem fails, release custody before the installation
+                # lock so another process cannot inherit a still-running writer.
+                if not started:
+                    from app.broker_configuration.worker_lifecycle import close_failed_startup
 
-                await close_failed_startup()
-            raise
+                    await close_failed_startup()
+                raise
+    finally:
+        await close_fleet_lane(fleet_lane)
 
 
 @asynccontextmanager
-async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | None = None):
+async def _service_lifespan(
+    app: FastAPI, *, worker_refusal: UnboundBroker | None = None, fleet_lane: FleetLaneBoot | None = None
+):
     """Startup and shutdown events.
 
     The IBKR client is connected best-effort: a failure here logs and
@@ -371,7 +407,6 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
-    fleet_lane = None
     fleet_heartbeat_task = None
     # The selection cannot move between preflight, lease acquisition and the
     # effective acknowledgement, including writes by another process.
@@ -381,17 +416,8 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         else selection_handover()
     )
     with handover as handover_refusal:
-        # The fleet lane opens BEFORE any profile or custody database: the
-        # volume identity gate, then session registration (ADR 0062
-        # addendum). A coordinator that is down opens the lane offline only
-        # against confirmed evidence; a never-enrolled lane refuses.
-        if _ROLE_RUNS_CLERK:
-            from app.broker.alpaca.clerk.fleet_boot import open_fleet_lane
-            from app.broker_configuration.runtime import resolve_clerk_dir
-
-            fleet_lane = await open_fleet_lane(
-                settings=fleet_settings, volume_root=resolve_clerk_dir()
-            )
+        # The fleet lane is already open and its volume proven (see
+        # ``lifespan``); the profiles database opens here, after the gate.
         alpaca_binding = (
             await _install_alpaca_binding(
                 refusal=worker_refusal or handover_refusal
@@ -852,10 +878,6 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
             fleet_heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await fleet_heartbeat_task
-        if fleet_lane is not None:
-            from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane
-
-            await close_fleet_lane(fleet_lane)
         if sovereign_equity_snapshot_scheduler is not None:
             await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared

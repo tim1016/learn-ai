@@ -9,6 +9,8 @@ constructor injection — never through the production registry.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +25,12 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 from app.broker.fleet.records import StoredLifecycleState
+from app.broker.fleet.recovery import (
+    BACKUP_DATABASE_FILENAME,
+    BACKUP_MANIFEST_FILENAME,
+    D_COMPATIBLE_SCHEMA_VERSION,
+    _sha256,
+)
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 
@@ -300,6 +308,32 @@ def bind_lane(
     return session, confirmed
 
 
+def downgrade_backup_to_v2(backup_dir: Path) -> None:
+    """Rewrite a fresh backup into the v2 shape it carried before the upgrade.
+
+    Schema v3 adds exactly the nested-root index and trigger, so dropping the
+    pair and restamping the meta row produces genuine pre-upgrade evidence —
+    what a D-compatible rollback is for — without reconstructing the v2 DDL.
+    """
+    database = backup_dir / BACKUP_DATABASE_FILENAME
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("DROP TRIGGER trg_clerks_volume_root_not_nested")
+        connection.execute("DROP INDEX ux_clerks_volume_root")
+        connection.execute(
+            "UPDATE fleet_meta SET schema_version = ? WHERE id = 1",
+            (D_COMPATIBLE_SCHEMA_VERSION,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    manifest_path = backup_dir / BACKUP_MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["registry_schema_version"] = D_COMPATIBLE_SCHEMA_VERSION
+    manifest["database_sha256"] = _sha256(database)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
 __all__ = [
     "FAKE_ALPHA_CAPABILITIES",
     "FAKE_BETA_CAPABILITIES",
@@ -307,6 +341,7 @@ __all__ = [
     "FrozenClock",
     "Lane",
     "bind_lane",
+    "downgrade_backup_to_v2",
     "fake_alpha",
     "fake_beta",
     "provision_lane",
