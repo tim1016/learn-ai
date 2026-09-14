@@ -210,7 +210,7 @@ class _Lane:
         registration route (``app/routers/internal_fleet.py``, unmodified)
         over the test's own socket and parses the JSON body it returns — the
         same wire contract ``RemotePresence.register`` parses on the agent
-        side (``app/broker/fleet/presence.py:363-366``). Building the served
+        side (``app/broker/fleet/presence.py:376-377``). Building the served
         identity from that body — not from the ``ClerkSessionRecord`` the
         coordinator also reads — is what lets ``verify_identity_echo`` fail
         when the coordinator pins a different epoch than the lane serves. A
@@ -251,15 +251,19 @@ class _Lane:
         self.service.close()
 
 
-def _coordinator_app(lane: _Lane, agent_base_url: str) -> FastAPI:
+def _coordinator_app(lane: _Lane) -> FastAPI:
     """The public surface: registry + clerk-scoped router + lane router.
 
-    Also mounts the coordinator's real internal registration route
-    (``/internal/fleet``, unmodified) so ``_Lane.register_and_confirm`` can
-    register the way a real agent does — over HTTP, parsing the JSON body —
-    instead of reading the registry's session object directly.
+    ``delivery_for`` is the production resolver (``coordinator_delivery_for``):
+    it reads the approved-endpoint row the host ceremony writes and the
+    clerk's coordinator token, and refuses before any socket is opened for a
+    session citing an endpoint the row does not back. Also mounts the
+    coordinator's real internal registration route (``/internal/fleet``,
+    unmodified) so ``_Lane.register_and_confirm`` can register the way a real
+    agent does — over HTTP, parsing the JSON body — instead of reading the
+    registry's session object directly.
     """
-    from app.broker.fleet.delivery import HttpLaneDelivery
+    from app.broker.fleet.routing import coordinator_delivery_for
     from app.routers import broker_clerks, internal_fleet
 
     coordinator = FastAPI()
@@ -267,14 +271,13 @@ def _coordinator_app(lane: _Lane, agent_base_url: str) -> FastAPI:
     coordinator.state.fleet_agent_tokens_text = json.dumps(
         {lane.clerk_id: AGENT_TOKEN}
     )
-
-    def delivery_for(broker: str, session) -> HttpLaneDelivery:
-        return HttpLaneDelivery(
-            base_url=agent_base_url, coordinator_service_token=COORDINATOR_TOKEN
-        )
-
     coordinator.state.fleet_lane_router = LaneRouter(
-        service=lane.service, delivery_for=delivery_for
+        service=lane.service,
+        # The production resolver: it reads the approved-endpoint row and the
+        # clerk's coordinator token, and refuses before any socket is opened.
+        delivery_for=coordinator_delivery_for(
+            lane.service, {lane.clerk_id: COORDINATOR_TOKEN}
+        ),
     )
     broker_clerks.register_catalog_operations(
         {broker: adapter.operations() for broker, adapter in production_provider_adapters().items()}
@@ -313,13 +316,19 @@ class _Fleet:
         )
         self.agent.start()
         self.lane.approve(self.agent.base_url)
-        self.coordinator = _RealServer(
-            _coordinator_app(self.lane, self.agent.base_url)
-        )
+        self.coordinator = _RealServer(_coordinator_app(self.lane))
         self.coordinator.start()
-        registration_response = self.lane.register_and_confirm(
-            self.coordinator.base_url
-        )
+        try:
+            registration_response = self.lane.register_and_confirm(
+                self.coordinator.base_url
+            )
+        except Exception:
+            # Both servers are already listening on real sockets by this
+            # point; a registration failure must not leak them past the
+            # constructor.
+            self.coordinator.stop()
+            self.agent.stop()
+            raise
         self.identity["routing_epoch"] = int(registration_response["routing_epoch"])
 
     @property
@@ -618,7 +627,7 @@ async def test_commands_without_an_approved_endpoint_refuse(tmp_path: Path) -> N
             effective_profile_id="prof_b",
             effective_revision=1,
         )
-        coordinator = _RealServer(_coordinator_app(lane, "http://127.0.0.1:9"))
+        coordinator = _RealServer(_coordinator_app(lane))
         coordinator.start()
         try:
             async with httpx.AsyncClient(
@@ -629,6 +638,71 @@ async def test_commands_without_an_approved_endpoint_refuse(tmp_path: Path) -> N
                 )
                 assert response.status_code == 503
                 assert response.json()["reason"] == "clerk_unreachable"
+                # The refusal names the *approval ceremony*, which a transport
+                # failure could never produce. This is the assertion that
+                # distinguishes the gate from a connection refused.
+                assert "no approved endpoint row" in response.json()["message"]
+        finally:
+            coordinator.stop()
+    finally:
+        lane.close()
+
+
+async def test_a_session_citing_a_different_endpoint_than_the_approved_row_refuses(
+    tmp_path: Path,
+) -> None:
+    """The approval is per-reference: an approved row for ``agent:paper-1``
+    does not authorize a session that cites ``agent:paper-2``."""
+    from app.broker.fleet.records import ClerkSessionRecord
+    from app.utils.timestamps import now_ms_utc
+
+    lane = _Lane(tmp_path / "control3")
+    try:
+        lane.approve("http://127.0.0.1:1")
+        # A registration citing a reference the deployment never approved is
+        # already refused at registration time (``register_agent_session``
+        # checks the same approved row) — so the only way to reach the
+        # routing-layer branch is a session record that already cites a
+        # different reference, written directly the way a stale or
+        # hand-edited row would be.
+        with lane.service._store.transaction() as conn:
+            lane.service._store.upsert_session(
+                conn,
+                ClerkSessionRecord(
+                    broker="alpaca",
+                    clerk_id=lane.clerk_id,
+                    agent_instance_id="agnt_b00000000000000000000000c",
+                    routing_epoch=1,
+                    started_at_ms=now_ms_utc(),
+                    last_seen_at_ms=now_ms_utc(),
+                    endpoint_ref="agent:paper-2",
+                ),
+            )
+        lane.service.reserve_assignment(
+            broker="alpaca", clerk_id=lane.clerk_id, external_account_id=ACCOUNT
+        )
+        lane.service.confirm_assignment(
+            broker="alpaca",
+            clerk_id=lane.clerk_id,
+            external_account_id=ACCOUNT,
+            binding_generation=1,
+            agent_instance_id="agnt_b00000000000000000000000c",
+            routing_epoch=1,
+            effective_profile_id="prof_b",
+            effective_revision=1,
+        )
+        coordinator = _RealServer(_coordinator_app(lane))
+        coordinator.start()
+        try:
+            async with httpx.AsyncClient(
+                base_url=coordinator.base_url, timeout=10.0
+            ) as client:
+                response = await client.get(
+                    f"/api/brokers/alpaca/clerks/{lane.clerk_id}/account"
+                )
+                assert response.status_code == 503
+                assert response.json()["reason"] == "clerk_unreachable"
+                assert "no approved endpoint row" in response.json()["message"]
         finally:
             coordinator.stop()
     finally:
