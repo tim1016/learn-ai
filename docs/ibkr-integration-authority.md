@@ -29,6 +29,27 @@ Issue #1583 retired the last IBKR order-actuation closure:
 There is no replacement adapter, compatibility mutation, hidden host command, or
 unregistered runtime path.
 
+## Market data is load-bearing for Alpaca execution
+
+IBKR order actuation is retired, but the IBKR market-data feed is not residue —
+it is the live bar source Alpaca bots trade on. `main.py:741` installs
+`IbkrMarketDataFeed` as the process-wide `MarketDataFeed` once the IBKR client
+connects. Alpaca bots stream their decision bars through that shared feed
+(`bot_runtime.py:156`, `bot_trade_strategy.py:584`); there is no separate
+Alpaca-owned market-data path.
+
+Because of that, `IBKR_BROKER_ENABLED=false` does not merely disable IBKR
+broker endpoints — it removes the only installed `MarketDataFeed`, so an
+Alpaca deploy that requires live bars is refused with `MARKET_DATA_UNAVAILABLE`
+(`app/services/run_admission.py`). Treating `IBKR_BROKER_ENABLED` as
+IBKR-only residue and flipping it off breaks live Alpaca trading.
+
+`IBKR_LIVE_RUNS_ROOT` and `IBKR_LIVE_BARS_ROOT` (`config.py:108`, `:116`) are
+**deliberate legacy names**: they configure the artifact roots the Alpaca-lane
+runtime uses for live-run and live-bar persistence, not an IBKR-owned path.
+Renaming them to drop the `IBKR_` prefix is a compatibility break, not a
+cleanup — see `PythonDataService/app/broker/ibkr/config.py:105-116` and #2077.
+
 ## Preserved broker surface
 
 All preserved order-related operations are non-transmitting:

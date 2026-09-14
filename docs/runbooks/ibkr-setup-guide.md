@@ -34,6 +34,23 @@ IBKR_READONLY=true
 `4002` is the usual Gateway paper port and `7497` is the usual TWS paper port. The
 actual Gateway/TWS configuration is authoritative.
 
+## Nightly relogin
+
+IB Gateway logs itself out on its own nightly schedule. In IB Gateway, open
+Configure -> Settings -> Lock and Exit, and enable **Auto restart**. This is
+IBKR-side configuration, not a repository setting — there is no `.env` flag
+for it.
+
+With Auto restart off, Gateway does not reconnect after its nightly logout: the
+data-plane clerk logs a connect failure roughly once a minute, and any bot
+still running (including Alpaca bots — the IBKR feed supplies their live bars)
+dies at its next decision trigger because the feed it streams from is gone.
+Do not respond to this by disabling `IBKR_BROKER_ENABLED`; that flag controls
+whether the shared market-data feed exists at all and is load-bearing for
+Alpaca execution (see
+[`docs/ibkr-integration-authority.md`](../ibkr-integration-authority.md)). Fix
+the Gateway-side Auto restart setting instead.
+
 ## Verify the evidence path
 
 1. Open the read-only broker health/capability view and confirm it reports the intended

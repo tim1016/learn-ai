@@ -19,7 +19,7 @@ Set these before connecting the app:
 | Setting                           | Paper expectation                        | Why it matters                                                                                                                                             |
 | --------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Enable ActiveX and Socket Clients | Enabled                                  | The TWS API socket must be enabled before any client can connect.                                                                                          |
-| Read-Only API                     | Disabled for order-capable paper testing | IBKR enables read-only mode by default in some flows. Leave it enabled only for read-only diagnostics; disable it before order-capable paper tests.        |
+| Read-Only API                     | Enabled — IBKR order actuation is retired (#1583); this connection is read-only evidence and market data | IBKR enables read-only mode by default in some flows. Leave it enabled; there is no order-capable paper-testing path to disable it for.        |
 | Socket port                       | TWS paper: `7497`; Gateway paper: `4002` | IBKR's standard paper ports differ between TWS and Gateway.                                                                                                |
 | Socket port, live reference only  | TWS live: `7496`; Gateway live: `4001`   | The repo's paper guardrails should prevent live-port order paths. Treat a live port as a safety incident unless explicitly testing a read-only diagnostic. |
 | Client ID                         | Unique per simultaneous API client       | IBKR rejects or drops sessions when another API client is already using the same client ID.                                                                |
@@ -33,7 +33,6 @@ IBKR_MODE=paper
 IBKR_HOST=host.containers.internal
 IBKR_PORT=4002
 IBKR_CLIENT_ID=7
-IBKR_READONLY=false
 ```
 
 Notes:
@@ -70,7 +69,6 @@ If the selected Account Desk reports a client-ID overlap, do not retry blindly. 
 | ------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Connection refused                    | Gateway/TWS is not running, wrong host, or wrong port                | Start the IBKR app and confirm the configured paper port.                                              |
 | Socket connects then drops            | API setting rejection, Trusted IP issue, or duplicate client ID      | Recheck API settings and choose a unique client ID.                                                    |
-| Orders are rejected as read-only      | Read-Only API is still enabled or `IBKR_READONLY=true`               | Keep diagnostics read-only, but switch both IBKR and `.env` to order-capable before paper order tests. |
 | App shows live mode or non-DU account | Wrong IBKR session or live port/account                              | Stop. Disconnect and reconnect to the intended paper account before using broker pages.                |
 | Account Monitor remains frozen        | Open or unattributed exposure still exists, or account proof expired | Flatten/audit exposure, then run account reconciliation again.                                         |
 
