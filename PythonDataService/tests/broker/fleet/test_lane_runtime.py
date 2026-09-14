@@ -30,6 +30,13 @@ Receive = Callable[[], Awaitable[AsgiMessage]]
 Send = Callable[[AsgiMessage], Awaitable[None]]
 AsgiApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
 
+#: How long the injected slow export blocks. Must-timeout side of the budget.
+_SLOW_EXPORT_SECONDS = 2.0
+#: The response must return well inside this. Must-succeed side of the budget.
+#: The two are an order of magnitude apart on purpose: one small shared
+#: constant makes a loaded runner fail a test that is not about timing.
+_RESPONSE_BUDGET_SECONDS = 0.5
+
 
 def _config(*, requests: int = 1, streams: int = 1, queue: int = 0, timeout_ms: int = 0) -> LaneRuntimeConfig:
     """Build a small explicit lane sizing for one isolated test."""
@@ -392,7 +399,7 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
 
     def slow_record(updates: Mapping[tuple[str, str], int]) -> None:
         del updates
-        time.sleep(0.2)
+        time.sleep(_SLOW_EXPORT_SECONDS)
 
     monkeypatch.setattr(evidence, "_record_batch", slow_record)
 
@@ -403,7 +410,7 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
     runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
     started_at = time.monotonic()
     assert _status(await _invoke(runtime)) == 200
-    assert time.monotonic() - started_at < 0.1
+    assert time.monotonic() - started_at < _RESPONSE_BUDGET_SECONDS
     await evidence.flush()
 
 
