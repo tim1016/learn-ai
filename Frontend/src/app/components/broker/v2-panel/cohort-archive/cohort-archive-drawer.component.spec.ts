@@ -310,4 +310,33 @@ describe('CohortArchiveDrawerComponent', () => {
     await user.click(screen.getByRole('button', { name: /Archive 1/ }));
     expect(service.runCohortArchive).not.toHaveBeenCalled();
   });
+
+  it('refuses to submit when the drawer opened against a cold directory, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `freezeLaneFence` yields a null generation (#2068, decision 15). A
+    // present-but-null lane, not an absent one: an absent lane would also
+    // read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const service = fakeService([leg()]);
+    const { fixture } = await open(service, { directory });
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // The dispatch assertion comes first and does not depend on the button's
+    // disabled attribute: userEvent no-ops a click on a genuinely disabled
+    // button, so this proves the command itself never reaches the service,
+    // not merely that some other assertion (a disabled attribute, or the
+    // banner copy) happens to read a certain way.
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+    expect(service.runCohortArchive).not.toHaveBeenCalled();
+    expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
 });

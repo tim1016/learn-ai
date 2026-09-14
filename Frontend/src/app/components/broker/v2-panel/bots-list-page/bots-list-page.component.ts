@@ -34,8 +34,7 @@ import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service
 import {
   fencedTarget,
   freezeLaneFence,
-  laneFenceDrifted,
-  LANE_FENCE_CONFLICT_MESSAGE,
+  laneFenceVerdict,
   type LaneFence,
 } from '../../../../fleet/lane-fence';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
@@ -378,9 +377,10 @@ export class BotsListPageComponent {
     // reuse or a binding replacement; it must conflict rather than following
     // the operator to whatever lane happens to be current at submission time.
     const fence = this.openFence();
-    if (laneFenceDrifted(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()))) {
-      this.actionNotice.set({ tone: 'danger', message: LANE_FENCE_CONFLICT_MESSAGE });
-      this.messageService.add(actionOutcomeToast('conflict', LANE_FENCE_CONFLICT_MESSAGE));
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.actionNotice.set({ tone: 'danger', message: verdict.message });
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
       return;
     }
     const laneTarget = withEntity(fencedTarget(this.target(), fence), sid);

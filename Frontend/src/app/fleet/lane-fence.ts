@@ -50,6 +50,36 @@ export const LANE_FENCE_CONFLICT_MESSAGE =
   'This clerk lane was rebound while the action was open, so the command was not sent. ' +
   'Reopen the action to reissue it against the lane as it stands now.';
 
+export type LaneFenceVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
+
+/** The one sentence a surface shows when the lane was never fenceable. */
+export const LANE_FENCE_UNENFORCEABLE_MESSAGE =
+  'This clerk lane had no known binding when the action was opened, so the command ' +
+  'was not sent — it would have dispatched with no binding check at all. Reopen the ' +
+  'action once the fleet directory has loaded.';
+
+/**
+ * Whether a frozen fence may still be acted on.
+ *
+ * Enforceability is checked BEFORE drift, and the order is load-bearing. A
+ * fence frozen against a cold directory holds `bindingGeneration: null`; if the
+ * directory has since warmed, `laneFenceDrifted` also reports true (null !== 3).
+ * Both statements are accurate, but only one is actionable: the operator was
+ * shown a lane whose binding was unknown, and the remedy is to reopen now that
+ * it is known — not to reason about a lane that "moved".
+ */
+export function laneFenceVerdict(frozen: LaneFence, lane: LaneDescriptor | undefined): LaneFenceVerdict {
+  if (!laneFenceIsEnforceable(frozen)) {
+    return { ok: false, message: LANE_FENCE_UNENFORCEABLE_MESSAGE };
+  }
+  if (laneFenceDrifted(frozen, lane)) {
+    return { ok: false, message: LANE_FENCE_CONFLICT_MESSAGE };
+  }
+  return { ok: true };
+}
+
 /** Whether a target still matches the fence it was frozen against. */
 export function targetMatchesFence(target: ResourceTarget, fence: LaneFence): boolean {
   return (

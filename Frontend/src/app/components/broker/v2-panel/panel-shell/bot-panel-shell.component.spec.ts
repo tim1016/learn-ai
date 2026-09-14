@@ -1487,6 +1487,25 @@ describe('BotPanelShellComponent', () => {
     expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
   });
 
+  it('refuses a panel action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
+
   it('sends the generation the operator was shown, not the one current at click', async () => {
     const directory = provideFleetDirectory({
       observed_at_ms: 1_757_000_000_000,

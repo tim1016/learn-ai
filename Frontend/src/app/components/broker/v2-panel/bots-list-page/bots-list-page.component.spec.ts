@@ -518,4 +518,30 @@ describe('BotsListPageComponent', () => {
       expect.objectContaining({ severity: 'warn' }),
     );
   });
+
+  it('refuses a roster action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn' }),
+    );
+  });
 });

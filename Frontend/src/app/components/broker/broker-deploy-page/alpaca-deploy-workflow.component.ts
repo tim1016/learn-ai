@@ -33,7 +33,11 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
-import { LANE_FENCE_CONFLICT_MESSAGE } from '../../../fleet/lane-fence';
+import {
+  LANE_FENCE_CONFLICT_MESSAGE,
+  LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  laneFenceIsEnforceable,
+} from '../../../fleet/lane-fence';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -170,6 +174,20 @@ export class AlpacaDeployWorkflowComponent {
    * it on any lesser event would let a second click carry a fresh durable
    * identity into the same silent re-adoption this task closes. */
   protected readonly laneConflict = signal(false);
+  /** Whether the fence this drawer was opened with can be enforced by the
+   * coordinator at all. `target` is frozen once, by the drawer wrapper, for
+   * this component's entire lifetime (it exists only inside the drawer's
+   * `@if (visible())`, so a reopen mounts a fresh instance) — a cold
+   * directory at that moment yields a null generation, which the coordinator
+   * cannot check (`service.py`/`routing.py` are `is not None`-gated). Refuse
+   * rather than dispatch unfenced (#2068, decision 15). */
+  protected readonly laneUnenforceable = computed(
+    () =>
+      !laneFenceIsEnforceable({
+        bindingGeneration: this.target().bindingGeneration,
+        routingEpoch: this.target().routingEpoch,
+      }),
+  );
 
   /**
    * The symbol the readiness fetch is scoped to, or null for the
@@ -443,6 +461,9 @@ export class AlpacaDeployWorkflowComponent {
     const view = this.currentView();
     if (!view) {
       return { canSubmit: false, guidance: 'Loading deployment readiness…' };
+    }
+    if (this.laneUnenforceable()) {
+      return { canSubmit: false, guidance: LANE_FENCE_UNENFORCEABLE_MESSAGE };
     }
     if (this.laneConflict()) {
       return {

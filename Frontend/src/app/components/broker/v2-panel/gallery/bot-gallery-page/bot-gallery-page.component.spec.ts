@@ -299,4 +299,33 @@ describe('BotGalleryPageComponent', () => {
       }),
     );
   });
+
+  it('refuses a gallery action when the lane had no known binding at open, and dispatches nothing', async () => {
+    // Cold directory: the lane is present but its binding is unconfirmed, so
+    // `openFence` freezes `{bindingGeneration: null, ...}` (#2068, decision
+    // 15). A present-but-null lane, not an absent one: an absent lane would
+    // also read as "drifted" by laneFenceDrifted, which would mask a deleted
+    // enforceability branch behind the drift branch instead of proving it.
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: null })],
+    });
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    const runBotAction = vi.fn().mockResolvedValue({ message: 'stopped' });
+    const { panelService, messageService } = await renderPage(store, { directory, runBotAction });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(panelService.getPanel).not.toHaveBeenCalled();
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warn',
+        detail: expect.stringMatching(/no known binding when the action was opened/i),
+      }),
+    );
+  });
 });

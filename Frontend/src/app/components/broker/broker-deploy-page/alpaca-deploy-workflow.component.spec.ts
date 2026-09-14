@@ -1157,4 +1157,42 @@ describe('AlpacaDeployWorkflowComponent', () => {
     // cleared by submit()'s own `this.submitError.set(null)`.
     expect(screen.getByText(/rebound while the action was open/i)).toBeTruthy();
   });
+
+  it('refuses to submit when the drawer opened against a cold directory, and dispatches nothing', async () => {
+    // A cold or failed fleet directory yields a null generation. The drawer
+    // wrapper freezes `target` once, on open, for this component's whole
+    // lifetime — so an unenforceable fence here is a static fact of how the
+    // drawer opened, not something that could later "warm up" in place
+    // (#2068, decision 15).
+    const coldTarget = resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'PA9',
+      bindingGeneration: null,
+      routingEpoch: null,
+    });
+    const service = mockService();
+    const { fixture } = await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { target: coldTarget, accountId: 'PA9' },
+    });
+    await screen.findByRole('heading', { name: 'Bot binding' });
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'cold-open-01' },
+    });
+
+    // Calls the real submit() guard directly rather than clicking the
+    // button: the dispatch assertion below must be provable independently of
+    // whether the button's [disabled] binding happens to read correctly, so
+    // it cannot be masked by a DOM-level click no-op on a disabled control.
+    await component['submit']();
+
+    expect(service.previewStartAdmission).not.toHaveBeenCalled();
+    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
 });

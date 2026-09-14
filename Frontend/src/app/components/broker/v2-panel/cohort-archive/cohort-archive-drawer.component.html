@@ -43,7 +43,7 @@
       }
 
       @if (laneConflict()) {
-        <p role="alert">{{ laneConflictMessage }}</p>
+        <p role="alert">{{ laneConflictMessage() }}</p>
       }
 
       @if (emptyMessage(); as message) {

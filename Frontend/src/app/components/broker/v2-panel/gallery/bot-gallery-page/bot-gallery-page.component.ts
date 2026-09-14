@@ -18,8 +18,7 @@ import { resourceTarget, withCommand } from '../../../../../fleet/resource-targe
 import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
 import {
   freezeLaneFence,
-  laneFenceDrifted,
-  LANE_FENCE_CONFLICT_MESSAGE,
+  laneFenceVerdict,
   type LaneFence,
 } from '../../../../../fleet/lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
@@ -140,8 +139,9 @@ export class BotGalleryPageComponent {
 
   protected async onAction(event: { sid: string; actionId: string }): Promise<void> {
     if (this.pendingSids().has(event.sid)) return;
-    if (laneFenceDrifted(this.openFence(), this.fleetDirectory.lane(this.broker(), this.clerkId()))) {
-      this.messageService.add(actionOutcomeToast('conflict', LANE_FENCE_CONFLICT_MESSAGE));
+    const verdict = laneFenceVerdict(this.openFence(), this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
       return;
     }
     // Capture once at presentation/submission time. In particular, do not

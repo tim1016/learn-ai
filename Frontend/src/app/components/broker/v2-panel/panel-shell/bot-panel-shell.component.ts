@@ -41,8 +41,7 @@ import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service
 import {
   fencedTarget,
   freezeLaneFence,
-  laneFenceDrifted,
-  LANE_FENCE_CONFLICT_MESSAGE,
+  laneFenceVerdict,
   type LaneFence,
 } from '../../../../fleet/lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
@@ -323,9 +322,10 @@ export class BotPanelShellComponent {
     // An action is bound to the rendered lane, not the reactive route. Capture
     // both before any branch can await or display a confirmation.
     const fence = this.openFence();
-    if (laneFenceDrifted(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()))) {
-      this.actionReceipt.set(this.conflictReceipt(action, LANE_FENCE_CONFLICT_MESSAGE));
-      this.messageService.add(actionOutcomeToast('conflict', LANE_FENCE_CONFLICT_MESSAGE));
+    const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
+    if (!verdict.ok) {
+      this.actionReceipt.set(this.conflictReceipt(action, verdict.message));
+      this.messageService.add(actionOutcomeToast('conflict', verdict.message));
       return;
     }
     const target = fencedTarget(this.target(), fence);
