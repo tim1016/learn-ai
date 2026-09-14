@@ -616,3 +616,60 @@ def test_future_dated_status_message_cannot_poison_ordering_for_later_events(tmp
     fact = store.fact("SPY", now_ms=_NOW)
     assert fact.state == "HALTED"
     assert fact.reason_code == "SYMBOL_HALTED"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_backoff_resets_after_a_healthy_connection(tmp_path: Path) -> None:
+    """A blip hours ago must not pin a currently-healthy stream at the ceiling.
+
+    ``attempt`` feeds ``_default_backoff``, which caps at
+    ``_MAX_RECONNECT_BACKOFF_S`` (30s). It used to be set to zero once, before
+    the loop, and only ever incremented — so after roughly six lifetime errors
+    every subsequent reconnect waited the full 30 seconds, no matter how
+    healthy the stream had been in between.
+
+    That delay is not cosmetic. While the status stream is disconnected,
+    ``MarketLivenessStore.fact`` reports ``STATUS_STREAM_DISCONNECTED`` and new
+    exposure is blocked, so the backoff converts directly into refused entries.
+    Observed on the running Live lane: 34 stream errors in three hours, each
+    costing a 30-second blackout.
+    """
+    store = MarketLivenessStore()
+    backoff_attempts: list[int] = []
+    cycles = {"n": 0}
+
+    async def frame_source() -> AsyncIterator[bytes | str]:
+        index = cycles["n"]
+        cycles["n"] += 1
+        if index >= 4:
+            # End the loop deterministically; CancelledError is re-raised by
+            # _consume_statuses rather than swallowed by its except-Exception.
+            raise asyncio.CancelledError
+        if index == 2:
+            # The one healthy cycle: it actually delivered a frame.
+            yield json.dumps([{"T": "s", "S": "SPY", "sc": "T", "t": "2023-11-14T22:13:20Z"}])
+        raise RuntimeError("simulated disconnect")
+
+    async def _record_backoff(attempt: int) -> None:
+        backoff_attempts.append(attempt)
+
+    consumer = AlpacaMarketLivenessConsumer(
+        read=_Read(),  # type: ignore[arg-type]
+        frame_source=frame_source,
+        store=store,
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _NOW),
+        clock=lambda: _NOW,
+        backoff=_record_backoff,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer._consume_statuses()
+
+    # Cycles 0 and 1 delivered nothing, so the backoff escalates. Cycle 2
+    # delivered a frame, so cycle 3 starts from the floor again rather than
+    # continuing to 3.
+    assert backoff_attempts == [1, 2, 1, 2], (
+        "A healthy connection must reset the reconnect backoff. Without the "
+        "reset this reads [1, 2, 3, 4] and keeps climbing to the 30s ceiling, "
+        "where every blip costs a full blackout with new exposure blocked."
+    )

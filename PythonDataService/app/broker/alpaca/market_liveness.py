@@ -172,8 +172,10 @@ class AlpacaMarketLivenessConsumer:
     async def _consume_statuses(self) -> None:
         attempt = 0
         while True:
+            delivered = False
             try:
                 async for frame in self._frame_source():
+                    delivered = True
                     self.handle_frame(frame)
             except asyncio.CancelledError:
                 raise
@@ -198,6 +200,17 @@ class AlpacaMarketLivenessConsumer:
                 # ``start``/``stop``), never on an ordinary reconnect cycle.
                 self._store.mark_stream_disconnected(observed_at_ms=self._clock())
 
+            # A cycle that delivered frames was a healthy connection, so the
+            # next reconnect starts from the floor again. Without this reset
+            # ``attempt`` counts every error for the life of the process and
+            # the backoff pins at its 30s ceiling after roughly six of them —
+            # so a stream that is healthy *now* still pays a full 30-second
+            # blackout for a blip hours ago. That blackout is not merely
+            # cosmetic: while disconnected, ``MarketLivenessStore.fact``
+            # reports ``STATUS_STREAM_DISCONNECTED`` and new exposure is
+            # blocked, so the delay converts directly into refused entries.
+            if delivered:
+                attempt = 0
             attempt += 1
             if self._max_reconnects is not None and attempt > self._max_reconnects:
                 return

@@ -82,6 +82,87 @@ describe('deriveActionRejection', () => {
   });
 });
 
+describe('fleet refusals (flat body, no `detail` envelope)', () => {
+  // The broker clerk fleet returns `{reason, message, next_step}` directly:
+  // `FleetControlError.detail()` builds the body rather than nesting it. The
+  // parser used to require the nested shape, so every typed fleet refusal
+  // reached the operator as generic failure prose instead.
+  const fleetRefusal = new HttpErrorResponse({
+    status: 409,
+    error: {
+      reason: 'binding_generation_stale',
+      message: 'The lane was re-bound after this command was prepared.',
+      next_step: 'Reload the lane and re-issue the command.',
+    },
+  });
+
+  it('extracts the flat body', () => {
+    expect(extractActionErrorDetail(fleetRefusal)).toEqual({
+      reason: 'binding_generation_stale',
+      message: 'The lane was re-bound after this command was prepared.',
+      next_step: 'Reload the lane and re-issue the command.',
+    });
+  });
+
+  it('renders the refusal message rather than the caller fallback', () => {
+    const rejection = deriveActionRejection(fleetRefusal, 'Something went wrong.');
+
+    expect(rejection.message).toBe('The lane was re-bound after this command was prepared.');
+    expect(rejection.message).not.toBe('Something went wrong.');
+  });
+
+  it('uses `next_step` as remediation prose, not a formatted reason code', () => {
+    const rejection = deriveActionRejection(fleetRefusal, 'Something went wrong.');
+
+    // Backend-authored prose is rendered as-is; the raw code is only a
+    // last resort when the backend sent no prose at all.
+    expect(rejection.why).toBe('Reload the lane and re-issue the command.');
+  });
+
+  it('still falls back to the reason code when the refusal carries no prose', () => {
+    const terse = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'clerk_unreachable', message: 'The clerk did not answer.' },
+    });
+
+    expect(deriveActionRejection(terse, 'fallback').why).toBe('Clerk Unreachable');
+  });
+});
+
+describe('nested legacy bodies that carry next_step', () => {
+  // `next_step` is read for BOTH shapes, so this also changes existing nested
+  // emitters — `_historical_recovery_refusal` and the coverage-proof refusals
+  // in `alpaca_clerk_sqlite.py`. They previously rendered a formatted reason
+  // code as remediation; they now render the server's own prose, which is what
+  // CLAUDE.md requires of backend-authored operator copy.
+  it('prefers server prose over a formatted reason code', () => {
+    const legacy = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason: 'coverage_proof_insufficient',
+          message: 'The recovery evidence does not cover this run.',
+          next_step: 'Keep new exposure blocked and refresh the recovery evidence.',
+        },
+      },
+    });
+
+    const rejection = deriveActionRejection(legacy, 'fallback');
+
+    expect(rejection.why).toBe('Keep new exposure blocked and refresh the recovery evidence.');
+    expect(rejection.why).not.toBe('Coverage Proof Insufficient');
+  });
+
+  it('still formats the reason code when a nested body carries no prose', () => {
+    const terse = new HttpErrorResponse({
+      status: 409,
+      error: { detail: { reason: 'coverage_proof_insufficient', message: 'Not covered.' } },
+    });
+
+    expect(deriveActionRejection(terse, 'fallback').why).toBe('Coverage Proof Insufficient');
+  });
+});
+
 describe('actionOutcomeToast', () => {
   it('appends why to the detail when present', () => {
     const toast = actionOutcomeToast('failure', 'Resume failed.', 'Refresh and try again.');

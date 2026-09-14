@@ -103,10 +103,38 @@ async def open_fleet_lane(
     behavior. A ``clerk_agent`` role is never legacy — a missing marker or
     fleet configuration there is a refusal, never a silent fallback to
     unfenced authority (ADR 0062 addendum).
+
+    The legacy posture stays permitted for ``combined``, but it is not silent
+    when the volume is *enrolled*: that combination means a deployment lost its
+    fleet configuration rather than never having had it, so it is logged at
+    warning level before returning.
     """
     enrolled = volume_module.marker_path(volume_root).exists()
     if settings.ROLE == "combined":
         if settings.CONTROL_DIR is None and settings.COORDINATOR_URL is None:
+            if enrolled:
+                # An enrolled volume with no fleet configuration is not a fresh
+                # install choosing the legacy posture — it is a deployment that
+                # *had* fleet configuration and lost it. The isolation this
+                # volume was enrolled for is no longer in effect, and the boot
+                # is otherwise indistinguishable from a normal one, so say so
+                # loudly rather than reverting in silence.
+                logger.warning(
+                    "This clerk volume is fleet-enrolled, but no fleet "
+                    "configuration is present: the process is running the "
+                    "legacy UNFENCED posture over a volume that was fenced. "
+                    "The deployment's fleet configuration is missing.",
+                    extra={
+                        "action": "fleet_configuration_missing_on_enrolled_volume",
+                        "volume_root": str(volume_root),
+                        "fleet_role": settings.ROLE,
+                        "next_step": (
+                            "Restore FLEET_ROLE and FLEET_CONTROL_DIR or "
+                            "FLEET_COORDINATOR_URL for this deployment, or "
+                            "retire the volume's fleet enrolment deliberately."
+                        ),
+                    },
+                )
             return None
         if not enrolled:
             logger.info(

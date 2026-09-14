@@ -992,9 +992,17 @@ if _ROLE_RUNS_CLERK:
 # requests — the ones a coordinator pins — are answered with the identity
 # this runtime actually serves, per response and per streamed event. Browser
 # traffic is untouched.
+#
+# Only a process that serves a lane has an identity to echo. A
+# ``fleet_coordinator`` serves none, so the middleware had nothing to do there
+# but log: every agent heartbeat pins ``X-Fleet-Clerk-Id`` on its way *to* the
+# coordinator, tripping a warning whose message describes the opposite
+# direction — roughly twelve a minute per lane, drowning the warnings that
+# mean something.
 from app.broker.fleet.agent_identity import FleetIdentityMiddleware  # noqa: E402
 
-app.add_middleware(FleetIdentityMiddleware)
+if _ROLE_RUNS_CLERK:
+    app.add_middleware(FleetIdentityMiddleware)
 
 
 # CORS middleware for C# backend

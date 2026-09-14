@@ -20,12 +20,30 @@ fi
 echo "==> Tearing down all containers..."
 podman compose down
 
+# Compose ownership is decided by the label Compose itself stamps, never by a
+# hardcoded service list. A hardcoded list silently misclassifies every service
+# added after it was written: the broker clerk agents (`alpaca-live-clerk`,
+# `alpaca-paper-clerk`) were absent from the original five names, so a clerk
+# left in Created was reaped as an "orphan" below and never recovered above —
+# destroying a live execution lane on a routine `./restart.sh`.
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
+COMPOSE_LABEL="com.docker.compose.project=${COMPOSE_PROJECT}"
+
 # Reap orphaned non-compose containers stuck in Created (typically `sleep 1`
 # probes from lean-sidecar metadata staging that the host process abandons).
 # `podman compose down` only touches compose-managed names, so these pile up
-# in `podman ps -a` over time. Skip if none — `xargs --no-run-if-empty`
-# isn't portable, so guard explicitly.
-ORPHANS=$(podman ps -a --filter status=created --format "{{.Names}}" | grep -Ev '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+# in `podman ps -a` over time. Skip if none — `xargs --no-run-if-empty` isn't
+# portable, so guard explicitly.
+#
+# The destructive query deliberately does NOT mention ${COMPOSE_PROJECT}. Asking
+# for "created containers not in *our* project" would make a wrong project name
+# catastrophic: the label would match nothing and every core service sitting in
+# Created would be reaped. Asking for "created containers carrying no compose
+# project label at all" is positive evidence of non-ownership, so a wrong
+# project name can only ever under-reap. A container belonging to some other
+# Compose project is left alone either way, which is also correct.
+ORPHANS=$(podman ps -a --filter status=created \
+  --filter "label!=com.docker.compose.project" --format "{{.Names}}" || true)
 if [[ -n "$ORPHANS" ]]; then
   echo "==> Reaping orphaned Created containers:"
   echo "$ORPHANS" | sed 's/^/    /'
@@ -61,38 +79,64 @@ podman compose up -d --force-recreate || true
 # Observed on cold restarts where postgres takes >25s for WAL fsync
 # recovery. Try starting any compose container still in Created; if its
 # deps are now healthy, it'll come up.
-STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
-  | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+# Re-read: the reap above may have removed non-compose entries.
+STUCK=$(podman ps -a --filter status=created \
+  --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" || true)
 if [[ -n "$STUCK" ]]; then
   echo "==> Starting compose services left in Created:"
   echo "$STUCK" | sed 's/^/    /'
   echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
 fi
 
+# What Compose says should exist. The health verdict below compares against
+# this, not against however many containers happen to be running: `podman ps`
+# lists running containers only, so a service that crashed on boot is absent
+# from BOTH the healthy count and the total, the ratio stays balanced, and the
+# script reports "All N services healthy!" while a live execution lane is
+# simply gone. Counting what should be there is what makes a missing clerk
+# visible.
+EXPECTED_SERVICES=$(podman compose config --services 2>/dev/null | sort || true)
+
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
 # frontend at 120s; backend cold compile pushes 60–90s on top. Poll for
 # 240s (80 x 3s) so the script's verdict matches reality on cold builds.
+# Poll budget is injectable so a test can drive the verdict without waiting
+# the full production budget; unset, it is the 80 x 3s described above.
+RESTART_HEALTH_ATTEMPTS="${RESTART_HEALTH_ATTEMPTS:-80}"
+RESTART_HEALTH_INTERVAL="${RESTART_HEALTH_INTERVAL:-3}"
 echo "==> Waiting for services to become healthy..."
-for i in {1..80}; do
-  HEALTHY=$(podman ps --filter health=healthy --format "{{.Names}}" | wc -l)
-  TOTAL=$(podman ps --format "{{.Names}}" | wc -l)
-  echo "    [$i] $HEALTHY/$TOTAL healthy"
-  if [[ "$HEALTHY" -ge "$TOTAL" && "$TOTAL" -gt 0 ]]; then
+for i in $(seq 1 "$RESTART_HEALTH_ATTEMPTS"); do
+  HEALTHY=$(podman ps --filter "label=${COMPOSE_LABEL}" \
+    --filter health=healthy --format "{{.Names}}" | wc -l)
+  TOTAL=$(podman ps --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" | wc -l)
+  RUNNING_SERVICES=$(podman ps --filter "label=${COMPOSE_LABEL}" \
+    --format '{{index .Labels "com.docker.compose.service"}}' | sort -u || true)
+  MISSING=$(comm -23 <(printf '%s\n' "$EXPECTED_SERVICES") \
+    <(printf '%s\n' "$RUNNING_SERVICES") | grep -v '^$' || true)
+  if [[ -n "$MISSING" ]]; then
+    echo "    [$i] $HEALTHY/$TOTAL healthy; not running: $(echo $MISSING | tr '\n' ' ')"
+  else
+    echo "    [$i] $HEALTHY/$TOTAL healthy"
+  fi
+  if [[ -z "$MISSING" && "$HEALTHY" -ge "$TOTAL" && "$TOTAL" -gt 0 ]]; then
     echo "==> All $TOTAL services healthy!"
-    podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     exit 0
   fi
   # Mid-loop rescue: if a compose service drifted back into Created
   # because its dep flapped, recover it without waiting for the next
   # restart. Cheap to retry.
-  STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
-    | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+  STUCK=$(podman ps -a --filter status=created \
+    --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" || true)
   if [[ -n "$STUCK" ]]; then
     echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
   fi
-  sleep 3
+  sleep "$RESTART_HEALTH_INTERVAL"
 done
 
-echo "==> WARNING: Not all services healthy after 240s"
-podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+echo "==> WARNING: Not all services healthy after $((RESTART_HEALTH_ATTEMPTS * RESTART_HEALTH_INTERVAL))s"
+if [[ -n "${MISSING:-}" ]]; then
+  echo "==> Declared by compose but NOT RUNNING: $(echo $MISSING | tr '\n' ' ')"
+fi
+podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 exit 1

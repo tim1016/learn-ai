@@ -12,6 +12,7 @@
 // sentence is about the request, never about the configuration domain.
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { refusalBody } from '../../../../shared/errors/refusal-body';
 
 /** The two reasons that mean "someone else changed this first" (contract §5). */
 const STALE_WRITE_REASONS: ReadonlySet<string> = new Set([
@@ -46,13 +47,12 @@ export function clientRefusal(message: string, nextStep: string | null): Configu
   return { reason: null, message, nextStep, status: null, stale: false };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function readDetail(body: unknown): { reason: string; message: string; nextStep: string | null } | null {
-  if (!isRecord(body) || !isRecord(body['detail'])) return null;
-  const detail = body['detail'];
+function readDetail(error: unknown): { reason: string; message: string; nextStep: string | null } | null {
+  // `refusalBody` accepts both the fleet's flat body and FastAPI's nested
+  // `detail` envelope. Requiring the nested one made every fleet refusal parse
+  // as `null`, so a typed refusal reached the operator as generic failure prose.
+  const detail = refusalBody(error);
+  if (detail === null) return null;
   const reason = detail['reason'];
   const message = detail['message'];
   const nextStep = detail['next_step'];
@@ -67,7 +67,7 @@ function readDetail(body: unknown): { reason: string; message: string; nextStep:
  */
 export function toConfigurationRefusal(error: unknown): ConfigurationRefusal {
   const status = error instanceof HttpErrorResponse && error.status !== 0 ? error.status : null;
-  const detail = error instanceof HttpErrorResponse ? readDetail(error.error) : null;
+  const detail = readDetail(error);
   if (detail !== null) {
     return {
       reason: detail.reason,
