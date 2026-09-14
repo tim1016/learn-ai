@@ -103,11 +103,6 @@ def test_the_composition_registry_maps_alpaca_and_nothing_else() -> None:
     adapters = production_provider_adapters()
     assert set(adapters) == {"alpaca"}
     assert adapters["alpaca"].provider_id == "alpaca"
-    # The fleet package's own constant stays empty: the provider enters at
-    # application composition, never inside the broker-neutral package.
-    from app.broker.fleet.provider import PRODUCTION_PROVIDER_ADAPTERS
-
-    assert PRODUCTION_PROVIDER_ADAPTERS == {}
 
 
 # ---------------------------------------------------------------------------

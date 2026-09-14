@@ -118,9 +118,6 @@ def test_a_dispatched_attempt_can_never_present_as_un_sent(
             "WHERE correlation_id = ?",
             (attempt.correlation_id,),
         )
-    # Settling an unmarked attempt is still possible: the provider may refuse
-    # or deliver between open and the dispatch marking in a crashed caller,
-    # and the receipt records the truth the caller last knew.
 
 
 def test_a_concurrent_open_race_resolves_to_one_attempt(

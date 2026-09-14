@@ -84,6 +84,20 @@ def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
     assert len({identity.new_service_token() for _ in range(100)}) == 100
 
 
+#: The retry-semantics pin for the families whose exact status code is a
+#: documented contract, not merely one of the four valid buckets (audit
+#: 2026-09-13; folded from the former standalone
+#: test_status_codes_pin_the_retry_semantics).
+_PINNED_RETRY_SEMANTICS: dict[type[FleetControlError], int] = {
+    BrokerAndClerkRequired: 400,
+    BrokerNotSupported: 404,
+    ClerkNotFound: 404,
+    ClerkBrokerMismatch: 409,
+    ClerkUnreachable: 503,
+    ClerkRoutingOutcomeUnknown: 503,
+}
+
+
 @pytest.mark.parametrize("family", ALL_FAMILIES)
 def test_every_refusal_family_pins_reason_status_and_detail(family: type[FleetControlError]) -> None:
     """Every family pins a unique snake_case reason, a status code, and its detail body."""
@@ -93,19 +107,13 @@ def test_every_refusal_family_pins_reason_status_and_detail(family: type[FleetCo
     assert detail["message"] == "message"
     assert detail["next_step"] == "step"
     assert family.status_code in (400, 404, 409, 503)
+    if family in _PINNED_RETRY_SEMANTICS:
+        assert family.status_code == _PINNED_RETRY_SEMANTICS[family]
     # The reason is snake_case and stable: it is a wire contract, not prose.
     assert re.fullmatch(r"[a-z0-9_]+", family.reason)
-    # No two families share a reason — a rendered label must be unambiguous.
+
+
+def test_no_two_refusal_families_share_a_reason() -> None:
+    """A rendered label must be unambiguous: no two families share a reason."""
     reasons = [f.reason for f in ALL_FAMILIES]
     assert len(reasons) == len(set(reasons))
-
-
-def test_status_codes_pin_the_retry_semantics() -> None:
-    """Status codes group into terminal, state-conflict and retry-safe buckets."""
-    terminal = {BrokerNotSupported.status_code, ClerkNotFound.status_code}
-    conflict = {ClerkBrokerMismatch.status_code}
-    retry_safe = {ClerkUnreachable.status_code, ClerkRoutingOutcomeUnknown.status_code}
-    assert terminal == {404}
-    assert conflict == {409}
-    assert retry_safe == {503}
-    assert BrokerAndClerkRequired.status_code == 400
