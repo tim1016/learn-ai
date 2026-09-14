@@ -415,6 +415,12 @@ export class BotsListPageComponent {
       );
       this.actionNotice.set({ tone: 'danger', message: rejection.message });
       this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh();
+      }
     } finally {
       this.pendingBotIds.update((current) => {
         const next = new Set(current);

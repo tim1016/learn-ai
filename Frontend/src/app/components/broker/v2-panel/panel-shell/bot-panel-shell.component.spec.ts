@@ -1461,6 +1461,33 @@ describe('BotPanelShellComponent', () => {
     ).toBeTruthy();
   });
 
+  /**
+   * `FleetDirectoryService.refresh()` had no caller before this fix, which is
+   * the only reason the pre-freeze click-time fence read was harmless. Now
+   * that the fence is frozen at open, a stale-generation refusal must refresh
+   * the directory so the operator's next action is minted against a lane
+   * they have actually been shown (#2068).
+   */
+  it('refreshes the directory after the coordinator refuses a stale generation', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const { fixture } = await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+    await fixture.whenStable();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a panel action whose lane rebound while the action was open', async () => {
     const directory = provideFleetDirectory({
       observed_at_ms: 1_757_000_000_000,

@@ -50,6 +50,7 @@ import {
   actionOutcomeToast,
   deriveActionRejection,
   extractActionErrorDetail,
+  type ActionRejection,
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
@@ -362,9 +363,16 @@ export class BotPanelShellComponent {
       this.messageService.add(actionOutcomeToast('success', receipt.message));
       await this.liveStore.refresh();
     } catch (error) {
-      const receipt = this.errorReceipt(error, action);
+      const rejection = this.describeRejection(error, action);
+      const receipt = this.errorReceipt(error, action, rejection);
       this.actionReceipt.set(receipt);
       this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      // A stale-generation refusal means the fence the operator was shown is
+      // provably wrong; refresh so the next action is minted against a lane
+      // they have actually seen (#2068).
+      if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
+        void this.fleetDirectory.refresh();
+      }
       // The rejection is always pre-execution (see runBotAction's doc), so the
       // operator's last-seen panel state is now stale relative to whatever
       // changed underneath it — refresh so "Ready to resume" doesn't linger
@@ -544,9 +552,19 @@ export class BotPanelShellComponent {
     };
   }
 
-  private errorReceipt(error: unknown, action: PanelAction): ActionReceiptView {
+  /** The one place the fallback failure message is built, so a caller that
+   * needs the rejection ahead of the receipt (to branch on `reasonCode`)
+   * derives it the same way `errorReceipt` would have derived it itself. */
+  private describeRejection(error: unknown, action: PanelAction): ActionRejection {
+    return deriveActionRejection(error, `Action "${action.label}" failed.`);
+  }
+
+  private errorReceipt(
+    error: unknown,
+    action: PanelAction,
+    rejection: ActionRejection = this.describeRejection(error, action),
+  ): ActionReceiptView {
     const detail = extractActionErrorDetail(error);
-    const rejection = deriveActionRejection(error, `Action "${action.label}" failed.`);
     return {
       actionId:
         typeof detail?.['action_id'] === 'string'

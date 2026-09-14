@@ -41,6 +41,7 @@ describe('deriveActionRejection', () => {
       outcome: 'conflict',
       message: 'Resume is no longer available for this bot.',
       why: 'The Clerk evidence changed before activation.',
+      reasonCode: 'TERMINAL_EVIDENCE_UNREADABLE',
     });
   });
 
@@ -67,6 +68,29 @@ describe('deriveActionRejection', () => {
     const error = rejection({ reason: 'stale_action_token', message: 'boom' });
 
     expect(deriveActionRejection(error, 'fallback').why).toBe('Stale Action Token');
+  });
+
+  it('exposes the raw, unformatted reason code so a caller can branch on the refusal kind', () => {
+    const error = rejection({
+      reason: 'clerk_binding_generation_conflict',
+      message: 'Expected 3 is not 4.',
+    });
+
+    expect(deriveActionRejection(error, 'fallback').reasonCode).toBe(
+      'clerk_binding_generation_conflict',
+    );
+  });
+
+  it('falls back to the typed reason_code for the raw reasonCode when reason is absent', () => {
+    const error = rejection({ outcome: 'failure', message: 'boom', reason_code: 'CLERK_UNREACHABLE' });
+
+    expect(deriveActionRejection(error, 'fallback').reasonCode).toBe('CLERK_UNREACHABLE');
+  });
+
+  it('reasonCode is null when neither reason nor reason_code is present', () => {
+    const error = rejection({ outcome: 'unknown', message: 'boom' });
+
+    expect(deriveActionRejection(error, 'fallback').reasonCode).toBeNull();
   });
 
   it('defaults outcome to unknown and uses the fallback message for a non-HTTP error', () => {
