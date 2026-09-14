@@ -1,11 +1,14 @@
 # Dev-stack two-lane fleet posture (coordinator + Live + Paper clerks)
 
 **Status:** Operational record for the dev machine, 2026-09-14. The Live desk
-is qualified through the browser path end-to-end. The Paper lane is provisioned
-and configured but is **blocked at paper custody activation** — a real product
-gap, not a deployment error (see [Paper activation
-boundary](#paper-activation-boundary)). Do not paper over that gap by copying
-custody data across lanes.
+is qualified through the browser path end-to-end. The Paper lane's activation
+boundary was partially resolved the same day (owner decision widened ADR
+0059's R3 to admit an empty legacy inventory for paper, not just live) — a
+**fresh** paper account can now activate on this lane via the fresh-lane
+bootstrap dance below. Recovering the lane's pre-existing *legacy* paper
+account is still blocked — a real product gap, not a deployment error (see
+[Paper activation boundary](#paper-activation-boundary)). Do not paper over
+that remaining gap by copying custody data across lanes.
 
 **Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md),
 the [two-Clerk rollout runbook](fleet-d-two-clerk-rollout.md) (this posture is
@@ -121,15 +124,26 @@ This window dance is a workaround for a product gap: a fresh lane should be
 able to keep its session observable (or expose a sanctioned first-binding
 path) without a confirmed binding. Flagged as follow-up; not fixed here.
 
-## Paper activation boundary (open)
+## Paper activation boundary
 
-The paper lane reaches `ACTIVATION_REQUIRED`:
-`select_active_clerk_runtime` composes paper custody only from an activated
-SQLite authority, and the paper cutover (`cutover-initialize`) **refuses an
-empty legacy inventory for paper accounts** (`_live_evidence_permits_empty_legacy`
-— only live-mode evidence may stand in). The paper account's legacy artifacts
-and activation records live on `learn-ai-alpaca-clerk-data` (the Live lane's
-volume), and every documented move is fenced:
+The paper lane reached `ACTIVATION_REQUIRED`: `select_active_clerk_runtime`
+composes paper custody only from an activated SQLite authority, and the paper
+cutover (`cutover-initialize`) used to **refuse an empty legacy inventory for
+paper accounts** (`_live_evidence_permits_empty_legacy` — only live-mode
+evidence stood in).
+
+**Resolved 2026-09-14 (owner decision) for a fresh account:** that live-only
+exception is gone. A never-legacy account of either mode now completes
+`initialize`/`plan`/`apply` with an empty legacy artifact set and an empty
+runner roster — the flat-and-order-free check, unconditional for both modes,
+is what makes this safe. A genuinely fresh paper account (no prior Alpaca
+paper trading history at all) can activate on this lane today via the
+fresh-lane bootstrap dance above. See ADR 0059's 2026-09-14 amendment.
+
+**Still open — recovering the *existing* legacy paper account onto this
+lane.** That account's legacy artifacts and activation records live on
+`learn-ai-alpaca-clerk-data` (the Live lane's volume), and every documented
+move is fenced:
 
 - copying profiles/DBs/receipts/custody across lanes is forbidden (fleet E),
 - `restore` accepts only bundles matching the *same volume's* registry and
@@ -137,12 +151,12 @@ volume), and every documented move is fenced:
 - `reassign-assignment` moves an account between clerks, not custody between
   volumes.
 
-So an existing paper account cannot be split onto its own lane with today's
-ceremonies. Filling this needs a product decision (a cross-lane custody
-migration ceremony, an activation path for legacy-carrying accounts on a new
-volume, or accepting fresh-paper-account-only lanes). Until then the paper
-desk stays dark and the paper account's assignment stays reserved to the
-paper clerk — correctly fenced, not orphaned to another lane.
+So the *existing* paper account still cannot be split onto its own lane with
+today's ceremonies — that needs a cross-lane custody migration ceremony or an
+activation path for legacy-carrying accounts on a new volume, which is a
+separate, still-open product decision. Until then that specific account's
+assignment stays reserved to wherever its custody lives — correctly fenced,
+not orphaned to another lane.
 
 ## Operations quick reference
 

@@ -12,6 +12,8 @@
 
 **Scope extended 2026-09-12:** [ADR 0062](0062-broker-clerk-fleet-control-plane.md) lifts this ADR's "Not done by this ADR: more than one live account per installation" boundary by making each lane its own clerk — its own process, volume, credentials and custody. Every `real_live` clerk retains the full three-way mode agreement, per-instance arming, sealed envelope and cash-bound ENTER semantics independently; nothing in this ADR is weakened or shared across lanes.
 
+**Amended 2026-09-14 (owner decision):** The slice-7 design's R3 is widened again — its empty-legacy-set exception (`_live_evidence_permits_empty_legacy` in `app/broker/alpaca/clerk/sqlite/cutover.py`) is no longer live-only. A never-legacy account of either mode now completes `initialize`/`plan`/`apply` with an empty legacy artifact set and an empty runner roster; the flat-and-order-free check (kept unconditionally for both modes) is what made the live-only exception safe to extend, so extending it introduces no new custody risk. Reason: the asymmetry served no purpose R3's own flat-and-order-free gate did not already cover, and it was blocking a legitimate fresh paper lane (discovered while bootstrapping the two-lane dev posture, `docs/runbooks/fleet-dev-two-lane-posture.md`) from ever activating. Nothing else in D1–D12 changes.
+
 ## Context
 
 The scope memo established what this ADR takes as given:

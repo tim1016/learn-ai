@@ -215,9 +215,10 @@ def test_initialize_refuses_running_roster_without_creating_authority(
     assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
-def test_initialize_refuses_empty_runner_roster_without_creating_authority(
+def test_initialize_succeeds_with_empty_runner_roster(
     tmp_path: Path,
 ) -> None:
+    """An empty runner roster no longer refuses (owner decision 2026-09-14 removed R3's live-only exception)."""
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     (runner_root / "live_state").mkdir(parents=True)
@@ -233,17 +234,18 @@ def test_initialize_refuses_empty_runner_roster_without_creating_authority(
         open_order_ids=(),
     )
 
-    with pytest.raises(CutoverRefused, match="no Alpaca bots governed"):
-        initialize_cutover_authority(
-            account_id=ACCOUNT_ID,
-            artifacts_root=clerk_root,
-            runner_artifacts_root=runner_root,
-            broker_evidence=evidence,
-            max_broker_evidence_age_ms=1_000,
-            clock=_Clock(PLAN_MS),
-        )
+    receipt = initialize_cutover_authority(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=_Clock(PLAN_MS),
+    )
 
-    assert not (account_dir / "clerk.db").exists()
+    assert receipt.runner_roster == ()
+    assert receipt.legacy_artifacts
+    assert (account_dir / "clerk.db").exists()
     assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
@@ -387,9 +389,10 @@ def test_initialize_uses_account_scoped_legacy_roster_for_pre_registry_bot(
     assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
 
 
-def test_initialize_refuses_when_only_another_account_has_a_runner_bot(
+def test_initialize_succeeds_when_only_another_account_has_a_runner_bot(
     tmp_path: Path,
 ) -> None:
+    """Another account's bot leaves this account's own roster empty, which no longer refuses."""
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(
@@ -400,24 +403,24 @@ def test_initialize_refuses_when_only_another_account_has_a_runner_bot(
     account_dir.mkdir(parents=True)
     (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(CutoverRefused, match="no Alpaca bots governed"):
-        initialize_cutover_authority(
+    receipt = initialize_cutover_authority(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=BrokerCutoverEvidence(
             account_id=ACCOUNT_ID,
-            artifacts_root=clerk_root,
-            runner_artifacts_root=runner_root,
-            broker_evidence=BrokerCutoverEvidence(
-                account_id=ACCOUNT_ID,
-                account_mode="paper",
-                observed_at_ms=PLAN_MS,
-                proof_reference="fake-alpaca-account-snapshot",
-                positions={},
-                open_order_ids=(),
-            ),
-            max_broker_evidence_age_ms=1_000,
-            clock=_Clock(PLAN_MS),
-        )
+            account_mode="paper",
+            observed_at_ms=PLAN_MS,
+            proof_reference="fake-alpaca-account-snapshot",
+            positions={},
+            open_order_ids=(),
+        ),
+        max_broker_evidence_age_ms=1_000,
+        clock=_Clock(PLAN_MS),
+    )
 
-    assert not (account_dir / "clerk.db").exists()
+    assert receipt.runner_roster == ()
+    assert (account_dir / "clerk.db").exists()
 
 
 def test_initialize_refuses_registered_bot_with_missing_binding_evidence(
@@ -482,31 +485,33 @@ def test_initialize_refuses_broken_binding_symlink(tmp_path: Path) -> None:
     assert not (account_dir / "clerk.db").exists()
 
 
-def test_initialize_refuses_wrong_clerk_root_without_creating_authority(
+def test_initialize_succeeds_with_no_legacy_artifacts(
     tmp_path: Path,
 ) -> None:
-    clerk_root = tmp_path / "wrong-clerk-root"
+    """A fresh clerk root with no legacy artifacts no longer refuses; a real runner roster still records."""
+    clerk_root = tmp_path / "fresh-clerk-root"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(runner_root)
 
-    with pytest.raises(CutoverRefused, match="no legacy authority artifacts"):
-        initialize_cutover_authority(
+    receipt = initialize_cutover_authority(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=BrokerCutoverEvidence(
             account_id=ACCOUNT_ID,
-            artifacts_root=clerk_root,
-            runner_artifacts_root=runner_root,
-            broker_evidence=BrokerCutoverEvidence(
-                account_id=ACCOUNT_ID,
-                account_mode="paper",
-                observed_at_ms=PLAN_MS,
-                proof_reference="fake-alpaca-account-snapshot",
-                positions={},
-                open_order_ids=(),
-            ),
-            max_broker_evidence_age_ms=1_000,
-            clock=_Clock(PLAN_MS),
-        )
+            account_mode="paper",
+            observed_at_ms=PLAN_MS,
+            proof_reference="fake-alpaca-account-snapshot",
+            positions={},
+            open_order_ids=(),
+        ),
+        max_broker_evidence_age_ms=1_000,
+        clock=_Clock(PLAN_MS),
+    )
 
-    assert not (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
+    assert receipt.legacy_artifacts == ()
+    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
+    assert (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
 
 
 def test_initialize_refuses_unknown_broker_evidence_mode(tmp_path: Path) -> None:

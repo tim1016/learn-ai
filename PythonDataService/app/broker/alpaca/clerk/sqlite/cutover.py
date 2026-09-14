@@ -239,7 +239,6 @@ def _initialize_cutover_authority_locked(
     clock: Clock,
 ) -> CutoverInitializationReceipt:
     """Initialize or resume while holding the account's cutover lock."""
-    live_evidence = _live_evidence_permits_empty_legacy(normalized_broker)
     now = clock()
     registry = EstablishedAccountsRegistry(accounts_root)
     established = registry.latest(account_id)
@@ -264,11 +263,7 @@ def _initialize_cutover_authority_locked(
         account_id=account_id,
         artifacts_root=artifacts_root,
     )
-    legacy = _legacy_artifact_evidence(
-        artifacts_root,
-        account_id,
-        allow_empty=reset_authorized or live_evidence,
-    )
+    legacy = _legacy_artifact_evidence(artifacts_root, account_id)
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
@@ -276,7 +271,6 @@ def _initialize_cutover_authority_locked(
             artifacts_root,
             account_id,
         ),
-        allow_empty=reset_authorized or live_evidence,
     )
     intended_generation = (
         1
@@ -473,17 +467,7 @@ def plan_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    # One question, asked once: may the legacy and roster sets be empty? Both
-    # evidence reads below take the same answer, and the developer-reset half
-    # is a registry read that need not happen twice.
-    allow_empty = _live_evidence_permits_empty_legacy(
-        normalized_broker
-    ) or _developer_reset_replaces_activation(
-        accounts_root=accounts_root,
-        account_id=account_id,
-        artifacts_root=artifacts_root,
-    )
-    legacy = _legacy_artifact_evidence(artifacts_root, account_id, allow_empty=allow_empty)
+    legacy = _legacy_artifact_evidence(artifacts_root, account_id)
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
@@ -491,7 +475,6 @@ def plan_cutover(
             artifacts_root,
             account_id,
         ),
-        allow_empty=allow_empty,
     )
     draft = CutoverPlan(
         schema_version=3,
@@ -553,17 +536,7 @@ def apply_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    # The same one question the plan asked, re-asked against current evidence.
-    allow_empty = _live_evidence_permits_empty_legacy(
-        normalized_broker
-    ) or _developer_reset_replaces_activation(
-        accounts_root=accounts_root,
-        account_id=plan.account_id,
-        artifacts_root=artifacts_root,
-    )
-    current_legacy = _legacy_artifact_evidence(
-        artifacts_root, plan.account_id, allow_empty=allow_empty
-    )
+    current_legacy = _legacy_artifact_evidence(artifacts_root, plan.account_id)
     current_roster = _runner_roster_evidence(
         runner_artifacts_root,
         plan.account_id,
@@ -571,7 +544,6 @@ def apply_cutover(
             artifacts_root,
             plan.account_id,
         ),
-        allow_empty=allow_empty,
     )
     if current_database != plan.database:
         raise CutoverRefused("SQLite database changed after cutover planning")
@@ -705,19 +677,6 @@ def _normalize_broker_evidence(evidence: BrokerCutoverEvidence) -> BrokerCutover
     )
 
 
-def _live_evidence_permits_empty_legacy(broker_evidence: BrokerCutoverEvidence) -> bool:
-    """Whether live evidence may stand in for legacy artifacts (ADR 0059 slice 7, design R3).
-
-    A never-legacy live account has nothing to quarantine and no prior
-    activation to have reset, so live evidence permits (does not require) the
-    empty legacy set; a live account that does carry legacy artifacts is
-    quarantined exactly like a paper one. Shadow rehearsal is a mode, not a
-    requirement (owner decision 2026-09-09); the flat, order-free check is
-    what still guards graduation. For a paper account nothing changes.
-    """
-    return broker_evidence.account_mode == "live"
-
-
 def _validate_cutover_safety(
     *,
     account_id: str,
@@ -779,9 +738,12 @@ def _runner_roster_evidence(
     account_id: str,
     *,
     legacy_strategy_instance_ids: frozenset[str],
-    allow_empty: bool = False,
 ) -> tuple[RunnerBotEvidence, ...]:
-    """Bind the runner-owned semantic snapshot to complete artifact hashes."""
+    """Bind the runner-owned semantic snapshot to complete artifact hashes.
+
+    A never-legacy account's empty roster is not a refusal (owner decision
+    2026-09-14): every other roster-evidence problem still is.
+    """
     try:
         roster = read_quiescent_alpaca_roster(
             runner_artifacts_root,
@@ -789,7 +751,7 @@ def _runner_roster_evidence(
             legacy_strategy_instance_ids=legacy_strategy_instance_ids,
         )
     except CutoverRosterEvidenceError as exc:
-        if allow_empty and str(exc).startswith("runner evidence contains no Alpaca bots"):
+        if str(exc).startswith("runner evidence contains no Alpaca bots"):
             return ()
         raise CutoverRefused(str(exc)) from exc
     evidence: list[RunnerBotEvidence] = []
@@ -821,9 +783,8 @@ def _runner_roster_evidence(
 def _legacy_artifact_evidence(
     artifacts_root: Path,
     account_id: str,
-    *,
-    allow_empty: bool = False,
 ) -> tuple[LegacyArtifactEvidence, ...]:
+    """A never-legacy account's empty artifact set is not a refusal (owner decision 2026-09-14)."""
     _accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     evidence: list[LegacyArtifactEvidence] = []
     candidates = [account_dir / name for name in LEGACY_ARTIFACT_NAMES]
@@ -854,10 +815,6 @@ def _legacy_artifact_evidence(
                 kind=kind,
                 sha256=tree_sha256(path),
             )
-        )
-    if not evidence and not allow_empty:
-        raise CutoverRefused(
-            "no legacy authority artifacts were found; verify the Clerk artifacts root"
         )
     return tuple(sorted(evidence, key=lambda item: item.relative_path))
 
