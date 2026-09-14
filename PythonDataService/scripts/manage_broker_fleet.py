@@ -38,6 +38,14 @@ import json
 import sys
 from pathlib import Path
 
+from app.broker.fleet.compatibility_retirement import (
+    CompatibilityRetirementRefusal,
+    CompatibilityRouteState,
+    capture_snapshot,
+    evaluate_retirement,
+    write_retirement_receipt,
+    write_route_state,
+)
 from app.broker.fleet.errors import (
     ClerkVolumeCloneDetected,
     FleetControlError,
@@ -218,6 +226,72 @@ def _release(args: argparse.Namespace) -> int:
     finally:
         service.close()
     return 0
+
+
+def _compatibility_snapshot(args: argparse.Namespace) -> int:
+    """Capture one privacy-preserving compatibility aggregate snapshot."""
+    snapshot = capture_snapshot(
+        evidence_path=Path(args.evidence_path),
+        snapshot_path=Path(args.snapshot_path),
+        source_label=args.source_label,
+    )
+    _write(snapshot)
+    return 0
+
+
+def _compatibility_evaluate(args: argparse.Namespace) -> int:
+    """Evaluate retirement evidence but leave all aliases in measurement mode."""
+    receipt = _evaluate_compatibility(args)
+    _write_compatibility_receipt(args, receipt)
+    _write({"state": CompatibilityRouteState.MEASUREMENT.value, "receipt": receipt})
+    return 0
+
+
+def _compatibility_retire(args: argparse.Namespace) -> int:
+    """Retire only the retained unscoped reads after an eligible evaluation."""
+    receipt = _evaluate_compatibility(args)
+    _write_compatibility_receipt(args, receipt)
+    state_paths = [Path(path) for path in args.route_state_path]
+    if not state_paths:
+        raise CompatibilityRetirementRefusal(
+            "Retirement needs at least one lane-local compatibility route state path."
+        )
+    if len(set(state_paths)) != len(state_paths):
+        raise CompatibilityRetirementRefusal("Retirement route state paths must be unique.")
+    states = [
+        write_route_state(
+            state_path=state_path,
+            state=CompatibilityRouteState.RETIRED,
+            retirement_receipt=receipt,
+        )
+        for state_path in state_paths
+    ]
+    _write(
+        {
+            "state": CompatibilityRouteState.RETIRED.value,
+            "operator_receipt_id": receipt["operator_receipt_id"],
+            "route_state_count": len(states),
+        }
+    )
+    return 0
+
+
+def _evaluate_compatibility(args: argparse.Namespace) -> dict[str, object]:
+    """Build the shared fail-closed compatibility retirement receipt."""
+    return evaluate_retirement(
+        start_snapshot_paths=[Path(path) for path in args.start_snapshot],
+        end_snapshot_paths=[Path(path) for path in args.end_snapshot],
+        consumer_inventory_path=Path(args.consumer_inventory),
+        scoped_route_evidence_path=Path(args.scoped_route_evidence),
+        operator_receipt_path=Path(args.operator_receipt),
+        max_evidence_age_ms=args.max_evidence_age_ms,
+        max_window_duration_ms=args.max_window_duration_ms,
+    )
+
+
+def _write_compatibility_receipt(args: argparse.Namespace, receipt: dict[str, object]) -> None:
+    """Write the durable restricted-record receipt before changing route state."""
+    write_retirement_receipt(Path(args.decision_receipt_path), receipt)
 
 
 def _migrate_existing(args: argparse.Namespace) -> int:
@@ -573,6 +647,63 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Offline-and-obligations-clear proof token",
     )
     release.set_defaults(func=_release)
+
+    compatibility_snapshot = subparsers.add_parser(
+        "compatibility-snapshot",
+        help="Capture one privacy-preserving compatibility aggregate snapshot",
+    )
+    compatibility_snapshot.add_argument("--evidence-path", required=True)
+    compatibility_snapshot.add_argument("--snapshot-path", required=True)
+    compatibility_snapshot.add_argument(
+        "--source-label",
+        required=True,
+        help="Short aggregate source name, such as combined, paper, or live",
+    )
+    compatibility_snapshot.set_defaults(func=_compatibility_snapshot)
+
+    def _with_compatibility_evidence(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--start-snapshot", action="append", required=True)
+        sp.add_argument("--end-snapshot", action="append", required=True)
+        sp.add_argument("--consumer-inventory", required=True)
+        sp.add_argument("--scoped-route-evidence", required=True)
+        sp.add_argument("--operator-receipt", required=True)
+        sp.add_argument(
+            "--decision-receipt-path",
+            required=True,
+            help="Restricted-record path for the durable retirement decision",
+        )
+        sp.add_argument(
+            "--max-evidence-age-ms",
+            type=int,
+            default=86_400_000,
+            help="Maximum allowed age of end, inventory, health, and operator evidence",
+        )
+        sp.add_argument(
+            "--max-window-duration-ms",
+            type=int,
+            default=604_800_000,
+            help="Maximum bounded representative measurement-window duration",
+        )
+
+    compatibility_evaluate = subparsers.add_parser(
+        "compatibility-evaluate",
+        help="Evaluate evidence and leave compatibility reads in measurement mode",
+    )
+    _with_compatibility_evidence(compatibility_evaluate)
+    compatibility_evaluate.set_defaults(func=_compatibility_evaluate)
+
+    compatibility_retire = subparsers.add_parser(
+        "compatibility-retire",
+        help="Host-only retirement of eligible unscoped compatibility reads",
+    )
+    _with_compatibility_evidence(compatibility_retire)
+    compatibility_retire.add_argument(
+        "--route-state-path",
+        action="append",
+        required=True,
+        help="Lane-local compatibility/route_state.json path; repeat for each serving lane",
+    )
+    compatibility_retire.set_defaults(func=_compatibility_retire)
     return parser
 
 
@@ -581,8 +712,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except FleetControlError as exc:
-        _write({"error": f"{exc.reason}: {exc.message}"})
+    except (FleetControlError, CompatibilityRetirementRefusal) as exc:
+        reason = exc.reason if isinstance(exc, FleetControlError) else "compatibility_retirement_refused"
+        message = exc.message if isinstance(exc, FleetControlError) else str(exc)
+        _write({"error": f"{reason}: {message}"})
         return 2
     except (argparse.ArgumentError, OSError, ValueError) as exc:
         _write({"error": str(exc)})
