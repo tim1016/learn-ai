@@ -26,6 +26,7 @@ from app.broker.ibkr.client import (
     IbkrClient,
     set_client,
 )
+from app.broker.ibkr.connect_log_budget import install_ib_async_noise_filter
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
 from app.config import fleet_settings, settings
@@ -716,6 +717,11 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
         # ride the same chain retired with the broker-activity publisher
         # (PR-B of #1813, 2026-08-27).
         from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+        # Only the role that runs the IBKR clerk should own ib_async's
+        # client logger — installing this unconditionally at import time
+        # would affect every process that merely imports the broker stack.
+        install_ib_async_noise_filter()
 
         monitor = AutoReconnectMonitor(
             ibkr_client,
