@@ -77,10 +77,13 @@ class RegistryRecoveryState:
     required_clerk_ids: tuple[str, ...]
     reconciled_clerk_ids: tuple[str, ...]
     provider_summaries: dict[str, dict[str, str]]
+    empty_inventory_attestation: dict[str, str | int] | None
 
     @property
     def routing_closed(self) -> bool:
         """Whether any original lane remains unreconciled."""
+        if not self.required_clerk_ids:
+            return self.empty_inventory_attestation is None
         return set(self.required_clerk_ids) != set(self.reconciled_clerk_ids)
 
 
@@ -186,11 +189,7 @@ def create_registry_backup(store: FleetRegistryStore, *, backup_dir: Path) -> Re
             next_step="Choose a fresh, restricted backup directory; never overwrite evidence.",
         )
     backup_dir.mkdir(parents=True, exist_ok=True)
-    destination = sqlite3.connect(database)
-    try:
-        store._conn.backup(destination)
-    finally:
-        destination.close()
+    store.backup_to(database)
     manifest = RegistryBackupManifest(
         manifest_schema_version=MANIFEST_SCHEMA_VERSION,
         registry_id=store.registry_id,
@@ -272,6 +271,7 @@ def read_recovery_state(control_dir: Path) -> RegistryRecoveryState | None:
     required = {
         "state_schema_version", "registry_id", "backup_sha256", "opened_at_ms",
         "required_clerk_ids", "reconciled_clerk_ids", "provider_summaries",
+        "empty_inventory_attestation",
     }
     if (
         not isinstance(raw, dict)
@@ -302,6 +302,24 @@ def read_recovery_state(control_dir: Path) -> RegistryRecoveryState | None:
         raise FleetRegistryRecoveryPending(
             f"The registry recovery state has an invalid provider summary: {exc}",
         ) from exc
+    attestation = raw["empty_inventory_attestation"]
+    if attestation is not None and (
+            raw["required_clerk_ids"]
+            or not isinstance(attestation, dict)
+            or set(attestation) != {"operator", "change_ref", "attested_at_ms"}
+            or not isinstance(attestation["operator"], str)
+            or not attestation["operator"].strip()
+            or len(attestation["operator"]) > 128
+            or not isinstance(attestation["change_ref"], str)
+            or not attestation["change_ref"].strip()
+            or len(attestation["change_ref"]) > 512
+            or isinstance(attestation["attested_at_ms"], bool)
+            or not isinstance(attestation["attested_at_ms"], int)
+            or not 0 <= attestation["attested_at_ms"] <= MAX_TIMESTAMP_MS
+    ):
+        raise FleetRegistryRecoveryPending(
+            "The registry recovery state has an invalid empty-inventory attestation."
+        )
     if (
         not isinstance(raw["registry_id"], str)
         or not raw["registry_id"]
@@ -321,6 +339,7 @@ def read_recovery_state(control_dir: Path) -> RegistryRecoveryState | None:
         required_clerk_ids=tuple(raw["required_clerk_ids"]),
         reconciled_clerk_ids=tuple(raw["reconciled_clerk_ids"]),
         provider_summaries=summaries,
+        empty_inventory_attestation=attestation,
     )
 
 
@@ -351,6 +370,7 @@ def restore_registry_backup(
             required_clerk_ids=manifest.active_clerk_ids,
             reconciled_clerk_ids=(),
             provider_summaries={},
+            empty_inventory_attestation=None,
         ),
     )
     target = registry_database_path(control_dir)
@@ -386,12 +406,69 @@ def require_routing_open(control_dir: Path, *, registry_id: str) -> None:
         )
     if state.routing_closed:
         remaining = sorted(set(state.required_clerk_ids) - set(state.reconciled_clerk_ids))
+        if not remaining:
+            raise FleetRegistryRecoveryPending(
+                "Registry recovery is awaiting explicit host closeout for an empty active-lane inventory.",
+                next_step="Verify that the restored registry has no effective assignments, then run "
+                "closeout-empty-registry with the restricted incident/change reference.",
+            )
         raise FleetRegistryRecoveryPending(
             "Registry recovery is still awaiting original lane reconciliation: "
             + ", ".join(remaining),
             next_step="Run reconcile-registry for each original Clerk volume; do not "
             "create, release, or reassign an account while recovery is pending.",
         )
+
+
+def closeout_empty_registry_recovery(
+    store: FleetRegistryStore,
+    *,
+    control_dir: Path,
+    operator: str,
+    change_ref: str,
+) -> RegistryRecoveryState:
+    """Record explicit host closeout when a restored backup had no active lanes."""
+    state = read_recovery_state(control_dir)
+    if state is None or state.registry_id != store.registry_id:
+        raise FleetRegistryRecoveryPending(
+            "No matching registry restore ceremony is awaiting empty-inventory closeout."
+        )
+    if state.required_clerk_ids or state.reconciled_clerk_ids or state.provider_summaries:
+        raise FleetRegistryRecoveryPending(
+            "Empty-inventory closeout cannot replace original lane reconciliation."
+        )
+    operator = operator.strip()
+    change_ref = change_ref.strip()
+    if not operator or len(operator) > 128 or not change_ref or len(change_ref) > 512:
+        raise FleetRegistryRecoveryPending(
+            "Empty-inventory closeout requires bounded operator and incident/change references."
+        )
+    effective = [
+        assignment
+        for assignment in store.list_active_assignments()
+        if assignment.state == AssignmentState.EFFECTIVE
+    ]
+    if effective:
+        raise FleetRegistryRecoveryPending(
+            "The restored registry contains effective assignments and cannot use empty-inventory closeout.",
+            next_step="Restore matching lane evidence and reconcile every effective assignment.",
+        )
+    updated = RegistryRecoveryState(
+        state_schema_version=state.state_schema_version,
+        registry_id=state.registry_id,
+        backup_sha256=state.backup_sha256,
+        opened_at_ms=state.opened_at_ms,
+        required_clerk_ids=(),
+        reconciled_clerk_ids=(),
+        provider_summaries={},
+        empty_inventory_attestation={
+            "operator": operator,
+            "change_ref": change_ref,
+            "attested_at_ms": now_ms_utc(),
+        },
+    )
+    _write_recovery_state(control_dir, updated)
+    return updated
 
 
 def reconcile_restored_lane(
@@ -461,59 +538,70 @@ def reconcile_restored_lane(
         ) from exc
     assert summary is not None
     now = now_ms_utc()
-    with service._store.transaction() as conn:
-        existing = service._store.read_assignment_on(
-            conn, broker=clerk.broker, canonical_account_id=canonical
-        )
-        restored = AccountAssignmentRecord(
-            broker=clerk.broker,
-            canonical_external_account_id=canonical,
-            clerk_id=clerk_id,
-            assignment_generation=evidence.assignment_generation,
-            state=AssignmentState.EFFECTIVE,
-            effective_profile_id=evidence.effective_profile_id,
-            effective_revision=evidence.effective_revision,
-            confirmed_binding_generation=evidence.binding_generation,
-            confirmed_profile_id=evidence.effective_profile_id,
-            confirmed_revision=evidence.effective_revision,
-            confirmed_at_ms=evidence.confirmed_at_ms,
-            confirmed_agent_instance_id=evidence.agent_instance_id,
-            confirmed_routing_epoch=evidence.routing_epoch,
-            recorded_at_ms=now if existing is None else existing.recorded_at_ms,
-            updated_at_ms=now,
-        )
-        if existing is None:
-            service._store.insert_assignment(conn, restored)
-        else:
-            if (
-                existing.clerk_id != clerk_id
-                or existing.state == AssignmentState.RELEASED
-                or existing.assignment_generation != evidence.assignment_generation
-            ):
-                raise ClerkAssignmentConflict(
-                    f"Restored assignment {canonical} conflicts with durable evidence from clerk {clerk_id}.",
-                    next_step="Keep routing closed; resolve the conflicting recovery evidence offline.",
-                )
-            if (
-                existing.confirmed_binding_generation is not None
-                and existing.confirmed_binding_generation > evidence.binding_generation
-            ) or (
-                existing.confirmed_routing_epoch is not None
-                and existing.confirmed_routing_epoch > evidence.routing_epoch
-            ):
-                raise ClerkIdentityMismatch(
-                    f"Restored registry facts for clerk {clerk_id} are newer than its lane evidence.",
-                    next_step="Keep routing closed; use a matching lane backup rather than rolling facts back.",
-                )
-            if not service._store.cas_update_assignment(
-                conn,
-                restored,
-                previous_generation=existing.assignment_generation,
-                previous_state=existing.state,
-            ):
-                raise ClerkAssignmentConflict(
-                    f"Assignment {canonical} changed while registry recovery was reconciling it.",
-                )
+    try:
+        with service._store.transaction() as conn:
+            existing = service._store.read_assignment_on(
+                conn, broker=clerk.broker, canonical_account_id=canonical
+            )
+            restored = AccountAssignmentRecord(
+                broker=clerk.broker,
+                canonical_external_account_id=canonical,
+                clerk_id=clerk_id,
+                assignment_generation=evidence.assignment_generation,
+                state=AssignmentState.EFFECTIVE,
+                effective_profile_id=evidence.effective_profile_id,
+                effective_revision=evidence.effective_revision,
+                confirmed_binding_generation=evidence.binding_generation,
+                confirmed_profile_id=evidence.effective_profile_id,
+                confirmed_revision=evidence.effective_revision,
+                confirmed_at_ms=evidence.confirmed_at_ms,
+                confirmed_agent_instance_id=evidence.agent_instance_id,
+                confirmed_routing_epoch=evidence.routing_epoch,
+                recorded_at_ms=now if existing is None else existing.recorded_at_ms,
+                updated_at_ms=now,
+            )
+            if existing is None:
+                service._store.insert_assignment(conn, restored)
+            else:
+                if (
+                    existing.clerk_id != clerk_id
+                    or existing.state == AssignmentState.RELEASED
+                    or existing.assignment_generation != evidence.assignment_generation
+                ):
+                    raise ClerkAssignmentConflict(
+                        f"Restored assignment {canonical} conflicts with durable evidence "
+                        f"from clerk {clerk_id}.",
+                        next_step="Keep routing closed; resolve the conflicting recovery "
+                        "evidence offline.",
+                    )
+                if (
+                    existing.confirmed_binding_generation is not None
+                    and existing.confirmed_binding_generation > evidence.binding_generation
+                ) or (
+                    existing.confirmed_routing_epoch is not None
+                    and existing.confirmed_routing_epoch > evidence.routing_epoch
+                ):
+                    raise ClerkIdentityMismatch(
+                        f"Restored registry facts for clerk {clerk_id} are newer than its "
+                        "lane evidence.",
+                        next_step="Keep routing closed; use a matching lane backup rather "
+                        "than rolling facts back.",
+                    )
+                if not service._store.cas_update_assignment(
+                    conn,
+                    restored,
+                    previous_generation=existing.assignment_generation,
+                    previous_state=existing.state,
+                ):
+                    raise ClerkAssignmentConflict(
+                        f"Assignment {canonical} changed while registry recovery was "
+                        "reconciling it.",
+                    )
+    except sqlite3.IntegrityError as exc:
+        raise ClerkIdentityMismatch(
+            f"Clerk {clerk_id}'s durable recovery evidence violates the registry protocol.",
+            next_step="Keep routing closed and recover an intact matching lane-evidence backup.",
+        ) from exc
     reconciled = tuple(sorted(set(state.reconciled_clerk_ids) | {clerk_id}))
     summaries = dict(state.provider_summaries)
     summaries[clerk_id] = json.loads(summary.to_json())
@@ -525,6 +613,7 @@ def reconcile_restored_lane(
         required_clerk_ids=state.required_clerk_ids,
         reconciled_clerk_ids=reconciled,
         provider_summaries=summaries,
+        empty_inventory_attestation=state.empty_inventory_attestation,
     )
     _write_recovery_state(control_dir, updated)
     return updated
@@ -536,6 +625,7 @@ __all__ = [
     "D_COMPATIBLE_SCHEMA_VERSION",
     "RegistryBackupManifest",
     "RegistryRecoveryState",
+    "closeout_empty_registry_recovery",
     "create_registry_backup",
     "read_backup_manifest",
     "read_recovery_state",

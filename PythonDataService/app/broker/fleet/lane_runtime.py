@@ -144,14 +144,14 @@ class _CapacityPool:
             self._condition.notify(1)
 
 
-def compatibility_route_family(method: str, path: str, *, pinned: bool) -> str | None:
+def compatibility_route_family(method: str, path: str) -> str | None:
     """Return the fixed inventory family for an eligible legacy read.
 
     This deliberately matches only the Delivery-B retained-unscoped inventory.
     It retains no raw route parameter (account, strategy, ticket, or order ID)
     and excludes canonical clerk paths and all internal traffic.
     """
-    if pinned or method.upper() not in _SAFE_METHODS or not path.startswith("/api/brokers/"):
+    if method.upper() not in _SAFE_METHODS or not path.startswith("/api/brokers/"):
         return None
     parts = tuple(segment for segment in path.split("/") if segment)
     # api, brokers, broker, ...; the broker value is intentionally discarded.
@@ -515,11 +515,10 @@ class FleetLaneRuntimeMiddleware:
             for name, value in scope.get("headers", [])
         }
         method = str(scope["method"]).upper()
-        family = compatibility_route_family(
-            method,
-            str(scope.get("path", "")),
-            pinned=b"x-fleet-clerk-id" in headers,
-        )
+        family = compatibility_route_family(method, str(scope.get("path", "")))
+        # Coordinator forwarding carries this header. It must not double-count
+        # D's aggregate, but a client-supplied copy cannot bypass E retirement.
+        measurement_family = None if b"x-fleet-clerk-id" in headers else family
         if family is not None:
             from app.broker.fleet.compatibility_retirement import CompatibilityRetirementRefusal
 
@@ -573,11 +572,14 @@ class FleetLaneRuntimeMiddleware:
         def record_response(status: int) -> None:
             """Record one emitted response class only after its start line."""
             nonlocal measurement_recorded
-            if family is None or measurement_recorded:
+            if measurement_family is None or measurement_recorded:
                 return
             response_class = f"{status // 100}xx"
             if response_class in _COMPATIBILITY_RESPONSE_CLASSES:
-                self._evidence.schedule(route_family=family, response_class=response_class)
+                self._evidence.schedule(
+                    route_family=measurement_family,
+                    response_class=response_class,
+                )
             measurement_recorded = True
 
         async def refuse(pool: str) -> None:

@@ -8,7 +8,7 @@
 
 Run every command from the host against the named coordinator control volume. The browser, coordinator HTTP API, and Clerk agents cannot invoke these ceremonies. Keep Paper and Live on their original volumes and deployment namespace. Never copy a marker, confirmation file, profile, SQLite database, receipt, credential, custody record, or arming evidence across lanes.
 
-The recovery commands do not contain broker credentials and never call a broker, arm Live, submit a command, or replay a routing receipt. A restored registry starts with both routing and assignment mutation closed. It reopens only when every original active Clerk has reconciled its own durable identity and bounded provider summary. Normal provider gates still apply after that.
+The recovery commands do not contain broker credentials and never call a broker, arm Live, submit a command, or replay a routing receipt. A restored registry starts with both routing and assignment mutation closed. It reopens only when every original active Clerk has reconciled its own durable identity and bounded provider summary. A backup with no effective assignment also remains closed until a named host operator records an explicit empty-inventory closeout. Normal provider gates still apply after that.
 
 ## 1. Prepare and capture backups
 
@@ -63,6 +63,17 @@ If the restored registry lacks an assignment, the ceremony may reconstruct only 
 
 Repeat until output reports `routing_closed: false`. Starting an agent creates a new routing epoch, so it must perform its ordinary exact-binding confirmation before it becomes routeable. This is intentionally not a command retry and does not replay a routing receipt.
 
+If and only if `restore-registry` reports an empty `required_clerk_ids` list, inspect the restored registry and the restricted incident inventory to confirm that no effective assignment existed at capture. Provisioned or reserved rows are not authority, but an empty list never reopens the registry automatically. Record the closeout explicitly:
+
+```bash
+.venv/bin/python -m scripts.manage_broker_fleet closeout-empty-registry \
+  --control-dir <coordinator-control-root> \
+  --operator <named-operator> \
+  --change-ref <restricted-incident-or-change-reference>
+```
+
+This command refuses if the restored database contains any effective assignment. It records only the bounded operator name, restricted record reference and UTC-millisecond timestamp; it does not inspect or copy broker credentials. Do not use it instead of reconciling a listed Clerk.
+
 ## 4. Exercise same-owner restart and reassignment
 
 For a same-owner restart, restore only the original Clerk volume, preserve its opaque Clerk and volume identities, and have the original agent re-confirm its exact last-effective binding. The assignment remains with that Clerk; do not release it merely because a heartbeat expired.
@@ -103,7 +114,7 @@ Attach a restricted redacted record containing:
 - same-owner restart result, explicit reassignment generation and successor still-unroutable result before provider confirmation;
 - a deliberately corrupted manifest or confirmation-evidence refusal;
 - a deliberately newer-schema refusal;
-- restore output showing routing and assignment mutation closed, then each original lane's reconciliation output; and
+- restore output showing routing and assignment mutation closed, then each original lane's reconciliation output or the explicit empty-inventory host closeout; and
 - D-compatible rollback output plus proof that no combined role, shared volume, credential copy, Live arming change or command replay occurred.
 
 The checked-in tests exercise this control flow only with fake providers and temporary volumes. They do not validate production mounts, actual secrets, real broker state, operator credential isolation, host failure containment or Live command authorization.

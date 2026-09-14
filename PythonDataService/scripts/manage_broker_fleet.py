@@ -54,6 +54,7 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.identity import new_service_token
 from app.broker.fleet.recovery import (
     D_COMPATIBLE_SCHEMA_VERSION,
+    closeout_empty_registry_recovery,
     create_registry_backup,
     read_recovery_state,
     reconcile_restored_lane,
@@ -399,6 +400,29 @@ def _reconcile_registry(args: argparse.Namespace) -> int:
         )
     finally:
         service.close()
+    return 0
+
+
+def _closeout_empty_registry(args: argparse.Namespace) -> int:
+    """Close an empty-active-inventory restore with named host evidence."""
+    store = FleetRegistryStore.open(control_dir=Path(args.control_dir))
+    try:
+        state = closeout_empty_registry_recovery(
+            store,
+            control_dir=Path(args.control_dir),
+            operator=args.operator,
+            change_ref=args.change_ref,
+        )
+        _write(
+            {
+                "registry_id": state.registry_id,
+                "routing_closed": state.routing_closed,
+                "assignment_mutation_closed": state.routing_closed,
+                "empty_inventory_attestation": state.empty_inventory_attestation,
+            }
+        )
+    finally:
+        store.close()
     return 0
 
 
@@ -866,6 +890,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Bounded provider summary JSON from the original lane's recovery observation",
     )
     reconcile.set_defaults(func=_reconcile_registry)
+
+    closeout_empty = subparsers.add_parser(
+        "closeout-empty-registry",
+        help="Attest and close a restored registry with no effective assignments",
+    )
+    _with_control(closeout_empty)
+    closeout_empty.add_argument("--operator", required=True)
+    closeout_empty.add_argument(
+        "--change-ref",
+        required=True,
+        help="Restricted incident or change record proving the host inventory closeout",
+    )
+    closeout_empty.set_defaults(func=_closeout_empty_registry)
     return parser
 
 

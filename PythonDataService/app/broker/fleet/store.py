@@ -171,6 +171,15 @@ class FleetRegistryStore:
         with self._lock:
             self._conn.close()
 
+    def backup_to(self, database: Path) -> None:
+        """Write a consistent SQLite snapshot under the connection lock."""
+        with self._lock:
+            destination = sqlite3.connect(database)
+            try:
+                self._conn.backup(destination)
+            finally:
+                destination.close()
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """One serialized write; nested operations stay inside the outer commit."""

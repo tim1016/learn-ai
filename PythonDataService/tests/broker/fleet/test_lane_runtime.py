@@ -229,19 +229,18 @@ async def test_stream_queue_wait_releases_request_capacity_for_ordinary_reads(
 
 def test_compatibility_inventory_is_fixed_and_excludes_canonical_internal_and_mutations() -> None:
     """Only retained, unpinned read families may enter the D measurement."""
-    assert compatibility_route_family("GET", "/api/brokers/alpaca/assets", pinned=False) == "brokers_lane_extras"
+    assert compatibility_route_family("GET", "/api/brokers/alpaca/assets") == "brokers_lane_extras"
     assert compatibility_route_family(
-        "HEAD", "/api/brokers/alpaca/configuration/selection", pinned=False
+        "HEAD", "/api/brokers/alpaca/configuration/selection"
     ) == "broker_configuration"
     assert compatibility_route_family(
-        "GET", "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt", pinned=False
+        "GET", "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt"
     ) == "run_replay"
     assert compatibility_route_family(
-        "GET", "/api/brokers/alpaca/clerks/clrk_abc/account", pinned=False
+        "GET", "/api/brokers/alpaca/clerks/clrk_abc/account"
     ) is None
-    assert compatibility_route_family("GET", "/internal/fleet/sessions", pinned=False) is None
-    assert compatibility_route_family("POST", "/api/brokers/alpaca/bots", pinned=False) is None
-    assert compatibility_route_family("GET", "/api/brokers/alpaca/bots", pinned=True) is None
+    assert compatibility_route_family("GET", "/internal/fleet/sessions") is None
+    assert compatibility_route_family("POST", "/api/brokers/alpaca/bots") is None
 
 
 async def test_measurement_persists_only_safe_aggregate_and_never_mutations(
@@ -482,6 +481,36 @@ async def test_retired_state_refuses_only_retained_unscoped_reads(tmp_path: Path
     retired = await _invoke(runtime, path="/api/brokers/alpaca/bots")
     assert _status(retired) == 410
     assert json.loads(retired[-1]["body"])["reason"] == "compatibility_read_retired"
+    arbitrary_header = await _invoke(
+        runtime,
+        path="/api/brokers/alpaca/bots",
+        headers=[(b"x-fleet-clerk-id", b"clrk_arbitrary")],
+    )
+    assert _status(arbitrary_header) == 410
+
+    from app.broker.fleet.agent_identity import (
+        SERVED_IDENTITY_STATE_KEY,
+        FleetIdentityMiddleware,
+    )
+
+    identity = {
+        "broker": "alpaca",
+        "clerk_id": "clrk_serving",
+        "routing_epoch": 4,
+        "binding_generation": 9,
+    }
+    app_state = SimpleNamespace(state=SimpleNamespace())
+    setattr(app_state.state, SERVED_IDENTITY_STATE_KEY, lambda: identity)
+    matching_header = await _invoke(
+        FleetIdentityMiddleware(runtime),
+        path="/api/brokers/alpaca/bots",
+        headers=[
+            (b"x-fleet-broker", b"alpaca"),
+            (b"x-fleet-clerk-id", b"clrk_serving"),
+        ],
+        app_state=app_state,
+    )
+    assert _status(matching_header) == 410
     assert calls == 0
 
     canonical = await _invoke(runtime, path="/api/brokers/alpaca/clerks/clrk_paper/bots")

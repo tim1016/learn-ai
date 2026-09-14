@@ -426,6 +426,24 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
         == 0
     )
     restored = json.loads(capsys.readouterr().out)
-    assert restored["routing_closed"] is False
-    assert restored["assignment_mutation_closed"] is False
+    assert restored["routing_closed"] is True
+    assert restored["assignment_mutation_closed"] is True
     assert restored["rollback_topology"] == "d_compatible"
+    assert (
+        main(
+            _argv(
+                "closeout-empty-registry",
+                "--control-dir",
+                str(control_dir),
+                "--operator",
+                "fleet-owner",
+                "--change-ref",
+                "incident-2049",
+            )
+        )
+        == 0
+    )
+    closeout = json.loads(capsys.readouterr().out)
+    assert closeout["routing_closed"] is False
+    assert closeout["assignment_mutation_closed"] is False
+    assert closeout["empty_inventory_attestation"]["operator"] == "fleet-owner"
