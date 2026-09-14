@@ -14,7 +14,7 @@
  */
 
 import type { LaneDescriptor } from './fleet-directory.types';
-import type { ResourceTarget } from './resource-target';
+import { resourceTarget, type ResourceTarget } from './resource-target';
 
 export interface LaneFence {
   readonly bindingGeneration: number | null;
@@ -56,4 +56,17 @@ export function targetMatchesFence(target: ResourceTarget, fence: LaneFence): bo
     target.bindingGeneration === fence.bindingGeneration &&
     target.routingEpoch === fence.routingEpoch
   );
+}
+
+/** Re-stamp a target's binding-generation fence with what the operator was
+ * shown, without re-deriving any other dimension. */
+export function fencedTarget(target: ResourceTarget, fence: LaneFence): ResourceTarget {
+  return resourceTarget(target.broker, target.clerkId, {
+    accountId: target.accountId,
+    entityId: target.entityId,
+    capability: target.capability,
+    idempotencyKey: target.idempotencyKey,
+    bindingGeneration: fence.bindingGeneration,
+    routingEpoch: fence.routingEpoch,
+  });
 }

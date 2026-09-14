@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,10 +20,15 @@ import type {
   BotPanelLiveSnapshot,
   BotRunView,
   PanelAction,
+  PanelActionResult,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
-import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  type FleetDirectoryDouble,
+} from '../../../../fleet/fleet-directory-testing';
 
 const messageService = { add: vi.fn() };
 const chartMocks = vi.hoisted(() => {
@@ -51,7 +57,13 @@ vi.mock('lightweight-charts', () => {
 beforeEach(() => {
   TestBed.configureTestingModule({
     providers: [
-      provideFleetDirectory(),
+      // The double's default lane must resolve for this file's routed
+      // clerkId ('clrk_spec', not the shared fixture's TEST_CLERK_ID) so the
+      // fence tests exercise a real lane rather than a permanently-missing one.
+      provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      }),
       { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
       { provide: MarketDataService, useValue: marketDataMock },
     ],
@@ -220,6 +232,17 @@ const OPEN_CUSTODY_TIMELINE_ACTION = {
     'execution:alpaca-execution-1',
     'operation:effect:sid-001:recovery',
   ],
+} satisfies PanelAction;
+
+const STOP_ACTION = {
+  action_id: 'stop',
+  revision: 1,
+  concurrency_token: 'stop-token',
+  enabled: true,
+  label: 'Stop',
+  explanation: 'Stop the bot.',
+  blockers: [],
+  confirmation: null,
 } satisfies PanelAction;
 
 const HISTORICAL_RECOVERY_PLAN: HistoricalExecutionRecoveryPlan = {
@@ -502,6 +525,53 @@ function openDisclosure(label: string): void {
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
   details.open = true;
   fireEvent(details, new Event('toggle'));
+}
+
+function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActionResult {
+  return {
+    action_id: 'stop',
+    outcome: 'success',
+    receipt_id: 'receipt-001',
+    recorded_at_ms: 1_753_800_000_000,
+    applied: true,
+    revision: 1,
+    concurrency_token: 'stop-token',
+    message: 'Bot stop requested.',
+    ...overrides,
+  };
+}
+
+/** Renders the shell with a single "Stop" action available on the trader
+ * lens, so the fence tests only need to click one button. */
+async function renderShell(
+  overrides: {
+    directory?: FleetDirectoryDouble;
+    runBotAction?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
+  mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+    ...PANEL,
+    actions: [STOP_ACTION],
+    primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+  }));
+  const service = overrides.runBotAction
+    ? { ...mockService, runBotAction: overrides.runBotAction }
+    : mockService;
+  const { fixture } = await render(BotPanelShellComponent, {
+    inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+    providers: [
+      provideRouter([]),
+      { provide: BrokerV2PanelService, useValue: service },
+      { provide: BrokersService, useValue: brokersMock },
+      { provide: MessageService, useValue: messageService },
+      ...(overrides.directory
+        ? [{ provide: overrides.directory.provide, useValue: overrides.directory.useValue }]
+        : []),
+    ],
+  });
+  await fixture.whenStable();
+  fixture.detectChanges();
+  return { fixture };
 }
 
 describe('BotPanelShellComponent', () => {
@@ -1382,5 +1452,42 @@ describe('BotPanelShellComponent', () => {
         "Activation failed after Clerk registration for run 'run-2'; the Clerk stop committed.",
       ),
     ).toBeTruthy();
+  });
+
+  it('refuses a panel action whose lane rebound while the action was open', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    await renderShell({ directory, runBotAction });
+
+    // The operator is shown generation 3, then the coordinator rebinds to 4
+    // before they press the button — exactly what refresh() will start doing.
+    directory.rebind({
+      observed_at_ms: 1_757_000_000_001,
+      clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+  });
+
+  it('sends the generation the operator was shown, not the one current at click', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
+    await renderShell({ directory, runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: /stop/i }));
+
+    expect(runBotAction).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
+      expect.anything(), expect.anything(), null,
+    );
   });
 });
