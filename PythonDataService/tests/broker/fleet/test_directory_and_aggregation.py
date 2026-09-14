@@ -50,7 +50,7 @@ def _live(fleet_service, tmp_path: Path, broker: str, label: str):
     return lane
 
 
-def test_every_entry_carries_broker_clerk_identity_and_no_internal_secrets(
+def test_every_entry_carries_only_the_allowed_fields_and_never_the_worker_key(
     control_dir: Path, fleet_service
 ) -> None:
     """Directory entries carry exactly the allowed fields and never the worker key."""
@@ -81,14 +81,13 @@ def test_every_entry_carries_broker_clerk_identity_and_no_internal_secrets(
 
 
 def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
-    control_dir: Path, fleet_service
+    fleet_service,
 ) -> None:
     """Capability evidence is per provider; no parity is inferred in either direction."""
     from app.broker.fleet.errors import BrokerClerkCapabilityUnavailable
     from app.broker.fleet.provider import Capability
 
-    _live(fleet_service, control_dir.parent, "fake_alpha", "alpha")
-    _live(fleet_service, control_dir.parent, "fake_beta", "beta")
+    assert FAKE_ALPHA_CAPABILITIES != FAKE_BETA_CAPABILITIES
 
     # Both declare account_read…
     fleet_service.require_capability(broker="fake_alpha", capability=Capability.ACCOUNT_READ)
@@ -215,6 +214,9 @@ def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
     assert lanes[1]["ok"] is False
     assert lanes[1]["broker"] == "fake_beta"
     assert lanes[1]["error_reason"] == "clerk_unreachable"
+    # A failed lane carries no value at all — the healthy lane's fact never
+    # substitutes for it.
+    assert "value" not in lanes[1]
 
 
 def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(

@@ -361,7 +361,7 @@ catalog, not bridged, and mounted clerk-only — so it 404s in fleet posture.
 The fleet suite is a strong **contract-and-schema** suite wearing a **concurrency** suite's
 vocabulary: 6 of 227 tests create real contention, and only 2 contend across separate store
 connections. Roughly 37 tests have names that diverge from their assertions — including
-`test_compatibility_evidence_separates_unauthorized_and_not_found_responses`, which proves the
+`test_compatibility_evidence_separates_failed_probes_from_successful_reads`, which proves the
 two **collapse**. Full assay: [#2056](https://github.com/tim1016/learn-ai/issues/2056).
 
 ## 9. Operator vocabulary

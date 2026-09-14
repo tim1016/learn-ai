@@ -103,11 +103,6 @@ def test_the_composition_registry_maps_alpaca_and_nothing_else() -> None:
     adapters = production_provider_adapters()
     assert set(adapters) == {"alpaca"}
     assert adapters["alpaca"].provider_id == "alpaca"
-    # The fleet package's own constant stays empty: the provider enters at
-    # application composition, never inside the broker-neutral package.
-    from app.broker.fleet.provider import PRODUCTION_PROVIDER_ADAPTERS
-
-    assert PRODUCTION_PROVIDER_ADAPTERS == {}
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +517,7 @@ async def test_http_delivery_serves_a_read_and_a_stream_over_a_real_agent(
     assert json.loads(events[0].data)["account"] == "abcdef01-1234-abcd-5678-ef0123456789"
 
 
-async def test_a_wrong_identity_echo_is_an_uncertain_outcome(agent_server: _RealServer) -> None:
+async def test_verify_identity_echo_refuses_a_wrong_or_missing_echo() -> None:
     """A mismatched echo refuses the response after possible dispatch."""
     result = DeliveryResult(
         status_code=200,

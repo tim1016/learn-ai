@@ -246,10 +246,12 @@ def test_configuration_access_stays_routable_without_a_confirmed_binding(
     assert session is not None
 
 
-def test_routing_attempts_correlate_and_never_replace_upstream_evidence(
+def test_routing_attempt_identity_is_per_lane_and_idempotent(
     control_dir: Path, fleet_service
 ) -> None:
-    """Attempts pin context before dispatch and carry, never replace, upstream evidence."""
+    """Context is pinned before dispatch, dispatch marking is idempotent, and a
+    retried attempt's idempotency key lands on the same row — but only within
+    one lane; another lane's identical key opens a different receipt."""
     lane, _session = _live_lane(fleet_service, control_dir.parent, "receipts")
 
     first = fleet_service.open_routing_attempt(

@@ -38,13 +38,13 @@ def test_provision_mints_distinct_identities_and_marks_the_volume(
     assert marker.created_at_ms == clock()
 
 
-def test_provisioning_an_unknown_production_provider_fails_closed(
+def test_provisioning_against_an_empty_adapter_set_fails_closed(
     control_dir: Path, clock: FrozenClock
 ) -> None:
     """Provisioning an unknown production provider refuses before anything is marked."""
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
-        provider_adapters={},  # the production set is empty in this slice
+        provider_adapters={},
         clock=clock,
     )
     try:

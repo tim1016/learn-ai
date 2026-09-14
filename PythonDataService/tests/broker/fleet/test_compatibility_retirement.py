@@ -121,8 +121,9 @@ def _evaluate(paths: dict[str, Path]) -> dict[str, object]:
     )
 
 
-def test_evaluate_retirement_requires_all_nontraffic_evidence(tmp_path: Path) -> None:
-    """A one-hit delta is not enough: inventory, scoped health, and receipt all gate retirement."""
+def test_complete_evidence_evaluates_eligible_with_twenty_zero_route_deltas(tmp_path: Path) -> None:
+    """Complete inventory, scoped health, and receipt evidence evaluates eligible,
+    with every route delta at zero."""
     receipt = _evaluate(_complete_evidence(tmp_path))
 
     assert receipt["decision"] == "eligible"

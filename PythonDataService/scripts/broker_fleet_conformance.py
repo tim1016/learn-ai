@@ -46,7 +46,7 @@ CONFORMANCE_CHECKS = (
         check_id="provider_and_clerk_isolation",
         description="Two fake providers and N clerks retain separate adapters, volumes, and state.",
         node_ids=(
-            "tests/broker/fleet/test_provider_conformance.py::test_n_clerks_across_two_providers_run_concurrently",
+            "tests/broker/fleet/test_provider_conformance.py::test_six_clerks_across_two_providers_hold_distinct_volumes_and_one_registry",
             "tests/broker/fleet/test_provider_conformance.py::test_provider_clients_and_state_share_no_mutable_object",
         ),
     ),

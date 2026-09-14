@@ -104,7 +104,11 @@ def test_foreign_key_pins_assignments_and_sessions_to_real_clerks(
     control_dir: Path, fleet_service
 ) -> None:
     """Assignments and sessions are pinned to real clerk rows by foreign keys."""
-    from app.broker.fleet.records import AccountAssignmentRecord, AssignmentState
+    from app.broker.fleet.records import (
+        AccountAssignmentRecord,
+        AssignmentState,
+        ClerkSessionRecord,
+    )
 
     store: FleetRegistryStore = fleet_service._store
     orphan = AccountAssignmentRecord(
@@ -118,3 +122,14 @@ def test_foreign_key_pins_assignments_and_sessions_to_real_clerks(
     )
     with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
         store.insert_assignment(conn, orphan)
+
+    orphan_session = ClerkSessionRecord(
+        broker="fake_alpha",
+        clerk_id="clrk_0000000000000000000000ff",
+        agent_instance_id="agent-orphan",
+        routing_epoch=1,
+        started_at_ms=1,
+        last_seen_at_ms=1,
+    )
+    with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+        store.upsert_session(conn, orphan_session)

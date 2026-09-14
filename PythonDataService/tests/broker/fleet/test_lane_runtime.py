@@ -340,7 +340,7 @@ async def test_capacity_refusal_is_recorded_as_a_compatibility_5xx(tmp_path: Pat
     ]
 
 
-async def test_compatibility_evidence_separates_unauthorized_and_not_found_responses(
+async def test_compatibility_evidence_separates_failed_probes_from_successful_reads(
     tmp_path: Path,
 ) -> None:
     """Failed probes cannot be mistaken for successfully migrated consumers."""
