@@ -84,6 +84,24 @@ def _status(messages: list[AsgiMessage]) -> int:
     return next(message["status"] for message in messages if message["type"] == "http.response.start")
 
 
+def _scoped_os(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
+    """Swap the ``os`` *binding* inside ``lane_runtime`` only.
+
+    ``monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", …)``
+    reads through to the process-global ``os`` module and mutates it for
+    every thread and every other test in the session. Rebinding the module
+    attribute cannot leak: only ``lane_runtime``'s own lookups see the shim.
+    """
+    from app.broker.fleet import lane_runtime
+
+    shim = SimpleNamespace(
+        fsync=os.fsync, replace=os.replace, open=os.open, close=os.close, O_RDONLY=os.O_RDONLY
+    )
+    for name, value in overrides.items():
+        setattr(shim, name, value)
+    monkeypatch.setattr(lane_runtime, "os", shim)
+
+
 async def test_request_capacity_refuses_then_recovers_without_running_refused_handler(
     tmp_path: Path,
 ) -> None:
@@ -371,8 +389,7 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
         del source, destination
         raise OSError("replace refused")
 
-    original_replace = os.replace
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", refuse_replace)
+    _scoped_os(monkeypatch, replace=refuse_replace)
 
     async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -386,7 +403,7 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
     assert "Compatibility route-hit export failed." in caplog.text
     assert evidence._pending_updates == {("broker_bots", "2xx"): 1}
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", original_replace)
+    _scoped_os(monkeypatch)
     await evidence.flush()
     assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
@@ -566,7 +583,7 @@ async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying
             raise OSError("parent fsync refused")
         original_fsync(file_descriptor)
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_parent_sync)
+    _scoped_os(monkeypatch, fsync=refuse_parent_sync)
     evidence.schedule(route_family="broker_bots", response_class="2xx")
     with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
         await evidence.flush()
@@ -575,7 +592,7 @@ async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying
     assert evidence._pending_updates == {}
     assert evidence._directory_sync_required
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", original_fsync)
+    _scoped_os(monkeypatch)
     await evidence.flush()
     assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
