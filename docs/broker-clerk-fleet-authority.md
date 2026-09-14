@@ -140,7 +140,7 @@ Distinguishing the fences that are **real and tested** from those that are **dec
 - **A1, A2 and A7 addendum clauses** — all hold, with real triggers and real tests
   ([#2054](https://github.com/tim1016/learn-ai/issues/2054)).
 
-### Declared, but not in force
+### Declared — three since closed, one still hollow
 
 - **`validate_served_context` had no production caller; it is now dispatched.** ADR 0062
   Decision 5's provider safety gate is declared (`app/broker/fleet/provider.py:283`) and
@@ -223,7 +223,7 @@ The register splits three ways, not the expected two:
 
 | Axis | Level | Why |
 |---|---|---|
-| **Structural** — can it keep lanes apart as built? | **Low** | Identity is not a request parameter; the fences are in the database and tested; ADR 0062 scores 17 holds / 1 partial / **0 absent** |
+| **Structural** — can it keep lanes apart as built? | **Low** | Identity is not a request parameter; the fences are in the database and tested; ADR 0062 scores **0 absent**; of the four partials §4 tracked, three are now closed and Decision 5 remains partial (§4, §8) |
 | **State** — is what runs what was designed? | **High** | The posture is untracked, unreviewed, unreproducible, and `restart.sh` can destroy a lane (§5) |
 | **Observability** — if it goes wrong, will you know? | **High** | 25 refusal codes, none renderable; no audit read surface (§7) |
 
@@ -248,8 +248,10 @@ both cheap to fix.
 ### What would change the answer
 
 1. Paper lane activation.
-2. Browser-driven provisioning, or a second concurrent operator — makes the non-transactional
-   volume-root fence reachable.
+2. Browser-driven provisioning, or a second concurrent operator — the volume-root fence is now
+   transactional and DDL-backed (§4), so the registry itself no longer has a race here; the
+   remaining exposure is whatever a second operator does outside the registry, which this
+   document has not audited.
 3. Loss of `compose.override.yaml` — silent, and nothing today would notice.
 4. A real additional broker — both fakes canonicalize identically
    (`tests/broker/fleet/conftest.py:127`), so provider-qualified assignment is effectively
