@@ -493,7 +493,7 @@ class LaneRouter:
             readiness=operation.readiness,
         )
         _clerk, session, assignment = resolved
-        if assignment is not None:
+        if assignment is not None:  # execution operations only; CONFIGURATION_ACCESS resolves with no assignment
             self._refuse_unservable_context(broker, clerk_id, operation, session, assignment)
         return resolved
 
