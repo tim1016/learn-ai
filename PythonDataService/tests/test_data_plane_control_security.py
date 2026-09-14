@@ -186,6 +186,30 @@ def test_always_guarded_reads_are_declared_in_shared_manifest() -> None:
     assert undeclared == []
 
 
+def test_fleet_directory_read_is_declared_in_shared_manifest() -> None:
+    """The route-scan assertion above is blind to the fleet directory.
+
+    ``/api/broker-clerks`` carries the always-on guard but mounts only when
+    the coordinator surface installs (``FLEET_CONTROL_DIR`` set), so the
+    default test posture never registers it and the scan cannot catch a
+    missing manifest entry. Pin the entry directly: the browser's lane
+    directory loads this exact path through the dev proxy, which attaches
+    the control secret only for ``protected_read_prefixes`` matches — an
+    undeclared always-guarded read 403s from the browser the moment
+    ``DATA_PLANE_CONTROL_SECRET`` is configured.
+    """
+    from app.routers import broker_clerks
+
+    directory_routes = [
+        (route.path, sorted(route.methods or set()), _has_always_control_guard(route))
+        for route in broker_clerks.router.routes
+        if isinstance(route, APIRoute)
+    ]
+
+    assert ("/api/broker-clerks", ["GET"], True) in directory_routes
+    assert "/api/broker-clerks" in _PROTECTED_READ_PREFIXES
+
+
 @pytest.mark.asyncio
 async def test_control_mutation_rejects_missing_secret_header(monkeypatch) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")

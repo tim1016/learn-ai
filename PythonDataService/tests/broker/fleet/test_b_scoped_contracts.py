@@ -55,6 +55,7 @@ def _build_agent_app(
         SERVED_IDENTITY_STATE_KEY,
         FleetIdentityMiddleware,
     )
+    from app.security.data_plane_control import require_data_plane_control_secret_always
 
     agent = FastAPI()
     agent.add_middleware(FleetIdentityMiddleware)
@@ -64,7 +65,15 @@ def _build_agent_app(
 
     setattr(agent.state, SERVED_IDENTITY_STATE_KEY, _served)
 
-    @agent.get("/api/brokers/alpaca/account")
+    @agent.get(
+        "/api/brokers/alpaca/account",
+        dependencies=[
+            # Production shape: the real lane-side guard. The combined
+            # posture's raw-ASGI dispatch must present the coordinator
+            # token so this guard authorizes the forwarded read.
+            Depends(require_data_plane_control_secret_always),
+        ],
+    )
     async def account() -> JSONResponse:
         return JSONResponse({"account_id": ACCOUNT, "status": "ACTIVE"})
 
@@ -641,10 +650,17 @@ async def test_the_composed_auth_policy_honors_both_caller_families(
 
 
 async def test_combined_local_delivery_routes_in_process() -> None:
-    """The combined posture dispatches through raw ASGI, streams unbuffered."""
+    """The combined posture dispatches through raw ASGI, streams unbuffered.
+
+    The lane-side routes carry the always-on control-secret guard, so the
+    dispatch's coordinator token must reach that guard through the raw-ASGI
+    scope (lowercase header names, per the ASGI spec) with the secret
+    enforced — an unauthenticated-control test environment would let the
+    guard pass without the token and hide a broken dispatch.
+    """
     from app.broker.alpaca.clerk.fleet_adapter import ALPACA_OPERATIONS
     from app.broker.fleet.routing import build_local_delivery
-    from app.config import fleet_settings
+    from app.config import fleet_settings, settings
 
     agent = _build_agent_app(
         {"broker": "alpaca", "clerk_id": CLERK_ID,
@@ -652,6 +668,10 @@ async def test_combined_local_delivery_routes_in_process() -> None:
     )
     original = fleet_settings.COORDINATOR_SERVICE_TOKEN
     fleet_settings.COORDINATOR_SERVICE_TOKEN = COORDINATOR_TOKEN
+    original_secret = settings.DATA_PLANE_CONTROL_SECRET
+    original_allow = settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL
+    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
+    settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL = False
     try:
         delivery = build_local_delivery(agent)
         account_op = next(
@@ -688,6 +708,8 @@ async def test_combined_local_delivery_routes_in_process() -> None:
         assert len(events) == 3
         assert events[0].identity["x-fleet-routing-epoch"] == str(EPOCH)
     finally:
+        settings.DATA_PLANE_CONTROL_SECRET = original_secret
+        settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL = original_allow
         fleet_settings.COORDINATOR_SERVICE_TOKEN = original
 
 

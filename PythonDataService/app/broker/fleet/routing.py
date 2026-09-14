@@ -691,7 +691,12 @@ class _LocalAsgiHandler:
             headers.append((b"content-type", b"application/json"))
         token = (fleet_settings.COORDINATOR_SERVICE_TOKEN or "").strip()
         if token:
-            headers.append((COORDINATOR_TOKEN_HEADER.encode(), token.encode()))
+            # ASGI scope header names must be lowercase; a mixed-case name
+            # is invisible to Starlette's Headers and the lane-side guard
+            # would refuse the dispatch as an unauthenticated forward.
+            headers.append(
+                (COORDINATOR_TOKEN_HEADER.lower().encode(), token.encode())
+            )
         scope: dict[str, Any] = {
             "type": "http",
             "asgi": {"version": "3.0"},
