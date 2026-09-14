@@ -26,6 +26,12 @@ export class FleetDirectoryService {
   private readonly loading = signal(false);
   private inFlight: Promise<void> | null = null;
 
+  /** When the most recent load failed, so a retry is paced rather than barred. */
+  private failedAt: number | null = null;
+
+  /** How long a failed load is replayed before another attempt is made. */
+  private static readonly RETRY_COOLDOWN_MS = 3_000;
+
   /** The directory response, or undefined while loading / after an error. */
   readonly value = this.response.asReadonly();
 
@@ -61,12 +67,29 @@ export class FleetDirectoryService {
   }
 
   /** Await one directory load — redirect guards need the resolved lanes
-   * before deciding where an unscoped URL lands. */
+   * before deciding where an unscoped URL lands.
+   *
+   * A stored error is observable state, not a verdict. This used to reject
+   * immediately whenever a previous load had failed, and because the service is
+   * `providedIn: 'root'` that rejection was permanent: one blip while the
+   * directory was cold disabled every lane-scoped redirect and execution
+   * command for the whole browser session, recoverable only by a hard reload.
+   *
+   * A failure is therefore retried — but not faster than `RETRY_COOLDOWN_MS`,
+   * so a sustained outage replays the stored error cheaply instead of turning
+   * every navigation into another request. */
   ensureLoaded(): Promise<FleetDirectoryResponse> {
     const response = this.response();
     if (response !== undefined) return Promise.resolve(response);
+
     const error = this.loadError();
-    return error === undefined ? this.awaitLoaded(this.load()) : Promise.reject(error);
+    if (error !== undefined && this.failedAt !== null) {
+      const sinceFailure = Date.now() - this.failedAt;
+      if (sinceFailure >= 0 && sinceFailure < FleetDirectoryService.RETRY_COOLDOWN_MS) {
+        return Promise.reject(error);
+      }
+    }
+    return this.awaitLoaded(this.load());
   }
 
   /** One in-flight operation owns both state and every awaiting caller. */
@@ -79,9 +102,11 @@ export class FleetDirectoryService {
     this.inFlight = request.then(
       (response) => {
         this.response.set(response);
+        this.failedAt = null;
       },
       (error: unknown) => {
         this.loadError.set(error);
+        this.failedAt = Date.now();
       },
     ).finally(() => {
       this.loading.set(false);
