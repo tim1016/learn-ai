@@ -6,10 +6,29 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from scripts import run_broker_fleet_compose_qualification as qualification
+
+
+def test_compose_environment_overlay_preserves_base_interpolation_values() -> None:
+    """Adding temporary lane files must not discard required base Compose values."""
+    base = qualification.ComposeCommand(
+        engine="podman",
+        compose=("podman", "compose"),
+        environment={"POSTGRES_PASSWORD": "kept", "FLEET_COORDINATOR_PORT": "12345"},
+    )
+
+    updated = base.with_environment({"FLEET_PAPER_ENV_FILE": "/tmp/paper.env"})
+
+    assert updated.environment == {
+        "POSTGRES_PASSWORD": "kept",
+        "FLEET_COORDINATOR_PORT": "12345",
+        "FLEET_PAPER_ENV_FILE": "/tmp/paper.env",
+    }
+    assert base.environment == {"POSTGRES_PASSWORD": "kept", "FLEET_COORDINATOR_PORT": "12345"}
 
 
 def test_compose_topology_declares_distinct_role_env_files_and_lane_volumes() -> None:
@@ -41,15 +60,22 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     ):
         assert variable in compose
     assert "FLEET_ALLOW_LIVE_MUTATIONS" not in compose
-    assert "IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-1201}" in compose
-    assert "IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1202}" in compose
+    assert "FLEET_PAPER_IBKR_CLIENT_ID" not in compose
+    assert "FLEET_LIVE_IBKR_CLIENT_ID" not in compose
+    paper_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/paper.env.example").read_text(encoding="utf-8")
+    live_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/live.env.example").read_text(encoding="utf-8")
+    assert "IBKR_CLIENT_ID=1201" in paper_env
+    assert "IBKR_CLIENT_ID=1202" in live_env
     assert "ALPACA_MARKET_STATUS_UPSTREAM_URL" not in compose
-    assert "fleet-coordinator-lake:/lean-data-writer" in compose
-    assert "fleet-coordinator-cache:/app/cache" in compose
+    assert "${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z" in compose
+    assert "./PythonDataService/cache:/app/cache:z" in compose
     assert "FLEET_POSTGRES_PASSWORD" not in compose
     assert "POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD" in compose
     assert "POLYGON_API_KEY: ${POLYGON_API_KEY:-}" in compose
     assert "healthcheck:" in compose
+    assert "/app/cache:size=256m,mode=1777" in compose
+    assert "TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend" in compose
+    assert "alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator" in compose
 
 
 def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_dependencies() -> None:
@@ -65,6 +91,7 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
     assert '"--container-role", "coordinator"' not in overlay
     assert '"--container-role", "lane"' not in overlay
     assert "fleet-coordinator-postgres" in overlay
+    assert overlay.count('restart: "no"') == 2
 
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
@@ -82,6 +109,72 @@ def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> N
     with pytest.raises(qualification.QualificationError, match="Unknown fault"):
         qualification._fault_result("failed", "not a vocabulary value", {})
 
+
+def test_partial_fault_matrix_cannot_be_labelled_passed() -> None:
+    """An attempted or missing fault remains failed qualification evidence."""
+    faults = {
+        scenario: qualification._fault_result("passed", "proved", {"clerk_id": "live"})
+        for scenario in qualification.FAULT_SCENARIOS
+    }
+    qualification._assert_all_faults_passed(faults)
+    faults["credential_refusal_restart"] = qualification._fault_result(
+        "attempted", "process did not refuse", {"clerk_id": "live"}
+    )
+
+    with pytest.raises(qualification.QualificationError, match="nonpassing"):
+        qualification._assert_all_faults_passed(faults)
+
+    del faults["provider_outage"]
+    with pytest.raises(qualification.QualificationError, match="missing"):
+        qualification._assert_all_faults_passed(faults)
+
+
+def test_qualification_runtime_uses_enrollment_namespace(tmp_path: Path) -> None:
+    """Agents cannot accidentally boot in the production-default namespace."""
+    coordinator_env = tmp_path / "coordinator.env"
+
+    assert qualification._qualification_runtime_environment(
+        coordinator_env=coordinator_env,
+        deployment_namespace="compose:fleetqualification123",
+    ) == {
+        "FLEET_COORDINATOR_ENV_FILE": str(coordinator_env),
+        "FLEET_DEPLOYMENT_NAMESPACE": "compose:fleetqualification123",
+    }
+
+
+def test_capacity_probe_runs_as_module_inside_application_image() -> None:
+    """The real-image probe keeps `/app` on the import path for middleware imports."""
+    calls: list[list[str]] = []
+
+    class ComposeStub:
+        def run(
+            self,
+            project: str,
+            args: list[str],
+            *,
+            timeout_s: float,
+        ) -> subprocess.CompletedProcess[str]:
+            assert project == "qualification"
+            assert timeout_s == 20.0
+            calls.append(args)
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps(
+                    {
+                        "kind": "request",
+                        "refusal_status": 503,
+                        "reason": "fleet_lane_capacity_exhausted",
+                    }
+                ),
+                stderr="",
+            )
+
+    qualification._capacity_probe(
+        cast(qualification.ComposeCommand, ComposeStub()), "qualification", "request"
+    )
+
+    assert calls[0][3:6] == ["python", "-m", "scripts.run_broker_fleet_compose_qualification"]
 
 @pytest.mark.asyncio
 async def test_capacity_probe_exercises_real_lane_middleware_for_both_pools() -> None:
@@ -105,10 +198,10 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
         "DATA_PLANE_CONTROL_SECRET": "qualification-control-secret",
         "POLYGON_API_KEY": "qualification-polygon-placeholder",
     }
+    compose_command = qualification.ComposeCommand.discover().compose
     result = subprocess.run(
         [
-            "podman",
-            "compose",
+            *compose_command,
             "--project-name",
             "fleet-overlay-test",
             "--file",
@@ -133,8 +226,7 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
 
     rendered = subprocess.run(
         [
-            "podman",
-            "compose",
+            *compose_command,
             "--project-name",
             "fleet-overlay-test",
             "--file",

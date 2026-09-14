@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -128,6 +129,14 @@ class ComposeCommand:
         if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
             raise QualificationError(f"Unexpected {self.engine} inspect payload for {container_id!r}.")
         return payload[0]
+
+    def with_environment(self, updates: dict[str, str]) -> ComposeCommand:
+        """Return the same invocation while preserving required base interpolation."""
+        return ComposeCommand(
+            engine=self.engine,
+            compose=self.compose,
+            environment={**(self.environment or {}), **updates},
+        )
 
 
 def _request_json(
@@ -247,7 +256,7 @@ def _run_capacity_probe(kind: str) -> int:
 
 
 def _container_id(compose: ComposeCommand, project: str, service: str) -> str:
-    result = compose.run(project, ["ps", "-q", service])
+    result = compose.run(project, ["ps", "--all", "-q", service])
     container_id = result.stdout.strip()
     if not container_id:
         raise QualificationError(f"Compose did not create {service!r} in project {project!r}.")
@@ -351,6 +360,23 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     path.chmod(0o600)
 
 
+def _available_loopback_port() -> int:
+    """Reserve a currently free loopback port for the scoped Compose project."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _qualification_runtime_environment(
+    *, coordinator_env: Path, deployment_namespace: str
+) -> dict[str, str]:
+    """Pin every qualification role to the namespace used during enrollment."""
+    return {
+        "FLEET_COORDINATOR_ENV_FILE": str(coordinator_env),
+        "FLEET_DEPLOYMENT_NAMESPACE": deployment_namespace,
+    }
+
+
 def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -> ComposeCommand:
     """Provision test-only identities and return Compose with their env files."""
     control = "/app/artifacts/fleet"
@@ -415,7 +441,10 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
             ),
         },
     )
-    runtime_environment = {"FLEET_COORDINATOR_ENV_FILE": str(coordinator_env)}
+    runtime_environment = _qualification_runtime_environment(
+        coordinator_env=coordinator_env,
+        deployment_namespace=deployment_namespace,
+    )
     for lane, entry in lanes.items():
         lane_env = temporary_dir / f"{lane}.env"
         _write_env(
@@ -426,10 +455,11 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
                 "FLEET_WORKER_KEY": str(entry["worker_key"]),
                 "FLEET_AGENT_SERVICE_TOKEN": str(entry["agent_service_token"]),
                 "FLEET_COORDINATOR_SERVICE_TOKEN": str(entry["coordinator_service_token"]),
+                "IBKR_CLIENT_ID": "1201" if lane == "paper" else "1202",
             },
         )
         runtime_environment[f"FLEET_{lane.upper()}_ENV_FILE"] = str(lane_env)
-    return ComposeCommand(engine=compose.engine, compose=compose.compose, environment=runtime_environment)
+    return compose.with_environment(runtime_environment)
 
 
 def _wait_for_http(url: str, timeout_s: float, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -453,9 +483,10 @@ def _live_identity_after_paper_fault(
     timeout_s: float,
     headers: dict[str, str],
     live_id: str,
+    coordinator_url: str,
 ) -> dict[str, Any]:
     """Prove the coordinator still projects the enrolled Live identity."""
-    directory = _wait_for_http("http://127.0.0.1:8100/api/broker-clerks", timeout_s, headers)
+    directory = _wait_for_http(f"{coordinator_url}/api/broker-clerks", timeout_s, headers)
     clerks = directory.get("clerks")
     if not isinstance(clerks, list):
         raise QualificationError("Coordinator directory lost its clerk projection after Paper fault.")
@@ -473,11 +504,32 @@ def _fault_result(state: str, detail: str, live: dict[str, Any]) -> dict[str, An
     return {"state": state, "detail": detail, "live_after_fault": live}
 
 
+def _assert_all_faults_passed(faults: dict[str, dict[str, Any]]) -> None:
+    """Prevent a partial/attempted fault matrix from being labelled passed."""
+    missing = sorted(set(FAULT_SCENARIOS) - faults.keys())
+    incomplete = sorted(name for name, result in faults.items() if result.get("state") != "passed")
+    if missing or incomplete:
+        raise QualificationError(
+            f"Fleet fault matrix is incomplete; missing={missing!r}, nonpassing={incomplete!r}."
+        )
+
+
 def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[str, Any]:
     """Run a held-ASGI capacity proof inside the already-running real Paper role."""
     result = compose.run(
         project,
-        ["exec", "-T", "alpaca-paper-clerk", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--container-role", "capacity-probe", "--capacity-kind", kind],
+        [
+            "exec",
+            "-T",
+            "alpaca-paper-clerk",
+            "python",
+            "-m",
+            "scripts.run_broker_fleet_compose_qualification",
+            "--container-role",
+            "capacity-probe",
+            "--capacity-kind",
+            kind,
+        ],
         timeout_s=20.0,
     )
     payload = _json_line(result, f"Paper {kind} capacity probe")
@@ -499,6 +551,10 @@ def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: fl
             if isinstance(exit_code, int) and exit_code != 0:
                 logs = compose.run(project, ["logs", "--tail", "30", "alpaca-paper-clerk"], check=False)
                 refusal_text = "marker" in (logs.stdout + logs.stderr).lower()
+                if not refusal_text:
+                    raise QualificationError(
+                        "Poisoned Paper process exited without a volume-marker refusal in its bounded logs."
+                    )
                 return {"exit_code": exit_code, "marker_refusal_text": refusal_text}
             raise QualificationError("Poisoned Paper process exited successfully instead of refusing its volume.")
         time.sleep(1)
@@ -508,6 +564,7 @@ def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: fl
 def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path | None) -> dict[str, Any]:
     """Exercise actual coordinator/agent roles on isolated Compose volumes."""
     bootstrap_discovered = ComposeCommand.discover()
+    coordinator_port = _available_loopback_port()
     bootstrap = ComposeCommand(
         engine=bootstrap_discovered.engine,
         compose=bootstrap_discovered.compose,
@@ -515,6 +572,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             "POSTGRES_PASSWORD": "qualification-postgres-password",
             "REDIS_PASSWORD": "qualification-redis-password",
             "POLYGON_API_KEY": "qualification-polygon-placeholder",
+            "FLEET_COORDINATOR_PORT": str(coordinator_port),
         },
     )
     project = f"fleetqualification{uuid.uuid4().hex[:12]}"
@@ -522,21 +580,28 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
     started = False
     with tempfile.TemporaryDirectory(prefix="learn-ai-fleet-qualification-") as temporary:
         try:
+            evidence["stage"] = "render"
             bootstrap.run(project, ["--profile", "fleet-qualification", "config"])
             started = True
+            evidence["stage"] = "build"
             bootstrap.run(project, ["build", "fleet-coordinator"], timeout_s=120.0)
             started = True
+            evidence["stage"] = "enrollment"
             compose = _host_ceremony(bootstrap, project, Path(temporary))
+            evidence["stage"] = "support_startup"
             compose.run(
                 project,
                 ["--profile", "fleet-qualification", "up", "--detach", "fleet-db", "fleet-redis", "fleet-coordinator", "fleet-fake-paper-provider", "fleet-fake-live-provider", "fleet-fake-market-data"],
                 timeout_s=90.0,
             )
             started = True
-            _wait_for_http("http://127.0.0.1:8100/health", timeout_s)
+            coordinator_url = f"http://127.0.0.1:{coordinator_port}"
+            _wait_for_http(f"{coordinator_url}/health", timeout_s)
+            evidence["stage"] = "lane_startup"
             compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "alpaca-paper-clerk", "alpaca-live-clerk"], timeout_s=60.0)
-            _wait_for_http("http://127.0.0.1:8100/health", timeout_s)
+            _wait_for_lanes(compose, project, timeout_s)
 
+            evidence["stage"] = "topology_inspection"
             inspections = {service: compose.inspect(_container_id(compose, project, service)) for service in QUALIFICATION_SERVICES}
             mounts = {
                 "coordinator": _mount_at(inspections["fleet-coordinator"], "/app/artifacts/fleet"),
@@ -553,7 +618,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
 
             token = "qualification-control-secret"
             directory_headers = {"X-Data-Plane-Control-Secret": token}
-            directory = _wait_for_http("http://127.0.0.1:8100/api/broker-clerks", timeout_s, directory_headers)
+            directory = _wait_for_http(f"{coordinator_url}/api/broker-clerks", timeout_s, directory_headers)
             clerks = directory.get("clerks")
             if not isinstance(clerks, list) or len(clerks) != 2:
                 raise QualificationError("Actual coordinator did not project both enrolled clerk registrations.")
@@ -562,7 +627,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
                 raise QualificationError("Actual coordinator directory does not contain the Live qualification lane.")
             live_id = str(live_clerk["clerk_id"])
             mutation_status, mutation_refusal = _request_json(
-                f"http://127.0.0.1:8100/api/brokers/alpaca/clerks/{live_id}/orders",
+                f"{coordinator_url}/api/brokers/alpaca/clerks/{live_id}/orders",
                 method="POST",
                 headers=directory_headers,
             )
@@ -570,53 +635,62 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
                 raise QualificationError("Live mutation route unexpectedly accepted an unbound qualification lane.")
 
             faults: dict[str, dict[str, Any]] = {}
+            evidence["stage"] = "provider_outage"
             compose.run(project, ["kill", "fleet-fake-paper-provider"])
             faults["provider_outage"] = _fault_result(
                 "passed",
                 "Paper-only fake provider was physically killed; Live retained its independent market read.",
-                _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
             )
             # Restore only the Paper test dependency before subsequent Paper
             # restart faults; Live remained independently available throughout.
             compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "fleet-fake-paper-provider"], timeout_s=30.0)
 
+            evidence["stage"] = "credential_refusal_restart"
             compose.run(project, ["kill", "alpaca-paper-clerk"])
             compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
-            try:
-                credential = compose.run(
-                    project,
-                    ["run", "--rm", "--no-deps", "-e", "FLEET_AGENT_SERVICE_TOKEN=qualification-refused-token", "alpaca-paper-clerk"],
-                    check=False,
-                    timeout_s=15.0,
-                )
-                credential_state = "passed" if credential.returncode else "attempted"
-                credential_detail = f"Real Paper restart with a refused agent token returned {credential.returncode}."
-            except QualificationError as exc:
-                credential_state = "unrun"
-                credential_detail = f"Refused-token restart did not complete in its bound: {exc}"
+            credential = compose.run(
+                project,
+                ["run", "--rm", "--no-deps", "-e", "FLEET_AGENT_SERVICE_TOKEN=qualification-refused-token", "alpaca-paper-clerk"],
+                check=False,
+                timeout_s=15.0,
+            )
+            if credential.returncode == 0:
+                raise QualificationError("Real Paper restart accepted a refused agent token.")
             faults["credential_refusal_restart"] = _fault_result(
-                credential_state,
-                credential_detail,
-                _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
+                "passed",
+                f"Real Paper restart with a refused agent token returned {credential.returncode}.",
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
             )
             compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "--no-deps", "alpaca-paper-clerk"], timeout_s=30.0)
             _wait_for_lanes(compose, project, timeout_s)
 
+            evidence["stage"] = "request_queue_saturation"
             request_probe = _capacity_probe(compose, project, "request")
             faults["request_queue_saturation"] = _fault_result(
                 "passed",
                 "Held ASGI request consumed Paper's only request slot and a second request received the middleware's typed 503.",
-                _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
             )
             faults["request_queue_saturation"]["probe"] = request_probe
+            evidence["stage"] = "stream_saturation"
             stream_probe = _capacity_probe(compose, project, "stream")
             faults["stream_saturation"] = _fault_result(
                 "passed",
                 "Held Paper SSE consumed the stream pool and a second stream received the middleware's typed 503.",
-                _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
             )
             faults["stream_saturation"]["probe"] = stream_probe
 
+            evidence["stage"] = "volume_marker_poison_mismount_refusal"
             compose.run(project, ["kill", "alpaca-paper-clerk"])
             compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
             compose.run(project, ["run", "--rm", "--no-deps", "fleet-qualification-enroller", "sh", "-ec", "printf '%s\\n' '{not-valid-json' > /app/artifacts/clerks/paper/.learn-ai-clerk-volume.json"])
@@ -630,17 +704,31 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             faults["volume_marker_poison_mismount_refusal"] = _fault_result(
                 "passed",
                 f"Paper volume marker was poisoned before real role restart; compose up returned {poison.returncode} and the process exited nonzero.",
-                _live_identity_after_paper_fault(compose, project, timeout_s, directory_headers, live_id),
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
             )
             faults["volume_marker_poison_mismount_refusal"]["probe"] = poisoned
-            live_health = _wait_for_http("http://127.0.0.1:8100/api/broker-clerks", timeout_s, directory_headers)
+            live_health = _wait_for_http(f"{coordinator_url}/api/broker-clerks", timeout_s, directory_headers)
             market_status, market_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-market-data:8013/health")
             provider_status, provider_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-live-provider:8012/health")
             if market_status != HTTPStatus.OK or provider_status != HTTPStatus.OK:
                 raise QualificationError("Live container lost private market/provider egress after Paper failure.")
             coordinator_check = compose.run(project, ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"])
-            evidence.update({"volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_market_egress": market_body, "live_provider_egress": provider_body, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Fake provider and market endpoints prove private egress only; this qualification does not emulate Alpaca account/profile binding, broker protocol calls, or a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
+            _assert_all_faults_passed(faults)
+            evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_market_egress": market_body, "live_provider_egress": provider_body, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Fake provider and market endpoints prove private egress only; this qualification does not emulate Alpaca account/profile binding, broker protocol calls, or a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
             return evidence
+        except (QualificationError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
+            evidence.update(
+                {
+                    "result": "failed",
+                    "failure": {
+                        "stage": evidence.get("stage", "unknown"),
+                        "error_type": type(exc).__name__,
+                    },
+                }
+            )
+            raise
         finally:
             if evidence_path is not None:
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)

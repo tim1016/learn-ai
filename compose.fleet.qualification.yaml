@@ -59,10 +59,20 @@ services:
       POSTGRES_URL: postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres
       REDIS_URL: redis://fleet-redis:6379/0
       POLYGON_API_KEY: qualification-polygon-placeholder
+    volumes: !override
+      - fleet-coordinator-control:/app/artifacts/fleet
+      - fleet-coordinator-artifacts:/app/artifacts
+      - fleet-coordinator-cache:/app/cache
+      - fleet-coordinator-reference-data:/lean-data:ro
+      - fleet-coordinator-lean-cache:/lean-cache
+      - fleet-coordinator-lake:/lean-data-writer
     stop_grace_period: 2s
 
   alpaca-paper-clerk:
     profiles: ["fleet-qualification"]
+    # Preserve the first startup-refusal exit for bounded inspection instead
+    # of hiding it behind the production restart policy.
+    restart: "no"
     environment:
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
@@ -78,6 +88,7 @@ services:
 
   alpaca-live-clerk:
     profiles: ["fleet-qualification"]
+    restart: "no"
     environment:
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012
@@ -138,3 +149,7 @@ services:
 
 volumes:
   fleet-coordinator-postgres:
+  fleet-coordinator-cache:
+  fleet-coordinator-reference-data:
+  fleet-coordinator-lean-cache:
+  fleet-coordinator-lake:

@@ -70,4 +70,4 @@ D records the backup manifests, exact stop/restore/reconciliation plan, compatib
 - coordinator and lane rollback using schema-compatible artifacts; and
 - validation that Live arming/envelope evidence remains lane-local and unchanged.
 
-Until those transcripts exist, state `recovery posture documented; not operationally qualified`. D's fake Compose harness may exercise selected rollback-shaped probes but cannot replace E's actual restore, reassignment, registry-recovery, or rollback evidence.
+Until those transcripts exist, state `recovery posture documented; not operationally qualified`. D's isolated actual-role Compose qualification may exercise selected rollback-shaped probes, but it cannot replace E's actual restore, reassignment, registry-recovery, or rollback evidence.

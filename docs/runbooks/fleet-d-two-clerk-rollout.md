@@ -4,11 +4,11 @@
 
 ## Scope and language
 
-This runbook authorizes preparation, fake-endpoint Compose qualification, a Paper canary, and Live read-only qualification. It does not authorize Live commands. A Live command requires separately recorded authorization and must still satisfy existing provider-owned envelope, host-only arming, custody, capability, exact-binding, idempotency, risk, and outcome-reconciliation gates.
+This runbook authorizes preparation, isolated actual-role Compose qualification against fake upstreams, a Paper canary, and Live read-only qualification. It does not authorize Live commands. A Live command requires separately recorded authorization and must still satisfy existing provider-owned envelope, host-only arming, custody, capability, exact-binding, idempotency, risk, and outcome-reconciliation gates.
 
 Enrollment, endpoint changes, remount, restore, reassignment, recovery, retirement, and Live arming remain host-only. Do not put a container-runtime socket in a service or use the browser or `FLEET_ROLE=combined` for a ceremony.
 
-Use exactly one of these status statements: `code complete`, `fake Compose harness exercised`, `deployment qualified`, `Paper canary qualified`, `Live read-only qualified`, `Live command authorized`, or `operational rollout complete`. Never infer a later statement from an earlier one.
+Use exactly one of these status statements: `code complete`, `isolated actual-role Compose qualification passed`, `deployment qualified`, `Paper canary qualified`, `Live read-only qualified`, `Live command authorized`, or `operational rollout complete`. Never infer a later statement from an earlier one.
 
 ## 0. Baseline and environment files
 
@@ -29,15 +29,15 @@ cp deploy/fleet/env/live.env.example deploy/fleet/env/live.env
 chmod 600 deploy/fleet/env/coordinator.env deploy/fleet/env/paper.env deploy/fleet/env/live.env
 ```
 
-The coordinator file has the installation control secret, coordinator-side per-Clerk transport-token maps, and the existing research/data-lake configuration it needs (for example Polygon, data-lake, Postgres, and Redis). It has no Alpaca execution credential, Clerk-local IBKR live-feed client configuration, or lane-custody path. Each lane file has only its own broker credential slot, issued Clerk/worker identity, and two directional fleet tokens. Never reuse a file, token, broker credential, client ID, or opaque Clerk ID between Paper and Live.
+The coordinator file has the installation control secret and coordinator-side per-Clerk transport-token maps. The production overlay passes its existing research/data-lake configuration (including Polygon, data-lake, Postgres, and Redis) from the deployment environment and base Compose services. It has no Alpaca execution credential, Clerk-local IBKR live-feed client configuration, or lane-custody path. Each lane file has only its own broker credential slot, issued Clerk/worker identity, two directional fleet tokens, and its distinct read-only IBKR client ID. Never reuse a file, token, broker credential, client ID, or opaque Clerk ID between Paper and Live.
 
-Each lane file explicitly sets `FLEET_ROLE=clerk_agent`, `FLEET_CLERK_ID`, `FLEET_WORKER_KEY`, `FLEET_COORDINATOR_URL=http://fleet-coordinator:8000`, `FLEET_AGENT_ENDPOINT_REF`, `FLEET_AGENT_SERVICE_TOKEN`, `FLEET_COORDINATOR_SERVICE_TOKEN`, and `FLEET_DEPLOYMENT_NAMESPACE`. It also sets reviewed positive values for `FLEET_MAX_INFLIGHT_REQUESTS`, `FLEET_MAX_INFLIGHT_STREAMS`, `FLEET_REQUEST_QUEUE_LIMIT`, and `FLEET_REQUEST_QUEUE_TIMEOUT_MS`.
+Each lane file sets `FLEET_CLERK_ID`, `FLEET_WORKER_KEY`, `FLEET_AGENT_SERVICE_TOKEN`, `FLEET_COORDINATOR_SERVICE_TOKEN`, the lane's Alpaca credentials, and `IBKR_CLIENT_ID`. The reviewed Compose topology supplies `FLEET_ROLE=clerk_agent`, `FLEET_COORDINATOR_URL=http://fleet-coordinator:8000`, the lane endpoint reference, deployment namespace, and positive values for `FLEET_MAX_INFLIGHT_REQUESTS`, `FLEET_MAX_INFLIGHT_STREAMS`, `FLEET_REQUEST_QUEUE_LIMIT`, and `FLEET_REQUEST_QUEUE_TIMEOUT_MS`.
 
 Those four capacity controls are per lane. A `503 fleet_lane_capacity_exhausted` is a qualification observation, never a reason to raise limits during an incident.
 
 ## 1. Provision distinct coordinator, Paper, and Live identities
 
-Create the three named volumes before Compose starts: `fleet-coordinator-control`, `fleet-alpaca-paper-data`, and `fleet-alpaca-live-data`. Record every actual engine volume source and its container destination. The expected destinations are `/app/artifacts/fleet` for the coordinator and `/app/artifacts/alpaca_clerk` for each lane; equal destination strings do not prove shared storage.
+Create the coordinator control/artifact volumes and the two lane volumes before Compose starts: `fleet-coordinator-control`, `fleet-coordinator-artifacts`, `fleet-alpaca-paper-data`, and `fleet-alpaca-live-data`. Record every actual engine volume source and its container destination. The identity-bearing destinations are `/app/artifacts/fleet` for the coordinator and `/app/artifacts/alpaca_clerk` for each lane; equal destination strings do not prove shared storage. The coordinator additionally reuses the existing host research cache, LEAN reference data, lean-cache, and canonical `LEAN_DATA_VOLUME_HOST_PATH`; it does not create a second data lake or catalog.
 
 Use the host ceremony against the mounted roots. Record one-time outputs only in the corresponding uncommitted environment file or restricted evidence store, never in shell history, a ticket, registry, receipt, or log.
 
@@ -59,34 +59,45 @@ Approve only deployment-owned distinct endpoints, then verify both lane volumes:
 
 Any refusal stops the rollout. Do not reissue an identity, copy a marker, or release an assignment to make a service start.
 
-## 2. Use the fleet-only invocation and inspect production ingress
+## 2. Use the production overlay and inspect ingress
 
-Use only the release-owned fleet invocation documented with the D Compose bundle. It must render the fleet profile and suppress the legacy `combined` service; do not add the ordinary development compose file or run a generic `up` as a shortcut. Save both the rendered configuration and `config --services` output. The latter must show the coordinator, the Paper Clerk, the Live Clerk, and only explicitly approved supporting services; it must not show a legacy combined Python service.
+Use the base Compose file plus the release-owned fleet overlay and its explicit profile. A generic `compose up` is not a fleet deployment. From the repository root, save both rendered outputs before starting anything:
+
+```bash
+podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml --profile fleet config > <safe-output>/fleet-rendered.yaml
+podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml --profile fleet config --services > <safe-output>/fleet-services.txt
+```
+
+Docker Compose may replace `podman compose` on a supported host. The Compose implementation must support the checked-in `!override` tag. `fleet-services.txt` must contain `db`, `redis`, `fleet-coordinator`, `alpaca-paper-clerk`, `alpaca-live-clerk`, `backend`, and `frontend`; it must not contain `python-service`. Start only that reviewed render:
+
+```bash
+podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml --profile fleet up -d
+```
 
 The backend's Python base URL terminates at `fleet-coordinator`. The browser reaches the backend, then the coordinator; it never addresses an agent directly. `fleet-coordinator` is the only host-published fleet service. `alpaca-paper-clerk` and `alpaca-live-clerk` have no host port, are reachable only on the fleet network, and must have explicit `fleet_coordinator`/`clerk_agent` roles respectively.
 
 Verify three different named volume sources; no shared writable artifact tree; and lane-local `ALPACA_CLERK_DIR`, `IBKR_LIVE_RUNS_ROOT`, `IBKR_LIVE_BARS_ROOT`, and `BROKER_CAPTURE_DIR`. Verify each role has CPU, memory, PID, and tmpfs limits, each lane has its own request/SSE/queue budget, and no service mounts a Docker/Podman socket. Verify the coordinator contains no Alpaca execution credential, Clerk-local IBKR live-feed client, or lane custody mount; its research/data-lake configuration remains permitted. Verify Paper has no Live credential slot and Live has no Paper credential slot.
 
-The fleet network permits lane egress only to the approved Alpaca API and retained read-only IBKR market-data source through the reviewed host/gateway path. Both lanes use distinct IBKR client IDs and clerk-scoped market-status forwarding. The coordinator receives neither an Alpaca execution credential nor a Clerk custody mount and has no Clerk-local IBKR live-feed client; its existing research/data-lake dependencies remain permitted. Do not replace the market-data path with a deprecated IBKR control endpoint or a coordinator proxy. Rendering is validation, not qualification.
+Each lane's supported market-data wiring is the retained read-only IBKR client through the reviewed host/gateway aliases. Paper and Live use different `IBKR_CLIENT_ID` values and retain Clerk-scoped market-status evidence. The private bridge prevents direct app-network ingress to agents but does not itself implement an outbound allowlist; enforce an approved Alpaca/IBKR destination policy at the host edge where required. The coordinator receives neither an Alpaca execution credential nor a Clerk custody mount and has no Clerk-local IBKR live-feed client; its existing research/data-lake and Polygon dependencies remain permitted. Do not replace the market-data path with a deprecated IBKR control endpoint or a coordinator proxy. Rendering is validation, not qualification.
 
-## 3. Fake-endpoint Compose harness exercise
+## 3. Isolated actual-role Compose qualification
 
-Run the checked-in host qualification with fake endpoints only. Its evidence path must be outside Git and access-controlled.
+Run the checked-in host qualification. It starts the real coordinator and Clerk application roles on isolated named volumes/support stores, while only the upstream broker/market-data endpoints are fake. Its evidence path must be outside Git and access-controlled.
 
 ```bash
 cd PythonDataService
 .venv/bin/python -m scripts.run_broker_fleet_compose_qualification --evidence-path <safe-output>/fleet-compose-qualification.json
 ```
 
-The command uses a scoped random Compose project and tears it down with volumes unless `--keep` is explicitly needed for failure investigation. Preserve the redacted transcript and evidence JSON. It exercises fake volume/source probes, coordinator-custody absence probes, Paper kill, Live read, and Live mutation refusal through containers. Do not replace it with mocks, in-process transport, a unit test, or an unrelated full suite.
+The command uses a scoped random Compose project and an available loopback port, then tears it down with volumes unless `--keep` is explicitly needed for failure investigation. Preserve the redacted transcript and evidence JSON. It inspects actual volume sources and runtime limits; checks coordinator custody absence and private agent ports; exercises Paper provider/process/credential/marker/request/SSE faults; and proves Live identity/read continuity plus mutation refusal. Do not replace it with an in-process topology, a unit test, or an unrelated full suite.
 
-Its fake/canned probes do **not** qualify production physical mounts, secret injection, a real broker or market-data upstream, host resource contention, or operator readiness. Do not write `deployment qualified` or `operational rollout complete` from this command alone.
+Its actual roles with fake upstreams do **not** qualify production physical mounts, production secret injection, a real broker or market-data upstream, production host contention, or operator readiness. Do not write `deployment qualified` or `operational rollout complete` from this command alone.
 
 Abort on a shared writable mount, secret leakage, exposed lane port, missing/incorrect lane identity, unexpected mutation, coordinator custody data, or any Paper fault that prevents correctly identified Live reads within its own resource budget. Record capacity overloads as `fleet_lane_capacity_exhausted`; do not tune around a fault without a new reviewed capacity plan.
 
 ## 4. Deployment-qualification fault matrix
 
-Before Paper credentials are introduced, run and record the D fault matrix against the actual fleet invocation and actual role images. A canned harness may help choose cases; it cannot close this checklist.
+Before Paper credentials are introduced, attach the isolated actual-role result, then run and record the remaining D fault matrix against the reviewed production render and actual host boundaries. The qualification command closes only the rows explicitly present in its evidence; it cannot close the real-upstream, production-mount, host-contention, coordinator-outage, Paper-canary, or Live-read-only rows.
 
 | Fault or boundary | Required observation | Abort condition |
 |---|---|---|
@@ -103,7 +114,7 @@ Only a complete, reviewed actual-deployment record can mark `deployment qualifie
 
 ## 5. Paper canary
 
-Only after the fake Compose record passes, replace only Paper's fake credential slot with the approved Paper account credential. Keep Live on fake/no-command posture. Complete existing Paper validation, program-build, exact account/program canary admission, profile/binding, custody, and market-data gates. Record the immutable Clerk/account/binding target, bounded duration, command identities, provider receipts, resource observations, and stop criteria.
+Only after the isolated actual-role Compose record passes, replace only Paper's fake credential slot with the approved Paper account credential. Keep Live on fake/no-command posture. Complete existing Paper validation, program-build, exact account/program canary admission, profile/binding, custody, and market-data gates. Record the immutable Clerk/account/binding target, bounded duration, command identities, provider receipts, resource observations, and stop criteria.
 
 Stop and leave Paper stopped for missing or stale proof, route/account mismatch, unexpected command/outcome, feed-health failure, capacity breach, or inability to reconcile a command identity. A successful Paper canary is not numerical-equivalence proof and does not authorize Live.
 

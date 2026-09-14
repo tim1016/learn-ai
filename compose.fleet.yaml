@@ -1,6 +1,6 @@
-# ADR 0062 fleet deployment. This is intentionally separate from compose.yaml:
-# the existing stack remains the supported combined/development posture, while a
-# fleet deployment names a coordinator and every clerk explicitly.
+# ADR 0062 production fleet overlay. Run this with compose.yaml and the fleet
+# profile so the existing database/data-lake plane is preserved while the
+# combined Python process is replaced by an explicit coordinator and Clerks.
 name: learn-ai-fleet
 
 x-fleet-agent: &fleet-agent
@@ -12,6 +12,9 @@ x-fleet-agent: &fleet-agent
   read_only: true
   tmpfs:
     - /tmp:size=128m,mode=1777
+    # Import-time read surfaces use this non-authoritative cache even in an
+    # agent role. Keep it bounded and lane-local inside the read-only image.
+    - /app/cache:size=256m,mode=1777
   pids_limit: 256
   cpus: "1.00"
   mem_limit: 768m
@@ -38,6 +41,7 @@ x-fleet-agent: &fleet-agent
     FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-4}
     FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-64}
     FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
+    TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator
   extra_hosts:
     - "host.containers.internal:host-gateway"
     - "host.docker.internal:host-gateway"
@@ -63,7 +67,11 @@ services:
     environment:
       FLEET_ROLE: fleet_coordinator
       FLEET_CONTROL_DIR: /app/artifacts/fleet
+      LEAN_DATA_ROOT: /lean-data
+      LEAN_DATA_CACHE: /lean-cache
       LEAN_DATA_WRITE_ROOT: /lean-data-writer
+      LEAN_LAUNCHER_URL: ${LEAN_LAUNCHER_URL:-http://host.containers.internal:8090}
+      BACKEND_URL: http://backend:8080
       # These are the existing data-plane stores from compose.yaml. Fleet is
       # a role split, never a second catalog or job authority.
       POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for the shared data plane}@db:5432/postgres
@@ -71,21 +79,30 @@ services:
       # A2 makes coordinator the data-plane market-data owner. This is not a
       # broker execution credential and agent lanes never inherit it.
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+      POLYGON_RATE_LIMIT_PER_MIN: ${POLYGON_RATE_LIMIT_PER_MIN:-0}
+      FRED_API_KEY: ${FRED_API_KEY:-}
       FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
       FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-32}
       FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-8}
       FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-128}
       FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
+      TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend
     volumes:
       - fleet-coordinator-control:/app/artifacts/fleet
       - fleet-coordinator-artifacts:/app/artifacts
-      - fleet-coordinator-cache:/app/cache
-      # Coordinator-owned market-data root: never a clerk volume or credential.
-      - fleet-coordinator-lake:/lean-data-writer
+      # Preserve the existing coordinator-owned research/data-lake plane. The
+      # qualification overlay replaces these binds with isolated named volumes.
+      - ../Lean/Data:/lean-data:ro,z
+      - ./PythonDataService/lean-cache:/lean-cache:z
+      - ./PythonDataService/cache:/app/cache:z
+      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
     ports:
       # The coordinator is the only public fleet surface. Clerk agents have
       # no host port and are reachable only on fleet-private.
       - "127.0.0.1:${FLEET_COORDINATOR_PORT:-8100}:8000"
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+      - "host.docker.internal:host-gateway"
     networks:
       - fleet-private
       # The full-stack overlay joins this existing application network so the
@@ -114,7 +131,6 @@ services:
       FLEET_ROLE: clerk_agent
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
-      IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-1201}
     volumes:
       - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
 
@@ -128,7 +144,6 @@ services:
       FLEET_ROLE: clerk_agent
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
-      IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1202}
       # This is deliberately not an enablement switch. Existing per-account
       # arming and Live gates remain the sole authority for any mutation.
     volumes:
@@ -162,8 +177,6 @@ services:
 volumes:
   fleet-coordinator-control:
   fleet-coordinator-artifacts:
-  fleet-coordinator-cache:
-  fleet-coordinator-lake:
   fleet-alpaca-paper-data:
   fleet-alpaca-live-data:
 
