@@ -549,14 +549,21 @@ async function renderShell(
     runBotAction?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
-  mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
-    ...PANEL,
-    actions: [STOP_ACTION],
-    primary_action_by_lens: { trader: 'stop', operator: 'stop' },
-  }));
-  const service = overrides.runBotAction
-    ? { ...mockService, runBotAction: overrides.runBotAction }
-    : mockService;
+  // A persistent mock, not `mockResolvedValueOnce`: a rebind restarts the
+  // live store (its address is a read and must follow the current lane, see
+  // the constructor's second effect), which re-fetches the snapshot. A local
+  // override — not a mutation of the shared `mockService.getLiveSnapshot` —
+  // keeps every fetch, including that restart-triggered one, returning the
+  // Stop-action panel without leaking a persistent mock into later tests.
+  const service = {
+    ...mockService,
+    getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
+      ...PANEL,
+      actions: [STOP_ACTION],
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
+    })),
+    ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
+  };
   const { fixture } = await render(BotPanelShellComponent, {
     inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
     providers: [
@@ -1460,14 +1467,19 @@ describe('BotPanelShellComponent', () => {
       clerks: [testLane({ clerk_id: 'clrk_spec' })],
     });
     const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
-    await renderShell({ directory, runBotAction });
+    const { fixture } = await renderShell({ directory, runBotAction });
 
     // The operator is shown generation 3, then the coordinator rebinds to 4
     // before they press the button — exactly what refresh() will start doing.
+    // The live store's stream address is unfenced (a read, not a command) and
+    // restarts on this rebind; let that settle before re-querying the button
+    // so the click lands on the current DOM node, not one mid-teardown.
     directory.rebind({
       observed_at_ms: 1_757_000_000_001,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
     });
+    await fixture.whenStable();
+    fixture.detectChanges();
 
     await userEvent.click(screen.getByRole('button', { name: /stop/i }));
 

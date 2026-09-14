@@ -3,6 +3,7 @@
  * Specs provide `provideFleetDirectory()` to keep lane-resolution cheap and
  * deterministic; the fixture mirrors the wire shape of `/api/broker-clerks`
  * (backend `ClerkDescriptor.public_fields()`). */
+import { signal } from '@angular/core';
 import { FleetDirectoryService } from './fleet-directory.service';
 import type { FleetDirectoryResponse, LaneDescriptor } from './fleet-directory.types';
 
@@ -55,30 +56,36 @@ export function provideFleetDirectory(
     clerks: [testLane()],
   },
 ): FleetDirectoryDouble {
-  let response = initial;
+  // A real signal, not a reassigned closure variable: `lane()` must be a
+  // genuine reactive read so a consumer reading it inside a tracked context
+  // (an `effect`, a `computed`, a `linkedSignal` computation) actually
+  // subscribes. A plain-variable double let an `untracked()` guard around
+  // such a read go unverified by every spec that uses this fixture — the
+  // guard could be deleted and no test would notice (#2068 fix round 1).
+  const response = signal(initial);
   return {
     provide: FleetDirectoryService,
     useValue: {
-      value: () => response,
+      value: () => response(),
       error: () => undefined,
       isLoading: () => false,
-      lanesOf: (broker: string) => response.clerks.filter((lane) => lane.broker === broker),
+      lanesOf: (broker: string) => response().clerks.filter((lane) => lane.broker === broker),
       lane: (broker: string, clerkId: string) =>
-        response.clerks.find(
+        response().clerks.find(
           (candidate) => candidate.broker === broker && candidate.clerk_id === clerkId,
         ),
       laneForAccount: (broker: string, accountId: string) =>
-        response.clerks.find(
+        response().clerks.find(
           (candidate) =>
             candidate.broker === broker &&
             candidate.provider_summary?.confirmed_account_id?.toLowerCase() ===
               accountId.trim().toLowerCase(),
         ),
-      refresh: () => Promise.resolve(response),
-      ensureLoaded: () => Promise.resolve(response),
+      refresh: () => Promise.resolve(response()),
+      ensureLoaded: () => Promise.resolve(response()),
     } as Partial<FleetDirectoryService>,
     rebind(next: FleetDirectoryResponse) {
-      response = next;
+      response.set(next);
     },
   };
 }

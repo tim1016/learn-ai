@@ -500,12 +500,17 @@ describe('BotsListPageComponent', () => {
 
     // The operator is shown generation 3, then the coordinator rebinds to 4
     // before they press the button — exactly what refresh() will start doing.
+    // The unfenced `target()`/`fleetScope()` reactively follows the rebind
+    // (a read, not a command) and reloads the catalog; let that settle before
+    // re-querying the button so the click lands on the current DOM node.
     directory.rebind({
       observed_at_ms: 1_757_000_000_001,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
     });
+    await view.fixture.whenStable();
+    view.fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
 
     expect(runBotAction).not.toHaveBeenCalled();
     expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
