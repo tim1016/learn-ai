@@ -760,6 +760,15 @@ class AlpacaProviderAdapter:
         already run inside the clerk's own handlers; this hook adds the one
         fleet-visible invariant the generic layer cannot check: a bot action
         names the effective account it targets.
+
+        In production this invariant is unreachable from the routing seam
+        today: `LaneRouter._resolve`, the only caller, builds every
+        `ServedContext` from a resolved assignment whose
+        `canonical_external_account_id` is a non-optional `str`, so
+        `context.account_id` is never `None` there. The check is kept anyway
+        as the contract for the generic fleet layer, and for hand-built
+        contexts in tests — this adapter declares no refusal the seam can
+        currently trigger.
         """
         if (
             context.capability == Capability.BOT_ACTION
