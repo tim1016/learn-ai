@@ -179,8 +179,7 @@ def test_missing_copy_raises_keyerror() -> None:
 # Every closed vocabulary in this module is declared twice: once as a
 # ``Literal`` (for static type-checking on request/response schemas) and once
 # as a runtime ``frozenset``/``tuple`` (for iteration — including by the
-# operator-manual generator, ``scripts/regenerate_broker_v2_operator_manual.py``,
-# and by ``ALL_VOCABULARY_CODES`` below). Nothing enforces the two stay equal.
+# ``ALL_VOCABULARY_CODES`` below). Nothing enforces the two stay equal.
 #
 # ``ActionId`` (a ``Literal``) and ``ACTION_IDS`` (a tuple) drifting apart is
 # the exact failure this ADR names: a member added to the ``Literal`` alone

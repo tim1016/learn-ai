@@ -18,12 +18,14 @@ blindly (audit 2026-09-13, finding 7).
 
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 
 import httpx
+from starlette.datastructures import Headers
 
 from app.broker.fleet.internal_http import (
     FleetStreamError,
@@ -33,11 +35,31 @@ from app.broker.fleet.internal_http import (
     iter_sse_from_response,
 )
 from app.broker.fleet.provider import ProviderOperation
+from app.config import fleet_settings
 
 logger = logging.getLogger(__name__)
 
 IDENTITY_HEADER_PREFIX = "X-Fleet-"
 COORDINATOR_TOKEN_HEADER = "X-Fleet-Coordinator-Token"
+
+
+def lane_forward_is_authorized(headers: Headers) -> bool:
+    """Whether this request proves itself as the coordinator's own forward.
+
+    Two conditions, both required: the request presents the coordinator
+    token (compared against the env-only value this agent was provisioned
+    with, in constant time, never logged) **and** it carries the pinned
+    fleet identity a coordinator dispatch always attaches — a token alone
+    is forgeable; the pin pair is the proof. An absent or wrong token, or a
+    token unaccompanied by both pins, returns ``False``.
+    """
+    supplied = headers.get(COORDINATOR_TOKEN_HEADER, "")
+    expected = (fleet_settings.COORDINATOR_SERVICE_TOKEN or "").strip()
+    if not expected or not supplied:
+        return False
+    if "x-fleet-clerk-id" not in headers or "x-fleet-broker" not in headers:
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
 
 class DeliveryIdentityMismatch(Exception):
@@ -348,6 +370,7 @@ __all__ = [
     "LocalLaneDelivery",
     "StreamDeliveryResult",
     "bind_path_template",
+    "lane_forward_is_authorized",
     "validate_event_identity",
     "verify_identity_echo",
 ]

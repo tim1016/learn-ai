@@ -11,7 +11,7 @@
  *   3. No changes needed to the host component or the service.
  */
 
-export type MarkdownDocId = 'methodology' | 'broker-v2-manual';
+export type MarkdownDocId = 'methodology';
 
 export interface MarkdownDocDescriptor {
   /** Absolute app-relative URL of the `.md` asset. */
@@ -33,12 +33,5 @@ export const MARKDOWN_DOC_REGISTRY: Readonly<Record<MarkdownDocId, MarkdownDocDe
     title: 'Indicator Reliability — Methodology',
     fullPageRoute: '/docs/indicator-reliability-methodology',
     width: 'min(960px, 92vw)',
-  },
-  'broker-v2-manual': {
-    src: '/assets/docs/broker-v2-operator-manual.md',
-    eyebrow: 'Operator Manual',
-    title: 'Broker V2 Panel',
-    fullPageRoute: '/brokers/alpaca/manual',
-    width: 'min(800px, 92vw)',
   },
 };

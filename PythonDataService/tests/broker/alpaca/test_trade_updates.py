@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.stream_health import build_default_stream_health_ga
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
+    _MIN_HELD_CONNECTION_MS,
     TradeUpdatesConsumer,
     _from_gap_recovery_event,
     _inject_frame_faults,
@@ -1405,3 +1406,147 @@ async def test_injected_frame_threads_through_the_real_consumer(tmp_path: Path, 
     assert len(captured) == 2
     bodies = "".join(json.dumps(record) for record in captured)
     assert "suspended" in bodies
+
+
+class _ReconcileRecordingSink(_EvidenceSink):
+    """An _EvidenceSink that records which loop cycle asked for a gap-fill."""
+
+    def __init__(self, cycles: dict[str, int]) -> None:
+        super().__init__()
+        self._cycles = cycles
+        self.reconciled_on_cycle: list[int] = []
+
+    async def reconcile_gap(self) -> None:
+        # ``_consume_once`` reconciles after ``anext`` has already advanced the
+        # counter, so the cycle being reconciled is one behind it.
+        self.reconciled_on_cycle.append(self._cycles["n"] - 1)
+
+
+async def test_reconnect_backoff_resets_after_a_connected_cycle_and_still_gap_reconciles(
+    tmp_path: Path,
+) -> None:
+    """A blip hours ago must not pin a healthy trade_updates stream at 30s.
+
+    ``attempt`` fed ``_default_backoff`` *and* answered "is this a reconnect?".
+    Set to zero once before the loop and only ever incremented, it pinned the
+    backoff at its 30s ceiling after roughly six lifetime errors — and on this
+    stream every second of backoff is a second the clerk is not receiving
+    fills and order lifecycle events.
+
+    Both halves of the split are pinned here. The backoff resets after a cycle
+    that actually connected AND held the socket at least the backoff ceiling,
+    AND the connect that follows the reset still runs the REST gap-reconcile:
+    a single-counter reset that lands after the increment makes the next
+    connect look like a first connect, skips the gap-fill, and silently drops
+    the fills missed while down. A fifth, connect-then-raise-mid-stream cycle
+    pins that the held-duration reset applies on the error path too, not just
+    a clean end of stream.
+    """
+    cycles = {"n": 0}
+    now = {"ms": _FIXED_MS}
+    backoff_attempts: list[int] = []
+    broker = _FakeBroker()
+    sink = _ReconcileRecordingSink(cycles)
+
+    async def frame_source() -> AsyncIterator[bytes | str]:
+        index = cycles["n"]
+        cycles["n"] += 1
+        if index >= 5:
+            # End the loop deterministically; run() re-raises CancelledError
+            # rather than swallowing it in its except-Exception.
+            raise asyncio.CancelledError
+        if index in (2, 3):
+            # The connected cycles: each delivers a frame, holds the socket
+            # for the backoff ceiling, then ends cleanly.
+            yield json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
+            now["ms"] += _MIN_HELD_CONNECTION_MS
+            return
+        if index == 4:
+            # Connect, hold past the ceiling, then die mid-stream (not a
+            # clean end of stream) — the reset must still apply here.
+            yield json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
+            now["ms"] += _MIN_HELD_CONNECTION_MS
+            raise RuntimeError("simulated mid-stream disconnect")
+        raise RuntimeError("simulated disconnect")
+
+    async def _record_backoff(attempt: int) -> None:
+        backoff_attempts.append(attempt)
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=sink,
+        read=broker,
+        frame_source=frame_source,
+        journal=_capture_journal(tmp_path),
+        clock=lambda: now["ms"],
+        backoff=_record_backoff,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert backoff_attempts == [1, 2, 1, 1, 1], (
+        "A cycle that connected AND held the socket at least the backoff "
+        "ceiling must reset the reconnect backoff. Without the reset this "
+        "reads [1, 2, 3, 4, 5] and keeps climbing to the 30s ceiling, where "
+        "every later blip costs half a minute of unseen fills."
+    )
+    assert sink.reconciled_on_cycle == [2, 3, 4], (
+        "Every connect after the first cycle must REST gap-reconcile, "
+        "including the one immediately after a backoff reset and the one "
+        "that dies mid-stream after being held — that is the fill-losing "
+        "regression a single-counter reset introduces."
+    )
+
+
+async def test_reconnect_backoff_keeps_escalating_when_the_socket_flaps(
+    tmp_path: Path,
+) -> None:
+    """A connect-then-drop flap must not hot-loop the reconnect at the 1s floor.
+
+    A socket the server evicts seconds after the auth ack reaches the
+    connection watermark every cycle — resetting on bare connect would pin
+    the backoff at 1s forever, which on this stream is 60 reconnects/min and
+    60 REST gap-reconciles/min (500-order ``list_orders`` each) against a
+    live broker. The held-duration conjunct is what stops that.
+    """
+    cycles = {"n": 0}
+    backoff_attempts: list[int] = []
+    broker = _FakeBroker()
+    sink = _ReconcileRecordingSink(cycles)
+
+    async def frame_source() -> AsyncIterator[bytes | str]:
+        index = cycles["n"]
+        cycles["n"] += 1
+        if index >= 4:
+            # End the loop deterministically; run() re-raises CancelledError
+            # rather than swallowing it in its except-Exception.
+            raise asyncio.CancelledError
+        # The flap: connects every cycle (reaches the watermark) but the
+        # clock never advances, so the connection is never "held".
+        yield json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
+        return
+
+    async def _record_backoff(attempt: int) -> None:
+        backoff_attempts.append(attempt)
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=sink,
+        read=broker,
+        frame_source=frame_source,
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_record_backoff,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert backoff_attempts == [1, 2, 3, 4], (
+        "A socket evicted right after the auth ack is a flap; resetting on "
+        "bare connect hot-loops the reconnect and the 500-order REST "
+        "gap-reconcile at the 1s floor."
+    )
+    assert consumer.counters.connects == 4, (
+        "The flap DID reach the watermark every cycle — that is what makes "
+        "the held-duration conjunct load-bearing."
+    )

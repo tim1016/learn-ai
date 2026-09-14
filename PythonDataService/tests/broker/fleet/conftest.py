@@ -2,9 +2,9 @@
 
 The two test-only fake providers prove the extension boundary (PRD Phase 6 /
 FR-002): they implement the adapter protocol, declare *different* capability
-sets, and reach the service only through constructor injection — never through
-the production registry, which stays empty until the Alpaca adapter lands as
-Phase 2.
+sets, canonicalize accounts *differently* (the headline boundary proof
+alongside the capability split), and reach the service only through
+constructor injection — never through the production registry.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ FAKE_BETA_CAPABILITIES = frozenset(
     {
         Capability.ACCOUNT_READ,
         Capability.GALLERY_READ,
+        Capability.CONFIGURATION_MANAGE,
     }
 )
 
@@ -103,8 +104,36 @@ _FAKE_BETA_OPERATIONS = frozenset(
             requires_effective_account=False,
             idempotency=OperationIdempotency.READ,
         ),
+        ProviderOperation(
+            operation_id="configuration_apply",
+            method="POST",
+            path_template="/configuration/apply",
+            agent_path_template="/api/fake-beta/configuration/apply",
+            capability=Capability.CONFIGURATION_MANAGE,
+            readiness=OperationReadiness.CONFIGURATION_ACCESS,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.ONE_SHOT,
+        ),
     }
 )
+
+
+def _alpha_canonical_account_id(raw: str) -> str:
+    """Alpha's canonical key: strip and upper-case."""
+    return raw.strip().upper()
+
+
+def _beta_canonical_account_id(raw: str) -> str:
+    """Beta's canonical key: strip, lower-case, and fold ``-`` to ``_``.
+
+    Deliberately different from alpha's in *shape* as well as case, so no
+    case-insensitive comparison can collapse the two back together. A blank
+    input still canonicalizes to the empty identity the service refuses
+    (``ClerkAccountMismatch`` in ``reserve_assignment``,
+    ``app/broker/fleet/service.py:726``), so the empty-canonical gate stays
+    reachable for both providers.
+    """
+    return raw.strip().lower().replace("-", "_")
 
 
 class FrozenClock:
@@ -128,10 +157,10 @@ class FakeProviderAdapter:
     """A minimal in-memory provider adapter owned by the tests, not the app."""
 
     provider_id: str
+    capabilities: frozenset[Capability]
+    declared_operations: frozenset[ProviderOperation]
+    canonical_rule: Callable[[str], str]
     adapter_version: str = "test.1"
-    capabilities: frozenset[Capability] = FAKE_ALPHA_CAPABILITIES
-    declared_operations: frozenset[ProviderOperation] = _FAKE_ALPHA_OPERATIONS
-    canonical_rule: Callable[[str], str] = lambda raw: raw.strip().upper()
     refused_accounts: frozenset[str] = field(default_factory=frozenset)
     served_context_refusals: list[str] = field(default_factory=list)
     summaries: list[Mapping[str, object]] = field(default_factory=list)
@@ -168,6 +197,7 @@ def fake_alpha() -> FakeProviderAdapter:
         provider_id="fake_alpha",
         capabilities=FAKE_ALPHA_CAPABILITIES,
         declared_operations=_FAKE_ALPHA_OPERATIONS,
+        canonical_rule=_alpha_canonical_account_id,
     )
 
 
@@ -177,6 +207,7 @@ def fake_beta() -> FakeProviderAdapter:
         provider_id="fake_beta",
         capabilities=FAKE_BETA_CAPABILITIES,
         declared_operations=_FAKE_BETA_OPERATIONS,
+        canonical_rule=_beta_canonical_account_id,
     )
 
 

@@ -36,7 +36,6 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
   { path: "broker/bots", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/bots/:id", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/offline-replay", redirectTo: "brokers/alpaca", pathMatch: "full" },
-  { path: "broker/bot-manual", redirectTo: "brokers/alpaca/manual", pathMatch: "full" },
   { path: "broker/deploy", redirectTo: "brokers/alpaca", pathMatch: "full" },
 ];
 
@@ -373,10 +372,6 @@ export const routes: Routes = [
     // never to another lane).
     path: "brokers/:broker/accounts/:accountId/bots/:sid",
     canActivate: [brokerClerkRedirectGuard('/bots/:sid')],
-    loadComponent: loadBrokerLaneUnavailable,
-  },
-  {
-    path: "brokers/:broker/manual",
     loadComponent: loadBrokerLaneUnavailable,
   },
   {

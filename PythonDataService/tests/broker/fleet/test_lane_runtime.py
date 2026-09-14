@@ -11,8 +11,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
 
+from app.broker.fleet import lane_runtime
 from app.broker.fleet.compatibility_retirement import (
     CompatibilityRouteState,
     write_route_state,
@@ -29,6 +33,14 @@ AsgiMessage = dict[str, Any]
 Receive = Callable[[], Awaitable[AsgiMessage]]
 Send = Callable[[AsgiMessage], Awaitable[None]]
 AsgiApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
+
+#: How long the injected slow export blocks. Must-timeout side of the budget.
+_SLOW_EXPORT_SECONDS = 1.0
+#: The response must return well inside this. Must-succeed side of the budget.
+#: The invariant, not a ratio: the sleep must exceed the budget (a real
+#: on-loop regression makes elapsed time track the sleep), and the budget
+#: must exceed worst-case scheduling jitter on a loaded runner.
+_RESPONSE_BUDGET_SECONDS = 0.5
 
 
 def _config(*, requests: int = 1, streams: int = 1, queue: int = 0, timeout_ms: int = 0) -> LaneRuntimeConfig:
@@ -75,6 +87,22 @@ async def _invoke(
 def _status(messages: list[AsgiMessage]) -> int:
     """Return the one response status emitted by an ASGI invocation."""
     return next(message["status"] for message in messages if message["type"] == "http.response.start")
+
+
+def _scoped_os(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
+    """Swap the ``os`` *binding* inside ``lane_runtime`` only.
+
+    ``monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", …)``
+    reads through to the process-global ``os`` module and mutates it for
+    every thread and every other test in the session. Rebinding the module
+    attribute cannot leak: only ``lane_runtime``'s own lookups see the shim.
+    """
+    shim = SimpleNamespace(
+        fsync=os.fsync, replace=os.replace, open=os.open, close=os.close, O_RDONLY=os.O_RDONLY
+    )
+    for name, value in overrides.items():
+        setattr(shim, name, value)
+    monkeypatch.setattr(lane_runtime, "os", shim)
 
 
 async def test_request_capacity_refuses_then_recovers_without_running_refused_handler(
@@ -364,8 +392,7 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
         del source, destination
         raise OSError("replace refused")
 
-    original_replace = os.replace
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", refuse_replace)
+    _scoped_os(monkeypatch, replace=refuse_replace)
 
     async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -379,7 +406,7 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
     assert "Compatibility route-hit export failed." in caplog.text
     assert evidence._pending_updates == {("broker_bots", "2xx"): 1}
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", original_replace)
+    _scoped_os(monkeypatch)
     await evidence.flush()
     assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
@@ -392,7 +419,7 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
 
     def slow_record(updates: Mapping[tuple[str, str], int]) -> None:
         del updates
-        time.sleep(0.2)
+        time.sleep(_SLOW_EXPORT_SECONDS)
 
     monkeypatch.setattr(evidence, "_record_batch", slow_record)
 
@@ -403,7 +430,7 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
     runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
     started_at = time.monotonic()
     assert _status(await _invoke(runtime)) == 200
-    assert time.monotonic() - started_at < 0.1
+    assert time.monotonic() - started_at < _RESPONSE_BUDGET_SECONDS
     await evidence.flush()
 
 
@@ -444,30 +471,35 @@ async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> Non
     assert evidence.snapshot()["route_hits"][0]["route_family"] == "broker_bots"
 
 
+def _eligible_receipt() -> dict[str, Any]:
+    """A minimal retirement receipt that passes eligibility validation."""
+    return {
+        "schema_version": 1,
+        "decision": "eligible",
+        "measurement_window": {"start_ms": 1, "end_ms": 2},
+        "operator_receipt_id": "receipt-1",
+        "scoped_route_evidence": {"unresolved_scoped_route_failures": 0},
+        "consumer_inventory": {
+            "consumers": ["alpaca-desk"],
+            "attested_route_families": [
+                "broker_bots",
+                "broker_configuration",
+                "broker_v2_panel",
+                "brokers_lane_extras",
+                "run_replay",
+            ],
+        },
+        "route_deltas": [],
+    }
+
+
 async def test_retired_state_refuses_only_retained_unscoped_reads(tmp_path: Path) -> None:
     """A retirement receipt cannot affect canonical scoped reads or mutations."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
     write_route_state(
         state_path=evidence.route_state_path,
         state=CompatibilityRouteState.RETIRED,
-        retirement_receipt={
-            "schema_version": 1,
-            "decision": "eligible",
-            "measurement_window": {"start_ms": 1, "end_ms": 2},
-            "operator_receipt_id": "receipt-1",
-            "scoped_route_evidence": {"unresolved_scoped_route_failures": 0},
-            "consumer_inventory": {
-                "consumers": ["alpaca-desk"],
-                "attested_route_families": [
-                    "broker_bots",
-                    "broker_configuration",
-                    "broker_v2_panel",
-                    "brokers_lane_extras",
-                    "run_replay",
-                ],
-            },
-            "route_deltas": [],
-        },
+        retirement_receipt=_eligible_receipt(),
     )
     calls = 0
 
@@ -559,7 +591,7 @@ async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying
             raise OSError("parent fsync refused")
         original_fsync(file_descriptor)
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_parent_sync)
+    _scoped_os(monkeypatch, fsync=refuse_parent_sync)
     evidence.schedule(route_family="broker_bots", response_class="2xx")
     with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
         await evidence.flush()
@@ -568,7 +600,7 @@ async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying
     assert evidence._pending_updates == {}
     assert evidence._directory_sync_required
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", original_fsync)
+    _scoped_os(monkeypatch)
     await evidence.flush()
     assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
@@ -680,3 +712,84 @@ def test_lane_runtime_config_rejects_partial_or_negative_sizing() -> None:
 
     with pytest.raises(ValueError, match="must both be positive"):
         LaneRuntimeConfig.from_settings(PartialSettings())
+
+
+async def test_a_retired_lane_still_serves_an_authenticated_coordinator_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delivery E retires the browser alias, never the fleet's own transport."""
+    from app.broker.fleet.delivery import COORDINATOR_TOKEN_HEADER
+    from app.config import fleet_settings
+
+    evidence = CompatibilityReadEvidence(tmp_path)
+    write_route_state(
+        state_path=tmp_path / "compatibility" / "route_state.json",
+        state=CompatibilityRouteState.RETIRED,
+        retirement_receipt=_eligible_receipt(),
+    )
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", "svct_" + "a" * 32)
+
+    inner = FastAPI()
+
+    @inner.get("/api/brokers/alpaca/clerk/status")
+    async def _status() -> dict[str, str]:
+        return {"state": "ready"}
+
+    inner.add_middleware(FleetLaneRuntimeMiddleware, config=None, evidence=evidence)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        browser = await client.get("/api/brokers/alpaca/clerk/status")
+        forwarded = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+        spoofed = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={"X-Fleet-Broker": "alpaca", "X-Fleet-Clerk-Id": "clk_test"},
+        )
+
+    assert browser.status_code == 410
+    assert browser.json()["reason"] == "compatibility_read_retired"
+    assert forwarded.status_code == 200
+    assert spoofed.status_code == 410
+
+    # An unconfigured coordinator token means nothing is exempt, even a
+    # request carrying the full forward header set.
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", None)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        unconfigured_token = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+    assert unconfigured_token.status_code == 410
+
+    # The exemption is checked before route state is ever read, so a proven
+    # forward is served even while the retirement state file is invalid —
+    # the 503 that an invalid state would otherwise force never applies to
+    # the fleet's own transport.
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", "svct_" + "a" * 32)
+    evidence.route_state_path.write_text("{not-json", encoding="utf-8")
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        forwarded_despite_invalid_state = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+    assert forwarded_despite_invalid_state.status_code == 200

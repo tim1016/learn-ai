@@ -18566,6 +18566,17 @@
             "default": 0,
             "title": "Successful Reconnect Count",
             "type": "integer"
+          },
+          "unreachable_since_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreachable Since Ms"
           }
         },
         "required": [

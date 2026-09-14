@@ -133,7 +133,7 @@ Evidence: [broker router](../../PythonDataService/app/routers/brokers.py), [guar
 
 These contradictions make it difficult to tell a deliberate safety refusal from unfinished functionality. Correct the current manual and operator copy, and reconcile amended ADR/glossary text while preserving the recorded decision history. A historical type name alone is not evidence of a second authority.
 
-Evidence: [manual](../broker-v2-operator-manual.md), [glossary](../../CONTEXT.md), [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md), [mode cards](../../PythonDataService/app/services/broker_v2_panel/paper_deploy_service.py), [Dry Run execution](../../PythonDataService/app/services/bot_trade_strategy.py).
+Evidence: [fleet authority](../broker-clerk-fleet-authority.md), [glossary](../../CONTEXT.md), [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md), [mode cards](../../PythonDataService/app/services/broker_v2_panel/paper_deploy_service.py), [Dry Run execution](../../PythonDataService/app/services/bot_trade_strategy.py).
 
 ### F7 — Dry Run's UI entry point depends on the real-account deployment projection
 

@@ -111,8 +111,10 @@ class AutoReconnectMonitor:
         backoff_jitter_source: Callable[[], float] | None = None,
         subscription_recovery_interval_s: float = 10.0,
         recovery_callbacks: list[Callable[[], Awaitable[None]]] | None = None,
+        now_ms: Callable[[], int] = now_ms_utc,
     ) -> None:
         self._client = client
+        self._now_ms = now_ms
         self._poll_interval_s = poll_interval_s or self.POLL_INTERVAL_S
         self._initial_backoff_s = initial_backoff_s or self.INITIAL_BACKOFF_S
         self._max_backoff_s = max_backoff_s or self.MAX_BACKOFF_S
@@ -142,15 +144,21 @@ class AutoReconnectMonitor:
         self._is_attempting: bool = False
         self._current_attempt: int = 0
         self._successful_reconnect_count: int = 0
-        self._last_transition_ms: int = now_ms_utc()
+        self._last_transition_ms: int = self._now_ms()
         self._is_recovering: bool = False
         self._recovery_state: RecoveryState = "HEALTHY"
         self._link_interrupted_since_ms: int | None = None
-        self._last_probe_due_ms: int = now_ms_utc()
+        self._last_probe_due_ms: int = self._now_ms()
         # Tracks last in-process subscription-recovery attempt so a repeatedly
         # failing resubscribe doesn't spam every poll cycle. ``0`` lets the
         # first stale observation fire immediately on detection.
         self._last_subscription_recovery_ms: int = 0
+        # Durable outage anchor (#2080). Set on the first failed connect of
+        # an outage; unlike ``_last_transition_ms``, a later open-breaker
+        # probe does NOT re-stamp it, so a long blackout reports its real
+        # age instead of the age of the most recent probe. Cleared on the
+        # next successful connect.
+        self._unreachable_since_ms: int | None = None
 
     @property
     def is_running(self) -> bool:
@@ -183,6 +191,10 @@ class AutoReconnectMonitor:
     @property
     def is_hard_down(self) -> bool:
         return self._recovery_state == "HARD_DOWN"
+
+    @property
+    def unreachable_since_ms(self) -> int | None:
+        return self._unreachable_since_ms
 
     def start(self) -> None:
         """Spawn the monitor task. No-op if already running."""
@@ -303,7 +315,7 @@ class AutoReconnectMonitor:
         necessarily that our API socket is dead. ADR 0018 requires a bounded
         wait here so transient link blips do not churn clientIds.
         """
-        now_ms = now_ms_utc()
+        now_ms = self._now_ms()
         if self._link_interrupted_since_ms is None:
             self._link_interrupted_since_ms = now_ms
             self._advance_recovery("link_lost")
@@ -334,7 +346,7 @@ class AutoReconnectMonitor:
         """
         if not getattr(self._client, "subscriptions_stale", False):
             return False
-        now_ms = now_ms_utc()
+        now_ms = self._now_ms()
         interval_ms = int(self._subscription_recovery_interval_s * 1000)
         if now_ms - self._last_subscription_recovery_ms < interval_ms:
             return False
@@ -362,7 +374,7 @@ class AutoReconnectMonitor:
 
         Returns True when the probe failed and a reconnect loop was entered.
         """
-        now_ms = now_ms_utc()
+        now_ms = self._now_ms()
         if now_ms - self._last_probe_due_ms < int(self._probe_interval_s * 1000):
             return False
         self._last_probe_due_ms = now_ms
@@ -410,6 +422,8 @@ class AutoReconnectMonitor:
             if await self._run_one_attempt(attempt):
                 return "succeeded"
             await self._drop_half_recovered_socket()
+            if self._unreachable_since_ms is None:
+                self._unreachable_since_ms = self._now_ms()
             return "failed"
 
     async def _adopt_externally_restored_socket(self) -> AttemptOutcome:
@@ -588,20 +602,27 @@ class AutoReconnectMonitor:
     def _begin_attempt(self, attempt: int) -> None:
         self._is_attempting = True
         self._current_attempt = attempt
-        self._last_transition_ms = now_ms_utc()
+        self._last_transition_ms = self._now_ms()
 
     def _advance_recovery(self, signal: RecoverySignal) -> None:
         previous = self._recovery_state
         self._recovery_state = transition_recovery_state(previous, signal)
         if self._recovery_state != previous:
-            self._last_transition_ms = now_ms_utc()
+            self._last_transition_ms = self._now_ms()
+        # Single chokepoint (#2080): every path that lands on HEALTHY —
+        # the fast ladder, the open-breaker probe, the HARD_DOWN tick
+        # shortcut, and the externally-restored-socket adoption path —
+        # passes through here. Clearing the anchor anywhere else would
+        # leave it duplicated and risk drifting out of sync.
+        if self._recovery_state == "HEALTHY":
+            self._unreachable_since_ms = None
 
     def _mark_hard_down(self, attempts: int) -> None:
         self._advance_recovery("reconnect_exhausted")
         self._is_attempting = False
         self._is_recovering = False
         self._current_attempt = 0
-        self._last_transition_ms = now_ms_utc()
+        self._last_transition_ms = self._now_ms()
         # Start the open-state clock here so the first slow probe waits a
         # full interval: the ladder's final backoff already just elapsed.
         self._last_open_probe_ms = self._last_transition_ms
@@ -626,7 +647,7 @@ class AutoReconnectMonitor:
         downtime was set by whatever unrelated event happened to reconnect
         it -- a gateway outage of minutes became one of hours.
         """
-        now_ms = now_ms_utc()
+        now_ms = self._now_ms()
         if now_ms - self._last_open_probe_ms < int(self._open_probe_interval_s * 1000):
             return
         self._last_open_probe_ms = now_ms
@@ -642,18 +663,18 @@ class AutoReconnectMonitor:
         if success:
             self._current_attempt = 0
             self._successful_reconnect_count += 1
-        self._last_transition_ms = now_ms_utc()
+        self._last_transition_ms = self._now_ms()
 
     def _begin_recovery(self) -> None:
         self._is_attempting = False
         self._is_recovering = True
-        self._last_transition_ms = now_ms_utc()
+        self._last_transition_ms = self._now_ms()
 
     def _end_recovery(self, *, success: bool) -> None:
         self._is_recovering = False
         if success:
             self._current_attempt = 0
-        self._last_transition_ms = now_ms_utc()
+        self._last_transition_ms = self._now_ms()
 
 
 # ── module-level singleton ────────────────────────────────────────────

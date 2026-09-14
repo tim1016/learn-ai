@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio
 from alpaca.common.enums import Sort
@@ -36,7 +37,8 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
 from alpaca.trading.requests import GetAssetsRequest, GetOrdersRequest
 from pydantic import ValidationError
-from requests.exceptions import RequestException
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import RequestException, Timeout
 from requests.sessions import Session
 
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
@@ -98,6 +100,56 @@ def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
         return request(method, url, **kwargs)
 
     session.request = request_with_timeout  # type: ignore[method-assign]
+
+
+# One retry, GET/HEAD only. Alpaca closes idle keep-alive connections and
+# urllib3 hands the closed socket to the next request, which dies with
+# RemoteDisconnected before a byte was answered — 16 occurrences in 6 hours on
+# the Live lane, each degrading the clerk's account posture to
+# evidence-unavailable. alpaca-py does not cover it: its own retry fires on
+# HTTP status codes (429/504), never on a connection-level failure. The same
+# requests.Session carries order submission (POST) and cancellation (DELETE),
+# so this allowlist is the whole safety argument — a write is never re-issued.
+_STALE_CONNECTION_RETRY_METHODS: frozenset[str] = frozenset({"GET", "HEAD"})
+
+
+def _connection_failure_kind(exc: BaseException) -> str:
+    """The underlying urllib3/http.client error name, for the retry log line."""
+    cause = exc.args[0] if exc.args else None
+    return type(cause).__name__ if isinstance(cause, BaseException) else type(exc).__name__
+
+
+def _install_stale_connection_retry(session: Session) -> None:
+    """Re-issue an idempotent request once when the pooled connection was dead.
+
+    Wraps ``Session.request`` rather than mounting a ``urllib3`` ``Retry``:
+    ``Retry`` has no hook, and half the value of this fix is that the stale-pool
+    recurrence stays visible instead of silently vanishing from the logs.
+    ``Timeout`` is excluded — a connect timeout has already spent most of the
+    caller's ``_DEFAULT_TIMEOUT_S`` budget and a read timeout may have reached
+    the server, so neither is the "closed before any response" case.
+    """
+    request = session.request
+
+    def request_with_retry(method: str, url: str, **kwargs: Any) -> Any:
+        try:
+            return request(method, url, **kwargs)
+        except RequestsConnectionError as exc:
+            if isinstance(exc, Timeout) or method.upper() not in _STALE_CONNECTION_RETRY_METHODS:
+                raise
+            logger.warning(
+                "alpaca pooled connection was closed; re-issuing the idempotent request once",
+                extra={
+                    "action": "alpaca_stale_connection_retry",
+                    "broker": BROKER_ID,
+                    "method": method.upper(),
+                    "path": urlsplit(url).path,
+                    "cause": _connection_failure_kind(exc),
+                },
+            )
+            return request(method, url, **kwargs)
+
+    session.request = request_with_retry  # type: ignore[method-assign]
 
 
 class AlpacaTradingClient:
@@ -169,6 +221,7 @@ class AlpacaTradingClient:
             raw_data=True,
         )
         _install_session_timeout(client._session, timeout_s=self._timeout_s)
+        _install_stale_connection_retry(client._session)
         journal = self._journal or get_capture_journal()
         install_capture_hook(client._session, journal, broker=self.broker_id)
         return client

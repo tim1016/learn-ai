@@ -185,13 +185,18 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
     second = provision_lane(
         fleet_service, broker="fake_beta", label="race-b", tmp_path=control_dir.parent
     )
-    # Same raw account, but provider-qualified keys differ — no conflict.
+    # Same raw account, but the providers canonicalize it differently: this
+    # only shows two different keys don't collide, not that one canonical key
+    # coexists across providers (see
+    # test_one_canonical_key_belongs_to_each_provider_independently in
+    # test_assignments.py for that proof).
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=first.clerk_id, external_account_id="acct-dup"
     )
-    fleet_service.reserve_assignment(
+    beta_reservation = fleet_service.reserve_assignment(
         broker="fake_beta", clerk_id=second.clerk_id, external_account_id="acct-dup"
     )
+    assert beta_reservation.canonical_external_account_id == "acct_dup"
     # Within one provider, the second clerk's reservation is durably refused.
     rival = provision_lane(
         fleet_service, broker="fake_alpha", label="race-c", tmp_path=control_dir.parent
@@ -205,6 +210,13 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
             broker="fake_alpha", canonical_account_id="ACCT-DUP"
         ).clerk_id
         == first.clerk_id
+    )
+    # Beta's own canonical form is not what alpha reserved under.
+    assert (
+        fleet_service._store.read_assignment(
+            broker="fake_beta", canonical_account_id="ACCT-DUP"
+        )
+        is None
     )
 
 
@@ -225,15 +237,14 @@ def test_the_generic_spine_survives_a_provider_adapter_refusal(
 ) -> None:
     """A provider raising inside canonicalization surfaces as its own error,
     not as registry corruption."""
-    from tests.broker.fleet.conftest import FakeProviderAdapter
+    from dataclasses import replace
 
-    strict = FakeProviderAdapter(
-        provider_id="fake_alpha",
-        refused_accounts=frozenset({"acct-bad"}),
-    )
+    from tests.broker.fleet.conftest import fake_alpha, fake_beta
+
+    strict = replace(fake_alpha(), refused_accounts=frozenset({"acct-bad"}))
     service = FleetControlService(
         store=fleet_service._store,
-        provider_adapters={"fake_alpha": strict, "fake_beta": FakeProviderAdapter("fake_beta")},
+        provider_adapters={"fake_alpha": strict, "fake_beta": fake_beta()},
         clock=clock,
     )
     lane = provision_lane(
@@ -309,6 +320,8 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """A FleetControlError subclass from the provider gate is not re-wrapped."""
+    import dataclasses
+
     from app.broker.fleet.routing import LaneRouter
     from tests.broker.fleet.conftest import FakeProviderAdapter, bind_lane, fake_alpha, fake_beta, provision_lane
 
@@ -318,9 +331,7 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
 
     base = fake_alpha()
     strict = _TypedRefusalAdapter(
-        provider_id=base.provider_id,
-        capabilities=base.capabilities,
-        declared_operations=base.declared_operations,
+        **{f.name: getattr(base, f.name) for f in dataclasses.fields(base)}
     )
     service = FleetControlService(
         store=fleet_service._store,
@@ -347,3 +358,63 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
             path_params={},
             query={},
         )
+
+
+def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
+    """The extension boundary is only provable when the fakes disagree.
+
+    Two adapters that canonicalize identically cannot distinguish a
+    provider-qualified key from a globally unique one — the exact bug
+    provider-qualified assignment exists to prevent.
+    """
+    from tests.broker.fleet.conftest import fake_alpha, fake_beta
+
+    raw = "  Acct-XYZ "
+    assert fake_alpha().canonical_account_id(raw) == "ACCT-XYZ"
+    assert fake_beta().canonical_account_id(raw) == "acct_xyz"
+    # Not merely case: a casefold cannot collapse them back together.
+    assert (
+        fake_alpha().canonical_account_id(raw).casefold()
+        != fake_beta().canonical_account_id(raw).casefold()
+    )
+    # Both still refuse the empty identity, so the service's gate stays reachable.
+    assert fake_alpha().canonical_account_id("   ") == ""
+    assert fake_beta().canonical_account_id("   ") == ""
+
+
+def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_provider(
+    control_dir: Path, fleet_service
+) -> None:
+    """Readiness is per-provider: only beta declares a configuration-access
+    operation, and it stays routable before any binding is confirmed."""
+    from app.broker.fleet.errors import ClerkUnreachable
+    from app.broker.fleet.provider import OperationReadiness
+
+    beta = provision_lane(fleet_service, broker="fake_beta", label="cfg", tmp_path=control_dir.parent)
+    fleet_service.register_agent_session(
+        fleet_protocol_version=2, clerk_id=beta.clerk_id, worker_key=beta.worker_key
+    )
+    fleet_service.require_capability(
+        broker="fake_beta", capability=Capability.CONFIGURATION_MANAGE
+    )
+    with pytest.raises(BrokerClerkCapabilityUnavailable):
+        fleet_service.require_capability(
+            broker="fake_alpha", capability=Capability.CONFIGURATION_MANAGE
+        )
+    # Unbound, so execution refuses…
+    with pytest.raises(ClerkUnreachable):
+        fleet_service.resolve_route(broker="fake_beta", clerk_id=beta.clerk_id)
+    # …but the configuration surface stays reachable (the repair path), and
+    # the readiness that gets it there is read off the declared operation
+    # itself, not hand-passed.
+    configuration_apply = next(
+        operation
+        for operation in fleet_service.adapters()["fake_beta"].operations()
+        if operation.operation_id == "configuration_apply"
+    )
+    assert configuration_apply.readiness is OperationReadiness.CONFIGURATION_ACCESS
+    _clerk, session, assignment = fleet_service.resolve_route(
+        broker="fake_beta", clerk_id=beta.clerk_id, readiness=configuration_apply.readiness
+    )
+    assert assignment is None
+    assert session.clerk_id == beta.clerk_id

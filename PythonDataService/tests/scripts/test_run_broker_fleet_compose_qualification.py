@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -107,11 +108,7 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
 
 def test_qualification_uses_declared_alpaca_reads_not_raw_probe_endpoints() -> None:
     """The host evidence reaches the SDK/client and market-status consumer seams."""
-    script_path = (
-        qualification.REPOSITORY_ROOT
-        / "PythonDataService/scripts/run_broker_fleet_compose_qualification.py"
-    )
-    script = script_path.read_text(encoding="utf-8")
+    script = Path(qualification.__file__).read_text(encoding="utf-8")
 
     assert '"/api/brokers/alpaca/account"' in script
     assert '"/api/brokers/alpaca/market-status-snapshot"' in script
@@ -121,18 +118,52 @@ def test_qualification_uses_declared_alpaca_reads_not_raw_probe_endpoints() -> N
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
     """D evidence records every Paper fault without claiming an E scenario."""
-    assert set(qualification.FAULT_SCENARIOS) == {
-        "provider_outage",
-        "credential_refusal_restart",
-        "volume_marker_poison_mismount_refusal",
-        "request_queue_saturation",
-        "stream_saturation",
-    }
+    assert "coordinator_outage" not in qualification.FAULT_SCENARIOS
     assert {"passed", "attempted", "unrun"} == qualification.FAULT_STATES
     result = qualification._fault_result("unrun", "bounded host unavailable", {"clerk_id": "live"})
     assert result["state"] == "unrun"
     with pytest.raises(qualification.QualificationError, match="Unknown fault"):
         qualification._fault_result("failed", "not a vocabulary value", {})
+
+
+def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -> None:
+    """The tuple is a manifest; this asserts the ceremony honours it.
+
+    Comparing FAULT_SCENARIOS to a literal copy of itself cannot catch the one
+    drift that matters — a scenario declared in the vocabulary and never
+    assigned in run_host_qualification, which _assert_all_faults_passed would
+    then fail at runtime on the host, hours into a maintenance window. If a
+    scenario is ever extracted into a helper, keep its `faults[...] =`
+    assignment at the call site in run_host_qualification, or this check
+    goes red on an otherwise-correct refactor.
+    """
+    source = Path(qualification.__file__).read_text(encoding="utf-8")
+    function = next(
+        (
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run_host_qualification"
+        ),
+        None,
+    )
+    assert function is not None, "run_host_qualification was renamed or removed; update this test's target."
+    populated = {
+        target.slice.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "faults"
+        and isinstance(target.slice, ast.Constant)
+        and isinstance(target.slice.value, str)
+    }
+    assert populated == set(qualification.FAULT_SCENARIOS)
+
+
+def test_parse_args_accepts_build_timeout_s_and_defaults_to_120() -> None:
+    """A cold CI runner needs a wider image-build budget than a warm host."""
+    assert qualification._parse_args([]).build_timeout_s == 120.0
+    assert qualification._parse_args(["--build-timeout-s", "1500"]).build_timeout_s == 1500.0
 
 
 def test_partial_fault_matrix_cannot_be_labelled_passed() -> None:

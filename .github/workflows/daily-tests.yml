@@ -118,3 +118,47 @@ jobs:
           name: daily-python-test-results
           path: PythonDataService/TestResults/*.xml
           if-no-files-found: ignore
+
+  fleet-compose-qualification:
+    name: Fleet Compose Qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: PythonDataService
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: docker compose version
+        run: docker compose version
+      - name: Run the isolated actual-role Compose qualification
+        env:
+          DATA_PLANE_CONTROL_SECRET: ""
+        run: |
+          mkdir -p TestResults
+          # The runner has no deploy/fleet/env/*.env, so the pre-ceremony render
+          # is already secret-free; pin it anyway so the job cannot regress.
+          # Compose resolves a relative env_file against the Compose file's
+          # parent (repo root), not this step's working-directory, so the
+          # pin must be absolute or it silently misses.
+          : > TestResults/empty.env
+          # A cold runner building python:3.12-slim + requirements-heavy takes
+          # minutes; --build-timeout-s widens only that one bound so the first
+          # nightly run doesn't go red on image build alone.
+          FLEET_LIVE_ENV_FILE="$(pwd)/TestResults/empty.env" \
+          FLEET_PAPER_ENV_FILE="$(pwd)/TestResults/empty.env" \
+          FLEET_COORDINATOR_ENV_FILE="$(pwd)/TestResults/empty.env" \
+          python -m scripts.run_broker_fleet_compose_qualification \
+            --timeout-s 120 --build-timeout-s 1500 \
+            --evidence-path TestResults/fleet-compose-qualification.json
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fleet-compose-qualification
+          path: PythonDataService/TestResults/fleet-compose-qualification.json
+          if-no-files-found: warn

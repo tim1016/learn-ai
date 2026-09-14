@@ -711,7 +711,9 @@ def _cleanup_qualification(
     return None
 
 
-def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path | None) -> dict[str, Any]:
+def run_host_qualification(
+    *, keep: bool, timeout_s: float, evidence_path: Path | None, build_timeout_s: float = 120.0
+) -> dict[str, Any]:
     """Exercise actual coordinator/agent roles on isolated Compose volumes."""
     bootstrap_discovered = ComposeCommand.discover()
     coordinator_port = _available_loopback_port()
@@ -735,7 +737,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             bootstrap.run(project, ["--profile", "fleet-qualification", "config"])
             started = True
             evidence["stage"] = "build"
-            bootstrap.run(project, ["build", "fleet-coordinator"], timeout_s=120.0)
+            bootstrap.run(project, ["build", "fleet-coordinator"], timeout_s=build_timeout_s)
             started = True
             evidence["stage"] = "enrollment"
             compose = _host_ceremony(bootstrap, project, Path(temporary))
@@ -942,6 +944,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--assert-no-custody-root", type=Path)
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=90.0)
+    parser.add_argument("--build-timeout-s", type=float, default=120.0)
     parser.add_argument("--evidence-path", type=Path)
     return parser.parse_args(argv)
 
@@ -970,7 +973,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(json.dumps(_assert_no_custody_root(args.assert_no_custody_root), sort_keys=True) + "\n")
         return 0
     try:
-        evidence = run_host_qualification(keep=args.keep, timeout_s=args.timeout_s, evidence_path=args.evidence_path)
+        evidence = run_host_qualification(
+            keep=args.keep,
+            timeout_s=args.timeout_s,
+            evidence_path=args.evidence_path,
+            build_timeout_s=args.build_timeout_s,
+        )
     except (QualificationError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
         logger.error("Fleet Compose qualification failed.", extra={"error": str(exc)})
         return 1

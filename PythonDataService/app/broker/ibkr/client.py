@@ -24,6 +24,7 @@ import logging
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
+from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
 from app.broker.ibkr.event_codes import (
     CONNECTIVITY_LOST_CODES as _CONNECTIVITY_LOST_CODES,
 )
@@ -45,6 +46,11 @@ from app.broker.ibkr.recovery_state_machine import recovery_state_from_connectio
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+# Shared by the WARNING (report_first) and DEBUG (suppressed) branches of a
+# failed connect attempt in ``_connect_with_retries`` — same message, two
+# different log levels depending on CONNECT_LOG_BUDGET's verdict (#2080).
+_CONNECT_ATTEMPT_FAILED_MSG = "IBKR connect attempt %d failed: %s"
 
 # Conservative headroom below IBKR's default 50 requests/second connection
 # pace. Pin the ib_async transport explicitly so a dependency-default change
@@ -411,7 +417,11 @@ class IbkrClient:
             self._client_id_in_use_seen = False
             self._connection_lost = False
             try:
-                logger.info(
+                # Demoted to DEBUG while CONNECT_LOG_BUDGET is suppressing a
+                # sustained outage — the per-attempt chatter is only useful
+                # once, not once per attempt (#2080).
+                step_log = logger.debug if CONNECT_LOG_BUDGET.suppressing else logger.info
+                step_log(
                     "[STEP 1/3] IBKR connect attempt %d/%d → %s:%d (mode=%s, clientId=%d)",
                     attempt,
                     s.connect_attempts,
@@ -431,6 +441,12 @@ class IbkrClient:
                 # OS-default ~2h. Best-effort: the monitor catches what
                 # keep-alive would have accelerated if this fails.
                 apply_tcp_keepalive(self._ib)
+                if (recovered_ms := CONNECT_LOG_BUDGET.note_success()) is not None:
+                    logger.info(
+                        "IBKR reachable again after %d ms",
+                        recovered_ms,
+                        extra={"action": "ibkr_connect_recovered"},
+                    )
                 break
             except Exception as exc:
                 last_error = exc
@@ -440,11 +456,34 @@ class IbkrClient:
                         host=resolved_host,
                         port=s.port,
                     ) from exc
-                logger.warning(
-                    "IBKR connect attempt %d failed: %s",
-                    attempt,
-                    exc,
-                )
+                verdict = CONNECT_LOG_BUDGET.note_failure(exc)
+                if verdict == "report_first":
+                    logger.warning(
+                        _CONNECT_ATTEMPT_FAILED_MSG,
+                        attempt,
+                        exc,
+                        extra={
+                            "action": "ibkr_connect_failed",
+                            "unreachable_since_ms": CONNECT_LOG_BUDGET.unreachable_since_ms,
+                        },
+                    )
+                elif verdict == "report_summary":
+                    logger.warning(
+                        "IBKR still unreachable; %d connect attempts suppressed since last report: %s",
+                        CONNECT_LOG_BUDGET.suppressed_attempts,
+                        exc,
+                        extra={
+                            "action": "ibkr_connect_still_failing",
+                            "suppressed_attempts": CONNECT_LOG_BUDGET.suppressed_attempts,
+                            "unreachable_since_ms": CONNECT_LOG_BUDGET.unreachable_since_ms,
+                        },
+                    )
+                else:
+                    logger.debug(
+                        _CONNECT_ATTEMPT_FAILED_MSG,
+                        attempt,
+                        exc,
+                    )
                 await asyncio.sleep(min(2.0 * attempt, 5.0))
         else:
             raise BrokerError(

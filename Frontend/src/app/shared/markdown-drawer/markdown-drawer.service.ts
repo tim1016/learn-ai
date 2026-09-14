@@ -13,11 +13,7 @@ import type { MarkdownDocId } from './markdown-drawer.model';
  *
  * Canonical consumers:
  *   - Methodology context help  → docId `'methodology'`
- *   - Broker-v2 card help       → docId `'broker-v2-manual'`  (via `BrokerV2CardHelpButtonComponent`)
  *
- * S4 wiring note: `BrokerV2CardHelpButtonComponent` injects this service
- * directly.  S4 components call `open('broker-v2-manual', anchor)` with a
- * `BrokerV2CardName`-derived anchor from `BROKER_V2_CARD_ANCHOR_MAP`.
  */
 @Injectable({ providedIn: 'root' })
 export class MarkdownDrawerService {
