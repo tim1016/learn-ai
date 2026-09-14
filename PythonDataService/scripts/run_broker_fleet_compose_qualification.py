@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -44,7 +46,8 @@ QUALIFICATION_SERVICES = (
     "alpaca-live-clerk",
 )
 LANE_SERVICES = ("alpaca-paper-clerk", "alpaca-live-clerk")
-_CUSTODY_TERMS = ("custody", "profile", "arming", "ledger", "order", "position")
+_COORDINATOR_CONTROL_PATHS = frozenset(("fleet", "fleet/registry.db", "fleet/registry.db-shm", "fleet/registry.db-wal"))
+_FLEET_REGISTRY_TABLES = frozenset(("fleet_meta", "clerks", "clerk_sessions", "clerk_session_history", "approved_endpoints", "account_assignments", "account_assignment_history", "routing_receipts", "routing_receipts_v2"))
 FAULT_SCENARIOS = (
     "provider_outage",
     "credential_refusal_restart",
@@ -199,6 +202,40 @@ def _run_fake_market_data() -> int:
     return 0
 
 
+def _qualification_local_call(path: str) -> tuple[int, dict[str, Any]]:
+    """Call the already-running clerk ASGI process through its loopback socket."""
+    secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
+    if not secret:
+        raise QualificationError("Qualification client has no per-run probe secret.")
+    return _request_json(
+        f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
+        headers={"X-Fleet-Qualification-Secret": secret},
+        timeout_s=4.0,
+    )
+
+
+def _run_dependency_client(kind: str) -> int:
+    """Emit one real running-clerk dependency result for host evidence."""
+    status, body = _qualification_local_call(f"/dependency/{kind}")
+    sys.stdout.write(json.dumps({"status": status, "body": body}, sort_keys=True) + "\n")
+    return 0
+
+
+def _run_capacity_client(kind: str) -> int:
+    """Contend against the deployed Paper ASGI middleware, never a fresh instance."""
+    path = f"/hold/{kind}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(_qualification_local_call, path)
+        time.sleep(0.15)
+        second = _qualification_local_call(path)
+        first.result(timeout=4.0)
+    status, body = second
+    if status != HTTPStatus.SERVICE_UNAVAILABLE or body.get("reason") != "fleet_lane_capacity_exhausted":
+        raise QualificationError(f"Running Paper {kind} capacity did not return its typed 503.")
+    sys.stdout.write(json.dumps({"kind": kind, "refusal_status": status, "reason": body["reason"]}, sort_keys=True) + "\n")
+    return 0
+
+
 async def _run_capacity_probe_async(kind: str) -> dict[str, object]:
     """Exercise the installed lane middleware with held ASGI work, not a fake lane."""
     from app.broker.fleet.lane_runtime import (  # Imported only inside the real Paper image.
@@ -302,6 +339,20 @@ def _assert_private_agent_ports(inspect: dict[str, Any], service: str) -> None:
         return
     if not isinstance(ports, dict) or any(value is not None for value in ports.values()):
         raise QualificationError(f"{service} unexpectedly publishes a host port: {ports!r}")
+
+
+def _assert_coordinator_mount_isolation(inspect: dict[str, Any], lane_sources: set[str]) -> None:
+    """Reject every coordinator mount that could be a lane-local custody root."""
+    mounts = inspect.get("Mounts")
+    if not isinstance(mounts, list):
+        raise QualificationError("Coordinator inspection has no mount list.")
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            continue
+        source = mount.get("Source")
+        destination = mount.get("Destination")
+        if source in lane_sources or (isinstance(destination, str) and "alpaca_clerk" in destination):
+            raise QualificationError("Coordinator exposes a lane source or custody destination.")
 
 
 def _exec_probe(compose: ComposeCommand, project: str, service: str, path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
@@ -427,6 +478,7 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
         )
         lanes[lane] = lane_result
     control_secret = "qualification-control-secret"
+    probe_secret = f"qualification-probe-{uuid.uuid4().hex}"
     coordinator_env = temporary_dir / "coordinator.env"
     _write_env(
         coordinator_env,
@@ -456,6 +508,7 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
                 "FLEET_AGENT_SERVICE_TOKEN": str(entry["agent_service_token"]),
                 "FLEET_COORDINATOR_SERVICE_TOKEN": str(entry["coordinator_service_token"]),
                 "IBKR_CLIENT_ID": "1201" if lane == "paper" else "1202",
+                "FLEET_QUALIFICATION_PROBE_SECRET": probe_secret,
             },
         )
         runtime_environment[f"FLEET_{lane.upper()}_ENV_FILE"] = str(lane_env)
@@ -515,7 +568,7 @@ def _assert_all_faults_passed(faults: dict[str, dict[str, Any]]) -> None:
 
 
 def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[str, Any]:
-    """Run a held-ASGI capacity proof inside the already-running real Paper role."""
+    """Run contention through the deployed, already-running Paper ASGI service."""
     result = compose.run(
         project,
         [
@@ -526,7 +579,7 @@ def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[st
             "-m",
             "scripts.run_broker_fleet_compose_qualification",
             "--container-role",
-            "capacity-probe",
+            "capacity-client",
             "--capacity-kind",
             kind,
         ],
@@ -538,6 +591,22 @@ def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[st
     if payload.get("reason") != "fleet_lane_capacity_exhausted":
         raise QualificationError(f"Paper {kind} capacity probe emitted the wrong refusal reason.")
     return payload
+
+
+def _dependency_probe(
+    compose: ComposeCommand, project: str, service: str, kind: str
+) -> tuple[int, dict[str, Any]]:
+    """Call a qualification dependency through the real named clerk ASGI process."""
+    result = compose.run(
+        project,
+        ["exec", "-T", service, "python", "-m", "scripts.run_broker_fleet_compose_qualification", "--container-role", "dependency-client", "--dependency-kind", kind],
+    )
+    payload = _json_line(result, f"{service} dependency probe")
+    status = payload.get("status")
+    body = payload.get("body")
+    if not isinstance(status, int) or not isinstance(body, dict):
+        raise QualificationError(f"{service} dependency probe returned malformed evidence.")
+    return status, body
 
 
 def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: float) -> dict[str, object]:
@@ -611,6 +680,9 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             sources = {role: mount.get("Source") for role, mount in mounts.items()}
             if len(set(sources.values())) != 3 or not all(isinstance(source, str) and source for source in sources.values()):
                 raise QualificationError(f"Fleet volumes are not physically distinct: {sources!r}")
+            _assert_coordinator_mount_isolation(
+                inspections["fleet-coordinator"], {str(sources["paper"]), str(sources["live"])}
+            )
             _assert_coordinator_secret_absence(inspections["fleet-coordinator"])
             resources = {service: _assert_limits(inspections[service], service) for service in QUALIFICATION_SERVICES}
             for service in LANE_SERVICES:
@@ -637,13 +709,27 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             faults: dict[str, dict[str, Any]] = {}
             evidence["stage"] = "provider_outage"
             compose.run(project, ["kill", "fleet-fake-paper-provider"])
+            paper_dependency_status, paper_dependency = _dependency_probe(compose, project, "alpaca-paper-clerk", "broker")
+            live_dependency_status, live_dependency = _dependency_probe(compose, project, "alpaca-live-clerk", "broker")
+            paper_market_status, paper_market = _dependency_probe(compose, project, "alpaca-paper-clerk", "market-data")
+            live_market_status, live_market = _dependency_probe(compose, project, "alpaca-live-clerk", "market-data")
+            if paper_dependency_status != HTTPStatus.SERVICE_UNAVAILABLE:
+                raise QualificationError("Running Paper ASGI route did not refuse its killed qualification upstream.")
+            if live_dependency_status != HTTPStatus.OK:
+                raise QualificationError("Running Live ASGI route lost its independent qualification upstream.")
+            if paper_market_status != HTTPStatus.OK or live_market_status != HTTPStatus.OK:
+                raise QualificationError("Running clerk ASGI market-data dependency route did not remain read-only available.")
             faults["provider_outage"] = _fault_result(
                 "passed",
-                "Paper-only fake provider was physically killed; Live retained its independent market read.",
+                "Paper's real ASGI dependency route refused its killed upstream while Live's real ASGI dependency route still succeeded.",
                 _live_identity_after_paper_fault(
                     compose, project, timeout_s, directory_headers, live_id, coordinator_url
                 ),
             )
+            faults["provider_outage"]["paper_dependency"] = paper_dependency
+            faults["provider_outage"]["live_dependency"] = live_dependency
+            faults["provider_outage"]["paper_market_dependency"] = paper_market
+            faults["provider_outage"]["live_market_dependency"] = live_market
             # Restore only the Paper test dependency before subsequent Paper
             # restart faults; Live remained independently available throughout.
             compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "fleet-fake-paper-provider"], timeout_s=30.0)
@@ -741,18 +827,30 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
 
 
 def _assert_no_custody_root(root: Path) -> dict[str, object]:
-    """Prove a coordinator volume has only its inert registry probe artifact."""
-    names = sorted(path.name.lower() for path in root.iterdir())
-    forbidden = [name for name in names if any(term in name for term in _CUSTODY_TERMS)]
-    if forbidden:
-        raise QualificationError(f"Coordinator control root contains lane custody material: {forbidden}")
-    return {"ok": True, "entries": names}
+    """Require the coordinator control root to contain only the fleet registry."""
+    actual = {path.relative_to(root).as_posix() for path in root.rglob("*")}
+    unexpected = sorted(actual - _COORDINATOR_CONTROL_PATHS)
+    if unexpected:
+        raise QualificationError(f"Coordinator control root contains unapproved material: {unexpected}")
+    database = root / "fleet" / "registry.db"
+    if not database.is_file():
+        raise QualificationError("Coordinator control root is missing its fleet registry database.")
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    finally:
+        connection.close()
+    unknown_tables = sorted(tables - _FLEET_REGISTRY_TABLES)
+    if unknown_tables:
+        raise QualificationError(f"Fleet registry contains unapproved tables: {unknown_tables}")
+    return {"ok": True, "entries": sorted(actual), "tables": sorted(tables)}
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--container-role", choices=("fake-provider", "fake-market-data", "capacity-probe"))
+    parser.add_argument("--container-role", choices=("fake-provider", "fake-market-data", "capacity-client", "dependency-client"))
     parser.add_argument("--capacity-kind", choices=("request", "stream"))
+    parser.add_argument("--dependency-kind", choices=("broker", "market-data"))
     parser.add_argument("--health-url")
     parser.add_argument("--call-url")
     parser.add_argument("--call-method", choices=("GET", "POST"), default="GET")
@@ -767,10 +865,14 @@ def main(argv: list[str] | None = None) -> int:
     """Dispatch a container role helper or run the host qualification ceremony."""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.container_role:
-        if args.container_role == "capacity-probe":
+        if args.container_role == "capacity-client":
             if args.capacity_kind is None:
-                raise QualificationError("--capacity-kind is required for capacity-probe.")
-            return _run_capacity_probe(args.capacity_kind)
+                raise QualificationError("--capacity-kind is required for capacity-client.")
+            return _run_capacity_client(args.capacity_kind)
+        if args.container_role == "dependency-client":
+            if args.dependency_kind is None:
+                raise QualificationError("--dependency-kind is required for dependency-client.")
+            return _run_dependency_client(args.dependency_kind)
         return {"fake-provider": _run_fake_provider, "fake-market-data": _run_fake_market_data}[args.container_role]()
     if args.health_url:
         status, _body = _request_json(args.health_url)

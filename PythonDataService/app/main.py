@@ -85,6 +85,7 @@ from app.routers import (
 from app.routers import (
     data_lake as data_lake_router,
 )
+from app.routers.fleet_qualification import qualification_router_from_environment
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -916,6 +917,14 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=settings.get_trusted_hosts(),
 )
+
+# Compose qualification is an opt-in clerk-only surface.  It remains absent
+# from normal and coordinator processes and does not participate in providers.
+_fleet_qualification_router = qualification_router_from_environment(
+    _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+)
+if _fleet_qualification_router is not None:
+    app.include_router(_fleet_qualification_router)
 
 # Delivery D: combined and clerk-agent processes measure the retained
 # browser-direct compatibility reads during the pre-cutover window. Only a

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -249,14 +251,22 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
 
 
 def test_assert_no_custody_root_refuses_custody_named_artifact(tmp_path: Path) -> None:
-    """The coordinator assertion rejects custody-like state by filename."""
-    (tmp_path / "fleet-registry.sqlite").touch()
+    """The coordinator proof rejects an unknown nested artifact and table."""
+    registry_directory = tmp_path / "fleet"
+    registry_directory.mkdir()
+    connection = sqlite3.connect(registry_directory / "registry.db")
+    connection.execute("CREATE TABLE fleet_meta (id INTEGER)")
+    connection.commit()
+    connection.close()
+    for child in tmp_path.iterdir():
+        if child.name != "fleet":
+            shutil.rmtree(child)
     result = qualification._assert_no_custody_root(tmp_path)
     assert result["ok"] is True
-    assert "fleet-registry.sqlite" in result["entries"]
-    (tmp_path / "custody.sqlite").touch()
+    assert result["tables"] == ["fleet_meta"]
+    (registry_directory / "nested.bin").touch()
 
-    with pytest.raises(qualification.QualificationError, match="custody"):
+    with pytest.raises(qualification.QualificationError, match="unapproved material"):
         qualification._assert_no_custody_root(tmp_path)
 
 
@@ -277,11 +287,29 @@ def test_mount_and_resource_assertions_require_real_engine_evidence() -> None:
         qualification._mount_at(inspect, "/wrong")
 
 
+def test_coordinator_mount_isolation_rejects_a_lane_source() -> None:
+    """A distinct visible source is insufficient if coordinator also mounts it."""
+    inspection = {
+        "Mounts": [
+            {"Source": "/volumes/control", "Destination": "/app/artifacts/fleet"},
+            {"Source": "/volumes/paper", "Destination": "/elsewhere"},
+        ]
+    }
+    with pytest.raises(qualification.QualificationError, match="lane source"):
+        qualification._assert_coordinator_mount_isolation(inspection, {"/volumes/paper", "/volumes/live"})
+
+
 def test_live_probe_mutation_refusal_is_a_typed_non_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Host evidence preserves the fake lane's refusal instead of treating it as a crash."""
+    """The CLI serializes the closed coordinator registry evidence."""
     root = tmp_path / "live"
     root.mkdir()
+    registry_directory = root / "fleet"
+    registry_directory.mkdir()
+    connection = sqlite3.connect(registry_directory / "registry.db")
+    connection.execute("CREATE TABLE fleet_meta (id INTEGER)")
+    connection.commit()
+    connection.close()
     result = qualification.main(["--assert-no-custody-root", str(root)])
 
     assert result == 0
-    assert json.loads(capsys.readouterr().out) == {"entries": [], "ok": True}
+    assert json.loads(capsys.readouterr().out)["ok"] is True

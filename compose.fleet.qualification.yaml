@@ -77,6 +77,10 @@ services:
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
+      FLEET_MAX_INFLIGHT_REQUESTS: "1"
+      FLEET_MAX_INFLIGHT_STREAMS: "1"
+      FLEET_REQUEST_QUEUE_LIMIT: "0"
+      FLEET_REQUEST_QUEUE_TIMEOUT_MS: "0"
     stop_grace_period: 2s
     volumes:
       - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
@@ -94,6 +98,8 @@ services:
       FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
     stop_grace_period: 2s
+    volumes:
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
     depends_on:
       fleet-fake-live-provider:
         condition: service_healthy
