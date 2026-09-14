@@ -20,12 +20,26 @@ fi
 echo "==> Tearing down all containers..."
 podman compose down
 
+# Compose ownership is decided by the label Compose itself stamps, never by a
+# hardcoded service list. A hardcoded list silently misclassifies every service
+# added after it was written: the broker clerk agents (`alpaca-live-clerk`,
+# `alpaca-paper-clerk`) were absent from the original five names, so a clerk
+# left in Created was reaped as an "orphan" below and never recovered above —
+# destroying a live execution lane on a routine `./restart.sh`.
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
+COMPOSE_LABEL="com.docker.compose.project=${COMPOSE_PROJECT}"
+
+CREATED=$(podman ps -a --filter status=created --format "{{.Names}}" | sort || true)
+COMPOSE_CREATED=$(podman ps -a --filter status=created \
+  --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" | sort || true)
+
 # Reap orphaned non-compose containers stuck in Created (typically `sleep 1`
 # probes from lean-sidecar metadata staging that the host process abandons).
 # `podman compose down` only touches compose-managed names, so these pile up
-# in `podman ps -a` over time. Skip if none — `xargs --no-run-if-empty`
-# isn't portable, so guard explicitly.
-ORPHANS=$(podman ps -a --filter status=created --format "{{.Names}}" | grep -Ev '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+# in `podman ps -a` over time. Anything Compose owns is excluded here and
+# recovered below instead. Skip if none — `xargs --no-run-if-empty` isn't
+# portable, so guard explicitly.
+ORPHANS=$(comm -23 <(echo "$CREATED") <(echo "$COMPOSE_CREATED") | grep -v '^$' || true)
 if [[ -n "$ORPHANS" ]]; then
   echo "==> Reaping orphaned Created containers:"
   echo "$ORPHANS" | sed 's/^/    /'
@@ -61,8 +75,9 @@ podman compose up -d --force-recreate || true
 # Observed on cold restarts where postgres takes >25s for WAL fsync
 # recovery. Try starting any compose container still in Created; if its
 # deps are now healthy, it'll come up.
-STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
-  | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+# Re-read: the reap above may have removed non-compose entries.
+STUCK=$(podman ps -a --filter status=created \
+  --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" || true)
 if [[ -n "$STUCK" ]]; then
   echo "==> Starting compose services left in Created:"
   echo "$STUCK" | sed 's/^/    /'
@@ -74,19 +89,20 @@ fi
 # 240s (80 x 3s) so the script's verdict matches reality on cold builds.
 echo "==> Waiting for services to become healthy..."
 for i in {1..80}; do
-  HEALTHY=$(podman ps --filter health=healthy --format "{{.Names}}" | wc -l)
-  TOTAL=$(podman ps --format "{{.Names}}" | wc -l)
+  HEALTHY=$(podman ps --filter "label=${COMPOSE_LABEL}" \
+    --filter health=healthy --format "{{.Names}}" | wc -l)
+  TOTAL=$(podman ps --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" | wc -l)
   echo "    [$i] $HEALTHY/$TOTAL healthy"
   if [[ "$HEALTHY" -ge "$TOTAL" && "$TOTAL" -gt 0 ]]; then
     echo "==> All $TOTAL services healthy!"
-    podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     exit 0
   fi
   # Mid-loop rescue: if a compose service drifted back into Created
   # because its dep flapped, recover it without waiting for the next
   # restart. Cheap to retry.
-  STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
-    | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+  STUCK=$(podman ps -a --filter status=created \
+    --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" || true)
   if [[ -n "$STUCK" ]]; then
     echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
   fi
@@ -94,5 +110,5 @@ for i in {1..80}; do
 done
 
 echo "==> WARNING: Not all services healthy after 240s"
-podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+podman ps --filter "label=${COMPOSE_LABEL}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 exit 1
