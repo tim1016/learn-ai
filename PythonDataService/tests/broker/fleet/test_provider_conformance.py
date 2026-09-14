@@ -185,7 +185,11 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
     second = provision_lane(
         fleet_service, broker="fake_beta", label="race-b", tmp_path=control_dir.parent
     )
-    # Same raw account, but provider-qualified keys differ — no conflict.
+    # Same raw account, but the providers canonicalize it differently: this
+    # only shows two different keys don't collide, not that one canonical key
+    # coexists across providers (see
+    # test_one_canonical_key_belongs_to_each_provider_independently in
+    # test_assignments.py for that proof).
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=first.clerk_id, external_account_id="acct-dup"
     )
@@ -233,12 +237,11 @@ def test_the_generic_spine_survives_a_provider_adapter_refusal(
 ) -> None:
     """A provider raising inside canonicalization surfaces as its own error,
     not as registry corruption."""
-    from tests.broker.fleet.conftest import FakeProviderAdapter, fake_beta
+    from dataclasses import replace
 
-    strict = FakeProviderAdapter(
-        provider_id="fake_alpha",
-        refused_accounts=frozenset({"acct-bad"}),
-    )
+    from tests.broker.fleet.conftest import fake_alpha, fake_beta
+
+    strict = replace(fake_alpha(), refused_accounts=frozenset({"acct-bad"}))
     service = FleetControlService(
         store=fleet_service._store,
         provider_adapters={"fake_alpha": strict, "fake_beta": fake_beta()},
@@ -303,7 +306,7 @@ def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_pr
     """Readiness is per-provider: only beta declares a configuration-access
     operation, and it stays routable before any binding is confirmed."""
     from app.broker.fleet.errors import ClerkUnreachable
-    from app.broker.fleet.provider import Capability, OperationReadiness
+    from app.broker.fleet.provider import OperationReadiness
 
     beta = provision_lane(fleet_service, broker="fake_beta", label="cfg", tmp_path=control_dir.parent)
     fleet_service.register_agent_session(
@@ -319,11 +322,17 @@ def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_pr
     # Unbound, so execution refuses…
     with pytest.raises(ClerkUnreachable):
         fleet_service.resolve_route(broker="fake_beta", clerk_id=beta.clerk_id)
-    # …but the configuration surface stays reachable (the repair path).
+    # …but the configuration surface stays reachable (the repair path), and
+    # the readiness that gets it there is read off the declared operation
+    # itself, not hand-passed.
+    configuration_apply = next(
+        operation
+        for operation in fleet_service.adapters()["fake_beta"].operations()
+        if operation.operation_id == "configuration_apply"
+    )
+    assert configuration_apply.readiness is OperationReadiness.CONFIGURATION_ACCESS
     _clerk, session, assignment = fleet_service.resolve_route(
-        broker="fake_beta",
-        clerk_id=beta.clerk_id,
-        readiness=OperationReadiness.CONFIGURATION_ACCESS,
+        broker="fake_beta", clerk_id=beta.clerk_id, readiness=configuration_apply.readiness
     )
     assert assignment is None
-    assert session is not None
+    assert session.clerk_id == beta.clerk_id

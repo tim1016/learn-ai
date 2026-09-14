@@ -24,7 +24,6 @@ from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet.volume import marker_path
 from tests.broker.fleet.conftest import (
-    FakeProviderAdapter,
     FrozenClock,
     fake_alpha,
     provision_lane,
@@ -252,7 +251,7 @@ def test_retirement_races_a_reservation_without_leaving_an_orphan(
     rival_store = FleetRegistryStore.open(control_dir=control_dir)
     rival = FleetControlService(
         store=rival_store,
-        provider_adapters={"fake_alpha": FakeProviderAdapter("fake_alpha")},
+        provider_adapters={"fake_alpha": fake_alpha()},
         clock=clock,
     )
     try:

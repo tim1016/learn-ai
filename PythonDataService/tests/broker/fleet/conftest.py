@@ -2,9 +2,9 @@
 
 The two test-only fake providers prove the extension boundary (PRD Phase 6 /
 FR-002): they implement the adapter protocol, declare *different* capability
-sets, and reach the service only through constructor injection — never through
-the production registry, which stays empty until the Alpaca adapter lands as
-Phase 2.
+sets, canonicalize accounts *differently* (the headline boundary proof
+alongside the capability split), and reach the service only through
+constructor injection — never through the production registry.
 """
 
 from __future__ import annotations
@@ -122,7 +122,8 @@ def _beta_canonical_account_id(raw: str) -> str:
     Deliberately different from alpha's in *shape* as well as case, so no
     case-insensitive comparison can collapse the two back together. A blank
     input still canonicalizes to the empty identity the service refuses
-    (``app/broker/fleet/service.py:726``), so the empty-canonical gate stays
+    (``ClerkAccountMismatch`` in ``reserve_assignment``,
+    ``app/broker/fleet/service.py:726``), so the empty-canonical gate stays
     reachable for both providers.
     """
     return raw.strip().lower().replace("-", "_")
@@ -149,10 +150,10 @@ class FakeProviderAdapter:
     """A minimal in-memory provider adapter owned by the tests, not the app."""
 
     provider_id: str
+    capabilities: frozenset[Capability]
+    declared_operations: frozenset[ProviderOperation]
+    canonical_rule: Callable[[str], str]
     adapter_version: str = "test.1"
-    capabilities: frozenset[Capability] = FAKE_ALPHA_CAPABILITIES
-    declared_operations: frozenset[ProviderOperation] = _FAKE_ALPHA_OPERATIONS
-    canonical_rule: Callable[[str], str] = _alpha_canonical_account_id
     refused_accounts: frozenset[str] = field(default_factory=frozenset)
     served_context_refusals: list[str] = field(default_factory=list)
     summaries: list[Mapping[str, object]] = field(default_factory=list)
@@ -189,6 +190,7 @@ def fake_alpha() -> FakeProviderAdapter:
         provider_id="fake_alpha",
         capabilities=FAKE_ALPHA_CAPABILITIES,
         declared_operations=_FAKE_ALPHA_OPERATIONS,
+        canonical_rule=_alpha_canonical_account_id,
     )
 
 
@@ -304,8 +306,6 @@ __all__ = [
     "FakeProviderAdapter",
     "FrozenClock",
     "Lane",
-    "_alpha_canonical_account_id",
-    "_beta_canonical_account_id",
     "bind_lane",
     "fake_alpha",
     "fake_beta",

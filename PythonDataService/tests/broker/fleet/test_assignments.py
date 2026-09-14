@@ -69,6 +69,19 @@ def test_identical_raw_account_ids_coexist_across_providers(
     assert fleet_service._store.list_active_assignments() == [first, second]
 
 
+def test_one_canonical_key_belongs_to_each_provider_independently(
+    control_dir: Path, fleet_service
+) -> None:
+    """The key is (broker, canonical): a raw id both providers canonicalize
+    *identically* still yields two independent rows, not a conflict."""
+    alpha = provision_lane(fleet_service, broker="fake_alpha", label="pk-a", tmp_path=control_dir.parent)
+    beta = provision_lane(fleet_service, broker="fake_beta", label="pk-b", tmp_path=control_dir.parent)
+    first = _reserved(fleet_service, "fake_alpha", alpha.clerk_id, " 90210 ")
+    second = _reserved(fleet_service, "fake_beta", beta.clerk_id, " 90210 ")
+    assert first.canonical_external_account_id == second.canonical_external_account_id == "90210"
+    assert fleet_service._store.list_active_assignments() == [first, second]
+
+
 def test_a_clerk_cannot_reserve_under_another_brokers_route(
     control_dir: Path, fleet_service
 ) -> None:
