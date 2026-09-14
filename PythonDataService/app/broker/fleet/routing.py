@@ -32,6 +32,7 @@ from app.broker.fleet.delivery import (
     StreamDeliveryResult,
 )
 from app.broker.fleet.errors import (
+    BrokerClerkCapabilityUnavailable,
     ClerkBindingGenerationConflict,
     ClerkIdentityMismatch,
     ClerkRoutingAttemptConflict,
@@ -482,13 +483,43 @@ class LaneRouter:
             if operation.requires_effective_account
             else None
         )
-        return self._service.resolve_route(
+        resolved = self._service.resolve_route(
             broker=broker,
             clerk_id=clerk_id,
             expected_binding_generation=expected_binding_generation,
             expected_account_id=expected_account,
             readiness=operation.readiness,
         )
+        _clerk, session, assignment = resolved
+        if assignment is not None:
+            # ADR 0062 Decision 5 / addendum 3: the provider's own safety gate
+            # answers for execution operations only. A configuration-access
+            # operation must stay routable for a lane whose binding is broken,
+            # which is precisely the lane a provider gate would refuse.
+            from app.broker.fleet.provider import ServedContext
+
+            context = ServedContext(
+                broker=broker,
+                clerk_id=clerk_id,
+                agent_instance_id=session.agent_instance_id,
+                routing_epoch=session.routing_epoch,
+                account_id=assignment.canonical_external_account_id,
+                capability=operation.capability,
+                effective_binding_generation=assignment.confirmed_binding_generation,
+            )
+            try:
+                self._service.adapters()[broker].validate_served_context(context)
+            except FleetControlError:
+                raise
+            except Exception as exc:
+                raise BrokerClerkCapabilityUnavailable(
+                    f"Provider {broker!r} refuses to serve "
+                    f"{operation.operation_id} on clerk {clerk_id}: {exc}",
+                    next_step="The provider's own safety gates must pass before "
+                    "this operation routes; repair the lane's configuration and "
+                    "retry against its current resource.",
+                ) from exc
+        return resolved
 
     def _request(
         self,

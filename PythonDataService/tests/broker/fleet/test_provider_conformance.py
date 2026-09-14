@@ -265,3 +265,41 @@ def test_test_fakes_are_absent_from_production_composition_and_openapi() -> None
         artifact = (repository_root / relative_path).read_text(encoding="utf-8")
         assert "fake_alpha" not in artifact
         assert "fake_beta" not in artifact
+
+
+async def test_a_provider_refusing_the_served_context_closes_the_route(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """The provider safety gate runs at the routing seam, before dispatch."""
+    import dataclasses
+
+    from app.broker.fleet.errors import BrokerClerkCapabilityUnavailable
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import bind_lane, fake_alpha, fake_beta, provision_lane
+
+    strict = dataclasses.replace(fake_alpha(), served_context_refusals=["account_read"])
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": strict, "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label="served", tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account="acct-served")
+
+    def _never(broker: str, session):
+        raise AssertionError("dispatch must not be reached past a provider refusal")
+
+    router = LaneRouter(service=service, delivery_for=_never)
+    operation = next(
+        op for op in strict.operations() if op.operation_id == "account_read"
+    )
+    with pytest.raises(BrokerClerkCapabilityUnavailable, match="refuses to serve"):
+        await router.deliver_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )

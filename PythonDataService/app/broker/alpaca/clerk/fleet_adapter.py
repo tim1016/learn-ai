@@ -760,10 +760,11 @@ class AlpacaProviderAdapter:
         """Refuse served contexts the Alpaca authority machinery cannot honor.
 
         The heavy provider gates (mode agreement, arming, envelope, lease)
-        already run inside the clerk's own handlers; this hook adds only the
-        fleet-visible invariant: a bot action is not servable by a lane whose
-        reported authority is shadow — a shadow lane has no submission port
-        by construction (ADR 0059).
+        already run inside the clerk's own handlers; this hook adds the two
+        fleet-visible invariants the generic layer cannot check: a bot action
+        names the effective account it targets, and every served account id
+        is a canonical Alpaca UUID, because the Alpaca authority keys every
+        custody path by that exact value.
         """
         if (
             context.capability == Capability.BOT_ACTION

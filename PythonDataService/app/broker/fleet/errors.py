@@ -140,7 +140,7 @@ class ClerkAssignmentConflict(FleetControlError):
 
 
 class BrokerClerkCapabilityUnavailable(FleetControlError):
-    """The provider adapter does not declare the requested capability (FR-006)."""
+    """The provider adapter does not declare the requested capability, or cannot honor the served context for this lane (FR-006)."""
 
     reason: ClassVar[str] = "broker_clerk_capability_unavailable"
     status_code: ClassVar[int] = 409
