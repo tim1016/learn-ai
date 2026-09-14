@@ -15,6 +15,12 @@ x-fleet-agent: &fleet-agent
   pids_limit: 256
   cpus: "1.00"
   mem_limit: 768m
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 30s
   environment: &fleet-agent-environment
     FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
     ALPACA_CLERK_DIR: /app/artifacts/alpaca_clerk
@@ -39,33 +45,6 @@ x-fleet-agent: &fleet-agent
     - fleet-private
 
 services:
-  fleet-db:
-    image: docker.io/library/postgres:16
-    profiles: ["fleet"]
-    restart: unless-stopped
-    environment:
-      POSTGRES_PASSWORD: ${FLEET_POSTGRES_PASSWORD:?Set FLEET_POSTGRES_PASSWORD in the coordinator environment}
-    volumes:
-      - fleet-coordinator-postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    networks: [fleet-private]
-
-  fleet-redis:
-    image: docker.io/library/redis:7-alpine
-    profiles: ["fleet"]
-    restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    networks: [fleet-private]
-
   fleet-coordinator:
     build:
       context: ./PythonDataService
@@ -85,11 +64,13 @@ services:
       FLEET_ROLE: fleet_coordinator
       FLEET_CONTROL_DIR: /app/artifacts/fleet
       LEAN_DATA_WRITE_ROOT: /lean-data-writer
-      POSTGRES_URL: postgresql://postgres:${FLEET_POSTGRES_PASSWORD:?Set FLEET_POSTGRES_PASSWORD in the coordinator environment}@fleet-db:5432/postgres
-      REDIS_URL: redis://fleet-redis:6379/0
-      # The current process-wide Settings construction requires this value,
-      # but the coordinator does not use a market-data client or broker SDK.
-      POLYGON_API_KEY: ""
+      # These are the existing data-plane stores from compose.yaml. Fleet is
+      # a role split, never a second catalog or job authority.
+      POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for the shared data plane}@db:5432/postgres
+      REDIS_URL: redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
+      # A2 makes coordinator the data-plane market-data owner. This is not a
+      # broker execution credential and agent lanes never inherit it.
+      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
       FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-32}
       FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-8}
@@ -112,10 +93,16 @@ services:
       # ingress. Clerk agents never join it.
       - app-network
     depends_on:
-      fleet-db:
+      db:
         condition: service_healthy
-      fleet-redis:
+      redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   alpaca-paper-clerk:
     <<: *fleet-agent
@@ -177,7 +164,6 @@ volumes:
   fleet-coordinator-artifacts:
   fleet-coordinator-cache:
   fleet-coordinator-lake:
-  fleet-coordinator-postgres:
   fleet-alpaca-paper-data:
   fleet-alpaca-live-data:
 

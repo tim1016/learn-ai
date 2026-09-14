@@ -3,11 +3,32 @@
 # command, and fleet roles. Only the external provider/market endpoints below
 # are fake; they are not present in the production topology.
 services:
+  # Qualification has isolated support stores so it never joins an operator's
+  # base stack. Production gets db/redis from compose.yaml instead.
   fleet-db:
+    image: docker.io/library/postgres:16
     profiles: ["fleet-qualification"]
+    environment:
+      POSTGRES_PASSWORD: qualification-postgres-password
+    volumes:
+      - fleet-coordinator-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [fleet-private]
 
   fleet-redis:
+    image: docker.io/library/redis:7-alpine
     profiles: ["fleet-qualification"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [fleet-private]
 
   # A host-ceremony helper only. It uses the real provisioning CLI against all
   # three scoped volumes before the actual roles start; it is not a runtime.
@@ -28,8 +49,16 @@ services:
 
   fleet-coordinator:
     profiles: ["fleet-qualification"]
+    depends_on: !override
+      fleet-db:
+        condition: service_healthy
+      fleet-redis:
+        condition: service_healthy
     environment:
       NUMBA_DISABLE_JIT: "1"
+      POSTGRES_URL: postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres
+      REDIS_URL: redis://fleet-redis:6379/0
+      POLYGON_API_KEY: qualification-polygon-placeholder
     stop_grace_period: 2s
 
   alpaca-paper-clerk:
@@ -39,6 +68,8 @@ services:
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
       FLEET_FAKE_MARKET_DATA_URL: http://fleet-fake-market-data:8013
     stop_grace_period: 2s
+    volumes:
+      - ./PythonDataService/scripts/run_broker_fleet_compose_qualification.py:/app/scripts/run_broker_fleet_compose_qualification.py:ro
     depends_on:
       fleet-fake-paper-provider:
         condition: service_healthy
@@ -104,3 +135,6 @@ services:
       interval: 2s
       timeout: 2s
       retries: 10
+
+volumes:
+  fleet-coordinator-postgres:

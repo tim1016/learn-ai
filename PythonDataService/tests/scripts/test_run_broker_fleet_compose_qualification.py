@@ -46,6 +46,10 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     assert "ALPACA_MARKET_STATUS_UPSTREAM_URL" not in compose
     assert "fleet-coordinator-lake:/lean-data-writer" in compose
     assert "fleet-coordinator-cache:/app/cache" in compose
+    assert "FLEET_POSTGRES_PASSWORD" not in compose
+    assert "POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD" in compose
+    assert "POLYGON_API_KEY: ${POLYGON_API_KEY:-}" in compose
+    assert "healthcheck:" in compose
 
 
 def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_dependencies() -> None:
@@ -60,6 +64,35 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
     assert "alpaca-live-clerk:\n    profiles" in overlay
     assert '"--container-role", "coordinator"' not in overlay
     assert '"--container-role", "lane"' not in overlay
+    assert "fleet-coordinator-postgres" in overlay
+
+
+def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
+    """D evidence records every Paper fault without claiming an E scenario."""
+    assert set(qualification.FAULT_SCENARIOS) == {
+        "provider_outage",
+        "credential_refusal_restart",
+        "volume_marker_poison_mismount_refusal",
+        "request_queue_saturation",
+        "stream_saturation",
+    }
+    assert {"passed", "attempted", "unrun"} == qualification.FAULT_STATES
+    result = qualification._fault_result("unrun", "bounded host unavailable", {"clerk_id": "live"})
+    assert result["state"] == "unrun"
+    with pytest.raises(qualification.QualificationError, match="Unknown fault"):
+        qualification._fault_result("failed", "not a vocabulary value", {})
+
+
+@pytest.mark.asyncio
+async def test_capacity_probe_exercises_real_lane_middleware_for_both_pools() -> None:
+    """The qualification subcommand holds ASGI work and verifies typed refusal."""
+    for kind in ("request", "stream"):
+        result = await qualification._run_capacity_probe_async(kind)
+        assert result == {
+            "kind": kind,
+            "reason": "fleet_lane_capacity_exhausted",
+            "refusal_status": 503,
+        }
 
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
