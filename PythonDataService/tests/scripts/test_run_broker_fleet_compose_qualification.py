@@ -73,12 +73,16 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     assert "${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z" in compose
     assert "./PythonDataService/cache:/app/cache:z" in compose
     assert "FLEET_POSTGRES_PASSWORD" not in compose
-    assert "POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD" in compose
+    assert "POSTGRES_URL:" not in compose
+    assert "REDIS_URL:" not in compose
     assert "POLYGON_API_KEY: ${POLYGON_API_KEY:-}" in compose
     assert "healthcheck:" in compose
     assert "/app/cache:size=256m,mode=1777" in compose
     assert "TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend" in compose
     assert "alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator" in compose
+    coordinator_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/coordinator.env.example").read_text(encoding="utf-8")
+    assert "POSTGRES_URL=" in coordinator_env
+    assert "REDIS_URL=" in coordinator_env
 
 
 def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_dependencies() -> None:
@@ -175,6 +179,62 @@ def test_qualification_env_is_created_restricted_and_never_overwritten(
     with pytest.raises(FileExistsError):
         qualification._write_env(path, {"FLEET_AGENT_SERVICE_TOKEN": "replacement"})
     assert path.read_text(encoding="utf-8") == "FLEET_AGENT_SERVICE_TOKEN=first\n"
+
+
+def test_qualification_coordinator_environment_has_complete_support_store_urls(
+    tmp_path: Path,
+) -> None:
+    """The tracked qualification topology contains no connection strings."""
+    # The concrete URLs are generated into the private coordinator file; this
+    # narrowly exercises the same input used by the host ceremony without
+    # provisioning a real Compose project.
+    values = {
+        "POSTGRES_URL": "postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres",
+        "REDIS_URL": "redis://fleet-redis:6379/0",
+    }
+    path = tmp_path / "coordinator.env"
+    qualification._write_env(path, values)
+    assert path.read_text(encoding="utf-8") == (
+        "POSTGRES_URL=postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres\n"
+        "REDIS_URL=redis://fleet-redis:6379/0\n"
+    )
+
+
+def test_cleanup_failure_changes_qualification_evidence_to_failed() -> None:
+    """A failed scoped teardown cannot leave a passing evidence record."""
+    class ComposeStub:
+        def run(self, _project: str, _args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise qualification.QualificationError("engine refused teardown")
+
+    evidence: dict[str, object] = {"result": "passed", "stage": "complete"}
+    error = qualification._cleanup_qualification(
+        cast(qualification.ComposeCommand, ComposeStub()), "qualification", evidence
+    )
+
+    assert error is not None
+    assert evidence == {
+        "result": "failed",
+        "stage": "complete",
+        "failure": {"stage": "cleanup", "error_type": "QualificationError"},
+    }
+
+
+def test_cleanup_failure_preserves_an_earlier_qualification_failure() -> None:
+    """Teardown trouble must not erase the root failure's evidence stage."""
+    class ComposeStub:
+        def run(self, _project: str, _args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise qualification.QualificationError("engine refused teardown")
+
+    evidence: dict[str, object] = {
+        "result": "failed",
+        "failure": {"stage": "lane_startup", "error_type": "QualificationError"},
+    }
+    qualification._cleanup_qualification(
+        cast(qualification.ComposeCommand, ComposeStub()), "qualification", evidence
+    )
+
+    assert evidence["failure"] == {"stage": "lane_startup", "error_type": "QualificationError"}
+    assert evidence["cleanup_failure"] == {"stage": "cleanup", "error_type": "QualificationError"}
 
 
 def test_capacity_probe_runs_as_module_inside_application_image() -> None:

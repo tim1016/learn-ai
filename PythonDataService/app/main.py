@@ -51,6 +51,7 @@ from app.routers import (
     dataset,
     edge,
     engine,
+    fleet_compatibility_reads,
     golden_fixtures,
     golden_validation,
     grid_search,
@@ -1227,6 +1228,16 @@ if _FLEET_COORDINATOR_SURFACE:
         }
     )
     app.include_router(broker_clerks.router)
+
+# The production coordinator is the browser ingress during the narrow
+# unscoped-read compatibility window.  It deliberately receives only these
+# two read aliases; no agent, generic broker router, or mutation surface is
+# exposed by that compatibility bridge.
+if _FLEET_ROLE == "fleet_coordinator":
+    app.include_router(
+        fleet_compatibility_reads.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
 
 # Exception handlers. Register request validation separately so rejected
 # non-finite JSON numbers cannot make FastAPI's own 422 body non-serializable.

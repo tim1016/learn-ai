@@ -535,6 +535,8 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
         {
             "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",
             "DATA_PLANE_CONTROL_SECRET": control_secret,
+            "POSTGRES_URL": "postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres",
+            "REDIS_URL": "redis://fleet-redis:6379/0",
             "FLEET_AGENT_SERVICE_TOKENS_JSON": json.dumps(
                 {entry["clerk_id"]: entry["agent_service_token"] for entry in lanes.values()}, separators=(",", ":")
             ),
@@ -679,6 +681,36 @@ def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: fl
     raise QualificationError("Poisoned Paper process did not exit within its bounded startup window.")
 
 
+def _cleanup_qualification(
+    compose: ComposeCommand, project: str, evidence: dict[str, Any]
+) -> QualificationError | None:
+    """Tear down one scoped project and make cleanup failure qualification-fatal.
+
+    A successful fault matrix is not a successful qualification if its
+    supposedly isolated containers or volumes could not be removed.  Preserve
+    that failure in the durable evidence before returning it to the caller.
+    """
+    try:
+        compose.run(
+            project,
+            ["--profile", "fleet-qualification", "down", "--volumes", "--remove-orphans"],
+            timeout_s=60.0,
+        )
+    except (QualificationError, subprocess.CalledProcessError) as exc:
+        logger.error("Scoped fleet qualification cleanup failed.", extra={"error": str(exc), "project": project})
+        cleanup_failure = {"stage": "cleanup", "error_type": type(exc).__name__}
+        if evidence.get("result") == "passed":
+            evidence.update({"result": "failed", "failure": cleanup_failure})
+        else:
+            # Preserve the original bounded-stage failure while retaining the
+            # teardown problem as a second, durable operator fact.
+            evidence["cleanup_failure"] = cleanup_failure
+        return QualificationError(
+            "Scoped fleet qualification cleanup failed; its evidence is not a passing qualification."
+        )
+    return None
+
+
 def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path | None) -> dict[str, Any]:
     """Exercise actual coordinator/agent roles on isolated Compose volumes."""
     bootstrap_discovered = ComposeCommand.discover()
@@ -696,6 +728,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
     project = f"fleetqualification{uuid.uuid4().hex[:12]}"
     evidence: dict[str, Any] = {"project": project, "compose_files": [str(path) for path in COMPOSE_FILES]}
     started = False
+    completed = False
     with tempfile.TemporaryDirectory(prefix="learn-ai-fleet-qualification-") as temporary:
         try:
             evidence["stage"] = "render"
@@ -851,6 +884,7 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             coordinator_check = compose.run(project, ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"])
             _assert_all_faults_passed(faults)
             evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_account_read_after_paper_failure": live_account, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Qualification drives Alpaca's SDK URL-override seam and the supported Paper market-status consumer against fake endpoints; it does not bind a real account/profile or run a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
+            completed = True
             return evidence
         except (QualificationError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
             evidence.update(
@@ -864,14 +898,14 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             )
             raise
         finally:
+            cleanup_error: QualificationError | None = None
+            if started and not keep:
+                cleanup_error = _cleanup_qualification(bootstrap, project, evidence)
             if evidence_path is not None:
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            if started and not keep:
-                try:
-                    bootstrap.run(project, ["--profile", "fleet-qualification", "down", "--volumes", "--remove-orphans"], timeout_s=60.0)
-                except (QualificationError, subprocess.CalledProcessError) as exc:
-                    logger.error("Scoped fleet qualification cleanup failed.", extra={"error": str(exc), "project": project})
+            if cleanup_error is not None and completed:
+                raise cleanup_error
 
 
 def _assert_no_custody_root(root: Path) -> dict[str, object]:

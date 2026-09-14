@@ -530,6 +530,10 @@ class FleetLaneRuntimeMiddleware:
                     ],
                 }
             )
+            # Capacity refusal is still a response to the retained read.  It
+            # must contribute its response class before the body is emitted,
+            # just like an application-owned response start does.
+            record_response(503)
             await send({"type": "http.response.body", "body": body, "more_body": False})
 
         try:
@@ -551,16 +555,20 @@ class FleetLaneRuntimeMiddleware:
                     }
                     content_type = response_headers.get(b"content-type", b"")
                     if b"text/event-stream" in content_type and self._streams is not None:
+                        # A stream may wait for its independent budget for up
+                        # to the configured queue deadline.  Do not let that
+                        # wait consume a general request slot: ordinary
+                        # control reads must remain admitted while the stream
+                        # pool is contended.
+                        if request_lease is not None:
+                            await request_lease.release()
+                            request_lease = None
                         try:
                             stream_lease = await self._streams.acquire()
                         except FleetLaneCapacityExhausted as exc:
                             refusal_sent = True
-                            await request_lease.release()
-                            request_lease = None
                             await refuse(exc.pool)
                             raise _StreamCapacityRefused from exc
-                        await request_lease.release()
-                        request_lease = None
                     await send(message)
                     record_response(int(message["status"]))
                     return

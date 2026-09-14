@@ -12,7 +12,14 @@ const {
 // target override from accidentally bypassing data-plane authorization.
 const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
 const DEFAULT_DATA_PLANE_PROXY_TARGET = 'http://127.0.0.1:8000';
-const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set(['127.0.0.1', 'localhost', 'python-service']);
+const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set([
+  '127.0.0.1',
+  'localhost',
+  'python-service',
+  // The sole public fleet process. Clerk agents are deliberately absent:
+  // browser traffic may never target a lane directly.
+  'fleet-coordinator',
+]);
 const dataPlaneControlSecret = resolveDataPlaneControlSecret();
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);

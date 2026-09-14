@@ -56,8 +56,6 @@ services:
         condition: service_healthy
     environment:
       NUMBA_DISABLE_JIT: "1"
-      POSTGRES_URL: postgresql://postgres:qualification-postgres-password@fleet-db:5432/postgres
-      REDIS_URL: redis://fleet-redis:6379/0
       POLYGON_API_KEY: qualification-polygon-placeholder
     volumes: !override
       - fleet-coordinator-control:/app/artifacts/fleet

@@ -146,6 +146,15 @@ for (const target of ['', '   ', 'https://data-plane.example', 'http://data-plan
 assert.equal(proxyConfig['/api'].target, 'http://python-service:8000');
 assert.equal(dataPlaneControlSecret, TEST_DATA_PLANE_CONTROL_SECRET);
 
+{
+  const result = spawnSync(
+    process.execPath,
+    ['-e', `process.env.DATA_PLANE_CONTROL_SECRET = ${JSON.stringify(TEST_DATA_PLANE_CONTROL_SECRET)}; process.env.DATA_PLANE_PROXY_TARGET = 'http://fleet-coordinator:8000'; const config = require(${JSON.stringify(path.resolve(__dirname, '../proxy.conf.js'))}); if (config['/api'].target !== 'http://fleet-coordinator:8000') process.exit(1);`],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr);
+}
+
 for (const prefix of CONTROL_PREFIXES) {
   const req = request({ url: `${prefix}/__probe` });
   const proxyReq = proxyReqRecorder();

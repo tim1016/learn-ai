@@ -72,10 +72,8 @@ services:
       LEAN_DATA_WRITE_ROOT: /lean-data-writer
       LEAN_LAUNCHER_URL: ${LEAN_LAUNCHER_URL:-http://host.containers.internal:8090}
       BACKEND_URL: http://backend:8080
-      # These are the existing data-plane stores from compose.yaml. Fleet is
+      # Complete data-plane connection strings are environment-only. Fleet is
       # a role split, never a second catalog or job authority.
-      POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for the shared data plane}@db:5432/postgres
-      REDIS_URL: redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
       # A2 makes coordinator the data-plane market-data owner. This is not a
       # broker execution credential and agent lanes never inherit it.
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}

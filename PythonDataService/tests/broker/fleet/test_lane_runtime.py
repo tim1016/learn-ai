@@ -174,6 +174,55 @@ async def test_stream_capacity_is_separate_from_ordinary_requests_and_recovers(
     assert _status(await _invoke(runtime, path="/stream")) == 200
 
 
+async def test_stream_queue_wait_releases_request_capacity_for_ordinary_reads(
+    tmp_path: Path,
+) -> None:
+    """A queued stream never starves the ordinary request admission pool."""
+    first_stream_started = asyncio.Event()
+    second_stream_waiting = asyncio.Event()
+    release_first_stream = asyncio.Event()
+    stream_calls = 0
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        nonlocal stream_calls
+        if scope["path"] == "/stream":
+            stream_calls += 1
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")],
+                }
+            )
+            if stream_calls == 1:
+                first_stream_started.set()
+                await release_first_stream.wait()
+            else:
+                second_stream_waiting.set()
+            await send({"type": "http.response.body", "body": b"data: done\n\n", "more_body": False})
+            return
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        config=_config(queue=1, timeout_ms=500),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    first_stream = asyncio.create_task(_invoke(runtime, path="/stream"))
+    await first_stream_started.wait()
+    queued_stream = asyncio.create_task(_invoke(runtime, path="/stream"))
+    await asyncio.sleep(0)
+
+    # The second stream is waiting on the stream pool, not holding the only
+    # ordinary request slot while it waits.
+    assert _status(await _invoke(runtime, path="/ordinary")) == 200
+    release_first_stream.set()
+    assert _status(await first_stream) == 200
+    assert _status(await queued_stream) == 200
+    assert second_stream_waiting.is_set()
+
+
 def test_compatibility_inventory_is_fixed_and_excludes_canonical_internal_and_mutations() -> None:
     """Only retained, unpinned read families may enter the D measurement."""
     assert compatibility_route_family("GET", "/api/brokers/alpaca/assets", pinned=False) == "brokers_lane_extras"
@@ -221,6 +270,43 @@ async def test_measurement_persists_only_safe_aggregate_and_never_mutations(
     serialized = evidence.path.read_text(encoding="utf-8")
     for forbidden in ("account-secret", "sid-secret", "token", "authorization", "Bearer"):
         assert forbidden not in serialized
+
+
+async def test_capacity_refusal_is_recorded_as_a_compatibility_5xx(tmp_path: Path) -> None:
+    """Overloaded retained reads remain visible to retirement evidence."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        entered.set()
+        await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=_config(), evidence=evidence)
+    admitted = asyncio.create_task(_invoke(runtime, path="/api/brokers/alpaca/bots"))
+    await entered.wait()
+    assert _status(await _invoke(runtime, path="/api/brokers/alpaca/bots")) == 503
+    release.set()
+    await admitted
+    await evidence.flush()
+    assert evidence.snapshot()["route_hits"] == [
+        {
+            "route_family": "broker_bots",
+            "response_class": "2xx",
+            "count": 1,
+            "first_observed_at_ms": 1,
+            "last_observed_at_ms": 1,
+        },
+        {
+            "route_family": "broker_bots",
+            "response_class": "5xx",
+            "count": 1,
+            "first_observed_at_ms": 1,
+            "last_observed_at_ms": 1,
+        },
+    ]
 
 
 async def test_compatibility_evidence_separates_unauthorized_and_not_found_responses(
