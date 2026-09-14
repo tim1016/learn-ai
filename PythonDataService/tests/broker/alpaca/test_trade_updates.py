@@ -1405,3 +1405,79 @@ async def test_injected_frame_threads_through_the_real_consumer(tmp_path: Path, 
     assert len(captured) == 2
     bodies = "".join(json.dumps(record) for record in captured)
     assert "suspended" in bodies
+
+
+class _ReconcileRecordingSink(_EvidenceSink):
+    """An _EvidenceSink that records which loop cycle asked for a gap-fill."""
+
+    def __init__(self, cycles: dict[str, int]) -> None:
+        super().__init__()
+        self._cycles = cycles
+        self.reconciled_on_cycle: list[int] = []
+
+    async def reconcile_gap(self) -> None:
+        # ``_consume_once`` reconciles after ``anext`` has already advanced the
+        # counter, so the cycle being reconciled is one behind it.
+        self.reconciled_on_cycle.append(self._cycles["n"] - 1)
+
+
+async def test_reconnect_backoff_resets_after_a_connected_cycle_and_still_gap_reconciles(
+    tmp_path: Path,
+) -> None:
+    """A blip hours ago must not pin a healthy trade_updates stream at 30s.
+
+    ``attempt`` fed ``_default_backoff`` *and* answered "is this a reconnect?".
+    Set to zero once before the loop and only ever incremented, it pinned the
+    backoff at its 30s ceiling after roughly six lifetime errors — and on this
+    stream every second of backoff is a second the clerk is not receiving
+    fills and order lifecycle events.
+
+    Both halves of the split are pinned here. The backoff resets after a cycle
+    that actually connected, AND the connect that follows the reset still runs
+    the REST gap-reconcile: a single-counter reset that lands after the
+    increment makes the next connect look like a first connect, skips the
+    gap-fill, and silently drops the fills missed while down.
+    """
+    cycles = {"n": 0}
+    backoff_attempts: list[int] = []
+    broker = _FakeBroker()
+    sink = _ReconcileRecordingSink(cycles)
+
+    async def frame_source() -> AsyncIterator[bytes | str]:
+        index = cycles["n"]
+        cycles["n"] += 1
+        if index >= 4:
+            # End the loop deterministically; run() re-raises CancelledError
+            # rather than swallowing it in its except-Exception.
+            raise asyncio.CancelledError
+        if index in (2, 3):
+            # The connected cycles: each delivers a frame and ends cleanly.
+            yield json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
+            return
+        raise RuntimeError("simulated disconnect")
+
+    async def _record_backoff(attempt: int) -> None:
+        backoff_attempts.append(attempt)
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=sink,
+        read=broker,
+        frame_source=frame_source,
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_record_backoff,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert backoff_attempts == [1, 2, 1, 1], (
+        "A connected cycle must reset the reconnect backoff. Without the reset "
+        "this reads [1, 2, 3, 4] and keeps climbing to the 30s ceiling, where "
+        "every later blip costs half a minute of unseen fills."
+    )
+    assert sink.reconciled_on_cycle == [2, 3], (
+        "Every connect after the first cycle must REST gap-reconcile, "
+        "including the one immediately after a backoff reset — that is the "
+        "fill-losing regression a single-counter reset introduces."
+    )

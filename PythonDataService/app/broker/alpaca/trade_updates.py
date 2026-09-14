@@ -140,6 +140,7 @@ class TradeUpdateCounters:
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
     - ``reconnects`` — reconnect cycles performed.
+    - ``connects`` — cycles that reached the connection watermark.
     - ``gap_reconciled`` — orders pulled by a post-reconnect REST gap-fill.
     """
 
@@ -149,6 +150,7 @@ class TradeUpdateCounters:
     unexplained: int = 0
     parse_errors: int = 0
     reconnects: int = 0
+    connects: int = 0
     gap_reconciled: int = 0
     capture_failures: int = 0
     event_key_collisions: int = 0
@@ -353,6 +355,8 @@ class TradeUpdatesConsumer:
         if self._connected != connected:
             self._connected = connected
             self._connection_changed_at_ms = self._clock()
+            if connected:
+                self._counters.connects += 1
 
     def _mark_evidence_health(self, healthy: bool) -> None:
         self._evidence_health = ExecutionEvidenceHealth(
@@ -388,11 +392,22 @@ class TradeUpdatesConsumer:
         of stream (a disconnect) — reconnects with backoff and REST
         gap-reconciles the orders missed while down. ``asyncio.CancelledError``
         propagates so a lifespan shutdown stops the loop immediately.
+
+        Two counters, deliberately not one. ``cycles`` is monotonic: it owns
+        the reconnect budget and answers "does this connect follow an earlier
+        one" (i.e. whether ``_consume_once`` should REST gap-reconcile).
+        ``attempt`` is the backoff input only, and resets to zero after any
+        cycle that reached the connection watermark — so a stream healthy for
+        hours does not pay the 30s backoff ceiling for a blip long past. The
+        same split exists in ``AlpacaMarketLivenessConsumer._consume_statuses``
+        and ``ReconciliationSweep._run_forever``.
         """
+        cycles = 0
         attempt = 0
         while True:
+            connects_before = self._counters.connects
             try:
-                await self._consume_once(reconcile_after_connect=attempt > 0)
+                await self._consume_once(reconcile_after_connect=cycles > 0)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -404,9 +419,17 @@ class TradeUpdatesConsumer:
                     exc_info=True,
                 )
 
+            # "Healthy" is *connected*, not *a frame arrived*: ``_consume_once``
+            # runs the gap-reconcile between the first frame and the connection
+            # watermark, so keying the reset on the frame would let a
+            # permanently failing reconciler reset the backoff every cycle and
+            # hot-loop this socket at the 1s floor.
+            if self._counters.connects > connects_before:
+                attempt = 0
             attempt += 1
+            cycles += 1
             self._counters.reconnects += 1
-            if self._max_reconnects is not None and attempt > self._max_reconnects:
+            if self._max_reconnects is not None and cycles > self._max_reconnects:
                 logger.info(
                     "alpaca trade_updates reconnect budget exhausted; stopping",
                     extra={"action": "trade_updates_reconnect_budget_exhausted"},
