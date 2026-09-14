@@ -734,3 +734,38 @@ async def test_a_retired_lane_still_serves_an_authenticated_coordinator_forward(
     assert browser.json()["reason"] == "compatibility_read_retired"
     assert forwarded.status_code == 200
     assert spoofed.status_code == 410
+
+    # An unconfigured coordinator token means nothing is exempt, even a
+    # request carrying the full forward header set.
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", None)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        unconfigured_token = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+    assert unconfigured_token.status_code == 410
+
+    # The exemption is checked before route state is ever read, so a proven
+    # forward is served even while the retirement state file is invalid —
+    # the 503 that an invalid state would otherwise force never applies to
+    # the fleet's own transport.
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_SERVICE_TOKEN", "svct_" + "a" * 32)
+    evidence.route_state_path.write_text("{not-json", encoding="utf-8")
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=inner), base_url="http://test"
+    ) as client:
+        forwarded_despite_invalid_state = await client.get(
+            "/api/brokers/alpaca/clerk/status",
+            headers={
+                COORDINATOR_TOKEN_HEADER: "svct_" + "a" * 32,
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clk_test",
+            },
+        )
+    assert forwarded_despite_invalid_state.status_code == 200

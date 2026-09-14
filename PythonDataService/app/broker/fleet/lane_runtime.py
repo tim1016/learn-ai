@@ -21,9 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from starlette.requests import Request
+from starlette.datastructures import Headers
 
 from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
+from app.broker.fleet.delivery import lane_forward_is_authorized
+from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
@@ -31,20 +33,6 @@ _COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 _COMPATIBILITY_EVIDENCE_RELATIVE_PATH = Path("compatibility") / "route_hits.json"
 _COMPATIBILITY_ROUTE_STATE_RELATIVE_PATH = Path("compatibility") / "route_state.json"
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
-
-
-def _is_authenticated_coordinator_forward(scope: dict[str, Any]) -> bool:
-    """Whether this request proves itself as the coordinator's own forward.
-
-    Reuses ``app.security.data_plane_control``'s unforgeable pair check — the
-    coordinator service token plus the pinned lane identity — instead of
-    minting a second definition of "this is the fleet's own transport, not a
-    browser". A header alone is client-forgeable and must stay retirable.
-    """
-    from app.security.data_plane_control import _lane_forward_is_authorized
-
-    return _lane_forward_is_authorized(Request(scope))
-
 
 _COMPATIBILITY_ROUTE_FAMILIES = RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
@@ -532,14 +520,15 @@ class FleetLaneRuntimeMiddleware:
             for name, value in scope.get("headers", [])
         }
         method = str(scope["method"]).upper()
-        forwarded = _is_authenticated_coordinator_forward(scope)
-        family = (
-            None
-            if forwarded
-            else compatibility_route_family(method, str(scope.get("path", "")))
-        )
-        # An unauthenticated copy of the pin must not bypass E retirement, so
-        # measurement drops only what the proven forward already excluded.
+        family = compatibility_route_family(method, str(scope.get("path", "")))
+        if family is not None and lane_forward_is_authorized(Headers(scope=scope)):
+            # The fleet's own proven transport is never a retirable browser alias.
+            family = None
+        # The pin alone (x-fleet-clerk-id) suppresses double-counting of D's
+        # aggregate, proven or not; only the *proven* forward above — the
+        # full token-plus-pin pair — suppresses E retirement by clearing
+        # `family`, so a spoofed pin still counts toward measurement and
+        # still retires.
         measurement_family = None if b"x-fleet-clerk-id" in headers else family
         if family is not None:
             from app.broker.fleet.compatibility_retirement import CompatibilityRetirementRefusal
@@ -570,6 +559,15 @@ class FleetLaneRuntimeMiddleware:
         else:
             route_state = "measurement"
         if family is not None and route_state == "retired":
+            if b"x-fleet-clerk-id" in headers:
+                logger.warning(
+                    "fleet compatibility route refused a pinned request that did not prove itself as a coordinator forward",
+                    extra={
+                        "action": "fleet_compat_forward_unproven",
+                        "route_family": family,
+                        "coordinator_token_configured": bool(fleet_settings.COORDINATOR_SERVICE_TOKEN),
+                    },
+                )
             body = json.dumps(
                 {
                     "reason": "compatibility_read_retired",
