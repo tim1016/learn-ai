@@ -95,6 +95,22 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
     assert "fleet-coordinator-postgres" in overlay
     assert overlay.count('restart: "no"') == 2
     assert overlay.count("disable: true") == 2
+    assert "FLEET_QUALIFICATION_ACCOUNT_MODE: paper" in overlay
+    assert "FLEET_QUALIFICATION_ACCOUNT_MODE: live" in overlay
+
+
+def test_qualification_uses_declared_alpaca_reads_not_raw_probe_endpoints() -> None:
+    """The host evidence reaches the SDK/client and market-status consumer seams."""
+    script_path = (
+        qualification.REPOSITORY_ROOT
+        / "PythonDataService/scripts/run_broker_fleet_compose_qualification.py"
+    )
+    script = script_path.read_text(encoding="utf-8")
+
+    assert '"/api/brokers/alpaca/account"' in script
+    assert '"/api/brokers/alpaca/market-status-snapshot"' in script
+    assert '"/v2/account"' in script
+    assert "/read" not in script
 
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:

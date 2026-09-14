@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -185,7 +186,9 @@ def _serve_json(port: int, handler: type[BaseHTTPRequestHandler]) -> None:
     server.serve_forever()
 
 
-def _json_handler(payload_for_path: dict[str, dict[str, Any]]) -> type[BaseHTTPRequestHandler]:
+def _json_handler(
+    payload_for_path: dict[str, dict[str, Any] | Callable[[], dict[str, Any]]],
+) -> type[BaseHTTPRequestHandler]:
     """Create an inert fake endpoint handler with no credential behaviour."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -194,6 +197,8 @@ def _json_handler(payload_for_path: dict[str, dict[str, Any]]) -> type[BaseHTTPR
             if payload is None:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
+            if callable(payload):
+                payload = payload()
             body = json.dumps(payload, sort_keys=True).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json")
@@ -211,12 +216,56 @@ def _json_handler(payload_for_path: dict[str, dict[str, Any]]) -> type[BaseHTTPR
 def _run_fake_provider() -> int:
     provider = os.environ.get("FLEET_PROBE_PROVIDER", "unknown")
     port = 8011 if provider == "paper" else 8012
-    _serve_json(port, _json_handler({"/health": {"ok": True}, "/read": {"provider": provider}}))
+    account_number = "PAQUALIFICATION" if provider == "paper" else "LQUALIFICATION"
+    _serve_json(
+        port,
+        _json_handler(
+            {
+                "/health": {"ok": True},
+                # Alpaca's real TradingClient reads this endpoint.  Keep this
+                # payload valid for the production adapter, so qualification
+                # proves the SDK/client/adapter path rather than bare egress.
+                "/v2/account": {
+                    "account_number": account_number,
+                    "status": "ACTIVE",
+                    "cash": "1000",
+                    "equity": "1000",
+                    "buying_power": "1000",
+                    "portfolio_value": "1000",
+                    "long_market_value": "0",
+                    "short_market_value": "0",
+                    "trading_blocked": False,
+                    "account_blocked": False,
+                },
+            }
+        ),
+    )
     return 0
 
 
 def _run_fake_market_data() -> int:
-    _serve_json(8013, _json_handler({"/health": {"ok": True}, "/read": {"market_data": "read_only"}}))
+    def market_status_snapshot() -> dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        return {
+            "source": "alpaca.stock_data.status",
+            "connected": True,
+            "observed_at_ms": now_ms,
+            "connection_changed_at_ms": now_ms,
+            "symbol_statuses": [],
+        }
+
+    _serve_json(
+        8013,
+        _json_handler(
+            {
+                "/health": {"ok": True},
+                # This is the exact protected route read by the supported
+                # Alpaca Paper market-status consumer, not a bespoke probe
+                # endpoint.
+                "/api/brokers/alpaca/market-status-snapshot": market_status_snapshot,
+            }
+        ),
+    )
     return 0
 
 
@@ -230,6 +279,15 @@ def _qualification_local_call(path: str) -> tuple[int, dict[str, Any]]:
         headers={"X-Fleet-Qualification-Secret": secret},
         timeout_s=4.0,
     )
+
+
+def _qualification_declared_read(path: str) -> tuple[int, dict[str, Any]]:
+    """Call a normal declared Alpaca read through the running clerk ASGI app."""
+    headers: dict[str, str] = {}
+    control_secret = os.environ.get("DATA_PLANE_CONTROL_SECRET", "")
+    if control_secret:
+        headers["X-Data-Plane-Control-Secret"] = control_secret
+    return _request_json(f"http://127.0.0.1:8000{path}", headers=headers, timeout_s=4.0)
 
 
 def _qualification_local_hold(path: str) -> int:
@@ -248,8 +306,17 @@ def _qualification_local_hold(path: str) -> int:
 
 
 def _run_dependency_client(kind: str) -> int:
-    """Emit one real running-clerk dependency result for host evidence."""
-    status, body = _qualification_local_call(f"/dependency/{kind}")
+    """Emit one real running-clerk client/feed result for host evidence."""
+    if kind == "broker":
+        status, body = _qualification_declared_read("/api/brokers/alpaca/account")
+    else:
+        refresh_status, refresh_body = _qualification_local_call("/dependency/market-data")
+        if refresh_status != HTTPStatus.OK:
+            status, body = refresh_status, refresh_body
+        else:
+            status, body = _qualification_declared_read(
+                "/api/brokers/alpaca/market-status-snapshot"
+            )
     sys.stdout.write(json.dumps({"status": status, "body": body}, sort_keys=True) + "\n")
     return 0
 
@@ -525,7 +592,6 @@ def _live_identity_after_paper_fault(
     live = next((entry for entry in clerks if isinstance(entry, dict) and str(entry.get("clerk_id")) == live_id), None)
     if not isinstance(live, dict):
         raise QualificationError("Live identity disappeared after an isolated Paper fault.")
-    _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-market-data:8013/read")
     return {"clerk_id": live_id, "display_label": live.get("display_label"), "directory_size": len(clerks)}
 
 
@@ -691,24 +757,22 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             paper_dependency_status, paper_dependency = _dependency_probe(compose, project, "alpaca-paper-clerk", "broker")
             live_dependency_status, live_dependency = _dependency_probe(compose, project, "alpaca-live-clerk", "broker")
             paper_market_status, paper_market = _dependency_probe(compose, project, "alpaca-paper-clerk", "market-data")
-            live_market_status, live_market = _dependency_probe(compose, project, "alpaca-live-clerk", "market-data")
             if paper_dependency_status != HTTPStatus.SERVICE_UNAVAILABLE:
                 raise QualificationError("Running Paper ASGI route did not refuse its killed qualification upstream.")
             if live_dependency_status != HTTPStatus.OK:
                 raise QualificationError("Running Live ASGI route lost its independent qualification upstream.")
-            if paper_market_status != HTTPStatus.OK or live_market_status != HTTPStatus.OK:
-                raise QualificationError("Running clerk ASGI market-data dependency route did not remain read-only available.")
+            if paper_market_status != HTTPStatus.OK:
+                raise QualificationError("Running Paper ASGI market-status consumer did not remain read-only available.")
             faults["provider_outage"] = _fault_result(
                 "passed",
-                "Paper's real ASGI dependency route refused its killed upstream while Live's real ASGI dependency route still succeeded.",
+                "Paper's declared Alpaca account read refused its killed upstream while Live's independent declared account read still succeeded.",
                 _live_identity_after_paper_fault(
                     compose, project, timeout_s, directory_headers, live_id, coordinator_url
                 ),
             )
             faults["provider_outage"]["paper_dependency"] = paper_dependency
             faults["provider_outage"]["live_dependency"] = live_dependency
-            faults["provider_outage"]["paper_market_dependency"] = paper_market
-            faults["provider_outage"]["live_market_dependency"] = live_market
+            faults["provider_outage"]["paper_market_status_consumer"] = paper_market
             # Restore only the Paper test dependency before subsequent Paper
             # restart faults; Live remained independently available throughout.
             compose.run(project, ["--profile", "fleet-qualification", "up", "--detach", "fleet-fake-paper-provider"], timeout_s=30.0)
@@ -775,13 +839,14 @@ def run_host_qualification(*, keep: bool, timeout_s: float, evidence_path: Path 
             )
             faults["volume_marker_poison_mismount_refusal"]["probe"] = poisoned
             live_health = _wait_for_http(f"{coordinator_url}/api/broker-clerks", timeout_s, directory_headers)
-            market_status, market_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-market-data:8013/health")
-            provider_status, provider_body = _exec_probe(compose, project, "alpaca-live-clerk", "http://fleet-fake-live-provider:8012/health")
-            if market_status != HTTPStatus.OK or provider_status != HTTPStatus.OK:
-                raise QualificationError("Live container lost private market/provider egress after Paper failure.")
+            live_account_status, live_account = _dependency_probe(
+                compose, project, "alpaca-live-clerk", "broker"
+            )
+            if live_account_status != HTTPStatus.OK:
+                raise QualificationError("Live declared Alpaca account read failed after Paper failure.")
             coordinator_check = compose.run(project, ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"])
             _assert_all_faults_passed(faults)
-            evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_market_egress": market_body, "live_provider_egress": provider_body, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Fake provider and market endpoints prove private egress only; this qualification does not emulate Alpaca account/profile binding, broker protocol calls, or a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
+            evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_account_read_after_paper_failure": live_account, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Qualification drives Alpaca's SDK URL-override seam and the supported Paper market-status consumer against fake endpoints; it does not bind a real account/profile or run a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
             return evidence
         except (QualificationError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
             evidence.update(

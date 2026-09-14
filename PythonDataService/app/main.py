@@ -337,11 +337,19 @@ async def _service_lifespan(app: FastAPI, *, worker_refusal: UnboundBroker | Non
     if _ROLE_RUNS_CLERK:
         from app.broker.alpaca.broker import register_default_brokers
         from app.broker.contract.registry import get_broker_registry
+        from app.routers.fleet_qualification import (
+            install_qualification_bindings_from_environment,
+        )
 
         register_default_brokers()
+        qualification_bindings_installed = install_qualification_bindings_from_environment(
+            _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+        )
         logger.info(
             "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
         )
+        if qualification_bindings_installed:
+            logger.info("Compose qualification Alpaca read/status seams installed.")
 
     # Alpaca Clerk (phase 2) — the in-process single-writer for order
     # submission. Installed only when Alpaca keys are present, independent of
