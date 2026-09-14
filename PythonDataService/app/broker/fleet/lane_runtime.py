@@ -37,6 +37,7 @@ _COMPATIBILITY_ROUTE_FAMILIES = frozenset(
     }
 )
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
+_MAX_FLUSH_ATTEMPTS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +54,14 @@ class FleetLaneCapacityExhausted(Exception):
 
 class _StreamCapacityRefused(Exception):
     """Stop an already-starting SSE response after its safe 503 replacement."""
+
+
+class CompatibilityEvidenceFlushError(RuntimeError):
+    """A finite compatibility-evidence flush did not become durable."""
+
+
+class _CompatibilityEvidenceDirectorySyncError(OSError):
+    """The replacement succeeded but its parent-directory sync did not."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +214,7 @@ class CompatibilityReadEvidence:
         # owns disk I/O; it never creates an unbounded task/queue per request.
         self._pending_updates: dict[tuple[str, str], int] = {}
         self._export_task: asyncio.Task[None] | None = None
+        self._directory_sync_required = False
 
     @property
     def path(self) -> Path:
@@ -226,6 +236,10 @@ class CompatibilityReadEvidence:
         self._pending_updates[key] = self._pending_updates.get(key, 0) + 1
         if self._export_task is not None and not self._export_task.done():
             return
+        self._start_export(route_family=route_family, response_class=response_class)
+
+    def _start_export(self, *, route_family: str, response_class: str) -> None:
+        """Start one bounded exporter, preserving a failed aggregate for retry."""
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(self._drain_exports())
@@ -239,18 +253,66 @@ class CompatibilityReadEvidence:
         task.add_done_callback(self._finish_export)
 
     async def flush(self) -> None:
-        """Await pending exports for tests and an explicit operator export seam."""
-        while self._export_task is not None:
-            await asyncio.gather(self._export_task, return_exceptions=True)
+        """Flush pending evidence or fail explicitly after bounded retries.
+
+        A caller that needs a durable delivery receipt must call this method;
+        route handlers intentionally do not await it. Failed batches retain
+        their counts, while a post-replace directory-sync failure retries only
+        the directory sync so the aggregate can never be double-counted.
+        """
+        last_error: BaseException | None = None
+        for attempt in range(1, _MAX_FLUSH_ATTEMPTS + 1):
+            if self._export_task is None:
+                if not self._pending_updates and not self._directory_sync_required:
+                    return
+                self._start_export(
+                    route_family="compatibility_flush",
+                    response_class="flush",
+                )
+            task = self._export_task
+            if task is None:
+                last_error = RuntimeError("Compatibility route-hit exporter could not start.")
+                break
+            await asyncio.gather(task, return_exceptions=True)
             await asyncio.sleep(0)
+            if task.cancelled():
+                last_error = asyncio.CancelledError()
+            else:
+                last_error = task.exception()
+            if (
+                last_error is None
+                and not self._pending_updates
+                and not self._directory_sync_required
+            ):
+                return
+            logger.warning(
+                "Compatibility route-hit flush will retry a pending export.",
+                extra={
+                    "attempt": attempt,
+                    "max_attempts": _MAX_FLUSH_ATTEMPTS,
+                    "evidence_kind": "compatibility_route_hit",
+                },
+            )
+        raise CompatibilityEvidenceFlushError(
+            "Compatibility route-hit evidence could not be flushed durably."
+        ) from last_error
 
     async def _drain_exports(self) -> None:
         """Drain the fixed-cardinality aggregate through one off-loop writer."""
+        if self._directory_sync_required:
+            await asyncio.to_thread(self._fsync_parent_directory)
+            self._directory_sync_required = False
         while self._pending_updates:
             pending = self._pending_updates
             self._pending_updates = {}
             try:
                 await asyncio.to_thread(self._record_batch, pending)
+            except _CompatibilityEvidenceDirectorySyncError:
+                # The file replacement is already visible, so replaying the
+                # aggregate would double-count it. Retain only the remaining
+                # directory-sync obligation for a bounded flush retry.
+                self._directory_sync_required = True
+                raise
             except BaseException:
                 # Preserve the bounded aggregate for the next request to
                 # retry. Evidence failure remains observational: it never
@@ -351,10 +413,24 @@ class CompatibilityReadEvidence:
                 os.fsync(temporary.fileno())
             assert temporary_path is not None
             os.replace(temporary_path, self._path)
+            try:
+                self._fsync_parent_directory()
+            except OSError as exc:
+                raise _CompatibilityEvidenceDirectorySyncError(
+                    "Compatibility route-hit replacement needs a parent-directory sync."
+                ) from exc
         except BaseException:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise
+
+    def _fsync_parent_directory(self) -> None:
+        """Persist the replacement name, not only the replacement's contents."""
+        descriptor = os.open(self._path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 class FleetLaneRuntimeMiddleware:
@@ -397,6 +473,15 @@ class FleetLaneRuntimeMiddleware:
         send: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> None:
         """Bound one HTTP call and retain only an eligible route-family hit."""
+        if scope["type"] == "lifespan":
+            async def receive_flushing_shutdown() -> dict[str, Any]:
+                message = await receive()
+                if message["type"] == "lifespan.shutdown":
+                    await self._evidence.flush()
+                return message
+
+            await self.app(scope, receive_flushing_shutdown, send)
+            return
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -501,6 +586,7 @@ class FleetLaneRuntimeMiddleware:
 
 
 __all__ = [
+    "CompatibilityEvidenceFlushError",
     "CompatibilityReadEvidence",
     "FleetLaneCapacityExhausted",
     "FleetLaneRuntimeMiddleware",

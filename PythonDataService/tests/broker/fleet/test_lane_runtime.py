@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 import pytest
 
 from app.broker.fleet.lane_runtime import (
+    CompatibilityEvidenceFlushError,
     CompatibilityReadEvidence,
     FleetLaneRuntimeMiddleware,
     LaneRuntimeConfig,
@@ -273,6 +275,7 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
         del source, destination
         raise OSError("replace refused")
 
+    original_replace = os.replace
     monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", refuse_replace)
 
     async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
@@ -281,9 +284,15 @@ async def test_compatibility_evidence_removes_temporary_file_when_atomic_replace
 
     runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
     assert _status(await _invoke(runtime)) == 200
-    await evidence.flush()
+    with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
+        await evidence.flush()
     assert not list(evidence.path.parent.glob(".route_hits.json.*"))
     assert "Compatibility route-hit export failed." in caplog.text
+    assert evidence._pending_updates == {("broker_bots", "2xx"): 1}
+
+    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.replace", original_replace)
+    await evidence.flush()
+    assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
 
 async def test_background_evidence_export_does_not_delay_an_authorized_response(
@@ -312,7 +321,7 @@ async def test_background_evidence_export_does_not_delay_an_authorized_response(
 async def test_failed_evidence_batch_is_retried_without_losing_counts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A transient export failure retains its bounded batch for the next hit."""
+    """A transient export failure is retried by one bounded flush."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
     record_batch = evidence._record_batch
     attempts = 0
@@ -328,10 +337,8 @@ async def test_failed_evidence_batch_is_retried_without_losing_counts(
     evidence.schedule(route_family="broker_bots", response_class="2xx")
     await evidence.flush()
 
-    evidence.schedule(route_family="broker_bots", response_class="2xx")
-    await evidence.flush()
-
-    assert evidence.snapshot()["route_hits"][0]["count"] == 2
+    assert attempts == 2
+    assert evidence.snapshot()["route_hits"][0]["count"] == 1
 
 
 async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> None:
@@ -348,20 +355,67 @@ async def test_combined_observation_uses_no_capacity_pool(tmp_path: Path) -> Non
     assert evidence.snapshot()["route_hits"][0]["route_family"] == "broker_bots"
 
 
-def test_compatibility_evidence_removes_temporary_file_when_fsync_fails(
+async def test_parent_directory_fsync_failure_makes_flush_fail_without_replaying_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed durable flush leaves no orphaned aggregate temporary file."""
+    """A post-replace sync failure remains explicit and retries only the sync."""
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    original_fsync = os.fsync
+    fsync_calls = 0
+
+    def refuse_parent_sync(file_descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls >= 2:
+            raise OSError("parent fsync refused")
+        original_fsync(file_descriptor)
+
+    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_parent_sync)
+    evidence.schedule(route_family="broker_bots", response_class="2xx")
+    with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
+        await evidence.flush()
+    assert evidence.path.exists()
+    assert not list(evidence.path.parent.glob(".route_hits.json.*"))
+    assert evidence._pending_updates == {}
+    assert evidence._directory_sync_required
+
+    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", original_fsync)
+    await evidence.flush()
+    assert evidence.snapshot()["route_hits"][0]["count"] == 1
+
+
+async def test_lifespan_shutdown_does_not_complete_when_evidence_flush_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shutdown receives the same bounded durability refusal as explicit flush."""
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
 
-    def refuse_fsync(file_descriptor: int) -> None:
-        del file_descriptor
-        raise OSError("fsync refused")
+    def refuse_record(updates: Mapping[tuple[str, str], int]) -> None:
+        del updates
+        raise OSError("export unavailable")
 
-    monkeypatch.setattr("app.broker.fleet.lane_runtime.os.fsync", refuse_fsync)
-    with pytest.raises(OSError, match="fsync refused"):
-        evidence._record_batch({("broker_bots", "2xx"): 1})
-    assert not list(evidence.path.parent.glob(".route_hits.json.*"))
+    monkeypatch.setattr(evidence, "_record_batch", refuse_record)
+    evidence.schedule(route_family="broker_bots", response_class="2xx")
+    inner_received_shutdown = False
+    messages: list[AsgiMessage] = []
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        nonlocal inner_received_shutdown
+        message = await receive()
+        inner_received_shutdown = message["type"] == "lifespan.shutdown"
+        await send({"type": "lifespan.shutdown.complete"})
+
+    async def receive() -> AsgiMessage:
+        return {"type": "lifespan.shutdown"}
+
+    async def send(message: AsgiMessage) -> None:
+        messages.append(message)
+
+    runtime = FleetLaneRuntimeMiddleware(app, config=None, evidence=evidence)
+    with pytest.raises(CompatibilityEvidenceFlushError, match="could not be flushed"):
+        await runtime({"type": "lifespan"}, receive, send)
+    assert not inner_received_shutdown
+    assert messages == []
 
 
 async def test_identity_validation_precedes_capacity_and_pinned_reads_are_not_measured(
