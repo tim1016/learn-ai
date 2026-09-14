@@ -27,9 +27,7 @@ import { TransactionEvidenceTimelineComponent } from './transaction-evidence-tim
  * stations in `unknown_stale` state — the shell should not render the lens
  * until the profile is loaded.
  *
- * <!-- card-help anchor: station-1-signal — wired to S5 drawer in end-phase integration -->
- * <!-- card-help anchor: station-3-submit-gate — wired to S5 drawer in end-phase integration -->
- */
+ * * */
 @Component({
   selector: 'app-transaction-rail',
   changeDetection: ChangeDetectionStrategy.OnPush,

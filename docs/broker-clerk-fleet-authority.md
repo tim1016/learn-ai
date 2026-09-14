@@ -60,8 +60,10 @@ unfenced posture for this boot"* and returns `None` — no marker gate, no regis
 `/api/broker-clerks`. A `clerk_agent` with no marker refuses instead
 (`fleet_boot.py:118-122`), which is the addendum's intent; `combined` predates it and is exempt.
 
-This matters more than it reads: **a fresh clone of this repository runs unfenced**, and says so
-only at `INFO`. See §5.
+This matters more than it reads: **a fresh clone of this repository runs unfenced, and says
+nothing at all.** With no fleet configuration the function returns `None` at `fleet_boot.py:110`
+without logging; the `INFO` line at `:112-114` fires only in the narrower case where fleet control
+*is* configured but the volume is unenrolled. See §5.
 
 ## 2. Identity
 
@@ -218,7 +220,7 @@ The register splits three ways, not the expected two:
 |---|---|---|
 | **Structural** — can it keep lanes apart as built? | **Low** | Identity is not a request parameter; the fences are in the database and tested; ADR 0062 scores 14 holds / 4 partial / **0 absent** |
 | **State** — is what runs what was designed? | **High** | The posture is untracked, unreviewed, unreproducible, and `restart.sh` can destroy a lane (§5) |
-| **Observability** — if it goes wrong, will you know? | **High** | 28 refusal codes, none renderable; no audit read surface (§7) |
+| **Observability** — if it goes wrong, will you know? | **High** | 25 refusal codes, none renderable; no audit read surface (§7) |
 
 The third axis was not anticipated when the map was charted; the investigations forced it out, and
 it is the one worth acting on first. **You can accept structural risk when you can see failures.**
@@ -253,7 +255,7 @@ both cheap to fix.
 | # | Change | Axis |
 |---|---|---|
 | 1 | Fix `restart.sh`'s five-name allowlist (`:28`, `:64-65`) | State |
-| 2 | Fix the three refusal parsers to read the flat body; render the 28 reason codes | Observability |
+| 2 | Fix the three refusal parsers to read the flat body; render the 25 reason codes | Observability |
 | 3 | Commit the fleet topology with credentials externalised | State |
 | 4 | Wire `validate_served_context` into `LaneRouter._resolve`, **or** delete it and amend ADR 0062 Decision 5 | Structural |
 | 5 | Move the profiles-DB open after the volume identity gate; fix the comment at `app/main.py:383-386` | State |
@@ -281,11 +283,19 @@ three wire-contract or semantics changes that need an owner decision before any 
 
 ### Half A — the backend has it; no UI renders it
 
-- **28 refusal reason codes exist; `0` appear anywhere in `Frontend/src/`.**
-- **No PRD §10.4 refusal family can render at all.** The fleet returns a flat
-  `{reason, message, next_step}` (`app/routers/broker_clerks.py:78-88`) and all three frontend
-  parsers read `error.error.detail.*`. `app/broker/fleet/errors.py:1-6` claims the opposite. The
-  rendering path is already correct; only the parsers are wrong.
+- **25 refusal reason codes exist; `0` appear anywhere in `Frontend/src/`.** 22 are declared as
+  `reason: ClassVar[str]` in `app/broker/fleet/errors.py` (including the `fleet_control_error`
+  base); three more are minted inline — `command_envelope_invalid`
+  (`app/routers/broker_clerks.py:87`), `compatibility_retirement_state_invalid`
+  (`app/broker/fleet/lane_runtime.py:534`) and `compatibility_read_retired` (`:553`).
+- **No PRD §10.4 refusal family can render at all.** The fleet returns a **flat**
+  `{reason, message, next_step}` — `FleetControlError.detail()` builds exactly that
+  (`app/broker/fleet/errors.py:36-40`) and `app/routers/broker_clerks.py:78-88` returns it
+  unwrapped. All three frontend parsers read `error.error.detail.*` (e.g.
+  `Frontend/src/app/components/broker/v2-panel/lib/panel-action-outcome.ts:21-23`). **The backend
+  is correct and self-consistent; the defect is entirely in the frontend parsers.** The rendering
+  path beneath them is already right. (The method being *named* `detail()` is an easy trap — it
+  returns the body; it does not nest under a `detail` key.)
 - **The durable audit trail has no read surface.** Routing receipts, assignment history and
   session history are append-only, trigger-protected, and reachable only by opening the
   coordinator's SQLite file by hand. `aggregate_lane_reads` (PRD FR-083/084) has **no HTTP route**
@@ -334,10 +344,9 @@ claims to fix.**
 | Decision 2: nothing opens on the volume before the identity gate | ADR 0062; comment at `app/main.py:383-386` | A SQLite writer is created **and migrated** first: `app/main.py:377-382` → `broker_configuration/store.py:140-148`. `installation_worker()` (`main.py:222`) also writes a lock file on the unverified volume, and `fleet_boot.py:159-162` opens a second SQLite 25 lines before its own gate |
 | The coordinator "never serves an unscoped agent family itself" | `CONTEXT.md:2121` | It serves two unscoped agent-family reads |
 | "The browser secret terminates at the coordinator" | `CONTEXT.md`, composed-auth bullet | Documentation, not code (§4) |
-| Refusal bodies are nested under `error.detail` | `app/broker/fleet/errors.py:1-6` | The wire body is flat (§7) |
 | Retained unscoped **mutations** will retire with the compatibility mechanism | `docs/design/fleet-b-route-inventory.md` | `_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:31`) — the mechanism **can never reach mutations**. Retirement is also all-families-or-nothing despite a per-family constant, and the gate is clerk-agent-only, so it cannot reach the browser's actual compatibility reads |
 | `assignment_mutation_closed` is a second independent fence | ADR 0062 Consequences; `scripts/manage_broker_fleet.py:361,430` | `RegistryRecoveryState` has one bit; the field is a copy of `routing_closed`. The CLI reports a two-fence claim over a one-fence product |
-| The refusal vocabulary has 16 / 21 families | PRD / `app/broker/fleet/errors.py` | The true wire vocabulary is **28** |
+| The refusal vocabulary has 16 / 21 families | PRD / `app/broker/fleet/errors.py` | The true wire vocabulary is **25** (22 declared + 3 minted inline) |
 | `production_adapter()` resolves live adapters | `app/broker/fleet/provider.py:348-350` | Resolves against a deliberately-empty constant, has no callers, always refuses `"alpaca"`. The live registry is `app/broker/fleet_composition.py:27-29` |
 
 ### One stranded route
@@ -353,10 +362,79 @@ connections. Roughly 37 tests have names that diverge from their assertions — 
 `test_compatibility_evidence_separates_unauthorized_and_not_found_responses`, which proves the
 two **collapse**. Full assay: [#2056](https://github.com/tim1016/learn-ai/issues/2056).
 
-## 9. What this document replaced
+## 9. Operator vocabulary
+
+Absorbed on 2026-09-14 from the retired operator manual, because two Accepted ADRs name the
+operator-facing document as the place these terms are defined. Without this section their
+definitions would exist nowhere an operator is told to look.
+
+### `corpus_coverage` — a stamp on paper, a blocker anywhere else
+*(home for [ADR 0054](architecture/adrs/0054-corpus-coverage-is-a-stamp-on-paper.md))*
+
+Whether the golden corpus behind a program's `golden_trace_root` actually covers the symbol **and**
+the exact parameter values a bot resolved. The registry qualifies one `validated_settings` point per
+program over its `validated_symbols`; any other symbol, or any parameter value differing from that
+point, is `UNCOVERED`.
+
+It is a fact about the *evidence a run can later claim*, not about the bytes it runs — artifact and
+wiring digests still match their receipt — so since ADR 0054 it no longer refuses the build proof.
+
+Whether an uncovered point may start depends on `account_mode`:
+
+- **Proven paper** (and Dry Run, whose synthetic authority is paper by construction): the run
+  starts, and every surface says so. The Start/Resume `explanation` carries *"Corpus coverage is
+  UNCOVERED: the paper environment admits this exploratory run, which is not citable as
+  qualification evidence"*; the build fact reads `corpus_coverage: UNCOVERED` with a `next_step`
+  naming the two routes to a covered run (deploy at the registered validated settings, or run
+  golden qualification for these parameters); and the run's frozen evidence keeps the stamp, so the
+  panel never replays an exploratory run as citable proof.
+- **Live**: the run refuses with `PROGRAM_CORPUS_UNCOVERED`.
+
+A custody answer cannot omit its environment, so there is no third case. **There is no toggle** —
+the environment is the only switch, and a paper run that must be corpus-covered simply deploys at
+the validated point and reads `COVERED`.
+
+### `account_mode`
+*(home for [ADR 0054](architecture/adrs/0054-corpus-coverage-is-a-stamp-on-paper.md))*
+
+The environment (`paper` / `live`) on the Clerk custody snapshot, positively learned from the broker
+at activation. **Required, never unknown** — it fails closed rather than defaulting.
+
+### `FEED_DEATH` typed reasons
+*(home for [ADR 0053](architecture/adrs/0053-feed-continuity-same-run-recovery.md); see also
+`docs/references/feed-reconnect-continuity.md`)*
+
+`FEED_DEATH` is the reason code a `CRASHED` duty outcome carries when the run's market-data stream
+ended. Since #1921 a broker-socket interruption is not automatically fatal for a run carrying a
+continuity policy — a sealed regular-session program with a decision clock, while the data plane's
+feed-continuity switch is on. Such a run waits the reconnect out under its own decision clock and
+stitches the interrupted minute back together, so when it *does* report `FEED_DEATH` it says which
+continuity rule refused it. The typed reason prefixes the crash diagnostic's message
+(`"<REASON>: …"`) and is a column on the matching `refused` row in the run's continuity journal.
+
+The vocabulary is closed:
+
+| Reason | Meaning |
+|---|---|
+| `DECISION_BAR_MISSED` | The socket did not return before the deadline for the run's next decision bar (its trigger instant plus a 20-second delivery allowance). The run stopped rather than decide late; the `interruption` event records the deadline it was held to. |
+| `SUBSTITUTION_NOT_AUTHORIZED` | A minute the interruption touched could not be proven complete from live data, and nothing authorizes standing a historical bar in its place. Nothing authorizes it in this build, for any instrument or program — this is the expected reason for a lost print inside regular trading hours. |
+| `SUBSTITUTION_PATH_UNAVAILABLE` | An authorization was granted but no substitution path exists to honour it. No producer of such a grant is deployed, so this means one appeared without its delivery half — **escalate rather than retry**. |
+| `CONTINUITY_EVIDENCE_UNWRITABLE` | A continuity fact could not be written to the run's ledger. The run stops rather than continue without the evidence it promised. Check the account's storage and the ledger file before redeploying. |
+| `DECISION_LATE` | A bar assembled across the reconnect *was* delivered, but past the allowance for the decision it would have driven. Deciding on it would price a trade against a market that had already moved. |
+
+A run **without** a policy — unsealed or compatibility-mode strategy, an all-session binding, a
+program with no decision clock, or any run while the switch is off — keeps the pre-#1921 behaviour:
+the first interruption ends it with a plain `FEED_DEATH`, no typed reason and no `refused` row. The
+notice's message tells the two apart.
+
+None of these is an operator action. Each is a completed, evidence-backed stop: read the notice,
+then redeploy through the panel's normal admitted action once the feed is healthy.
+
+## 10. What this document replaced
 
 `docs/broker-v2-operator-manual.md` was generated under
-[ADR 0041](architecture/adrs/0041-generated-operator-button-reference.md): its Button Reference and
+[ADR 0041](architecture/adrs/0041-generated-operator-button-reference.md) — **retired 2026-09-14**,
+because this change deletes its entire subject. Its Button Reference and
 Glossary were produced from `app/broker/v2panel/vocabulary.py` and CI-gated with
 `git diff --exit-code` over the source and served copies.
 
