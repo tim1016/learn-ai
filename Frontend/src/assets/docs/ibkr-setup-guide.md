@@ -54,6 +54,16 @@ IBKR's API connection signature includes host, port, and client ID. The client I
 
 If the selected Account Desk reports a client-ID overlap, do not retry blindly. Stop the duplicate client, choose another client ID, or restart Gateway/TWS to clear stale sessions.
 
+## Relogin cadence
+
+IB Gateway logs itself out on its own nightly schedule. In IB Gateway, open Configure -> Settings -> Lock and Exit, and enable **Auto restart**. This is IBKR-side configuration, not a repo `.env` setting.
+
+Auto restart is not the complete remedy. It preserves the session across the nightly logout, but IBKR still forces a weekly re-login regardless of Auto restart (see `docs/audits/bot-fleet-stress-2026-08-25.md`, S1 finding). Before the first bot launch after that weekly window, confirm Gateway shows a logged-in session and Account Desk reports the market-data feed connected — do not assume Auto restart alone carried the session through it.
+
+While the Gateway is logged out (nightly without Auto restart, or the weekly forced re-login), the reconnect breaker keeps attempting a connect roughly once a minute, indefinitely — that attempt cadence is not the same as the visible log cadence. The data-plane clerk logs one connect-failure warning when the outage starts, then only a periodic summary every 15 minutes; quiet minutes between summaries are not a stopped monitor. Any bot still running (including Alpaca bots — the IBKR feed supplies their live bars) dies at its next decision trigger because the feed it streams from is gone.
+
+Do not respond to this by disabling `IBKR_BROKER_ENABLED`; that flag controls whether the shared market-data feed exists at all and is load-bearing for Alpaca execution (see `docs/ibkr-integration-authority.md`). Fix the Gateway-side login/Auto restart setting instead.
+
 ## Diagnostic flow
 
 1. Open the selected account in Account Desk.
@@ -83,4 +93,4 @@ Before enabling any real code path that depends on live broker evidence:
 - Unattributed exposure is flat or has an audited accepted override.
 - Any retired-bot recovery row is resolved or deliberately left frozen.
 
-Do not replace these checks with dummy production code. Pre-market work can add read-only display and disabled affordances; order-changing paths should wait for market-hours evidence.
+Do not replace these checks with dummy production code. Pre-market work can add read-only display and disabled affordances; Alpaca Broker V2 order-changing paths that depend on this IBKR evidence should wait for market-hours evidence.

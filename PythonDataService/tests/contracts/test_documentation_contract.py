@@ -98,8 +98,18 @@ def test_validate_repository_reports_independent_contract_failures(tmp_path: Pat
 
 
 def test_the_ibkr_authority_states_that_alpaca_execution_depends_on_this_feed() -> None:
-    """#2077/#2080 both misread a live dependency as residue. The doc must say it."""
+    """#2077/#2080 both misread a live dependency as residue. The doc must say it.
+
+    Three independent tokens can't fence the dependency (a reviewer could
+    salt them into unrelated sentences), so the real fence is the section
+    heading plus the verbatim topic sentence that names the relationship.
+    """
     authority = (REPOSITORY_ROOT / "docs/ibkr-integration-authority.md").read_text(encoding="utf-8")
+    assert "## Market data is load-bearing for Alpaca execution" in authority
+    assert (
+        "IBKR order actuation is retired, but the IBKR market-data feed is not residue "
+        "— it is the live bar source Alpaca bots trade on."
+    ) in authority
     assert "Alpaca" in authority
     assert "IbkrMarketDataFeed" in authority
     assert "IBKR_BROKER_ENABLED" in authority

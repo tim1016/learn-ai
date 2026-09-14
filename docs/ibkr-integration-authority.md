@@ -31,12 +31,17 @@ unregistered runtime path.
 
 ## Market data is load-bearing for Alpaca execution
 
-IBKR order actuation is retired, but the IBKR market-data feed is not residue —
-it is the live bar source Alpaca bots trade on. `main.py:741` installs
-`IbkrMarketDataFeed` as the process-wide `MarketDataFeed` once the IBKR client
-connects. Alpaca bots stream their decision bars through that shared feed
-(`bot_runtime.py:156`, `bot_trade_strategy.py:584`); there is no separate
-Alpaca-owned market-data path.
+IBKR order actuation is retired, but the IBKR market-data feed is not residue — it is the live bar source Alpaca bots trade on.
+
+`main.py:741` installs `IbkrMarketDataFeed` as the process-wide
+`MarketDataFeed` whenever the runs-clerk role has IBKR enabled
+(`IBKR_BROKER_ENABLED=true`) — installation does not wait on
+`IBKR_CONNECT_ON_STARTUP` or on the first `connect()` attempt succeeding; the
+monitor is started and the feed installed even after a soft-fail initial
+connect. The feed is only *usable* — able to actually stream bars — once the
+underlying IBKR client is connected. Alpaca bots stream their decision bars
+through that shared feed (`bot_runtime.py:156`, `bot_trade_strategy.py:584`);
+there is no separate Alpaca-owned market-data path.
 
 Because of that, `IBKR_BROKER_ENABLED=false` does not merely disable IBKR
 broker endpoints — it removes the only installed `MarketDataFeed`, so an
