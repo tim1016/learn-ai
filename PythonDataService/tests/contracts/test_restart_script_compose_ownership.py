@@ -45,7 +45,7 @@ def _declared_container_names() -> set[str]:
 
 
 def test_created_container_triage_filters_on_the_compose_project_label() -> None:
-    """Both halves of the Created triage must classify by label."""
+    """The recovery half must classify by the label Compose stamps."""
     script = _script()
 
     assert _COMPOSE_PROJECT_LABEL in script, (
@@ -57,8 +57,40 @@ def test_created_container_triage_filters_on_the_compose_project_label() -> None
 
     label_filters = script.count("label=${COMPOSE_LABEL}")
     assert label_filters >= 2, (
-        "Both the orphan-reap and the stuck-restart queries must filter on the "
-        f"Compose label; found {label_filters} such filter(s)."
+        "The stuck-restart and mid-loop-rescue queries must both filter on the "
+        f"project-scoped Compose label; found {label_filters} such filter(s)."
+    )
+
+
+def test_the_destructive_reap_never_depends_on_the_project_name() -> None:
+    """`rm -f` must be driven by absence of the label, not by a project mismatch.
+
+    The two possible framings fail in opposite directions:
+
+    - "created, and NOT in project X" — if the project name is ever wrong the
+      label matches nothing, every core service sitting in ``Created`` is
+      classified as an orphan, and the script deletes the whole stack.
+    - "created, and carrying NO compose project label" — absence of the label is
+      positive evidence the container is not Compose-managed. A wrong project
+      name can then only ever under-reap, which is harmless, and another
+      project's containers are left alone either way.
+
+    Only the second framing may reach ``podman rm -f``.
+    """
+    script = _script()
+
+    assert f'--filter "label!={_COMPOSE_PROJECT_LABEL}"' in script, (
+        "The orphan reap must select containers carrying no compose project "
+        "label at all. Selecting 'not in our project' makes a wrong "
+        "COMPOSE_PROJECT_NAME delete every service in the stack."
+    )
+
+    reap = script.split("ORPHANS=", 1)
+    assert len(reap) == 2, "restart.sh no longer computes ORPHANS."
+    reap_query = reap[1].split("\n\n", 1)[0]
+    assert "${COMPOSE_LABEL}" not in reap_query, (
+        "The destructive reap query must not be scoped to the project name; "
+        "that reintroduces the delete-everything failure mode."
     )
 
 

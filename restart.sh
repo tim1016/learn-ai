@@ -29,17 +29,21 @@ podman compose down
 COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
 COMPOSE_LABEL="com.docker.compose.project=${COMPOSE_PROJECT}"
 
-CREATED=$(podman ps -a --filter status=created --format "{{.Names}}" | sort || true)
-COMPOSE_CREATED=$(podman ps -a --filter status=created \
-  --filter "label=${COMPOSE_LABEL}" --format "{{.Names}}" | sort || true)
-
 # Reap orphaned non-compose containers stuck in Created (typically `sleep 1`
 # probes from lean-sidecar metadata staging that the host process abandons).
 # `podman compose down` only touches compose-managed names, so these pile up
-# in `podman ps -a` over time. Anything Compose owns is excluded here and
-# recovered below instead. Skip if none — `xargs --no-run-if-empty` isn't
+# in `podman ps -a` over time. Skip if none — `xargs --no-run-if-empty` isn't
 # portable, so guard explicitly.
-ORPHANS=$(comm -23 <(echo "$CREATED") <(echo "$COMPOSE_CREATED") | grep -v '^$' || true)
+#
+# The destructive query deliberately does NOT mention ${COMPOSE_PROJECT}. Asking
+# for "created containers not in *our* project" would make a wrong project name
+# catastrophic: the label would match nothing and every core service sitting in
+# Created would be reaped. Asking for "created containers carrying no compose
+# project label at all" is positive evidence of non-ownership, so a wrong
+# project name can only ever under-reap. A container belonging to some other
+# Compose project is left alone either way, which is also correct.
+ORPHANS=$(podman ps -a --filter status=created \
+  --filter "label!=com.docker.compose.project" --format "{{.Names}}" || true)
 if [[ -n "$ORPHANS" ]]; then
   echo "==> Reaping orphaned Created containers:"
   echo "$ORPHANS" | sed 's/^/    /'
