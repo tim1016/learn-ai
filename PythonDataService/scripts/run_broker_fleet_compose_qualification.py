@@ -11,7 +11,6 @@ contacts a real broker, consumes credentials, or enables Live mutation.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import concurrent.futures
 import json
 import logging
@@ -46,8 +45,27 @@ QUALIFICATION_SERVICES = (
     "alpaca-live-clerk",
 )
 LANE_SERVICES = ("alpaca-paper-clerk", "alpaca-live-clerk")
-_COORDINATOR_CONTROL_PATHS = frozenset(("fleet", "fleet/registry.db", "fleet/registry.db-shm", "fleet/registry.db-wal"))
-_FLEET_REGISTRY_TABLES = frozenset(("fleet_meta", "clerks", "clerk_sessions", "clerk_session_history", "approved_endpoints", "account_assignments", "account_assignment_history", "routing_receipts", "routing_receipts_v2"))
+_COORDINATOR_CONTROL_PATHS = frozenset(
+    (
+        "fleet",
+        "fleet/.registry.db.lock",
+        "fleet/registry.db",
+        "fleet/registry.db-shm",
+        "fleet/registry.db-wal",
+    )
+)
+_FLEET_REGISTRY_TABLES = frozenset(
+    (
+        "fleet_meta",
+        "clerks",
+        "clerk_sessions",
+        "clerk_session_history",
+        "approved_endpoints",
+        "account_assignments",
+        "account_assignment_history",
+        "routing_receipts",
+    )
+)
 FAULT_SCENARIOS = (
     "provider_outage",
     "credential_refusal_restart",
@@ -214,6 +232,21 @@ def _qualification_local_call(path: str) -> tuple[int, dict[str, Any]]:
     )
 
 
+def _qualification_local_hold(path: str) -> int:
+    """Consume a held response whose body may be SSE rather than JSON."""
+    secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
+    if not secret:
+        raise QualificationError("Qualification client has no per-run probe secret.")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
+        headers={"X-Fleet-Qualification-Secret": secret},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=4.0) as response:
+        response.read()
+        return response.status
+
+
 def _run_dependency_client(kind: str) -> int:
     """Emit one real running-clerk dependency result for host evidence."""
     status, body = _qualification_local_call(f"/dependency/{kind}")
@@ -225,70 +258,16 @@ def _run_capacity_client(kind: str) -> int:
     """Contend against the deployed Paper ASGI middleware, never a fresh instance."""
     path = f"/hold/{kind}"
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        first = executor.submit(_qualification_local_call, path)
+        first = executor.submit(_qualification_local_hold, path)
         time.sleep(0.15)
         second = _qualification_local_call(path)
-        first.result(timeout=4.0)
+        first_status = first.result(timeout=4.0)
+    if first_status != HTTPStatus.OK:
+        raise QualificationError(f"Running Paper {kind} hold did not enter the service.")
     status, body = second
     if status != HTTPStatus.SERVICE_UNAVAILABLE or body.get("reason") != "fleet_lane_capacity_exhausted":
         raise QualificationError(f"Running Paper {kind} capacity did not return its typed 503.")
     sys.stdout.write(json.dumps({"kind": kind, "refusal_status": status, "reason": body["reason"]}, sort_keys=True) + "\n")
-    return 0
-
-
-async def _run_capacity_probe_async(kind: str) -> dict[str, object]:
-    """Exercise the installed lane middleware with held ASGI work, not a fake lane."""
-    from app.broker.fleet.lane_runtime import (  # Imported only inside the real Paper image.
-        CompatibilityReadEvidence,
-        FleetLaneRuntimeMiddleware,
-        LaneRuntimeConfig,
-    )
-
-    async def invoke(runtime: Any, path: str, messages: list[dict[str, Any]]) -> None:
-        async def receive() -> dict[str, Any]:
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        async def send(message: dict[str, Any]) -> None:
-            messages.append(message)
-
-        await runtime({"type": "http", "method": "GET", "path": path, "headers": []}, receive, send)
-
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def held_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if kind == "stream":
-            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
-        else:
-            entered.set()
-        if kind == "stream":
-            entered.set()
-        await release.wait()
-        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
-
-    with tempfile.TemporaryDirectory(prefix="fleet-capacity-probe-") as directory:
-        runtime = FleetLaneRuntimeMiddleware(
-            held_app,
-            config=LaneRuntimeConfig(1, 1, 0, 0),
-            evidence=CompatibilityReadEvidence(Path(directory)),
-        )
-        first_messages: list[dict[str, Any]] = []
-        first = asyncio.create_task(invoke(runtime, "/held", first_messages))
-        await entered.wait()
-        refused_messages: list[dict[str, Any]] = []
-        await invoke(runtime, "/held", refused_messages)
-        status = next(message["status"] for message in refused_messages if message["type"] == "http.response.start")
-        reason = json.loads(refused_messages[-1]["body"])["reason"]
-        release.set()
-        await first
-    if status != HTTPStatus.SERVICE_UNAVAILABLE or reason != "fleet_lane_capacity_exhausted":
-        raise QualificationError(f"Fleet lane {kind} capacity probe did not return the typed 503.")
-    return {"kind": kind, "refusal_status": status, "reason": reason}
-
-
-def _run_capacity_probe(kind: str) -> int:
-    """Run bounded capacity proof inside the real, already-started Paper image."""
-    sys.stdout.write(json.dumps(asyncio.run(_run_capacity_probe_async(kind)), sort_keys=True) + "\n")
     return 0
 
 
@@ -840,9 +819,12 @@ def _assert_no_custody_root(root: Path) -> dict[str, object]:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     finally:
         connection.close()
-    unknown_tables = sorted(tables - _FLEET_REGISTRY_TABLES)
-    if unknown_tables:
-        raise QualificationError(f"Fleet registry contains unapproved tables: {unknown_tables}")
+    if tables != _FLEET_REGISTRY_TABLES:
+        missing = sorted(_FLEET_REGISTRY_TABLES - tables)
+        unknown = sorted(tables - _FLEET_REGISTRY_TABLES)
+        raise QualificationError(
+            f"Fleet registry table set is not exact; missing={missing!r}, unknown={unknown!r}."
+        )
     return {"ok": True, "entries": sorted(actual), "tables": sorted(tables)}
 
 

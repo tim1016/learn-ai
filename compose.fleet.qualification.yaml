@@ -73,6 +73,11 @@ services:
     # Preserve the first startup-refusal exit for bounded inspection instead
     # of hiding it behind the production restart policy.
     restart: "no"
+    # The harness performs explicit bounded health probes. Disable the
+    # periodic probe so it cannot consume Paper's deliberately one-slot
+    # request pool during capacity contention.
+    healthcheck:
+      disable: true
     environment:
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-paper-provider:8011
@@ -93,6 +98,8 @@ services:
   alpaca-live-clerk:
     profiles: ["fleet-qualification"]
     restart: "no"
+    healthcheck:
+      disable: true
     environment:
       NUMBA_DISABLE_JIT: "1"
       FLEET_FAKE_BROKER_URL: http://fleet-fake-live-provider:8012

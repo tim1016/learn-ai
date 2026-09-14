@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import cast
 
 import pytest
 
+from app.broker.fleet import schema
 from scripts import run_broker_fleet_compose_qualification as qualification
 
 
@@ -94,6 +94,7 @@ def test_qualification_overlay_keeps_actual_roles_and_only_fakes_external_depend
     assert '"--container-role", "lane"' not in overlay
     assert "fleet-coordinator-postgres" in overlay
     assert overlay.count('restart: "no"') == 2
+    assert overlay.count("disable: true") == 2
 
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
@@ -178,17 +179,24 @@ def test_capacity_probe_runs_as_module_inside_application_image() -> None:
 
     assert calls[0][3:6] == ["python", "-m", "scripts.run_broker_fleet_compose_qualification"]
 
-@pytest.mark.asyncio
-async def test_capacity_probe_exercises_real_lane_middleware_for_both_pools() -> None:
-    """The qualification subcommand holds ASGI work and verifies typed refusal."""
-    for kind in ("request", "stream"):
-        result = await qualification._run_capacity_probe_async(kind)
-        assert result == {
-            "kind": kind,
-            "reason": "fleet_lane_capacity_exhausted",
-            "refusal_status": 503,
-        }
 
+def test_stream_capacity_client_does_not_parse_held_sse_as_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The first held SSE body is opaque; only the typed refusal is JSON."""
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path: 200)
+    monkeypatch.setattr(
+        qualification,
+        "_qualification_local_call",
+        lambda path: (503, {"reason": "fleet_lane_capacity_exhausted"}),
+    )
+
+    assert qualification._run_capacity_client("stream") == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "kind": "stream",
+        "reason": "fleet_lane_capacity_exhausted",
+        "refusal_status": 503,
+    }
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
     """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
@@ -252,22 +260,34 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
 
 def test_assert_no_custody_root_refuses_custody_named_artifact(tmp_path: Path) -> None:
     """The coordinator proof rejects an unknown nested artifact and table."""
-    registry_directory = tmp_path / "fleet"
-    registry_directory.mkdir()
+    control_root = tmp_path / "control"
+    registry_directory = control_root / "fleet"
+    registry_directory.mkdir(parents=True)
+    connection = sqlite3.connect(registry_directory / "registry.db")
+    schema.configure_connection(connection)
+    schema.apply_schema(connection)
+    connection.close()
+    result = qualification._assert_no_custody_root(control_root)
+    assert result["ok"] is True
+    assert set(result["tables"]) == qualification._FLEET_REGISTRY_TABLES
+    (registry_directory / "nested.bin").touch()
+
+    with pytest.raises(qualification.QualificationError, match="unapproved material"):
+        qualification._assert_no_custody_root(control_root)
+
+
+def test_assert_no_custody_root_requires_exact_registry_schema(tmp_path: Path) -> None:
+    """A neutral or partial database is not accepted as coordinator-only state."""
+    control_root = tmp_path / "control"
+    registry_directory = control_root / "fleet"
+    registry_directory.mkdir(parents=True)
     connection = sqlite3.connect(registry_directory / "registry.db")
     connection.execute("CREATE TABLE fleet_meta (id INTEGER)")
     connection.commit()
     connection.close()
-    for child in tmp_path.iterdir():
-        if child.name != "fleet":
-            shutil.rmtree(child)
-    result = qualification._assert_no_custody_root(tmp_path)
-    assert result["ok"] is True
-    assert result["tables"] == ["fleet_meta"]
-    (registry_directory / "nested.bin").touch()
 
-    with pytest.raises(qualification.QualificationError, match="unapproved material"):
-        qualification._assert_no_custody_root(tmp_path)
+    with pytest.raises(qualification.QualificationError, match="table set is not exact"):
+        qualification._assert_no_custody_root(control_root)
 
 
 def test_mount_and_resource_assertions_require_real_engine_evidence() -> None:
@@ -301,13 +321,13 @@ def test_coordinator_mount_isolation_rejects_a_lane_source() -> None:
 
 def test_live_probe_mutation_refusal_is_a_typed_non_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The CLI serializes the closed coordinator registry evidence."""
-    root = tmp_path / "live"
+    root = tmp_path / "control"
     root.mkdir()
     registry_directory = root / "fleet"
     registry_directory.mkdir()
     connection = sqlite3.connect(registry_directory / "registry.db")
-    connection.execute("CREATE TABLE fleet_meta (id INTEGER)")
-    connection.commit()
+    schema.configure_connection(connection)
+    schema.apply_schema(connection)
     connection.close()
     result = qualification.main(["--assert-no-custody-root", str(root)])
 
