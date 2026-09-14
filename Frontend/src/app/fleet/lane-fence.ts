@@ -60,6 +60,16 @@ export const LANE_FENCE_UNENFORCEABLE_MESSAGE =
   'was not sent — it would have dispatched with no binding check at all. Reopen the ' +
   'action once the fleet directory has loaded.';
 
+/** The one sentence a surface shows when a `clerk_binding_generation_conflict`
+ * refusal's mitigating `FleetDirectoryService.refresh()` (#2068) itself
+ * rejects. The refusal already told the operator the fence they acted on was
+ * wrong; if the directory also fails to reload, the lane in front of them is
+ * still exactly as stale as it was, and that has to be said out loud rather
+ * than left to a silently-rejected promise. */
+export const LANE_FENCE_REFRESH_FAILED_MESSAGE =
+  'The fleet directory could not be refreshed after that refusal, so this lane may ' +
+  'still be showing a stale binding. Reload the page before retrying the action.';
+
 /**
  * Whether a frozen fence may still be acted on.
  *

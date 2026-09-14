@@ -35,6 +35,7 @@ import {
   fencedTarget,
   freezeLaneFence,
   laneFenceVerdict,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
   type LaneFence,
 } from '../../../../fleet/lane-fence';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
@@ -419,7 +420,9 @@ export class BotsListPageComponent {
       // provably wrong; refresh so the next action is minted against a lane
       // they have actually seen (#2068).
       if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
-        void this.fleetDirectory.refresh();
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
       }
     } finally {
       this.pendingBotIds.update((current) => {

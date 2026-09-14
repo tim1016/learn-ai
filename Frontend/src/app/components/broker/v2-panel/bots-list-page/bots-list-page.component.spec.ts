@@ -20,6 +20,7 @@ import {
   testLane,
   type FleetDirectoryDouble,
 } from '../../../../fleet/fleet-directory-testing';
+import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
 import type { ResourceTarget } from '../../../../fleet/resource-target';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -516,6 +517,42 @@ describe('BotsListPageComponent', () => {
     expect(view.mockMessageService.add).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error' }),
     );
+  });
+
+  /**
+   * `refresh()` is a proven-rejecting call (`FleetDirectoryService.refresh` ->
+   * `awaitLoaded` throws whenever `/api/broker-clerks` fails). Firing it
+   * fire-and-forget with no rejection handler would leave the operator with
+   * no signal that the mitigation for a stale-generation refusal didn't
+   * take — the directory's `response()` signal stays exactly as stale as it
+   * was, and the next action hits the identical refusal with no warning.
+   */
+  it('tells the operator when the mitigating directory refresh itself fails', async () => {
+    const directory = provideFleetDirectory({
+      observed_at_ms: 1_757_000_000_000,
+      clerks: [testLane({ clerk_id: 'clrk_spec' })],
+    });
+    directory.useValue.refresh = vi.fn().mockRejectedValue(new Error('directory reload failed'));
+    const runBotAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+      }),
+    );
+    const view = await renderPage([fakeCatalogBot()], {
+      directory,
+      runBotAction,
+      panelActions: [fakePanelAction('stop')],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    await vi.waitFor(() =>
+      expect(view.mockMessageService.add).toHaveBeenCalledWith(
+        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
+      ),
+    );
+    expect(runBotAction).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a roster action whose lane rebound while the row was on screen', async () => {

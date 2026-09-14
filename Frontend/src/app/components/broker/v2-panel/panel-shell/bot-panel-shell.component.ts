@@ -42,6 +42,7 @@ import {
   fencedTarget,
   freezeLaneFence,
   laneFenceVerdict,
+  LANE_FENCE_REFRESH_FAILED_MESSAGE,
   type LaneFence,
 } from '../../../../fleet/lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
@@ -371,7 +372,9 @@ export class BotPanelShellComponent {
       // provably wrong; refresh so the next action is minted against a lane
       // they have actually seen (#2068).
       if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
-        void this.fleetDirectory.refresh();
+        void this.fleetDirectory.refresh().catch(() => {
+          this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
+        });
       }
       // The rejection is always pre-execution (see runBotAction's doc), so the
       // operator's last-seen panel state is now stale relative to whatever
