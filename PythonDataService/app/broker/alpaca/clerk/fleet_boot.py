@@ -184,8 +184,9 @@ async def open_fleet_lane(
         boot.volume_id = str(expectation["volume_id"])
         _verify_root_against_expectation(volume_root, expectation, clerk_id=settings.CLERK_ID)
         if isinstance(presence, LocalPresence):
-            # The local transport additionally runs the registry's
-            # clone-ownership check the remote agent cannot see.
+            # `register` re-proves the volume itself, so this is redundant —
+            # deliberately: it is an earlier-failure belt. A wrong volume
+            # fails here, before any registry transaction is opened.
             await presence.verify_volume(clerk_id=settings.CLERK_ID, volume_root=volume_root)
         boot.session = await presence.register(
             clerk_id=settings.CLERK_ID,

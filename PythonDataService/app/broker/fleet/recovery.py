@@ -86,7 +86,7 @@ class RegistryRecoveryState:
         """One hold: routing AND assignment mutation, closed together.
 
         There is no second bit. ``require_recovery_hold_clear`` is the sole
-        enforcement and every mutating service path calls it, so a restored
+        enforcement and every mutating entry point calls it, so a restored
         registry refuses routing, provisioning, reservation, confirmation,
         release and retirement off this one derived value.
         """

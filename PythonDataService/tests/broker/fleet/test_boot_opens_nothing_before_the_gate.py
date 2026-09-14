@@ -79,6 +79,7 @@ def test_a_mismatched_volume_marker_leaves_no_writer_artifact(tmp_path: Path) ->
         "IBKR_LIVE_RUNS_ROOT": str(volume_root / "live_runs" / "runs"),
         "IBKR_LIVE_BARS_ROOT": str(volume_root / "live_bars"),
     }
+    before = sorted(p.relative_to(volume_root) for p in volume_root.rglob("*"))
     completed = subprocess.run(
         [sys.executable, "-c", _PROBE],
         capture_output=True,
@@ -90,5 +91,7 @@ def test_a_mismatched_volume_marker_leaves_no_writer_artifact(tmp_path: Path) ->
     outcome = json.loads(completed.stdout.strip().splitlines()[-1])
     assert outcome["refused"] == "ClerkVolumeIdentityMismatch"
 
-    # The proof: the gate ran before anything opened on the volume.
-    assert not (volume_root / "broker_configuration").exists()
+    # The proof: the gate ran before anything opened on the volume — not a
+    # single path under it, writer artifact or otherwise, was added or removed.
+    after = sorted(p.relative_to(volume_root) for p in volume_root.rglob("*"))
+    assert after == before

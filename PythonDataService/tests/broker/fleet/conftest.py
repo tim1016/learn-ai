@@ -29,6 +29,7 @@ from app.broker.fleet.recovery import (
     BACKUP_DATABASE_FILENAME,
     BACKUP_MANIFEST_FILENAME,
     D_COMPATIBLE_SCHEMA_VERSION,
+    _sha256,
 )
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
@@ -314,8 +315,6 @@ def downgrade_backup_to_v2(backup_dir: Path) -> None:
     pair and restamping the meta row produces genuine pre-upgrade evidence —
     what a D-compatible rollback is for — without reconstructing the v2 DDL.
     """
-    from app.broker.fleet.recovery import _sha256
-
     database = backup_dir / BACKUP_DATABASE_FILENAME
     connection = sqlite3.connect(database)
     try:

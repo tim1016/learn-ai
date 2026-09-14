@@ -330,7 +330,7 @@ def test_a_v2_registry_gains_the_nested_volume_root_fence(
         with pytest.raises(sqlite3.IntegrityError, match="one physical volume"), store.transaction() as conn:
             conn.execute(_INSERT_CLERK_SQL, _clerk_values("e", "/volumes"))
         # …and the equal-root case, which the partial UNIQUE index owns.
-        with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"), store.transaction() as conn:
             conn.execute(_INSERT_CLERK_SQL, _clerk_values("f", "/volumes/legacy"))
 
         # But the comparison is exact: '/volumes/legacy-2' merely starts with

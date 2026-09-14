@@ -209,11 +209,19 @@ async def _open_verified_fleet_lane():
     if not _ROLE_RUNS_CLERK:
         return None
     from app.broker.alpaca.clerk.fleet_boot import open_fleet_lane
+    from app.broker.fleet.errors import FleetControlError
     from app.broker_configuration.runtime import resolve_clerk_dir
 
-    return await open_fleet_lane(
-        settings=fleet_settings, volume_root=resolve_clerk_dir()
-    )
+    try:
+        return await open_fleet_lane(
+            settings=fleet_settings, volume_root=resolve_clerk_dir()
+        )
+    except FleetControlError as exc:
+        logger.warning(
+            "Fleet boot gate refused before any writer opened on the volume.",
+            extra={"action": "fleet_boot_refused", "reason_code": exc.reason},
+        )
+        raise
 
 
 @asynccontextmanager

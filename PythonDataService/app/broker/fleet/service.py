@@ -166,7 +166,7 @@ class FleetControlService:
         """Close the underlying registry store."""
         self._store.close()
 
-    def _require_registry_recovery_open(self) -> None:
+    def _require_recovery_hold_clear(self) -> None:
         """Reject routing and assignment mutation during a restore ceremony."""
         require_recovery_hold_clear(
             self._store.db_path.parent.parent,
@@ -216,7 +216,7 @@ class FleetControlService:
         namespaces are different mounts, and different strings do not prove
         different volumes (audit 2026-09-13, finding 4).
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker or not display_label:
             raise BrokerAndClerkRequired(
                 "Provisioning requires a broker and a display label.",
@@ -429,7 +429,7 @@ class FleetControlService:
         "no assignments" and leave a retired clerk owning an active
         assignment.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
@@ -474,7 +474,7 @@ class FleetControlService:
         points at. The reference and the clerk binding are stable; only the
         destination moves, by re-running this ceremony.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if _ENDPOINT_REF_PATTERN.fullmatch(endpoint_ref) is None:
             raise ValueError(
@@ -720,7 +720,7 @@ class FleetControlService:
         ``LocalPresence`` — the one transport that does share the filesystem
         — always supplies it.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker:
             raise BrokerAndClerkRequired("A reservation requires a broker.")
         clerk = self._require_clerk(clerk_id)
@@ -866,7 +866,7 @@ class FleetControlService:
         effective tuple; this row is the coordinator's confirmed observation
         of it and the fence routed commands are checked against.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
@@ -1011,7 +1011,7 @@ class FleetControlService:
         its evidence was prepared against, so release evidence prepared for
         generation N cannot silently release generation N+1's new owner.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
                 "The release ceremony requires the offline-and-obligations-clear proof.",
@@ -1090,7 +1090,7 @@ class FleetControlService:
         released. The successor is reserved, not confirmed or routed: its
         agent must still pass its provider-owned binding and arming gates.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         successor = self._require_clerk(successor_clerk_id)
         if successor.broker != broker:
             raise ClerkBrokerMismatch(
@@ -1208,7 +1208,7 @@ class FleetControlService:
         a provisioned lane whose binding is missing or broken, so the operator
         can reach the configuration surface that would produce one.
         """
-        self._require_registry_recovery_open()
+        self._require_recovery_hold_clear()
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
                 "A clerk-scoped operation requires both broker and clerk identity.",

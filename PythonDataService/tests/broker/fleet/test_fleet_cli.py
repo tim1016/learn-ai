@@ -483,6 +483,7 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
     # over a single RegistryRecoveryState bit.
     assert "assignment_mutation_closed" not in restored
     assert restored["rollback_topology"] == "current"
+    # A D rollback needs pre-upgrade evidence, so produce it from the v3 backup.
     downgrade_backup_to_v2(backup_dir)
     assert (
         main(
