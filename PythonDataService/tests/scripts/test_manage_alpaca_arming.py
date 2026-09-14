@@ -122,10 +122,10 @@ def _arm(roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], *, now_ms
 
 def _graduate_live_account(artifacts_root: Path) -> None:
     from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
-        test_a_never_legacy_live_account_graduates_end_to_end,
+        test_a_never_legacy_account_graduates_end_to_end,
     )
 
-    test_a_never_legacy_live_account_graduates_end_to_end(artifacts_root)
+    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
 
 
 def test_status_on_an_account_with_no_records_answers_unarmed(
