@@ -295,3 +295,35 @@ def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
     # Both still refuse the empty identity, so the service's gate stays reachable.
     assert fake_alpha().canonical_account_id("   ") == ""
     assert fake_beta().canonical_account_id("   ") == ""
+
+
+def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_provider(
+    control_dir: Path, fleet_service
+) -> None:
+    """Readiness is per-provider: only beta declares a configuration-access
+    operation, and it stays routable before any binding is confirmed."""
+    from app.broker.fleet.errors import ClerkUnreachable
+    from app.broker.fleet.provider import Capability, OperationReadiness
+
+    beta = provision_lane(fleet_service, broker="fake_beta", label="cfg", tmp_path=control_dir.parent)
+    fleet_service.register_agent_session(
+        fleet_protocol_version=2, clerk_id=beta.clerk_id, worker_key=beta.worker_key
+    )
+    fleet_service.require_capability(
+        broker="fake_beta", capability=Capability.CONFIGURATION_MANAGE
+    )
+    with pytest.raises(BrokerClerkCapabilityUnavailable):
+        fleet_service.require_capability(
+            broker="fake_alpha", capability=Capability.CONFIGURATION_MANAGE
+        )
+    # Unbound, so execution refuses…
+    with pytest.raises(ClerkUnreachable):
+        fleet_service.resolve_route(broker="fake_beta", clerk_id=beta.clerk_id)
+    # …but the configuration surface stays reachable (the repair path).
+    _clerk, session, assignment = fleet_service.resolve_route(
+        broker="fake_beta",
+        clerk_id=beta.clerk_id,
+        readiness=OperationReadiness.CONFIGURATION_ACCESS,
+    )
+    assert assignment is None
+    assert session is not None

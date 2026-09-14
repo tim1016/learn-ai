@@ -37,6 +37,7 @@ FAKE_BETA_CAPABILITIES = frozenset(
     {
         Capability.ACCOUNT_READ,
         Capability.GALLERY_READ,
+        Capability.CONFIGURATION_MANAGE,
     }
 )
 
@@ -95,6 +96,16 @@ _FAKE_BETA_OPERATIONS = frozenset(
             readiness=OperationReadiness.EXECUTION,
             requires_effective_account=False,
             idempotency=OperationIdempotency.READ,
+        ),
+        ProviderOperation(
+            operation_id="configuration_apply",
+            method="POST",
+            path_template="/configuration/apply",
+            agent_path_template="/api/fake-beta/configuration/apply",
+            capability=Capability.CONFIGURATION_MANAGE,
+            readiness=OperationReadiness.CONFIGURATION_ACCESS,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.ONE_SHOT,
         ),
     }
 )
