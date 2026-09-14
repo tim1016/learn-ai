@@ -100,7 +100,11 @@ _PINNED_RETRY_SEMANTICS: dict[type[FleetControlError], int] = {
 
 @pytest.mark.parametrize("family", ALL_FAMILIES)
 def test_every_refusal_family_pins_reason_status_and_detail(family: type[FleetControlError]) -> None:
-    """Every family pins a unique snake_case reason, a status code, and its detail body."""
+    """Every family pins a snake_case reason, a status code, and its detail body.
+
+    Uniqueness across families is a separate, non-parametrized claim — see
+    test_no_two_refusal_families_share_a_reason below.
+    """
     error = family("message", next_step="step")
     detail = error.detail()
     assert detail["reason"] == family.reason

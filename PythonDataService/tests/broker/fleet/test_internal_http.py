@@ -55,6 +55,11 @@ class _InternalServer:
 
     async def stop(self) -> None:
         """Close the listener and wait for it."""
+        # Defensive release: wait_closed() below blocks on any still-open
+        # connection handler, and a handler that reached the /events hold
+        # only proceeds once hold_open is set. A test that forgets to
+        # release it must fail fast here, not wedge the whole file.
+        self.hold_open.set()
         if self.server is not None:
             self.server.close()
             await self.server.wait_closed()
