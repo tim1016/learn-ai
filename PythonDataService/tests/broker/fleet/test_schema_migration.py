@@ -8,8 +8,12 @@ installing the confirmed/namespace/endpoint fences the hardened protocol
 expects.
 
 The v2 → v3 upgrade, which does run against live registries, installs the
-nested-volume-root fence: a registry that already violates it must fail
-loudly rather than gain half a fence.
+nested-volume-root fence. That is a loud failure only for the equal-root
+half: the partial ``UNIQUE`` index is validated against existing rows at
+``CREATE INDEX`` time, so a registry already carrying two equal roots
+refuses the upgrade. The ``BEFORE INSERT`` trigger is not — it only guards
+rows inserted after the upgrade, so a registry that already carries a
+nested (not equal) pair migrates cleanly, silently short one fence.
 """
 
 from __future__ import annotations

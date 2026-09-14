@@ -19,6 +19,8 @@ from app.broker.fleet.volume import marker_path
 from app.broker.fleet_composition import production_provider_adapters
 
 _PROBE = (
+    # Defends against tests/operator shadowing the stdlib operator module (see
+    # test_a2_alpaca_lane.py's `_route_paths_for_role`, which scrubs the same PYTHONPATH entry).
     "import sys; sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]; "
     "import asyncio, json; "
     "from app.main import app, lifespan\n"

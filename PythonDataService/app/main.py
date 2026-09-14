@@ -7,6 +7,7 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -100,6 +101,9 @@ from app.utils.error_handlers import (
     polygon_exception_handler,
     request_validation_exception_handler,
 )
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.fleet_boot import FleetLaneBoot
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -204,7 +208,7 @@ async def _install_alpaca_binding(
     return resolved
 
 
-async def _open_verified_fleet_lane():
+async def _open_verified_fleet_lane() -> FleetLaneBoot | None:
     """Run the ADR 0062 Decision 2 gate before any writer opens on the volume."""
     if not _ROLE_RUNS_CLERK:
         return None
@@ -269,7 +273,7 @@ async def lifespan(app: FastAPI):
 
 @asynccontextmanager
 async def _service_lifespan(
-    app: FastAPI, *, worker_refusal: UnboundBroker | None = None, fleet_lane=None
+    app: FastAPI, *, worker_refusal: UnboundBroker | None = None, fleet_lane: FleetLaneBoot | None = None
 ):
     """Startup and shutdown events.
 

@@ -177,7 +177,14 @@ async def open_fleet_lane(
     # opens, not left as a deployment convention. The broker capture
     # directory is deliberately exempt: it is lane evidence on the agent's
     # own container filesystem, never a shared root.
-    _fence_writable_roots(volume_root=volume_root)
+    try:
+        _fence_writable_roots(volume_root=volume_root)
+    except FleetBootRefused:
+        # A refusal here still leaves `owned_service`'s SQLite handle open
+        # (`boot` was constructed above solely to carry it) — close it before
+        # propagating, same as every other pre-registration refusal below.
+        await close_fleet_lane(boot)
+        raise
     try:
         expectation = await presence.expectation(clerk_id=settings.CLERK_ID)
         boot.registry_id = str(expectation["registry_id"])
