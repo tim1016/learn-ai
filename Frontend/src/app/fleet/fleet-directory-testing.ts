@@ -42,12 +42,20 @@ export function testLane(
   };
 }
 
+export interface FleetDirectoryDouble {
+  readonly provide: typeof FleetDirectoryService;
+  readonly useValue: Partial<FleetDirectoryService>;
+  /** Replace the served directory, as a coordinator rebinding would. */
+  rebind(next: FleetDirectoryResponse): void;
+}
+
 export function provideFleetDirectory(
-  response: FleetDirectoryResponse = {
+  initial: FleetDirectoryResponse = {
     observed_at_ms: 1_757_000_000_000,
     clerks: [testLane()],
   },
-) {
+): FleetDirectoryDouble {
+  let response = initial;
   return {
     provide: FleetDirectoryService,
     useValue: {
@@ -66,8 +74,11 @@ export function provideFleetDirectory(
             candidate.provider_summary?.confirmed_account_id?.toLowerCase() ===
               accountId.trim().toLowerCase(),
         ),
-      refresh: () => undefined,
+      refresh: () => Promise.resolve(response),
       ensureLoaded: () => Promise.resolve(response),
+    } as Partial<FleetDirectoryService>,
+    rebind(next: FleetDirectoryResponse) {
+      response = next;
     },
   };
 }
