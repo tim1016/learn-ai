@@ -644,26 +644,35 @@ def _route_paths_for_role(role: str) -> set[str]:
     ("role", "expect_unscoped_brokers", "expect_internal"),
     [
         ("combined", True, False),
-        ("fleet_coordinator", False, False),
+        ("fleet_coordinator", True, False),
         ("clerk_agent", True, False),
     ],
 )
 def test_the_router_surface_follows_the_role(
     role: str, expect_unscoped_brokers: bool, expect_internal: bool
 ) -> None:
-    """Combined keeps today's surface; the coordinator mounts only routing.
+    """Combined keeps today's surface; the coordinator is narrowly bounded.
 
     Delivery B gives the coordinator the clerk-scoped routing surface under
-    ``/api/brokers/{broker}/clerks/…`` — never the unscoped agent families,
-    which stay on the clerk-agent processes (combined serves both).
+    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly two retained
+    read aliases; the unscoped agent families stay on clerk-agent processes.
     """
     paths = _route_paths_for_role(role)
-    unscoped_brokers = any(
-        path.startswith("/api/brokers")
-        and not path.startswith("/api/brokers/{broker}/clerks")
+    unscoped_broker_paths = {
+        path
         for path in paths
+        if path.startswith("/api/brokers")
+        and not path.startswith("/api/brokers/{broker}/clerks")
+    }
+    assert bool(unscoped_broker_paths) is expect_unscoped_brokers, (
+        role,
+        sorted(paths)[:5],
     )
-    assert unscoped_brokers is expect_unscoped_brokers, (role, sorted(paths)[:5])
+    if role == "fleet_coordinator":
+        assert unscoped_broker_paths == {
+            "/api/brokers/{broker}/live-verdict",
+            "/api/brokers/{broker}/panel-profile",
+        }
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
     if role == "fleet_coordinator":
@@ -713,18 +722,21 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         assert completed.returncode == 0, completed.stderr[-2000:]
         paths = set(json.loads(completed.stdout.strip().splitlines()[-1]))
         assert any(path.startswith("/internal/fleet") for path in paths)
-        # Delivery B: the coordinator owns the clerk-scoped ROUTING surface
-        # under /api/brokers/{broker}/clerks/…, and nothing else under
-        # /api/brokers — the agent families stay on the agent processes.
+        # The coordinator owns the clerk-scoped routing surface plus exactly
+        # two D compatibility reads; agent families remain private.
         brokers_paths = {
             path for path in paths if path.startswith("/api/brokers")
         }
         assert brokers_paths, "the clerk-scoped routing surface must mount"
-        assert all(
-            path.startswith("/api/brokers/{broker}/clerks")
-            or path == "/api/brokers/{broker}/clerks"
+        unscoped = {
+            path
             for path in brokers_paths
-        ), sorted(brokers_paths)[:5]
+            if not path.startswith("/api/brokers/{broker}/clerks")
+        }
+        assert unscoped == {
+            "/api/brokers/{broker}/live-verdict",
+            "/api/brokers/{broker}/panel-profile",
+        }
 
 
 def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:
