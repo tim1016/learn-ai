@@ -189,9 +189,10 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=first.clerk_id, external_account_id="acct-dup"
     )
-    fleet_service.reserve_assignment(
+    beta_reservation = fleet_service.reserve_assignment(
         broker="fake_beta", clerk_id=second.clerk_id, external_account_id="acct-dup"
     )
+    assert beta_reservation.canonical_external_account_id == "acct_dup"
     # Within one provider, the second clerk's reservation is durably refused.
     rival = provision_lane(
         fleet_service, broker="fake_alpha", label="race-c", tmp_path=control_dir.parent
@@ -205,6 +206,13 @@ def test_racing_the_same_account_yields_one_winner_and_a_durable_refusal(
             broker="fake_alpha", canonical_account_id="ACCT-DUP"
         ).clerk_id
         == first.clerk_id
+    )
+    # Beta's own canonical form is not what alpha reserved under.
+    assert (
+        fleet_service._store.read_assignment(
+            broker="fake_beta", canonical_account_id="ACCT-DUP"
+        )
+        is None
     )
 
 
@@ -225,7 +233,7 @@ def test_the_generic_spine_survives_a_provider_adapter_refusal(
 ) -> None:
     """A provider raising inside canonicalization surfaces as its own error,
     not as registry corruption."""
-    from tests.broker.fleet.conftest import FakeProviderAdapter
+    from tests.broker.fleet.conftest import FakeProviderAdapter, fake_beta
 
     strict = FakeProviderAdapter(
         provider_id="fake_alpha",
@@ -233,7 +241,7 @@ def test_the_generic_spine_survives_a_provider_adapter_refusal(
     )
     service = FleetControlService(
         store=fleet_service._store,
-        provider_adapters={"fake_alpha": strict, "fake_beta": FakeProviderAdapter("fake_beta")},
+        provider_adapters={"fake_alpha": strict, "fake_beta": fake_beta()},
         clock=clock,
     )
     lane = provision_lane(
@@ -265,3 +273,25 @@ def test_test_fakes_are_absent_from_production_composition_and_openapi() -> None
         artifact = (repository_root / relative_path).read_text(encoding="utf-8")
         assert "fake_alpha" not in artifact
         assert "fake_beta" not in artifact
+
+
+def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
+    """The extension boundary is only provable when the fakes disagree.
+
+    Two adapters that canonicalize identically cannot distinguish a
+    provider-qualified key from a globally unique one — the exact bug
+    provider-qualified assignment exists to prevent.
+    """
+    from tests.broker.fleet.conftest import fake_alpha, fake_beta
+
+    raw = "  Acct-XYZ "
+    assert fake_alpha().canonical_account_id(raw) == "ACCT-XYZ"
+    assert fake_beta().canonical_account_id(raw) == "acct_xyz"
+    # Not merely case: a casefold cannot collapse them back together.
+    assert (
+        fake_alpha().canonical_account_id(raw).casefold()
+        != fake_beta().canonical_account_id(raw).casefold()
+    )
+    # Both still refuse the empty identity, so the service's gate stays reachable.
+    assert fake_alpha().canonical_account_id("   ") == ""
+    assert fake_beta().canonical_account_id("   ") == ""

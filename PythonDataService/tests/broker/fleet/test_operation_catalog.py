@@ -116,6 +116,8 @@ def test_the_fake_providers_declare_valid_catalogs() -> None:
         assert declared <= adapter.capabilities
         for operation in adapter.operations():
             assert operation.agent_path_template.startswith("/api/")
+    # The guard that stops the two fakes' canonicalization from re-collapsing.
+    assert fake_alpha().canonical_account_id("acct-1") != fake_beta().canonical_account_id("acct-1")
 
 
 def test_alpaca_catalog_covers_every_canonical_desk_read() -> None:
