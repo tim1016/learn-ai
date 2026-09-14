@@ -153,6 +153,7 @@ services:
     profiles: ["legacy-combined"]
 
   backend:
+    profiles: ["fleet"]
     environment:
       PolygonService__BaseUrl: http://fleet-coordinator:8000
     depends_on: !override
@@ -164,6 +165,7 @@ services:
         condition: service_healthy
 
   frontend:
+    profiles: ["fleet"]
     environment:
       DATA_PLANE_PROXY_TARGET: http://fleet-coordinator:8000
     depends_on: !override
