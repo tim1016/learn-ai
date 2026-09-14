@@ -146,10 +146,13 @@ jobs:
           mkdir -p TestResults
           # The runner has no deploy/fleet/env/*.env, so the pre-ceremony render
           # is already secret-free; pin it anyway so the job cannot regress.
+          # Compose resolves a relative env_file against the Compose file's
+          # parent (repo root), not this step's working-directory, so the
+          # pin must be absolute or it silently misses.
           : > TestResults/empty.env
-          FLEET_LIVE_ENV_FILE=TestResults/empty.env \
-          FLEET_PAPER_ENV_FILE=TestResults/empty.env \
-          FLEET_COORDINATOR_ENV_FILE=TestResults/empty.env \
+          FLEET_LIVE_ENV_FILE="$(pwd)/TestResults/empty.env" \
+          FLEET_PAPER_ENV_FILE="$(pwd)/TestResults/empty.env" \
+          FLEET_COORDINATOR_ENV_FILE="$(pwd)/TestResults/empty.env" \
           python -m scripts.run_broker_fleet_compose_qualification \
             --timeout-s 120 --evidence-path TestResults/fleet-compose-qualification.json
       - name: Upload qualification evidence

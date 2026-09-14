@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -121,6 +122,7 @@ def test_qualification_uses_declared_alpaca_reads_not_raw_probe_endpoints() -> N
 
 def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> None:
     """D evidence records every Paper fault without claiming an E scenario."""
+    assert "coordinator_outage" not in qualification.FAULT_SCENARIOS
     assert {"passed", "attempted", "unrun"} == qualification.FAULT_STATES
     result = qualification._fault_result("unrun", "bounded host unavailable", {"clerk_id": "live"})
     assert result["state"] == "unrun"
@@ -136,8 +138,6 @@ def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -
     assigned in run_host_qualification, which _assert_all_faults_passed would
     then fail at runtime on the host, hours into a maintenance window.
     """
-    import ast
-
     source = Path(qualification.__file__).read_text(encoding="utf-8")
     function = next(
         node for node in ast.walk(ast.parse(source))
