@@ -453,8 +453,12 @@ def _json_line(result: subprocess.CompletedProcess[str], operation: str) -> dict
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
     """Write a qualification-only env file with restrictive host permissions."""
-    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
-    path.chmod(0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as environment_file:
+        for key, value in values.items():
+            environment_file.write(f"{key}={value}\n")
+        environment_file.flush()
+        os.fsync(environment_file.fileno())
 
 
 def _available_loopback_port() -> int:

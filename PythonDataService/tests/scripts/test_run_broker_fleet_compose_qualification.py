@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -159,6 +160,21 @@ def test_qualification_runtime_uses_enrollment_namespace(tmp_path: Path) -> None
         "FLEET_COORDINATOR_ENV_FILE": str(coordinator_env),
         "FLEET_DEPLOYMENT_NAMESPACE": "compose:fleetqualification123",
     }
+
+
+def test_qualification_env_is_created_restricted_and_never_overwritten(
+    tmp_path: Path,
+) -> None:
+    """Secret-bearing ceremony files are private before their first byte."""
+    path = tmp_path / "paper.env"
+
+    qualification._write_env(path, {"FLEET_AGENT_SERVICE_TOKEN": "first"})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert path.read_text(encoding="utf-8") == "FLEET_AGENT_SERVICE_TOKEN=first\n"
+    with pytest.raises(FileExistsError):
+        qualification._write_env(path, {"FLEET_AGENT_SERVICE_TOKEN": "replacement"})
+    assert path.read_text(encoding="utf-8") == "FLEET_AGENT_SERVICE_TOKEN=first\n"
 
 
 def test_capacity_probe_runs_as_module_inside_application_image() -> None:
