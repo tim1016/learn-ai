@@ -39,10 +39,14 @@ import {
 /**
  * Data Lab Explore (PRD §7.3).
  *
- * Chart-first. The ONLY trigger for chart fetches is the explicit
- * **Refresh chart** button — scope/recipe edits mark the chart stale and
- * the last good chart stays visible behind an "Out of date" badge. The
- * chart request body always comes from the pure mapper
+ * Chart-first. Fetch triggers are: the explicit **Refresh chart** button, a
+ * shell-issued refresh request (preset click / Apply scope — the operator
+ * changed the committed scope on purpose and the chart follows; 2026-09-13
+ * product decision superseding PRD §14's refresh-only rule), the one-shot
+ * timeframe auto-correct re-fetch, and auto-load on mount when a committed
+ * scope already exists. Scope/recipe edits that do NOT commit mark the chart
+ * stale and the last good chart stays visible behind an "Out of date" badge.
+ * The chart request body always comes from the pure mapper
  * ({@link buildChartRequestBody}) — one path.
  */
 @Component({
@@ -129,7 +133,10 @@ export class ExploreComponent {
     // stays set (a failed fetch must leave the old bars visibly out of
     // date, not looking current). The fetchIssued guard keeps the freshly
     // mounted chart (viewChild present, loading still false, no fetch
-    // started) from settling the refresh early.
+    // started) from settling the refresh early. A refresh request that
+    // arrived mid-flight is consumed here, after the settle — that is what
+    // makes rapid preset clicks coalesce to one fetch for the newest scope
+    // instead of dropping the newest click.
     effect(
       () => {
         const chart = this.chartComponent();
@@ -140,11 +147,50 @@ export class ExploreComponent {
             this.chartFetchIssued.set(false);
             this.chartRefreshing.set(false);
             this.store.settleChartRequest();
+            if (this.hasUnconsumedRefreshRequest()) {
+              this.consumeRefreshRequest();
+              this.refreshChart();
+            }
           }
         });
       },
       { allowSignalWrites: true },
     );
+
+    // Shell-issued refresh requests (preset click, Apply scope). Consumed
+    // immediately when idle; left pending for the settle effect above when a
+    // fetch is already in flight.
+    effect(
+      () => {
+        const tick = this.store.chartRefreshRequests();
+        if (tick === 0 || tick === this.lastConsumedRefreshTick) return;
+        untracked(() => {
+          if (!this.canRefresh()) return;
+          this.consumeRefreshRequest();
+          this.refreshChart();
+        });
+      },
+      { allowSignalWrites: true },
+    );
+
+    // Auto-load on mount (2026-09-13): a committed scope present when Explore
+    // mounts renders immediately instead of waiting for an explicit refresh.
+    // A restored saved-session snapshot renders cached bars instead — that
+    // path keeps its no-fetch, stale-badge semantics.
+    if (this.hasCommittedScope() && !this.store.restoredChartSnapshot()) {
+      this.refreshChart();
+    }
+  }
+
+  // ── Shell refresh requests ─────────────────────────────────
+  private lastConsumedRefreshTick = 0;
+
+  private hasUnconsumedRefreshRequest(): boolean {
+    return this.store.chartRefreshRequests() > this.lastConsumedRefreshTick;
+  }
+
+  private consumeRefreshRequest(): void {
+    this.lastConsumedRefreshTick = this.store.chartRefreshRequests();
   }
 
   // ── Committed scope → chart inputs ────────────────────────
@@ -218,13 +264,22 @@ export class ExploreComponent {
   onChartDataLoaded(event: DataLabSessionChartSnapshot): void {
     this.store.setLatestChartSnapshot(event);
     this.lastQuality.set(event.quality);
+    // A successful load disarms the auto-correct retry budget — the next
+    // rejection starts a fresh correction cycle.
+    this.timeframeAutoRetried.set(false);
   }
+
+  /** One auto-correct re-fetch per successful load. The recommended timeframe
+   *  is by construction allowed for the range, so a second rejection means
+   *  something else is wrong and re-fetching in a loop would only burn
+   *  requests — fall back to the stale badge and let the operator decide. */
+  readonly timeframeAutoRetried = signal(false);
 
   onChartTimeframeRejected(event: { requested: string; recommended: string }): void {
     // Server-authored recovery choice (PRD §16): apply the recommendation to
     // the draft scope AND commit it — chart fetches read the committed scope,
     // so without the commit the next explicit refresh would resend the just
-    // rejected timeframe forever. The user still refreshes explicitly.
+    // rejected timeframe forever.
     const parsed = /^(\d+)([mhDWM])$/.exec(event.recommended);
     if (!parsed) return;
     const multiplier = parseInt(parsed[1], 10);
@@ -234,8 +289,16 @@ export class ExploreComponent {
       parsed[2] === 'D' ? 'day' :
       parsed[2] === 'W' ? 'week' : 'month';
     this.store.patchDraft({ timespan, multiplier, timeframe: event.recommended });
-    this.store.commitScope();
-    this.store.markChartStale();
+    const committed = this.store.commitScope();
+    if (committed.ok && !this.timeframeAutoRetried()) {
+      this.timeframeAutoRetried.set(true);
+      // Route through the store request (not a direct refreshChart): the
+      // rejection fires while the failed fetch is still settling, and the
+      // request-consumption machinery serializes this fetch after the settle.
+      this.store.requestChartRefresh();
+    } else {
+      this.store.markChartStale();
+    }
   }
 
   // ── Quality / provenance status row ───────────────────────

@@ -1413,3 +1413,175 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
 async def test_materialize_run_data_sync_refuses_to_block_an_event_loop():
     with pytest.raises(RuntimeError, match="running event loop"):
         _materialize_run_data_sync(_spec(), resolution="minute")
+
+
+# ---------------------------------------------------------------------------
+# Chart-range materialization (lake-first chart sourcing)
+# ---------------------------------------------------------------------------
+
+
+def _chart_result(spec: DataRunSpec, **overrides) -> DataAvailabilityResult:
+    base = {
+        "request_id": spec.request_id,
+        "overall_status": "complete",
+        "lean_data_root_path": "/lean-data-writer/lake",
+        "data_availability_hash": "b" * 64,
+        "fetched_artifact_count": 3,
+        "reused_artifact_count": 5,
+        "completed_at_ms": 0,
+        "duration_ms": 0,
+    }
+    base.update(overrides)
+    return DataAvailabilityResult(**base)
+
+
+def test_chart_spec_is_trade_only_minute_with_no_rollups_or_corp_actions():
+    """A chart reads minute zips and resamples; the daily rollup, factor and
+    map files are not its artifacts, and asking for the rollup would trigger
+    a whole-symbol rebuild on every window growth."""
+    from app.data_lake.run_materialization import _build_chart_range_spec
+
+    spec = _build_chart_range_spec(
+        symbol="spy",
+        start=TRADING_DAY,
+        end=WIDER_WINDOW_END,
+        price_adjustment_mode="polygon_split_adjusted",
+        requester="data-lab-chart",
+        fetch_timeout_seconds=120,
+    )
+    assert spec.run_type == "chart"
+    assert spec.symbols == ["SPY"]
+    assert spec.data_types == ["trade"]
+    assert spec.price_adjustment_mode == "polygon_split_adjusted"
+    assert spec.include_daily_trade is False
+    assert spec.include_factor_files is False
+    assert spec.include_map_files is False
+    assert spec.fetch_timeout_seconds == 120
+
+
+def test_materialize_chart_range_skips_symbols_the_writer_refuses():
+    result = run_materialization.materialize_chart_range(
+        symbol="BRK-B", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "skipped"
+    assert "not lake-addressable" in (result.detail or "")
+
+
+def test_materialize_chart_range_skips_inverted_windows():
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=WIDER_WINDOW_END, end=TRADING_DAY
+    )
+    assert result.status == "skipped"
+    assert "inverted" in (result.detail or "")
+
+
+def test_materialize_chart_range_skips_without_a_pinned_digest(monkeypatch):
+    monkeypatch.setattr("app.lean_sidecar.config.PINNED_LEAN_IMAGE_DIGEST", None)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "skipped"
+    assert "pinned LEAN image digest" in (result.detail or "")
+
+
+def test_materialize_chart_range_complete_when_nothing_withholds_minute_bars(monkeypatch):
+    def _fake(spec, *, resolution):
+        assert resolution == "minute"
+        return _chart_result(spec)
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "complete"
+    assert result.fetched_artifact_count == 3
+    assert result.reused_artifact_count == 5
+    assert result.detail is None
+    # Complete receipts carry exactly the three stable keys — detail appears
+    # only when there is something to say.
+    assert result.as_receipt() == {
+        "status": "complete",
+        "fetched_artifact_count": 3,
+        "reused_artifact_count": 5,
+    }
+
+
+def test_materialize_chart_range_metadata_grumble_does_not_downgrade(monkeypatch):
+    """A Phase-0 metadata failure withholds no minute bars; the chart is
+    complete with the grumble in the detail, not partial."""
+    def _fake(spec, *, resolution):
+        return _chart_result(
+            spec,
+            failures=[
+                ArtifactFailure(
+                    artifact_kind="metadata",
+                    symbol=None,
+                    trading_date=None,
+                    data_type=None,
+                    reason="lease_timeout",
+                    detail="another worker holds the metadata claim",
+                    attempt_count=1,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "complete"
+    assert "metadata/lease_timeout" in (result.detail or "")
+    assert result.as_receipt()["detail"] == result.detail
+
+
+def test_materialize_chart_range_partial_when_a_session_is_withheld(monkeypatch):
+    def _fake(spec, *, resolution):
+        return _chart_result(
+            spec,
+            overall_status="partial",
+            failures=[
+                ArtifactFailure(
+                    artifact_kind="time_series_bars",
+                    symbol="SPY",
+                    trading_date=TRADING_DAY,
+                    data_type="trade",
+                    reason="provider_api_error",
+                    detail="polygon down",
+                    attempt_count=1,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "partial"
+    assert "time_series_bars/provider_api_error" in (result.detail or "")
+    assert result.fetched_artifact_count == 3
+
+
+def test_materialize_chart_range_partial_on_ingest_timeout(monkeypatch):
+    def _fake(spec, *, resolution):
+        raise TimeoutError
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END, fetch_timeout_seconds=120
+    )
+    assert result.status == "partial"
+    assert "120s" in (result.detail or "")
+
+
+def test_materialize_chart_range_skips_when_catalog_unavailable(monkeypatch):
+    from app.data_lake.catalog_client import CatalogUnavailableError
+
+    def _fake(spec, *, resolution):
+        raise CatalogUnavailableError("POSTGRES_URL is empty")
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+    result = run_materialization.materialize_chart_range(
+        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
+    )
+    assert result.status == "skipped"
+    assert "catalog unavailable" in (result.detail or "")

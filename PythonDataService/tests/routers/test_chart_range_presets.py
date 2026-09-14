@@ -1,0 +1,145 @@
+"""`/api/chart` numeric-window authority and the range-presets endpoint.
+
+The chart request's ``start_ms_utc``/``end_ms_utc`` are declared additive-
+first fields (data-lab workspace redesign PRD §12); these tests pin that the
+router actually honors them — per-field precedence over the date strings,
+floored to UTC calendar dates, with an inverted numeric window refused as
+``INVALID_RANGE`` — and that ``GET /api/chart/range-presets`` is a thin,
+session-parameterized transport over the calendar resolver.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
+
+from app.routers import chart as chart_router
+from app.services import chart_service
+
+# UTC-midnight anchors: 2026-08-01 and 2026-09-11.
+AUG_1_MS = 1785561600000
+SEP_11_MS = 1789161600000
+
+_REQUEST: dict[str, Any] = {
+    "ticker": "SPY",
+    "from_date": "2025-11-26",
+    "to_date": "2025-12-01",
+    "timeframe": "1D",
+    "session": "rth",
+    "adjusted": False,
+    "indicators": [],
+}
+
+
+@pytest.fixture
+def api() -> FastAPI:
+    app = FastAPI()
+    app.include_router(chart_router.router, prefix="/api/chart")
+    return app
+
+
+@pytest.fixture(autouse=True)
+def _stub_chart_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the fetch: the chart service receives the window and answers
+    with a minimal valid payload, so the test observes only the router's
+    date resolution. Patched on the router module — it imported the name."""
+    chart_service._resample_cache.clear()
+    chart_service._indicator_cache.clear()
+    monkeypatch.setattr(
+        chart_router,
+        "get_chart_data",
+        lambda **kwargs: {"received": kwargs},
+    )
+
+
+async def _post(client: httpx.AsyncClient, body: dict[str, Any]) -> httpx.Response:
+    return await client.post("/api/chart/data", json=body)
+
+
+@pytest.mark.asyncio
+async def test_numeric_window_overrides_both_date_strings(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await _post(
+            client,
+            {**_REQUEST, "start_ms_utc": AUG_1_MS, "end_ms_utc": SEP_11_MS},
+        )
+    assert response.status_code == 200
+    assert response.json()["received"]["from_date"] == "2026-08-01"
+    assert response.json()["received"]["to_date"] == "2026-09-11"
+
+
+@pytest.mark.asyncio
+async def test_numeric_precedence_is_per_field(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await _post(client, {**_REQUEST, "end_ms_utc": SEP_11_MS})
+    assert response.status_code == 200
+    received = response.json()["received"]
+    assert received["from_date"] == _REQUEST["from_date"]
+    assert received["to_date"] == "2026-09-11"
+
+
+@pytest.mark.asyncio
+async def test_inverted_numeric_window_is_invalid_range(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await _post(
+            client,
+            {**_REQUEST, "start_ms_utc": SEP_11_MS, "end_ms_utc": AUG_1_MS},
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "INVALID_RANGE"
+
+
+@pytest.mark.asyncio
+async def test_date_strings_still_drive_the_window_without_ms_fields(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await _post(client, _REQUEST)
+    assert response.status_code == 200
+    received = response.json()["received"]
+    assert received["from_date"] == _REQUEST["from_date"]
+    assert received["to_date"] == _REQUEST["to_date"]
+
+
+# ──────────────────────────────────────────────
+# GET /api/chart/range-presets
+# ──────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_range_presets_endpoint_returns_the_resolver_output(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.get("/api/chart/range-presets")
+    assert response.status_code == 200
+    body = response.json()
+    assert [p["key"] for p in body["presets"]] == [key for key, _label, _count in chart_service.RANGE_PRESETS]
+    for preset in body["presets"]:
+        assert preset["session_count"] >= 1
+        assert isinstance(preset["start_ms_utc"], int)
+        assert isinstance(preset["end_ms_utc"], int)
+        # Same estimator /allowed-timeframes uses; a window of all full
+        # sessions yields exactly session_count daily bars (rth), an
+        # early-close half-day one fewer.
+        assert 0 < preset["estimated_bars_per_timeframe"]["1D"] <= preset["session_count"]
+
+
+@pytest.mark.asyncio
+async def test_range_presets_endpoint_accepts_the_session_parameter(api: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.get("/api/chart/range-presets", params={"session": "extended"})
+    assert response.status_code == 200
+    assert len(response.json()["presets"]) == len(chart_service.RANGE_PRESETS)
+
+
+@pytest.mark.asyncio
+async def test_range_presets_endpoint_maps_resolver_refusal_to_invalid_range(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _refuse(_now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
+        raise ValueError("calendar reaches only 3 sessions back")
+
+    monkeypatch.setattr(chart_router, "resolve_range_presets", _refuse)
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.get("/api/chart/range-presets")
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "INVALID_RANGE"

@@ -5,6 +5,10 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DataLabSessionService } from '../../services/data-lab-session.service';
+import {
+  ChartRangePreset,
+  DataLabRangePresetsService,
+} from '../../services/data-lab-range-presets.service';
 import { RunSessionService } from '../../services/run-session.service';
 import { DataLabComponent } from './data-lab.component';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from './data-lab-workspace-store';
@@ -83,8 +87,36 @@ function baseProviders(runSession = idleRunSession()) {
         deleteSession: vi.fn(),
       },
     },
+    { provide: DataLabRangePresetsService, useValue: { presets: vi.fn(async () => RANGE_PRESET_STUBS) } },
   ];
 }
+
+/** Calendar-resolved presets as Python would resolve them for a Saturday
+ *  (2026-09-12): both windows end Friday 2026-09-11, the 1D window is that
+ *  single session, 6M is 126 sessions back. */
+const preset1D: ChartRangePreset = {
+  key: '1D',
+  label: 'Past day',
+  start_date: '2026-09-11',
+  end_date: '2026-09-11',
+  start_ms_utc: Date.UTC(2026, 8, 11),
+  end_ms_utc: Date.UTC(2026, 8, 11),
+  session_count: 1,
+  estimated_bars_per_timeframe: { '1m': 390, '5m': 78, '1D': 1 },
+};
+
+const preset6M: ChartRangePreset = {
+  key: '6M',
+  label: 'Past 6 months',
+  start_date: '2026-03-13',
+  end_date: '2026-09-11',
+  start_ms_utc: Date.UTC(2026, 2, 13),
+  end_ms_utc: Date.UTC(2026, 8, 11),
+  session_count: 126,
+  estimated_bars_per_timeframe: { '1m': 49_140, '5m': 9_828, '1D': 126 },
+};
+
+const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset6M];
 
 /** Render the shell through a real router outlet (tabs, routing, dock). */
 async function renderRoutedShell(runSession = idleRunSession()) {
@@ -215,5 +247,82 @@ describe('DataLabComponent (shell)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
     expect(await screen.findByText('Apple review')).toBeTruthy();
+  });
+
+  // ── Calendar-resolved quick ranges ──────────────────────────
+  it('renders the quick-range chips Python resolved', async () => {
+    await renderRoutedShell();
+    const group = screen.getByRole('group', { name: 'Quick ranges' });
+    expect(group.querySelector('button')?.textContent?.trim()).toBe('1D');
+    expect(screen.getByRole('button', { name: '6M' })).toBeTruthy();
+  });
+
+  it('applies a preset verbatim: server window committed, chart refresh requested', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toEqual({
+      startMsUtc: preset6M.start_ms_utc,
+      endMsUtc: preset6M.end_ms_utc,
+    });
+    expect(store.chartRefreshRequests()).toBe(1);
+    // The matching chip is marked active; the other is not.
+    const active = document.querySelector('.dl-shell__preset--active');
+    expect(active?.textContent?.trim()).toBe('6M');
+  });
+
+  it('gives the 1D preset an intraday default timeframe so it is not one candle', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: '1D' }));
+    fixture.detectChanges();
+
+    const draft = store.draft();
+    expect(draft.timespan).toBe('minute');
+    expect(draft.multiplier).toBe(5);
+    // A single-day window (start == end) must commit — equality names one
+    // trading date under the interim date-anchor semantics, not an empty
+    // range — and trigger the chart refresh.
+    expect(store.committedWindow()).toEqual({
+      startMsUtc: preset1D.start_ms_utc,
+      endMsUtc: preset1D.end_ms_utc,
+    });
+    expect(store.chartRefreshRequests()).toBe(1);
+  });
+
+  it('leaves a blank-ticker preset click in the draft with the commit error, no refresh', async () => {
+    const { store, fixture } = await renderRoutedShell();
+
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toBeNull();
+    expect(store.draft().window).toEqual({
+      startMsUtc: preset6M.start_ms_utc,
+      endMsUtc: preset6M.end_ms_utc,
+    });
+    expect(store.chartRefreshRequests()).toBe(0);
+    expect(screen.getByText('Ticker is required')).toBeTruthy();
+  });
+
+  it('requests a chart refresh when Apply scope commits successfully', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({
+      ticker: 'SPY',
+      window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc },
+    });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply scope' }));
+    fixture.detectChanges();
+
+    expect(store.chartRefreshRequests()).toBe(1);
+    expect(screen.queryByText('Ticker is required')).toBeNull();
   });
 });

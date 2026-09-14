@@ -91,6 +91,38 @@
   min-width: 0;
 }
 
+// Calendar-resolved quick ranges (1D…2Y). Dates come from Python verbatim;
+// the chips only apply them.
+.dl-shell__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.dl-shell__preset {
+  min-height: 32px;
+  padding: 0.15rem 0.7rem;
+  border: 1px solid $border-light;
+  border-radius: 999px;
+  background: $bg-sunken;
+  color: $text-secondary;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+
+  &:hover {
+    color: $text-primary;
+    border-color: $accent;
+  }
+
+  &--active {
+    background: $accent;
+    border-color: $accent;
+    color: var(--text-on-accent);
+  }
+}
+
 .dl-shell__field {
   display: flex;
   flex-direction: column;

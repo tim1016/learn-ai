@@ -47,6 +47,17 @@ describe('DataLabWorkspaceStore scope', () => {
     expect(store.committedWindow()).toBeNull();
   });
 
+  it('commits a single-day window — equality names one trading date, not an empty range', () => {
+    // The interim date-anchor semantics (known-gaps §13) make the pair two
+    // inclusive UTC-midnight trading-date anchors; a 1D quick range resolves
+    // to the same session on both ends.
+    const store = createDataLabWorkspaceStore();
+    const day = Date.UTC(2026, 8, 11);
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: day, endMsUtc: day } });
+    expect(store.commitScope().ok).toBe(true);
+    expect(store.committedWindow()).toEqual({ startMsUtc: day, endMsUtc: day });
+  });
+
   it('committing marks the chart stale', () => {
     const store = committedStore();
     expect(store.chartStale()).toBe(true);
@@ -229,6 +240,18 @@ describe('DataLabWorkspaceStore serialization', () => {
     expect(store.committedWindow()).toBeNull();
     expect(store.committedTicker()).toBe('');
     expect(store.committedScope()).toBeNull();
+  });
+
+  it('restores a single-day window as a committed scope', () => {
+    const store = createDataLabWorkspaceStore();
+    const day = Date.UTC(2026, 8, 11);
+    const result = store.restore({
+      schemaVersion: 2,
+      ticker: 'SPY',
+      windowMsUtc: { startMsUtc: day, endMsUtc: day },
+    });
+    expect(result.warnings).toEqual([]);
+    expect(store.committedWindow()).toEqual({ startMsUtc: day, endMsUtc: day });
   });
 
   it('restore populates the committed scope atomically from one validated object', () => {

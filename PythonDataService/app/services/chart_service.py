@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -23,8 +24,15 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import urllib3.exceptions
 
-from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
-from app.services.chart_bar_source import compose_chart_bars
+from app.data_lake.run_materialization import materialize_chart_range
+from app.data_lake.types import polygon_mode_for
+from app.lean_sidecar.trading_calendar import (
+    expected_sessions,
+    is_trading_day,
+    session_window_for_date,
+    session_windows_ms_utc,
+)
+from app.services.chart_bar_source import compose_chart_bars, split_sessions_at_boundary
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     assert_canonical_bar_stream,
@@ -34,6 +42,7 @@ from app.services.dataset_service import (
     fetch_bars_chunked,
 )
 from app.services.polygon_client import PolygonClientService
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +247,117 @@ def get_allowed_timeframes(from_date: str, to_date: str, session: str) -> tuple[
             break
 
     return allowed, estimates, recommended
+
+
+# ──────────────────────────────────────────────
+# Calendar-resolved quick ranges (Data Lab scope presets)
+# ──────────────────────────────────────────────
+#: ``(key, label, session_count)`` — a preset means "the last N scheduled
+#: NYSE sessions". The unit→sessions counts mirror
+#: ``dataset_plan_service._SESSIONS_PER_UNIT`` (the repo's only other
+#: period→sessions mapping); that module imports this one, so the table is
+#: restated here rather than shared through a cycle.
+RANGE_PRESETS: tuple[tuple[str, str, int], ...] = (
+    ("1D", "Past day", 1),
+    ("5D", "Past week", 5),
+    ("1M", "Past month", 21),
+    ("3M", "Past quarter", 63),
+    ("6M", "Past 6 months", 126),
+    ("1Y", "Past year", 252),
+    ("2Y", "Past 2 years", 504),
+)
+
+_UNIX_EPOCH = date(1970, 1, 1)
+_MS_PER_DAY = 86_400_000
+
+
+def _utc_midnight_ms(d: date) -> int:
+    """UTC-midnight anchor of ``d`` — the Data Lab window convention (PRD §12)."""
+    return (d - _UNIX_EPOCH).days * _MS_PER_DAY
+
+
+def _utc_date_of_ms(ms: int) -> date:
+    """Floor ``ms`` to its UTC calendar date — inverse of :func:`_utc_midnight_ms`."""
+    return _UNIX_EPOCH + timedelta(days=ms // _MS_PER_DAY)
+
+
+def resolve_request_dates(
+    from_date: str,
+    to_date: str,
+    start_ms_utc: int | None,
+    end_ms_utc: int | None,
+) -> tuple[str, str]:
+    """Apply the numeric window's per-field precedence over the date strings.
+
+    Resolution floors each supplied ms value to its **UTC calendar date** —
+    the anchor the Data Lab store commits and the exact inverse of the
+    frontend's ``utcMsToIsoDate``, so the numeric channel and the string the
+    same request carries cannot disagree. Raises ``ValueError`` when the
+    resolved window is inverted; the router maps that to ``INVALID_RANGE``.
+    """
+    resolved_from = _utc_date_of_ms(start_ms_utc).isoformat() if start_ms_utc is not None else from_date
+    resolved_to = _utc_date_of_ms(end_ms_utc).isoformat() if end_ms_utc is not None else to_date
+    if date.fromisoformat(resolved_from) > date.fromisoformat(resolved_to):
+        raise ValueError(
+            f"resolved window is inverted: from {resolved_from} is after to {resolved_to}"
+        )
+    return resolved_from, resolved_to
+
+
+def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
+    """Resolve every :data:`RANGE_PRESETS` entry against the canonical calendar.
+
+    Each preset is the last N **scheduled NYSE sessions**: the end date is
+    the New York trading date of ``now_ms`` when that date is a session
+    (the chart serves its forming tail from the provider by design), else
+    the previous session — a 1D preset on a Saturday resolves to Friday,
+    and holidays never appear at either end. The start is the Nth session
+    back, so weekends and holidays are simply absent from the window.
+
+    Pure calendar arithmetic: one ``expected_sessions`` call covers the
+    deepest preset, and per-preset bar estimates come from the same
+    estimator ``/allowed-timeframes`` uses. No fetching.
+    """
+    ny_today = pd.Timestamp(now_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
+    if is_trading_day(ny_today):
+        end_date = ny_today
+    else:
+        prior = expected_sessions(ny_today - timedelta(days=10), ny_today - timedelta(days=1))
+        if not prior:
+            raise ValueError(f"no NYSE session in the 10 days before {ny_today.isoformat()}")
+        end_date = prior[-1]
+
+    deepest = RANGE_PRESETS[-1][2]
+    # 1.5 calendar days per session plus slack absorbs weekends, the ~10
+    # NYSE holidays a year, and holiday clusters; a generous lookback costs
+    # nothing — the schedule build is one call either way.
+    lookback_start = end_date - timedelta(days=math.ceil(deepest * 3 / 2) + 30)
+    sessions = expected_sessions(lookback_start, end_date)
+    if len(sessions) < deepest:
+        raise ValueError(
+            f"calendar reaches only {len(sessions)} sessions back from {end_date.isoformat()}; "
+            f"presets need {deepest}"
+        )
+
+    presets: list[dict[str, Any]] = []
+    for key, label, count in RANGE_PRESETS:
+        window = sessions[-count:]
+        start_date = window[0]
+        presets.append(
+            {
+                "key": key,
+                "label": label,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "start_ms_utc": _utc_midnight_ms(start_date),
+                "end_ms_utc": _utc_midnight_ms(end_date),
+                "session_count": len(window),
+                "estimated_bars_per_timeframe": estimate_bars_per_timeframe(
+                    start_date.isoformat(), end_date.isoformat(), session
+                ),
+            }
+        )
+    return presets
 
 
 # ──────────────────────────────────────────────
@@ -906,20 +1026,25 @@ def _fetch_chart_bars(
     adjusted: bool,
     requested_from: str,
     session: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return the 1-minute bar stream and its per-portion source indicator.
 
-    Flag off (the default): one provider fetch, exactly as before, and no
-    source indicator — the response keeps the shape it has today. Flag on:
-    completed sessions come from lake artifacts and only the still-forming
-    session touches the provider, with a receipt of which portion was
-    provider-served (see :mod:`app.services.chart_bar_source`).
+    Lake-first (ADR 0049 amendment): the window's completed sessions are
+    delta-fetched into the lake BEFORE the composer reads it — data flows to
+    the lake, then to the chart — and only the still-forming session is
+    served live from the provider, with a receipt of which portion was
+    provider-served (see :mod:`app.services.chart_bar_source`). When the
+    ingest cannot complete (provider down, timeout, a symbol the lake cannot
+    address) the composer fills the missing sessions per-gap from the
+    provider exactly as this seam's predecessor did, and the receipt's
+    ``lake_ingest`` block says what happened.
 
     ``fetch_from`` is warmup-extended; ``requested_from`` is what the operator
     asked for, and the receipt describes only that. ``session`` decides when a
     trading date stops forming — this chart renders post-market bars when it is
     ``extended``, so the composer must hold today open that much longer.
     """
+    ingest_receipt = _materialize_lake_first(ticker, fetch_from, to_date, adjusted, session)
     composed = compose_chart_bars(
         ticker=ticker,
         from_date=fetch_from,
@@ -929,7 +1054,44 @@ def _fetch_chart_bars(
         session=session,
         visible_from_date=requested_from,
     )
-    return composed.bars, composed.as_response_dict()
+    receipt = composed.as_response_dict()
+    receipt["lake_ingest"] = ingest_receipt
+    return composed.bars, receipt
+
+
+def _materialize_lake_first(
+    ticker: str,
+    fetch_from: str,
+    to_date: str,
+    adjusted: bool,
+    session: str,
+) -> dict[str, object]:
+    """Ingest the window's completed sessions into the lake, best-effort.
+
+    The ingest span is exactly the completed-session prefix the composer
+    would otherwise read — the same calendar split, so the two can never
+    disagree about which sessions are fetchable history versus a live tail.
+    A window with no completed sessions (e.g. a 1D preset before Monday's
+    open) skips ingest entirely; there is nothing immutable to fetch.
+    """
+    completed, _live, _boundary_ms = split_sessions_at_boundary(
+        fetch_from, to_date, now_ms_utc(), session
+    )
+    if not completed:
+        return {
+            "status": "skipped",
+            "fetched_artifact_count": 0,
+            "reused_artifact_count": 0,
+            "detail": "no completed sessions in the window; live tail only",
+        }
+    ingest = materialize_chart_range(
+        symbol=ticker,
+        start=completed[0].session_date,
+        end=completed[-1].session_date,
+        price_adjustment_mode=polygon_mode_for(adjusted),
+        requester="data-lab-chart",
+    )
+    return ingest.as_receipt()
 
 
 # ──────────────────────────────────────────────

@@ -190,7 +190,10 @@ def is_lake_addressable_symbol(symbol: str) -> bool:
 class DataRunSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
-    run_type: Literal["python_lab", "lean_lab"]
+    # "chart" is the Data Lab chart seam: same delta-fetch machinery, but a
+    # best-effort consumer (see run_materialization.materialize_chart_range)
+    # rather than a coverage-gated run.
+    run_type: Literal["python_lab", "lean_lab", "chart"]
     requester: str | None = None
     strategy_execution_id: int | None = None
 

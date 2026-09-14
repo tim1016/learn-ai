@@ -3597,6 +3597,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chart/range-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Range Presets
+         * @description Calendar-resolved quick ranges ("last N trading sessions") for chart scope UIs.
+         *
+         *     Every preset's start/end is computed by the canonical NYSE calendar —
+         *     weekends, holidays, and the forming session are handled server-side, so
+         *     the client applies dates verbatim and computes nothing.
+         */
+        get: operations["range_presets_api_chart_range_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/timeframes": {
         parameters: {
             query?: never;
@@ -9721,6 +9745,15 @@ export interface components {
         /**
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
+         *
+         *     Temporal authority (data-lab workspace redesign PRD §12): the numeric
+         *     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
+         *     each field takes precedence over its date-string counterpart when
+         *     supplied. The anchor is the Data Lab surface's stated convention —
+         *     UTC midnight of the intended trading date (the exact inverse of the
+         *     frontend's ``utcMsToIsoDate``), so a numeric window and the string the
+         *     same request carries never disagree. Both endpoints of the resolved
+         *     window are inclusive trading dates, matching ``from_date``/``to_date``.
          */
         ChartDataRequest: {
             /**
@@ -9735,6 +9768,11 @@ export interface components {
              * @default false
              */
             compute_all_indicators?: boolean;
+            /**
+             * End Ms Utc
+             * @description Canonical numeric window end (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over to_date when supplied.
+             */
+            end_ms_utc?: number | null;
             /**
              * Forward Fill
              * @description Fill missing bars with previous close (volume=0)
@@ -9757,6 +9795,11 @@ export interface components {
              * @default rth
              */
             session?: string;
+            /**
+             * Start Ms Utc
+             * @description Canonical numeric window start (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over from_date when supplied.
+             */
+            start_ms_utc?: number | null;
             /**
              * Ticker
              * @description Ticker symbol
@@ -9970,6 +10013,62 @@ export interface components {
              * @constant
              */
             source: "polygon";
+        };
+        /**
+         * ChartRangePreset
+         * @description One calendar-resolved quick range ("last N trading sessions").
+         */
+        ChartRangePreset: {
+            /**
+             * End Date
+             * @description Resolved end trading date (YYYY-MM-DD)
+             */
+            end_date: string;
+            /**
+             * End Ms Utc
+             * @description UTC-midnight anchor of end_date (int64 ms UTC, inclusive)
+             */
+            end_ms_utc: number;
+            /**
+             * Estimated Bars Per Timeframe
+             * @description Calendar-arithmetic bar estimate per timeframe for this window (same estimator as /api/chart/allowed-timeframes)
+             */
+            estimated_bars_per_timeframe: {
+                [key: string]: number;
+            };
+            /**
+             * Key
+             * @description Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y
+             */
+            key: string;
+            /**
+             * Label
+             * @description Human label for the preset
+             */
+            label: string;
+            /**
+             * Session Count
+             * @description Scheduled NYSE sessions in the window
+             */
+            session_count: number;
+            /**
+             * Start Date
+             * @description Resolved start trading date (YYYY-MM-DD)
+             */
+            start_date: string;
+            /**
+             * Start Ms Utc
+             * @description UTC-midnight anchor of start_date (int64 ms UTC, inclusive)
+             */
+            start_ms_utc: number;
+        };
+        /**
+         * ChartRangePresetsResponse
+         * @description Response for GET /api/chart/range-presets.
+         */
+        ChartRangePresetsResponse: {
+            /** Presets */
+            presets: components["schemas"]["ChartRangePreset"][];
         };
         /**
          * ChronologicalSplitPolicySpec
@@ -11642,7 +11741,7 @@ export interface components {
              * Run Type
              * @enum {string}
              */
-            run_type: "python_lab" | "lean_lab";
+            run_type: "python_lab" | "lean_lab" | "chart";
             /** Start Trading Date Ms */
             start_trading_date_ms: number;
             /** Strategy Execution Id */
@@ -32469,6 +32568,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartIndicatorSupportResponse"];
+                };
+            };
+        };
+    };
+    range_presets_api_chart_range_presets_get: {
+        parameters: {
+            query?: {
+                session?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartRangePresetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

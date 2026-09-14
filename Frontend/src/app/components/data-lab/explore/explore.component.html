@@ -59,7 +59,7 @@
 
 <section class="explore__chart" aria-label="Chart">
   @if (!hasCommittedScope() && !chartRendered()) {
-    <p class="explore__muted">Commit a ticker and range, then press Refresh chart.</p>
+    <p class="explore__muted">Enter a ticker and pick a quick range above — the chart loads on apply.</p>
   }
   @if (chartRendered()) {
     <app-data-lab-chart

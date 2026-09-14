@@ -13,14 +13,18 @@ from app.schemas.chart import (
     ChartIndicatorBatchRequest,
     ChartIndicatorBatchResponse,
     ChartIndicatorSupportResponse,
+    ChartRangePresetsResponse,
 )
 from app.services.chart_indicator_service import ChartIndicatorService, get_chart_indicator_service
 from app.services.chart_service import (
     TIMEFRAME_DEFS,
     get_allowed_timeframes,
     get_chart_data,
+    resolve_range_presets,
+    resolve_request_dates,
 )
 from app.services.dataset_service import INDICATOR_CONFIGS
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,6 +80,22 @@ async def chart_data(request: ChartDataRequest):
         # Convert indicators to dict format
         indicator_dicts = [{"name": ind.name, "params": ind.params} for ind in request.indicators]
 
+        # Numeric window authority (PRD §12): start_ms_utc/end_ms_utc take
+        # per-field precedence over the date strings, resolved to inclusive
+        # UTC calendar dates — the inverse of the frontend's utcMsToIsoDate.
+        try:
+            from_date, to_date = resolve_request_dates(
+                request.from_date,
+                request.to_date,
+                request.start_ms_utc,
+                request.end_ms_utc,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error_code": "INVALID_RANGE", "detail": str(exc)},
+            ) from exc
+
         # get_chart_data does heavy pandas work (Polygon fetch, resample, RTH
         # filter, indicator compute) — all synchronous. Running it directly in
         # the async handler blocked the event loop for 3-5 s and serialized
@@ -86,8 +106,8 @@ async def chart_data(request: ChartDataRequest):
         result = await asyncio.to_thread(
             get_chart_data,
             ticker=request.ticker,
-            from_date=request.from_date,
-            to_date=request.to_date,
+            from_date=from_date,
+            to_date=to_date,
             timeframe=request.timeframe,
             session=request.session,
             forward_fill=request.forward_fill,
@@ -155,6 +175,30 @@ async def allowed_timeframes(request: AllowedTimeframesRequest):
         }
     except Exception as e:
         logger.error(f"[CHART] Allowed timeframes error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},
+        )
+
+
+@router.get("/range-presets", response_model=ChartRangePresetsResponse)
+async def range_presets(session: str = "rth"):
+    """Calendar-resolved quick ranges ("last N trading sessions") for chart scope UIs.
+
+    Every preset's start/end is computed by the canonical NYSE calendar —
+    weekends, holidays, and the forming session are handled server-side, so
+    the client applies dates verbatim and computes nothing.
+    """
+    try:
+        result = await asyncio.to_thread(resolve_range_presets, now_ms_utc(), session=session)
+        return ChartRangePresetsResponse(presets=result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "INVALID_RANGE", "detail": str(e)},
+        ) from e
+    except Exception as e:
+        logger.error(f"[CHART] Range presets error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},

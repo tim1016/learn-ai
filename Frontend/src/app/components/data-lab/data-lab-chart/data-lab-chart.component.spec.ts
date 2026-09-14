@@ -236,3 +236,60 @@ describe('DataLabChartComponent saved-session provenance', () => {
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
   });
 });
+
+describe('DataLabChartComponent structured error handling', () => {
+  // Regression (2026-09-13): HttpErrorResponse implements — but does NOT
+  // extend — Error, so the pre-fix `instanceof Error` gate never matched a
+  // real HTTP failure. Every structured code fell through to the generic
+  // message and `timeframeRejected` never emitted, leaving the parent's
+  // server-authored timeframe auto-correct dead. These tests drive the exact
+  // wire failure shape through HttpTestingController.
+  it('emits timeframeRejected with the server recommendation on TIMEFRAME_NOT_ALLOWED', async () => {
+    const { fixture } = await renderChart();
+    const http = TestBed.inject(HttpTestingController);
+    const rejected: { requested: string; recommended: string }[] = [];
+    fixture.componentInstance.timeframeRejected.subscribe((event) => rejected.push(event));
+
+    fixture.componentInstance.fetchData();
+    const req = http.expectOne((candidate) => candidate.url.endsWith('/api/chart/data'));
+    req.flush(
+      {
+        detail: {
+          error_code: 'TIMEFRAME_NOT_ALLOWED',
+          detail: "Timeframe '15m' would produce ~90000 bars (max 20000).",
+          recommended_timeframe: '1h',
+          allowed_timeframes: ['1h', '4h', '1D'],
+        },
+      },
+      { status: 400, statusText: 'Bad Request' },
+    );
+    await waitFor(() => expect(fixture.componentInstance.loading()).toBe(false));
+    fixture.detectChanges();
+
+    expect(rejected).toEqual([
+      {
+        requested: '15m',
+        recommended: '1h',
+        detail: "Timeframe '15m' would produce ~90000 bars (max 20000).",
+      },
+    ]);
+    expect(fixture.componentInstance.error()).toContain('~90000 bars');
+  });
+
+  it('renders the typed NO_DATA copy, not a raw Http failure message', async () => {
+    const { fixture } = await renderChart();
+    const http = TestBed.inject(HttpTestingController);
+
+    fixture.componentInstance.fetchData();
+    const req = http.expectOne((candidate) => candidate.url.endsWith('/api/chart/data'));
+    req.flush(
+      { detail: { error_code: 'NO_DATA', detail: 'No data returned for ZZZZ' } },
+      { status: 404, statusText: 'Not Found' },
+    );
+    await waitFor(() => expect(fixture.componentInstance.loading()).toBe(false));
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.error()).toBe('No data for SPY in this range');
+    expect(fixture.componentInstance.error()).not.toContain('Http failure');
+  });
+});

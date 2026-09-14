@@ -166,4 +166,121 @@ describe('ExploreComponent', () => {
     expect(await screen.findByText('First headline')).toBeTruthy();
     http.verify();
   });
+
+  // ── Auto-load + shell refresh requests (2026-09-13) ─────────
+  it('auto-loads the chart on mount when a committed scope exists', async () => {
+    const store = createDataLabWorkspaceStore();
+    store.patchDraft({ ticker: 'SPY', window: WINDOW });
+    store.commitScope();
+    const result = await render(ExploreComponent, {
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: DataLabWorkspaceStore, useValue: store },
+      ],
+    });
+    const http = TestBed.inject(HttpTestingController);
+    flushCatalog(http);
+    result.fixture.detectChanges();
+
+    const req = await waitFor(() => {
+      const matches = http.match(`${environment.pythonServiceUrl}/api/chart/data`);
+      expect(matches).toHaveLength(1);
+      return matches[0] ?? throwChartRequestMissing();
+    });
+    expect(req.request.body['ticker']).toBe('SPY');
+    req.flush(chartResponse());
+    http.verify();
+  });
+
+  it('does not auto-load when a restored snapshot renders cached bars instead', async () => {
+    const store = createDataLabWorkspaceStore();
+    store.patchDraft({ ticker: 'SPY', window: WINDOW });
+    store.commitScope();
+    store.setRestoredChartSnapshot({
+      bars: [],
+      indicators: [],
+      quality,
+      allowedTimeframes: ['1D'],
+      estimatedBarsPerTimeframe: {},
+      recommendedTimeframe: '1D',
+      visibleIndicatorIds: [],
+      timeframe: '1D',
+    });
+    const result = await render(ExploreComponent, {
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: DataLabWorkspaceStore, useValue: store },
+      ],
+    });
+    const http = TestBed.inject(HttpTestingController);
+    flushCatalog(http);
+    result.fixture.detectChanges();
+
+    expect(http.match(`${environment.pythonServiceUrl}/api/chart/data`)).toHaveLength(0);
+    http.verify();
+  });
+
+  it('fetches when the shell requests a refresh for the committed scope', async () => {
+    const { http, store, fixture } = await renderExplore();
+    flushCatalog(http);
+    store.patchDraft({ ticker: 'SPY', window: WINDOW });
+    store.commitScope();
+    fixture.detectChanges();
+    expect(http.match(`${environment.pythonServiceUrl}/api/chart/data`)).toHaveLength(0);
+
+    // The shell's only chart lever: a refresh request through the store.
+    store.requestChartRefresh();
+    const req = await waitFor(() => {
+      const matches = http.match(`${environment.pythonServiceUrl}/api/chart/data`);
+      expect(matches).toHaveLength(1);
+      return matches[0] ?? throwChartRequestMissing();
+    });
+    req.flush(chartResponse());
+    http.verify();
+  });
+
+  it('auto-corrects a rejected timeframe and re-fetches once with the recommendation', async () => {
+    const { http, store, fixture } = await renderExplore();
+    flushCatalog(http);
+    store.patchDraft({ ticker: 'SPY', window: WINDOW, timespan: 'minute', multiplier: 1 });
+    store.commitScope();
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh chart' }));
+    const first = await waitFor(() => {
+      const matches = http.match(`${environment.pythonServiceUrl}/api/chart/data`);
+      expect(matches).toHaveLength(1);
+      return matches[0] ?? throwChartRequestMissing();
+    });
+    expect(first.request.body['timeframe']).toBe('1m');
+    first.flush(
+      {
+        detail: {
+          error_code: 'TIMEFRAME_NOT_ALLOWED',
+          detail: "Timeframe '1m' would produce ~90000 bars (max 20000).",
+          recommended_timeframe: '1D',
+          allowed_timeframes: ['1D'],
+        },
+      },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    // The parent commits the recommendation and issues exactly one recovery
+    // fetch — through the store request, serialized after the settle.
+    // (http.match consumed the first request out of the open list, so the
+    // recovery fetch is the only request left open.)
+    const second = await waitFor(() => {
+      const matches = http.match(`${environment.pythonServiceUrl}/api/chart/data`);
+      expect(matches).toHaveLength(1);
+      return matches[0] ?? throwChartRequestMissing();
+    });
+    expect(second.request.body['timeframe']).toBe('1D');
+    second.flush(chartResponse());
+    http.verify();
+    expect(store.chartStale()).toBe(false);
+  });
 });

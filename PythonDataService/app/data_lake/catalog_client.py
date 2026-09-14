@@ -52,13 +52,25 @@ logger = logging.getLogger(__name__)
 _pools: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncpg.Pool] = weakref.WeakKeyDictionary()
 
 
+class CatalogUnavailableError(RuntimeError):
+    """The catalog's Postgres is not reachable or not configured.
+
+    Raised by :func:`init_pool` and :func:`connection` instead of a bare
+    ``RuntimeError`` so a best-effort consumer — the chart's lake-first
+    ingest — can degrade to provider fallback on exactly this failure
+    without catching every ``RuntimeError`` in sight. A coverage-gated
+    consumer (an engine run) still fails hard: the lake is the sole
+    market-data store and there is no store to fall back to.
+    """
+
+
 async def init_pool() -> None:
     """Create the asyncpg pool for the calling loop. Idempotent per loop."""
     loop = asyncio.get_running_loop()
     if loop in _pools:
         return
     if not settings.POSTGRES_URL:
-        raise RuntimeError(
+        raise CatalogUnavailableError(
             "POSTGRES_URL is empty; cannot initialize catalog_client. "
             "The lake is the sole market-data store, so there is no store to "
             "fall back to — set POSTGRES_URL."
@@ -102,7 +114,7 @@ async def connection():  # type: ignore[return]
     loop = asyncio.get_running_loop()
     pool = _pools.get(loop)
     if pool is None:
-        raise RuntimeError("asyncpg pool not initialized; call init_pool() first")
+        raise CatalogUnavailableError("asyncpg pool not initialized; call init_pool() first")
     async with pool.acquire() as conn:
         yield conn
 

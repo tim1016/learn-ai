@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 
 class ChartIndicatorEntry(BaseModel):
     """Single indicator specification."""
@@ -91,11 +93,35 @@ class ChartIndicatorSupportResponse(BaseModel):
 
 
 class ChartDataRequest(BaseModel):
-    """Request for chart data with resampled bars and indicators."""
+    """Request for chart data with resampled bars and indicators.
+
+    Temporal authority (data-lab workspace redesign PRD §12): the numeric
+    ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
+    each field takes precedence over its date-string counterpart when
+    supplied. The anchor is the Data Lab surface's stated convention —
+    UTC midnight of the intended trading date (the exact inverse of the
+    frontend's ``utcMsToIsoDate``), so a numeric window and the string the
+    same request carries never disagree. Both endpoints of the resolved
+    window are inclusive trading dates, matching ``from_date``/``to_date``.
+    """
 
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
+    start_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window start (int64 ms UTC, UTC-midnight trading-date anchor, "
+        "inclusive). Takes precedence over from_date when supplied.",
+    )
+    end_ms_utc: int | None = Field(
+        None,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Canonical numeric window end (int64 ms UTC, UTC-midnight trading-date anchor, "
+        "inclusive). Takes precedence over to_date when supplied.",
+    )
     timeframe: str = Field("1D", description="Timeframe: 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, 1M")
     session: str = Field("rth", description="'rth' for regular trading hours, 'extended' for all hours")
     forward_fill: bool = Field(False, description="Fill missing bars with previous close (volume=0)")
@@ -108,6 +134,39 @@ class ChartDataRequest(BaseModel):
         description="When True, compute all indicators with default params (ignores 'indicators' list)",
     )
     adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
+
+
+class ChartRangePreset(BaseModel):
+    """One calendar-resolved quick range ("last N trading sessions")."""
+
+    key: str = Field(..., description="Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y")
+    label: str = Field(..., description="Human label for the preset")
+    start_date: str = Field(..., description="Resolved start trading date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="Resolved end trading date (YYYY-MM-DD)")
+    start_ms_utc: int = Field(
+        ...,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="UTC-midnight anchor of start_date (int64 ms UTC, inclusive)",
+    )
+    end_ms_utc: int = Field(
+        ...,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="UTC-midnight anchor of end_date (int64 ms UTC, inclusive)",
+    )
+    session_count: int = Field(..., ge=1, description="Scheduled NYSE sessions in the window")
+    estimated_bars_per_timeframe: dict[str, int] = Field(
+        ...,
+        description="Calendar-arithmetic bar estimate per timeframe for this window "
+        "(same estimator as /api/chart/allowed-timeframes)",
+    )
+
+
+class ChartRangePresetsResponse(BaseModel):
+    """Response for GET /api/chart/range-presets."""
+
+    presets: list[ChartRangePreset]
 
 
 class AllowedTimeframesRequest(BaseModel):

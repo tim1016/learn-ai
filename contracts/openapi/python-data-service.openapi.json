@@ -6889,7 +6889,7 @@
         "type": "object"
       },
       "ChartDataRequest": {
-        "description": "Request for chart data with resampled bars and indicators.",
+        "description": "Request for chart data with resampled bars and indicators.\n\nTemporal authority (data-lab workspace redesign PRD \u00a712): the numeric\n``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and\neach field takes precedence over its date-string counterpart when\nsupplied. The anchor is the Data Lab surface's stated convention \u2014\nUTC midnight of the intended trading date (the exact inverse of the\nfrontend's ``utcMsToIsoDate``), so a numeric window and the string the\nsame request carries never disagree. Both endpoints of the resolved\nwindow are inclusive trading dates, matching ``from_date``/``to_date``.",
         "properties": {
           "adjusted": {
             "default": true,
@@ -6902,6 +6902,20 @@
             "description": "When True, compute all indicators with default params (ignores 'indicators' list)",
             "title": "Compute All Indicators",
             "type": "boolean"
+          },
+          "end_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window end (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over to_date when supplied.",
+            "title": "End Ms Utc"
           },
           "forward_fill": {
             "default": false,
@@ -6927,6 +6941,20 @@
             "description": "'rth' for regular trading hours, 'extended' for all hours",
             "title": "Session",
             "type": "string"
+          },
+          "start_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical numeric window start (int64 ms UTC, UTC-midnight trading-date anchor, inclusive). Takes precedence over from_date when supplied.",
+            "title": "Start Ms Utc"
           },
           "ticker": {
             "description": "Ticker symbol",
@@ -7410,6 +7438,88 @@
           "source"
         ],
         "title": "ChartOverlayNoticeView",
+        "type": "object"
+      },
+      "ChartRangePreset": {
+        "description": "One calendar-resolved quick range (\"last N trading sessions\").",
+        "properties": {
+          "end_date": {
+            "description": "Resolved end trading date (YYYY-MM-DD)",
+            "title": "End Date",
+            "type": "string"
+          },
+          "end_ms_utc": {
+            "description": "UTC-midnight anchor of end_date (int64 ms UTC, inclusive)",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms Utc",
+            "type": "integer"
+          },
+          "estimated_bars_per_timeframe": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Calendar-arithmetic bar estimate per timeframe for this window (same estimator as /api/chart/allowed-timeframes)",
+            "title": "Estimated Bars Per Timeframe",
+            "type": "object"
+          },
+          "key": {
+            "description": "Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "description": "Human label for the preset",
+            "title": "Label",
+            "type": "string"
+          },
+          "session_count": {
+            "description": "Scheduled NYSE sessions in the window",
+            "minimum": 1.0,
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "start_date": {
+            "description": "Resolved start trading date (YYYY-MM-DD)",
+            "title": "Start Date",
+            "type": "string"
+          },
+          "start_ms_utc": {
+            "description": "UTC-midnight anchor of start_date (int64 ms UTC, inclusive)",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "start_date",
+          "end_date",
+          "start_ms_utc",
+          "end_ms_utc",
+          "session_count",
+          "estimated_bars_per_timeframe"
+        ],
+        "title": "ChartRangePreset",
+        "type": "object"
+      },
+      "ChartRangePresetsResponse": {
+        "description": "Response for GET /api/chart/range-presets.",
+        "properties": {
+          "presets": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRangePreset"
+            },
+            "title": "Presets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "presets"
+        ],
+        "title": "ChartRangePresetsResponse",
         "type": "object"
       },
       "ChronologicalSplitPolicySpec": {
@@ -11514,7 +11624,8 @@
           "run_type": {
             "enum": [
               "python_lab",
-              "lean_lab"
+              "lean_lab",
+              "chart"
             ],
             "title": "Run Type",
             "type": "string"
@@ -57473,6 +57584,50 @@
           }
         },
         "summary": "Supported Chart Indicators",
+        "tags": [
+          "chart"
+        ]
+      }
+    },
+    "/api/chart/range-presets": {
+      "get": {
+        "description": "Calendar-resolved quick ranges (\"last N trading sessions\") for chart scope UIs.\n\nEvery preset's start/end is computed by the canonical NYSE calendar \u2014\nweekends, holidays, and the forming session are handled server-side, so\nthe client applies dates verbatim and computes nothing.",
+        "operationId": "range_presets_api_chart_range_presets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "default": "rth",
+              "title": "Session",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartRangePresetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Range Presets",
         "tags": [
           "chart"
         ]
