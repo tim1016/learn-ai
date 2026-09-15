@@ -259,6 +259,11 @@ jobs:
     defaults:
       run:
         working-directory: PythonDataService
+    env:
+      # The fleet operation catalog import chain reaches `app.config`, whose
+      # Settings require this at module import. Same placeholder the Alpaca
+      # SQLite qualification smoke job already uses.
+      POLYGON_API_KEY: test-key-for-testing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -301,6 +306,23 @@ jobs:
             Frontend/src/app/fleet/fleet-refusal-vocabulary.snapshot.json)
           if [ -n "$status" ]; then
             echo "Regenerated fleet refusal vocabulary snapshot is untracked or otherwise dirty:"
+            echo "$status"
+            exit 1
+          fi
+      - name: Regenerate the fleet operation catalog snapshot and require it to match both committed copies
+        run: |
+          python -m scripts.regenerate_fleet_operation_catalog_snapshot
+          cd ..
+          git diff --exit-code -- \
+            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
+            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json
+          # Same untracked-file gap as above: a deleted-and-regenerated
+          # snapshot would pass `git diff` unnoticed without this check.
+          status=$(git status --porcelain -- \
+            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
+            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json)
+          if [ -n "$status" ]; then
+            echo "Regenerated fleet operation catalog snapshot is untracked or otherwise dirty:"
             echo "$status"
             exit 1
           fi

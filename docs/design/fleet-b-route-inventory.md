@@ -245,7 +245,10 @@ rather than folded into the reads list above:
   stands.
 
 They join `GET /api/brokers/{broker}/order-groups` (listed under `brokers`
-lane extras above) as routes with no fleet-scoped path today.
+lane extras above) as routes with no fleet-scoped path today. E-D (#2103)
+deletes `order-groups`'s only caller, `brokers.service.ts`'s
+`listOrderGroups`; the route is now stranded with no consumer at all —
+frontend, script, or test.
 
 Two of these are POST mutations, not reads, and have no coordinator
 successor: `run_replay`'s POST regenerate, and `brokers`' `POST

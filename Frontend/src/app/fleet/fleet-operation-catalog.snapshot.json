@@ -1,0 +1,391 @@
+{
+  "$comment": "Snapshot of the fleet's operation catalog (#2076, #2103): every ProviderOperation the production adapter registry declares. Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/fleet/test_operation_catalog_snapshot.py reads the Python-tree copy and asserts equality with the live production_provider_adapters() catalog. The Frontend's Frontend/src/app/fleet/operation-url.ts imports the Frontend-tree copy and derives its compile-time-checked operation-id union from it. Adding an operation requires (a) declaring it in fleet_adapter.py (or a future provider's adapter), (b) re-running PythonDataService/scripts/regenerate_fleet_operation_catalog_snapshot.py. Any missing step fails a parity test.",
+  "generated_by": "PythonDataService/scripts/regenerate_fleet_operation_catalog_snapshot.py",
+  "source_files": [
+    "PythonDataService/app/broker/fleet_composition.py (production_provider_adapters)",
+    "PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py (ALPACA_OPERATIONS)"
+  ],
+  "adapter_version": "alpaca-fleet.5",
+  "operations": {
+    "account_read": {
+      "method": "GET",
+      "path_template": "/account",
+      "requires_account": false
+    },
+    "activities_read": {
+      "method": "GET",
+      "path_template": "/activities",
+      "requires_account": false
+    },
+    "bot_admission_plan": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/admission",
+      "requires_account": true
+    },
+    "bot_authority_facts": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/authority-facts",
+      "requires_account": true
+    },
+    "bot_chart_history": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/chart/history",
+      "requires_account": true
+    },
+    "bot_chart_live": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/chart/live",
+      "requires_account": true
+    },
+    "bot_cohort_archive": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/cohort-archive",
+      "requires_account": true
+    },
+    "bot_cohort_archive_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/cohort-archive",
+      "requires_account": true
+    },
+    "bot_cohort_flatten": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/cohort-flatten",
+      "requires_account": true
+    },
+    "bot_cohort_flatten_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/cohort-flatten",
+      "requires_account": true
+    },
+    "bot_create": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots",
+      "requires_account": true
+    },
+    "bot_evidence": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/evidence",
+      "requires_account": true
+    },
+    "bot_live_snapshot": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/live-snapshot",
+      "requires_account": true
+    },
+    "bot_live_stream": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/live-stream",
+      "requires_account": true
+    },
+    "bot_panel_action": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/{sid}/actions",
+      "requires_account": true
+    },
+    "bot_panel_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/panel",
+      "requires_account": true
+    },
+    "bot_run_current_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/runs/current",
+      "requires_account": true
+    },
+    "bot_run_history_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/runs/history",
+      "requires_account": true
+    },
+    "bots_catalog_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/catalog",
+      "requires_account": true
+    },
+    "bots_deploy_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/deploy",
+      "requires_account": true
+    },
+    "clerk_status_read": {
+      "method": "GET",
+      "path_template": "/clerk/status",
+      "requires_account": false
+    },
+    "configuration_account_pin": {
+      "method": "POST",
+      "path_template": "/configuration/profiles/{profile_id}/revisions/{revision}/account-pin",
+      "requires_account": false
+    },
+    "configuration_credential_slots": {
+      "method": "GET",
+      "path_template": "/configuration/credential-slots",
+      "requires_account": false
+    },
+    "configuration_desk_state": {
+      "method": "GET",
+      "path_template": "/configuration/desk-state",
+      "requires_account": false
+    },
+    "configuration_events": {
+      "method": "GET",
+      "path_template": "/configuration/events",
+      "requires_account": false
+    },
+    "configuration_nicknames_read": {
+      "method": "GET",
+      "path_template": "/configuration/account-nicknames",
+      "requires_account": false
+    },
+    "configuration_nicknames_set": {
+      "method": "PUT",
+      "path_template": "/configuration/account-nicknames/{account_id}",
+      "requires_account": false
+    },
+    "configuration_owner_read": {
+      "method": "GET",
+      "path_template": "/configuration/owner",
+      "requires_account": false
+    },
+    "configuration_owner_update": {
+      "method": "PATCH",
+      "path_template": "/configuration/owner",
+      "requires_account": false
+    },
+    "configuration_profile_clone": {
+      "method": "POST",
+      "path_template": "/configuration/profiles/{profile_id}/clone",
+      "requires_account": false
+    },
+    "configuration_profile_create": {
+      "method": "POST",
+      "path_template": "/configuration/profiles",
+      "requires_account": false
+    },
+    "configuration_profile_read": {
+      "method": "GET",
+      "path_template": "/configuration/profiles/{profile_id}",
+      "requires_account": false
+    },
+    "configuration_profile_update": {
+      "method": "PATCH",
+      "path_template": "/configuration/profiles/{profile_id}",
+      "requires_account": false
+    },
+    "configuration_profiles_list": {
+      "method": "GET",
+      "path_template": "/configuration/profiles",
+      "requires_account": false
+    },
+    "configuration_revision_create": {
+      "method": "POST",
+      "path_template": "/configuration/profiles/{profile_id}/revisions",
+      "requires_account": false
+    },
+    "configuration_revision_read": {
+      "method": "GET",
+      "path_template": "/configuration/profiles/{profile_id}/revisions/{revision}",
+      "requires_account": false
+    },
+    "configuration_revisions_list": {
+      "method": "GET",
+      "path_template": "/configuration/profiles/{profile_id}/revisions",
+      "requires_account": false
+    },
+    "configuration_selection_apply": {
+      "method": "POST",
+      "path_template": "/configuration/selection/apply",
+      "requires_account": false
+    },
+    "configuration_selection_read": {
+      "method": "GET",
+      "path_template": "/configuration/selection",
+      "requires_account": false
+    },
+    "configuration_selection_write": {
+      "method": "PUT",
+      "path_template": "/configuration/selection",
+      "requires_account": false
+    },
+    "configuration_verify_account": {
+      "method": "POST",
+      "path_template": "/configuration/profiles/{profile_id}/revisions/{revision}/verify-account",
+      "requires_account": false
+    },
+    "custody_account_snapshot": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/snapshot",
+      "requires_account": true
+    },
+    "custody_account_timeline": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/timeline",
+      "requires_account": true
+    },
+    "custody_bot_recovery_check": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check",
+      "requires_account": true
+    },
+    "custody_bot_recovery_execute": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute",
+      "requires_account": true
+    },
+    "custody_bot_snapshot": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/snapshot",
+      "requires_account": true
+    },
+    "custody_bot_timeline": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/timeline",
+      "requires_account": true
+    },
+    "custody_command_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/commands/{command_id}",
+      "requires_account": true
+    },
+    "custody_diagnosis_read": {
+      "method": "GET",
+      "path_template": "/clerk/custody-diagnosis",
+      "requires_account": false
+    },
+    "custody_external_order_ack": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/transactions/external-orders/{external_order_id}/acknowledge",
+      "requires_account": true
+    },
+    "custody_historical_recovery_confirm": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/confirm",
+      "requires_account": true
+    },
+    "custody_historical_recovery_prepare": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare",
+      "requires_account": true
+    },
+    "custody_pnl_attribution": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/pnl-attribution",
+      "requires_account": true
+    },
+    "custody_reconcile": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/reconcile",
+      "requires_account": true
+    },
+    "custody_recovery_check": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/recovery-actions/check",
+      "requires_account": true
+    },
+    "custody_recovery_execute": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/recovery-actions/execute",
+      "requires_account": true
+    },
+    "custody_runs_start": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/runs/start",
+      "requires_account": true
+    },
+    "custody_runs_stop": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/runs/stop",
+      "requires_account": true
+    },
+    "custody_transaction_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/transactions/{transaction_id}",
+      "requires_account": true
+    },
+    "custody_transactions": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/transactions",
+      "requires_account": true
+    },
+    "gallery_snapshot": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/gallery/snapshot",
+      "requires_account": true
+    },
+    "gallery_stream": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/gallery/stream",
+      "requires_account": true
+    },
+    "manual_order_cancel": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/manual-orders/{order_ref:path}/cancel",
+      "requires_account": true
+    },
+    "manual_order_ticket_cancel": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel",
+      "requires_account": true
+    },
+    "manual_order_ticket_continue": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue",
+      "requires_account": true
+    },
+    "manual_order_ticket_put": {
+      "method": "PUT",
+      "path_template": "/accounts/{account_id}/manual-order-tickets/{ticket_id}",
+      "requires_account": true
+    },
+    "manual_order_ticket_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/manual-order-tickets/{ticket_id}",
+      "requires_account": true
+    },
+    "manual_orders_capability": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/manual-orders/capability",
+      "requires_account": true
+    },
+    "manual_orders_preview": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/manual-orders/preview",
+      "requires_account": true
+    },
+    "market_status_read": {
+      "method": "GET",
+      "path_template": "/market-status-snapshot",
+      "requires_account": false
+    },
+    "orders_read": {
+      "method": "GET",
+      "path_template": "/orders",
+      "requires_account": false
+    },
+    "paper_access_confirm": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/strategies/{program_key}/paper-access/confirm",
+      "requires_account": true
+    },
+    "paper_access_plan": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/strategies/{program_key}/paper-access/plan",
+      "requires_account": true
+    },
+    "portfolio_history_proof_read": {
+      "method": "GET",
+      "path_template": "/portfolio-history-proof",
+      "requires_account": false
+    },
+    "portfolio_history_read": {
+      "method": "GET",
+      "path_template": "/portfolio-history",
+      "requires_account": false
+    },
+    "positions_read": {
+      "method": "GET",
+      "path_template": "/positions",
+      "requires_account": false
+    }
+  }
+}

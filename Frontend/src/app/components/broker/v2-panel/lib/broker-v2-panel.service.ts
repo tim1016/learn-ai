@@ -14,7 +14,7 @@ import {
   type FleetCapability,
   withCommand,
 } from '../../../../fleet/resource-target';
-import { accountUrl } from '../../../../fleet/clerk-scoped-url';
+import { operationUrl } from '../../../../fleet/operation-url';
 import type {
   BotCatalogView,
   BotPanelView,
@@ -98,7 +98,7 @@ export class BrokerV2PanelService {
   deployBot(target: ResourceTarget, body: DeployBotBody): Promise<DeployBotReceipt> {
     return firstValueFrom(
       this.http.post<DeployBotReceipt>(
-        accountUrl(target, '/bots'),
+        operationUrl('bot_create', target),
         this.commandBody(target, 'bot_action', body),
       ),
     );
@@ -111,7 +111,7 @@ export class BrokerV2PanelService {
     // A plan over durable state — read-idempotent, no envelope required.
     return firstValueFrom(
       this.http.post<RunAdmissionDecision>(
-        accountUrl(target, '/bots/admission'),
+        operationUrl('bot_admission_plan', target),
         body,
       ),
     );
@@ -128,7 +128,7 @@ export class BrokerV2PanelService {
   ): Promise<DeployBotView> {
     const params = symbol ? new HttpParams().set('symbol', symbol) : undefined;
     return firstValueFrom(
-      this.http.get<DeployBotView>(accountUrl(target, '/bots/deploy'), { params }),
+      this.http.get<DeployBotView>(operationUrl('bots_deploy_read', target), { params }),
     );
   }
 
@@ -139,7 +139,7 @@ export class BrokerV2PanelService {
   ): Promise<PaperAccessPlan> {
     return firstValueFrom(
       this.http.post<PaperAccessPlan>(
-        accountUrl(target, `/strategies/${encodeURIComponent(strategyKey)}/paper-access/plan`),
+        operationUrl('paper_access_plan', { ...target, programKey: strategyKey }),
         { reason },
       ),
     );
@@ -152,10 +152,7 @@ export class BrokerV2PanelService {
   ): Promise<PaperAccessEvent> {
     return firstValueFrom(
       this.http.post<PaperAccessEvent>(
-        accountUrl(
-          target,
-          `/strategies/${encodeURIComponent(strategyKey)}/paper-access/confirm`,
-        ),
+        operationUrl('paper_access_confirm', { ...target, programKey: strategyKey }),
         this.commandBody(target, 'deploy', { plan, confirmation_token: plan.confirmation_token }),
       ),
     );
@@ -165,7 +162,7 @@ export class BrokerV2PanelService {
     // Polled every few seconds; a hang here freezes the roster (S7), and
     // overlapping polls are what turn a 267 ms read into a 2.58 s one
     // (#1912) — the scheduler answers both.
-    return this.polls.get<BotCatalogView[]>(accountUrl(target, '/bots/catalog'));
+    return this.polls.get<BotCatalogView[]>(operationUrl('bots_catalog_read', target));
   }
 
   getPanel(
@@ -181,7 +178,7 @@ export class BrokerV2PanelService {
     // (#1912), so it shares the roster's scheduler rather than adding to
     // the fan-out it is trying to remove.
     return this.polls.get<BotPanelView>(
-      accountUrl(target, `/bots/${encodeURIComponent(sid)}/panel`),
+      operationUrl('bot_panel_read', { ...target, sid }),
       params,
     );
   }
@@ -196,7 +193,7 @@ export class BrokerV2PanelService {
    */
   getCohortArchiveView(target: ResourceTarget): Promise<CohortArchiveView> {
     return firstValueFrom(
-      this.http.get<CohortArchiveView>(accountUrl(target, '/bots/cohort-archive')),
+      this.http.get<CohortArchiveView>(operationUrl('bot_cohort_archive_read', target)),
     );
   }
 
@@ -207,7 +204,7 @@ export class BrokerV2PanelService {
   ): Promise<CohortActionResult> {
     return firstValueFrom(
       this.http.post<CohortActionResult>(
-        accountUrl(target, '/bots/cohort-archive'),
+        operationUrl('bot_cohort_archive', target),
         this.commandBody(target, 'bot_action', request),
       ),
     );
@@ -216,7 +213,7 @@ export class BrokerV2PanelService {
   getCurrentRun(target: ResourceTarget, sid: string): Promise<BotRunView> {
     return firstValueFrom(
       this.http.get<BotRunView>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/runs/current`),
+        operationUrl('bot_run_current_read', { ...target, sid }),
       ),
     );
   }
@@ -230,7 +227,7 @@ export class BrokerV2PanelService {
     if (cursor) params = params.set('cursor', cursor);
     return firstValueFrom(
       this.http.get<BotRunHistoryPage>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/runs/history`),
+        operationUrl('bot_run_history_read', { ...target, sid }),
         { params },
       ),
     );
@@ -243,7 +240,7 @@ export class BrokerV2PanelService {
   ): Promise<PanelActionResult> {
     return firstValueFrom(
       this.http.post<PanelActionResult>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/actions`),
+        operationUrl('bot_panel_action', { ...target, sid }),
         this.commandBody(target, 'bot_action', request),
       ),
     );
@@ -358,10 +355,7 @@ export class BrokerV2PanelService {
   ): Promise<HistoricalExecutionRecoveryPlan> {
     return firstValueFrom(
       this.http.post<HistoricalExecutionRecoveryPlan>(
-        accountUrl(
-          target,
-          `/custody/bots/${encodeURIComponent(sid)}/historical-execution-recovery/prepare`,
-        ),
+        operationUrl('custody_historical_recovery_prepare', { ...target, sid }),
         this.commandBody(target, 'custody_command', { concurrency_token: concurrencyToken }),
       ),
     );
@@ -375,10 +369,7 @@ export class BrokerV2PanelService {
   ): Promise<HistoricalExecutionRecoveryReceipt> {
     return firstValueFrom(
       this.http.post<HistoricalExecutionRecoveryReceipt>(
-        accountUrl(
-          target,
-          `/custody/bots/${encodeURIComponent(sid)}/historical-execution-recovery/confirm`,
-        ),
+        operationUrl('custody_historical_recovery_confirm', { ...target, sid }),
         this.commandBody(target, 'custody_command', { plan, confirmation_token: plan.confirmation_token }),
       ),
     );
@@ -392,7 +383,7 @@ export class BrokerV2PanelService {
     const params = new HttpParams().set('resolution', resolution);
     // The tape polls beside the detail pane's panel read (#1912).
     return this.polls.get<ChartLiveResponse>(
-      accountUrl(target, `/bots/${encodeURIComponent(sid)}/chart/live`),
+      operationUrl('bot_chart_live', { ...target, sid }),
       params,
     );
   }
@@ -405,7 +396,7 @@ export class BrokerV2PanelService {
     const params = new HttpParams().set('resolution', resolution);
     return firstValueFrom(
       this.http.get<BotPanelLiveSnapshot>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/live-snapshot`),
+        operationUrl('bot_live_snapshot', { ...target, sid }),
         { params },
       ),
     );
@@ -419,7 +410,7 @@ export class BrokerV2PanelService {
   ): string {
     const params = new URLSearchParams({ resolution });
     if (cursor) params.set('cursor', cursor);
-    return `${accountUrl(target, `/bots/${encodeURIComponent(sid)}/live-stream`)}?${params.toString()}`;
+    return `${operationUrl('bot_live_stream', { ...target, sid })}?${params.toString()}`;
   }
 
   getHistoryChart(
@@ -430,7 +421,7 @@ export class BrokerV2PanelService {
     const params = new HttpParams().set('timeframe', timeframe);
     return firstValueFrom(
       this.http.get<ChartHistoryResponse>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/chart/history`),
+        operationUrl('bot_chart_history', { ...target, sid }),
         { params },
       ),
     );
@@ -454,7 +445,7 @@ export class BrokerV2PanelService {
     if (options.clientHint) params = params.set('client_hint', options.clientHint);
     return firstValueFrom(
       this.http.get<EvidencePage>(
-        accountUrl(target, `/bots/${encodeURIComponent(sid)}/evidence`),
+        operationUrl('bot_evidence', { ...target, sid }),
         { params },
       ),
     );
