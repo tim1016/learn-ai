@@ -360,6 +360,130 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
         )
 
 
+async def test_a_delivery_contract_violation_on_a_read_is_not_misdiagnosed_as_identity(
+    control_dir: Path, clock: FrozenClock, fleet_service, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2119: a handler-shape defect on ``deliver_read`` must not be reported
+    to the operator as a lane-identity mismatch with "refresh and retry"
+    advice that cannot fix a deterministic bug -- and it must be logged with
+    the exception's own detail, which the generic ``except Exception``
+    fallback in ``deliver_read`` provides without a dedicated except clause
+    (``DeliveryContractViolation`` no longer subclasses
+    ``DeliveryIdentityMismatch``, so it never reaches that branch).
+
+    This is the routing-seam half of the #2119 fix; ``test_a2_alpaca_lane.py``'s
+    ``test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_type``
+    proves the delivery layer raises the distinct ``DeliveryContractViolation``
+    in the first place.
+    """
+    import logging
+
+    from app.broker.fleet.delivery import DeliveryContractViolation
+    from app.broker.fleet.errors import ClerkIdentityMismatch, ClerkUnreachable
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import bind_lane, fake_alpha, fake_beta, provision_lane
+
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": fake_alpha(), "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label="contract-violation", tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account="acct-contract-violation")
+
+    class _ContractViolatingDelivery:
+        async def deliver(self, request: object) -> None:
+            del request
+            raise DeliveryContractViolation("the in-process handler returned str, not a DeliveryResult")
+
+    router = LaneRouter(service=service, delivery_for=lambda broker, session: _ContractViolatingDelivery())
+    operation = next(
+        op for op in fake_alpha().operations() if op.operation_id == "account_read"
+    )
+
+    caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
+    with pytest.raises(ClerkUnreachable) as excinfo:
+        await router.deliver_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )
+    assert not issubclass(excinfo.type, ClerkIdentityMismatch)
+    assert "refresh and retry" not in (excinfo.value.next_step or "")
+    assert "Lane delivery failed for" in caplog.text
+    assert "not a DeliveryResult" in caplog.text
+
+
+async def test_a_delivery_contract_violation_on_a_stream_is_reported_as_identity_mismatch(
+    control_dir: Path, clock: FrozenClock, fleet_service, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2119 scoped the fix to ``deliver_read``; ``stream_read`` folds
+    ``DeliveryContractViolation`` into the same ``except`` clause as
+    ``DeliveryIdentityMismatch`` and stays "Acceptable" because its
+    ``ClerkIdentityMismatch`` never carries ``next_step`` at all (so there is
+    no misleading "refresh and retry" for the operator to see either way).
+
+    Nothing else in the suite calls ``LaneRouter.stream_read()`` with a
+    ``DeliveryContractViolation`` -- an independent review ran the full
+    ``tests/broker/fleet`` suite (279 tests) with the widened except tuple
+    reverted to ``except DeliveryIdentityMismatch`` and got 279 passed, 0
+    failed, unchanged. Without this test, dropping
+    ``DeliveryContractViolation`` from that tuple would silently flip a
+    handler-shape bug's operator-visible outcome from ``ClerkIdentityMismatch``
+    (409, no ``next_step``) to ``ClerkUnreachable`` (503, a different
+    ``next_step``) with no red test anywhere.
+    """
+    import logging
+
+    from app.broker.fleet.delivery import DeliveryContractViolation
+    from app.broker.fleet.errors import ClerkIdentityMismatch, ClerkUnreachable
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import bind_lane, fake_alpha, fake_beta, provision_lane
+
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": fake_alpha(), "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label="stream-contract-violation", tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account="acct-stream-contract-violation")
+
+    class _ContractViolatingStreamDelivery:
+        async def stream(self, request: object) -> None:
+            del request
+            raise DeliveryContractViolation(
+                "the in-process handler returned str, not a StreamDeliveryResult"
+            )
+
+    router = LaneRouter(
+        service=service, delivery_for=lambda broker, session: _ContractViolatingStreamDelivery()
+    )
+    operation = next(
+        op for op in fake_alpha().operations() if op.operation_id == "account_read"
+    )
+
+    caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
+    with pytest.raises(ClerkIdentityMismatch) as excinfo:
+        await router.stream_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )
+    assert not issubclass(excinfo.type, ClerkUnreachable)
+    assert excinfo.value.next_step is None
+    assert "next_step" not in excinfo.value.detail()
+    assert "Lane stream failed identity verification" in caplog.text
+    assert "not a StreamDeliveryResult" in caplog.text
+
+
 def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
     """The extension boundary is only provable when the fakes disagree.
 

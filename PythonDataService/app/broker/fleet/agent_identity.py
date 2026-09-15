@@ -27,7 +27,7 @@ from typing import Any
 from starlette.datastructures import Headers
 
 from app.broker.fleet.delivery import lane_forward_is_authorized
-from app.broker.fleet.errors import BrokerAndClerkRequired, FleetControlError
+from app.broker.fleet.errors import BrokerAndClerkRequired, ClerkIdentityMismatch, FleetControlError
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 
 logger = logging.getLogger(__name__)
@@ -171,14 +171,22 @@ def _pin_mismatch(
 
 
 async def _send_refusal(
-    send: Callable[[dict[str, Any]], Awaitable[None]], error: FleetControlError
+    send: Callable[[dict[str, Any]], Awaitable[None]],
+    error: FleetControlError,
+    *,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> None:
-    """Write one typed refusal as a complete ASGI JSON response."""
+    """Write one typed refusal as a complete ASGI JSON response.
+
+    ``error.detail()`` is the one canonical wire shape (#2067); nothing on
+    this raw-ASGI path may hand-build a body of its own (#2107).
+    """
+    headers = [(b"content-type", b"application/json"), *(extra_headers or ())]
     await send(
         {
             "type": "http.response.start",
             "status": error.status_code,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": headers,
         }
     )
     await send(
@@ -340,23 +348,10 @@ class FleetIdentityMiddleware:
 
         mismatch = _pin_mismatch(request_headers, identity, scope.get("method", "GET"))
         if mismatch is not None:
-            body = (
-                '{"reason": "clerk_identity_mismatch", "message": '
-                + json.dumps(mismatch)
-                + "}"
-            ).encode()
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 409,
-                    "headers": [
-                        (b"content-type", b"application/json"),
-                        *_served_header_values(identity),
-                    ],
-                }
-            )
-            await send(
-                {"type": "http.response.body", "body": body, "more_body": False}
+            await _send_refusal(
+                send,
+                ClerkIdentityMismatch(mismatch),
+                extra_headers=_served_header_values(identity),
             )
             return
 

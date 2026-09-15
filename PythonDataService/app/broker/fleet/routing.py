@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.broker.fleet.delivery import (
+    DeliveryContractViolation,
     DeliveryIdentityMismatch,
     DeliveryRequest,
     DeliveryResult,
@@ -195,6 +196,12 @@ class LaneRouter:
         try:
             result = await delivery.deliver(request)
         except DeliveryIdentityMismatch as exc:
+            logger.warning(
+                "Lane delivery failed identity verification for %s on %s: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkIdentityMismatch(
                 "The lane's response failed identity verification; the "
                 "transport-level detail is in the coordinator log.",
@@ -206,6 +213,16 @@ class LaneRouter:
         except Exception as exc:
             # The exception text can carry internal topology (hostnames,
             # ports, paths); it goes to the log, never the public refusal.
+            # This also covers DeliveryContractViolation (#2119): a handler
+            # returning the wrong Python type is not an identity mismatch,
+            # so it must not carry "refresh and retry" advice that cannot
+            # fix a deterministic bug -- and the generic ClerkUnreachable
+            # mapping here already gets that right without a dedicated
+            # except clause; the %r of the exception conveys the same
+            # contract-shape detail a bespoke message would have. Contrast
+            # stream_read() below, which maps the same exception to 409
+            # ClerkIdentityMismatch instead -- justified there by that
+            # branch never carrying "refresh and retry" advice.
             logger.warning(
                 "Lane delivery failed for %s on %s: %r",
                 operation.operation_id,
@@ -261,7 +278,12 @@ class LaneRouter:
         delivery = self._delivery_for(broker, session)
         try:
             result = await delivery.stream(request)
-        except DeliveryIdentityMismatch as exc:
+        except (DeliveryIdentityMismatch, DeliveryContractViolation) as exc:
+            # A DeliveryContractViolation here is also a handler-shape defect
+            # rather than a lane-identity mismatch (#2119), but this branch
+            # never carries "refresh and retry" advice -- unlike deliver_read
+            # -- so folding both into the same logged ClerkIdentityMismatch
+            # stays acceptable rather than misdiagnosing with a false remedy.
             logger.warning(
                 "Lane stream failed identity verification for %s on %s: %r",
                 operation.operation_id,
