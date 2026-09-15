@@ -6,6 +6,44 @@ if [[ ! -f compose.yaml || ! -d PythonDataService ]]; then
   exit 1
 fi
 
+# The worker's compose target, derived the same way the desk authors its own
+# restart command (PythonDataService/app/broker_configuration/desk_state.py's
+# worker_restart_command, fed by runtime.py's worker_restart_target_from):
+# the deployment's declared FLEET_WORKER_SERVICE, plus whatever compose
+# context its own file does not already resolve. Undeclared (the combined
+# dev posture) keeps python-service, the only service compose.yaml declares
+# on its own. On the dev two-lane posture and the fleet overlays,
+# python-service is the coordinator, not a lane worker — restarting it does
+# not restart either lane, which is exactly the bug this derivation fixes.
+_fleet_env_var() {
+  local key="$1"
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s' "${!key}"
+    return
+  fi
+  if [[ -f .env ]]; then
+    grep -E "^${key}=" .env | tail -n 1 | cut -d '=' -f2- || true
+  fi
+}
+worker_service="$(_fleet_env_var FLEET_WORKER_SERVICE)"
+worker_service="${worker_service:-python-service}"
+compose_words=(podman compose)
+compose_project="$(_fleet_env_var FLEET_COMPOSE_PROJECT)"
+if [[ -n "$compose_project" ]]; then
+  compose_words+=(--project-name "$compose_project")
+fi
+compose_files_raw="$(_fleet_env_var FLEET_COMPOSE_FILES)"
+if [[ -n "$compose_files_raw" ]]; then
+  IFS=',' read -r -a compose_files <<< "$compose_files_raw"
+  for compose_file in "${compose_files[@]}"; do
+    compose_words+=(-f "$compose_file")
+  done
+fi
+compose_profile="$(_fleet_env_var FLEET_COMPOSE_PROFILE)"
+if [[ -n "$compose_profile" ]]; then
+  compose_words+=(--profile "$compose_profile")
+fi
+
 read -r -p "Disposable Alpaca Paper account ID: " PAPER_ACCOUNT_ID
 if [[ -z "$PAPER_ACCOUNT_ID" ]]; then
   echo "A Paper account ID is required." >&2
@@ -15,30 +53,30 @@ fi
 worker_stopped=0
 restore_worker() {
   if [[ "$worker_stopped" -eq 1 ]]; then
-    podman compose start python-service >/dev/null 2>&1 || true
+    "${compose_words[@]}" start "$worker_service" >/dev/null 2>&1 || true
   fi
 }
 trap restore_worker EXIT
 
-echo "Stopping the Alpaca worker..."
-podman compose stop python-service
+echo "Stopping the Alpaca worker ($worker_service)..."
+"${compose_words[@]}" stop "$worker_service"
 worker_stopped=1
 
 echo "Resetting the disposable Paper workspace after its own safety checks..."
-podman compose run --rm --no-deps python-service \
+"${compose_words[@]}" run --rm --no-deps "$worker_service" \
   python -m scripts.manage_alpaca_sqlite_clerk \
   --artifacts-root /app/artifacts/alpaca_clerk \
   --account-id "$PAPER_ACCOUNT_ID" \
   dev-reset --runner-artifacts-root /app/artifacts
 
 echo "Starting the worker so the Configuration page can record Apply..."
-podman compose start python-service
+"${compose_words[@]}" start "$worker_service"
 worker_stopped=0
 trap - EXIT
 
 data_plane_url="http://127.0.0.1:8000"
 selection_url="$data_plane_url/api/brokers/alpaca/configuration/selection"
-control_secret="$(podman compose exec -T python-service printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null | tr -d '\r\n')"
+control_secret="$("${compose_words[@]}" exec -T "$worker_service" printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null | tr -d '\r\n')"
 if [[ -z "$control_secret" ]]; then
   echo "The data-plane control credential is unavailable. The worker is running; use the Configuration page manually." >&2
   exit 1
@@ -86,7 +124,7 @@ if [[ "$endpoint_mode" != "live" ]]; then
 fi
 
 echo "Restarting the worker to make the recorded Live profile effective..."
-podman compose restart python-service
+"${compose_words[@]}" restart "$worker_service"
 
 for _ in {1..30}; do
   if selection_json="$(curl --fail --silent --show-error \
