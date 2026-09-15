@@ -75,7 +75,7 @@ export class BinDrillDownComponent {
 
   readonly binTitle = computed(() => {
     const bin = this.bin();
-    if (bin.lowerPct === null) return `worse than ${bin.upperPct!.toFixed(1)}%`;
+    if (bin.lowerPct === null) return `worse than ${(bin.upperPct ?? 0).toFixed(1)}%`;
     if (bin.upperPct === null) return `${bin.lowerPct.toFixed(1)}% or better`;
     return `${bin.lowerPct.toFixed(1)}% to ${bin.upperPct.toFixed(1)}%`;
   });

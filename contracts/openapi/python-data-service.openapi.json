@@ -12589,6 +12589,152 @@
         "title": "DatasetZipJobRequest",
         "type": "object"
       },
+      "DayCandleBarModel": {
+        "properties": {
+          "c": {
+            "title": "C",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "l": {
+            "title": "L",
+            "type": "number"
+          },
+          "o": {
+            "title": "O",
+            "type": "number"
+          },
+          "t": {
+            "description": "Bar start as int64 ms UTC",
+            "minimum": 0.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "o",
+          "h",
+          "l",
+          "c"
+        ],
+        "title": "DayCandleBarModel",
+        "type": "object"
+      },
+      "DayCandlesNotCapturedResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/DayNotCapturedDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "DayCandlesNotCapturedResponse",
+        "type": "object"
+      },
+      "DayCandlesRequest": {
+        "additionalProperties": false,
+        "description": "One drill-down day: extended-session minute candles for a session that\na study response already named (``session_open_ms_utc`` is the day's\nsession-open anchor, so no date string travels).",
+        "properties": {
+          "session_open_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "session_open_ms_utc"
+        ],
+        "title": "DayCandlesRequest",
+        "type": "object"
+      },
+      "DayCandlesResponse": {
+        "description": "Minute candles on the study's own price basis.\n\nRead from the same raw lake root and scaled by the same LEAN\nfactor-file multiplier the study applied to that day's anchors, so the\ncandle pane cannot disagree with the return being inspected (the\nprovider-adjusted chart feed applies split-only adjustment).",
+        "properties": {
+          "adjustment": {
+            "enum": [
+              "split_and_dividend",
+              "raw"
+            ],
+            "title": "Adjustment",
+            "type": "string"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/DayCandleBarModel"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "session_open_ms_utc",
+          "adjustment",
+          "bars"
+        ],
+        "title": "DayCandlesResponse",
+        "type": "object"
+      },
+      "DayNotCapturedDetail": {
+        "properties": {
+          "error_code": {
+            "enum": [
+              "NOT_CAPTURED",
+              "DAY_NOT_CAPTURED"
+            ],
+            "title": "Error Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "trading_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date"
+          }
+        },
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "title": "DayNotCapturedDetail",
+        "type": "object"
+      },
       "DayReturnsModel": {
         "description": "One day's returns plus ``bin_indices``: this day's histogram bin per\nreturn kind (index into that kind's ``bins`` list, edge bins included),\nstamped by the same membership function the counts were tallied with.\nConsumers select a basket's days by identity \u2014 they never re-derive\nmembership. ``None`` when that kind's value is undefined for the day.",
         "properties": {
@@ -20439,6 +20585,35 @@
         "title": "IndicatorTableResponse",
         "type": "object"
       },
+      "InsufficientCoverageDetail": {
+        "description": "The typed 400 body's ``detail`` for a too-thin usable sample.",
+        "properties": {
+          "available_sessions": {
+            "title": "Available Sessions",
+            "type": "integer"
+          },
+          "error_code": {
+            "const": "INSUFFICIENT_COVERAGE",
+            "default": "INSUFFICIENT_COVERAGE",
+            "title": "Error Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requested_sessions": {
+            "title": "Requested Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "requested_sessions",
+          "available_sessions"
+        ],
+        "title": "InsufficientCoverageDetail",
+        "type": "object"
+      },
       "Iv30LiveRequest": {
         "properties": {
           "debug": {
@@ -24205,6 +24380,43 @@
           "reason"
         ],
         "title": "NonSessionRecord",
+        "type": "object"
+      },
+      "NotCapturedDetail": {
+        "description": "The typed 404 body's ``detail`` (minus the extra_forbidden quirks).",
+        "properties": {
+          "capture_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Note"
+          },
+          "captured_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Captured Symbols",
+            "type": "array"
+          },
+          "error_code": {
+            "const": "NOT_CAPTURED",
+            "default": "NOT_CAPTURED",
+            "title": "Error Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "NotCapturedDetail",
         "type": "object"
       },
       "NullDistribution": {
@@ -30443,6 +30655,18 @@
         "title": "RetireReplaceAction",
         "type": "object"
       },
+      "ReturnDistributionInsufficientCoverageResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/InsufficientCoverageDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ReturnDistributionInsufficientCoverageResponse",
+        "type": "object"
+      },
       "ReturnDistributionMeta": {
         "properties": {
           "adjustment": {
@@ -30505,6 +30729,19 @@
           "adjustment"
         ],
         "title": "ReturnDistributionMeta",
+        "type": "object"
+      },
+      "ReturnDistributionNotCapturedResponse": {
+        "description": "404 body for a symbol the lake cannot address or capture could not fill.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/NotCapturedDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ReturnDistributionNotCapturedResponse",
         "type": "object"
       },
       "ReturnDistributionRequest": {
@@ -63149,6 +63386,26 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionInsufficientCoverageResponse"
+                }
+              }
+            },
+            "description": "The window holds fewer usable sessions than the statistics floor, or the study geometry is unusable."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionNotCapturedResponse"
+                }
+              }
+            },
+            "description": "The symbol is not lake-addressable, or the on-demand capture could not populate the lake for it."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -63161,6 +63418,58 @@
           }
         },
         "summary": "Run Return Distribution",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/research/return-distribution/day-candles": {
+      "post": {
+        "description": "One captured trading day's minute candles on the study's price basis.",
+        "operationId": "run_day_candles_api_research_return_distribution_day_candles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DayCandlesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DayCandlesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DayCandlesNotCapturedResponse"
+                }
+              }
+            },
+            "description": "The symbol is not lake-addressable, or the lake holds no bars for that trading date."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Day Candles",
         "tags": [
           "research"
         ]

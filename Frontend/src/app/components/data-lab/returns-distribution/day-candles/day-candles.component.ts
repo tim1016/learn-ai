@@ -7,9 +7,11 @@ import { ReturnsDistributionService } from '../returns-distribution.service';
 
 /**
  * The "inspect the day" pane: extended-session minute candles for one
- * selected trading date, fetched lazily from the existing chart endpoint.
- * The candles render through the shared canonical chart; this wrapper owns
- * only the fetch and the ET date heading.
+ * selected trading date, fetched lazily from the study's own day-candles
+ * read (same lake root and factor adjustment as the study, so the price
+ * basis matches the return being inspected). The candles render through
+ * the shared canonical chart; this wrapper owns only the fetch and the ET
+ * date heading.
  */
 @Component({
   selector: 'app-day-candles',
@@ -49,8 +51,8 @@ export class DayCandlesComponent {
   readonly etDate = computed(() => etIsoDate(this.sessionOpenMsUtc()));
 
   readonly candles = rxResource({
-    params: () => ({ ticker: this.ticker(), ms: this.sessionOpenMsUtc(), date: this.etDate() }),
-    stream: ({ params }) => this.service.minuteCandles(params.ticker, params.date),
+    params: () => ({ ticker: this.ticker(), ms: this.sessionOpenMsUtc() }),
+    stream: ({ params }) => this.service.minuteCandles(params.ticker, params.ms),
   });
 
   readonly bars = computed(() => this.candles.value() ?? []);

@@ -8,8 +8,8 @@ import { environment } from '../../../../environments/environment';
 
 type ReturnDistributionResponseDto = components['schemas']['ReturnDistributionResponse'];
 type ReturnDistributionRequestDto = components['schemas']['ReturnDistributionRequest'];
-type ChartDataRequestDto = components['schemas']['ChartDataRequest'];
-type ChartDataResponseDto = components['schemas']['ChartDataResponse'];
+type DayCandlesRequestDto = components['schemas']['DayCandlesRequest'];
+type DayCandlesResponseDto = components['schemas']['DayCandlesResponse'];
 
 export type ReturnKind = 'close_to_close' | 'session' | 'overnight';
 
@@ -177,7 +177,7 @@ function toStudy(dto: ReturnDistributionResponseDto): ReturnDistributionStudy {
 export class ReturnsDistributionService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/research/return-distribution`;
-  private readonly chartBase = `${environment.pythonServiceUrl}/api/chart/data`;
+  private readonly dayCandlesBase = `${environment.pythonServiceUrl}/api/research/return-distribution/day-candles`;
 
   distribution(query: StudyQuery): Observable<ReturnDistributionStudy> {
     const body: ReturnDistributionRequestDto = {
@@ -193,27 +193,23 @@ export class ReturnsDistributionService {
   }
 
   /** One trading day's extended-session minute candles for the drill-down,
-   * typed by the generated `/api/chart/data` response contract. */
-  minuteCandles(ticker: string, isoDate: string): Observable<StockAggregate[]> {
-    const body: ChartDataRequestDto = {
-      ticker,
-      from_date: isoDate,
-      to_date: isoDate,
-      timeframe: '1m',
-      session: 'extended',
-      adjusted: true,
-      forward_fill: false,
-      indicators: [],
+   * on the study's own price basis: the same raw lake root scaled by the
+   * same LEAN factor-file multiplier the study applied, so the candle pane
+   * cannot disagree with the return being inspected. */
+  minuteCandles(ticker: string, sessionOpenMsUtc: number): Observable<StockAggregate[]> {
+    const body: DayCandlesRequestDto = {
+      symbol: ticker,
+      session_open_ms_utc: sessionOpenMsUtc,
     };
-    return this.http.post<ChartDataResponseDto>(this.chartBase, body).pipe(
+    return this.http.post<DayCandlesResponseDto>(this.dayCandlesBase, body).pipe(
       map((response) =>
         response.bars.map((bar) => ({
           id: 0,
           tickerId: 0,
-          open: bar.o ?? 0,
-          high: bar.h ?? 0,
-          low: bar.l ?? 0,
-          close: bar.c ?? 0,
+          open: bar.o,
+          high: bar.h,
+          low: bar.l,
+          close: bar.c,
           volume: bar.v ?? 0,
           volumeWeightedAveragePrice: null,
           timestamp: bar.t,

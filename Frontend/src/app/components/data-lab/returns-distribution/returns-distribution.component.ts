@@ -202,6 +202,13 @@ export class ReturnsDistributionComponent {
 
   onBinWidthChange(event: Event): void {
     const value = Number((event.target as HTMLSelectElement).value);
-    if (Number.isFinite(value) && value > 0) this.binWidthPct.set(value);
+    if (Number.isFinite(value) && value > 0 && value !== this.binWidthPct()) {
+      this.binWidthPct.set(value);
+      // The retained index refers to a different interval under the new
+      // geometry: drop the basket and day selection rather than showing
+      // unrelated days or stale candles.
+      this.selectedBinIndex.set(null);
+      this.selectedDayMs.set(null);
+    }
   }
 }

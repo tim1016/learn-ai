@@ -17,6 +17,7 @@ Regeneration (must be justified in the commit message per repo rules):
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from itertools import pairwise
@@ -37,6 +38,7 @@ SEED = 20260914
 N_SESSIONS = 60
 BIN_WIDTH = 0.5
 SPAN = 5.0
+logger = logging.getLogger(__name__)
 OUT_DIR = (
     Path(__file__).resolve().parents[2]
     / "tests" / "fixtures" / "golden" / "return-distribution" / "RD-001" / "v1"
@@ -278,7 +280,7 @@ A regeneration commit must state what changed in the canonical module and why
 """,
         encoding="utf-8",
     )
-    print(f"RD-001 written to {OUT_DIR}")
+    logger.info("RD-001 written to %s", OUT_DIR)
 
 
 if __name__ == "__main__":

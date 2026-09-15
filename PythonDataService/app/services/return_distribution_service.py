@@ -26,14 +26,16 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from app.data_lake.factor_files import read_factor_rows
+from app.data_lake.factor_files import factor_multiplier_as_of, read_factor_rows
 from app.data_lake.path_policy import minute_bar_market_root, resolve_lake_root
 from app.data_lake.run_materialization import materialize_symbol_history
 from app.data_lake.types import is_lake_addressable_symbol
 from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_windows_ms_utc
 from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
 from app.research.return_distribution import (
@@ -45,6 +47,7 @@ from app.research.return_distribution import (
 )
 from app.services.chart_bar_source import split_sessions_at_boundary
 from app.services.chart_service import resolve_request_dates
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -70,9 +73,24 @@ CaptureStatus = Literal["not_attempted", "skipped", "complete", "partial", "fail
 
 
 class SymbolNotCapturedError(Exception):
-    """The lake holds no minute bars for the symbol and capture could not fill it."""
+    """The lake holds no minute bars for the symbol and capture could not fill it.
 
-    def __init__(self, symbol: str, captured_symbols: list[str], capture_note: str | None = None) -> None:
+    ``lake_addressable`` distinguishes the two refusal reasons explicitly:
+    ``False`` only for the validate/addressability guards (the symbol can
+    never live in the lake); ``True`` (the default) whenever a capture was
+    possible — even one that ran, reported success, and still wrote no
+    in-range sessions (a symbol with no trading history in the window).
+    The router must not infer this from a nullable ``capture_note``.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        captured_symbols: list[str],
+        capture_note: str | None = None,
+        *,
+        lake_addressable: bool = True,
+    ) -> None:
         message = (
             f"the data lake holds no minute bars for {symbol!r} and the on-demand "
             f"capture could not populate it"
@@ -84,6 +102,7 @@ class SymbolNotCapturedError(Exception):
         self.symbol = symbol
         self.captured_symbols = captured_symbols
         self.capture_note = capture_note
+        self.lake_addressable = lake_addressable
 
 
 class InsufficientCoverageError(Exception):
@@ -167,7 +186,16 @@ def _probe_lake_coverage(
     """
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
     completed, _live, _boundary = split_sessions_at_boundary(
-        read_start.isoformat(), to_date.isoformat(), now_ms
+        read_start.isoformat(),
+        to_date.isoformat(),
+        now_ms,
+        # The study consumes extended-hours bars, so a session is only
+        # immutable for capture once its 20:00-ET tape has finished. With
+        # the default RTH policy a request made after 16:00 ET would
+        # capture and catalog today's partial day, and later probes would
+        # see the date present and never repair the missing after-hours
+        # bars.
+        session="extended",
     )
     if not completed:
         return _CoverageProbe(needs_capture=False, capture_start=None, capture_end=None)
@@ -238,8 +266,6 @@ def _compute_sync(
             symbol, _captured_symbols(lake_root), capture_note=capture_note
         )
     expected = expected_sessions(from_date, to_date)
-    if len(in_range) < MIN_SESSIONS:
-        raise InsufficientCoverageError(requested=len(expected), available=len(in_range))
 
     windows = {
         w.session_date: (w.open_ms_utc, w.close_ms_utc)
@@ -263,6 +289,13 @@ def _compute_sync(
     scheduled = expected_sessions(read_start, to_date)
     all_days = compute_daily_returns(adjust_anchors(anchors, factor_rows), scheduled_sessions=scheduled)
     days = [d for d in all_days if d.trading_date >= from_date]
+
+    # The statistics floor applies to *usable* observations, after the
+    # exclusion of captured sessions that produced no RTH bars: 30 artifacts
+    # of which a handful are bar-less would otherwise advertise a sample the
+    # study never actually computes over.
+    if len(days) < MIN_SESSIONS:
+        raise InsufficientCoverageError(requested=len(expected), available=len(days))
 
     missing = len(expected) - len(in_range)
     if missing:
@@ -347,9 +380,9 @@ async def compute_return_distribution(
     try:
         validated = validate_symbol(symbol)
     except SymbolValidationError as e:
-        raise SymbolNotCapturedError(symbol, []) from e
+        raise SymbolNotCapturedError(symbol, [], lake_addressable=False) from e
     if not is_lake_addressable_symbol(validated):
-        raise SymbolNotCapturedError(symbol, [])
+        raise SymbolNotCapturedError(symbol, [], lake_addressable=False)
     root = lake_root if lake_root is not None else resolve_lake_root("raw")
     from_iso, to_iso = resolve_request_dates(None, None, from_ms_utc, to_ms_utc)
     from_d = date.fromisoformat(from_iso)
@@ -380,4 +413,106 @@ async def compute_return_distribution(
         span_pct=span_pct,
         lake_root=root,
         capture=capture,
+    )
+
+
+class DayNotCapturedError(Exception):
+    """The lake holds no minute bars for the requested trading date."""
+
+    def __init__(self, symbol: str, trading_date: date) -> None:
+        super().__init__(
+            f"the data lake holds no minute bars for {symbol!r} on "
+            f"{trading_date.isoformat()}"
+        )
+        self.symbol = symbol
+        self.trading_date = trading_date
+
+
+@dataclass(frozen=True)
+class DayCandlesOutcome:
+    """One day's extended-session minute bars on the study's price basis."""
+
+    trading_date: date
+    adjustment: Literal["split_and_dividend", "raw"]
+    bars: list[TradeBar]
+
+
+def _day_candles_sync(
+    *,
+    symbol: str,
+    session_open_ms_utc: int,
+    lake_root: Path,
+) -> DayCandlesOutcome:
+    # The anchor is the session's 09:30 ET open — a mid-day instant, so its
+    # ET calendar date is unambiguous across DST.
+    trading_date = et_date_at_ms(session_open_ms_utc)
+    reader = LeanMinuteDataReader([lake_root], session="extended")
+    bars = list(reader.read_day(symbol, trading_date))
+    if not bars:
+        raise DayNotCapturedError(symbol, trading_date)
+
+    # One trading date → one cumulative multiplier: prices scale, volume
+    # does not — the same LEAN semantics the study's anchors follow, from
+    # the same raw root and the same factor file, so the candle pane's
+    # basis cannot drift from the return being inspected.
+    factor_rows = read_factor_rows(lake_root, market="usa", symbol=symbol)
+    multiplier = factor_multiplier_as_of(factor_rows, trading_date)
+    adjustment: Literal["split_and_dividend", "raw"] = (
+        "split_and_dividend" if factor_rows else "raw"
+    )
+    if multiplier == Decimal(1):
+        scaled = bars
+    else:
+        scaled = [
+            TradeBar(
+                symbol=b.symbol,
+                open=b.open * multiplier,
+                high=b.high * multiplier,
+                low=b.low * multiplier,
+                close=b.close * multiplier,
+                volume=b.volume,
+                start_ms=b.start_ms,
+                end_ms=b.end_ms,
+            )
+            for b in bars
+        ]
+    logger.info(
+        "[RETURN_DISTRIBUTION] day candles %s %s: %d bars, adjustment=%s",
+        symbol,
+        trading_date.isoformat(),
+        len(scaled),
+        adjustment,
+        extra={"symbol": symbol, "trading_date": trading_date.isoformat(), "bars": len(scaled)},
+    )
+    return DayCandlesOutcome(
+        trading_date=trading_date,
+        adjustment=adjustment,
+        bars=scaled,
+    )
+
+
+async def compute_day_candles(
+    *,
+    symbol: str,
+    session_open_ms_utc: int,
+    lake_root: Path | None = None,
+) -> DayCandlesOutcome:
+    """Read one captured trading day's minute bars on the study's price basis.
+
+    No capture-on-demand: this read serves a day a study response already
+    named, so the bytes are in the lake by construction; anything else is a
+    typed 404. The zip parse runs off the event loop like the study's.
+    """
+    try:
+        validated = validate_symbol(symbol)
+    except SymbolValidationError as e:
+        raise SymbolNotCapturedError(symbol, [], lake_addressable=False) from e
+    if not is_lake_addressable_symbol(validated):
+        raise SymbolNotCapturedError(symbol, [], lake_addressable=False)
+    root = lake_root if lake_root is not None else resolve_lake_root("raw")
+    return await asyncio.to_thread(
+        _day_candles_sync,
+        symbol=validated,
+        session_open_ms_utc=session_open_ms_utc,
+        lake_root=root,
     )

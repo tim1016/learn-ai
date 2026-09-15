@@ -82,6 +82,13 @@ TRADING_DAYS_PER_YEAR = 252
 DEFAULT_BIN_WIDTH_PCT = 0.5
 DEFAULT_SPAN_PCT = 5.0
 
+#: Hard ceiling on ``span_pct / bin_width_pct`` (inner bins per side). The
+#: request validators enforce it first (422); ``_bin_geometry`` re-asserts
+#: it so no caller — including direct module use — can ask for an edge
+#: list that would exhaust memory (``bin_width_pct=1e-9`` would otherwise
+#: allocate ~10^10 edges).
+MAX_BINS_PER_SIDE = 100
+
 _ET = ZoneInfo("America/New_York")
 
 ReturnKind = Literal["close_to_close", "session", "overnight"]
@@ -108,6 +115,21 @@ SEGMENT_NAMES: tuple[str, ...] = (
 
 class NonMonotonicBarError(ValueError):
     """A day's bars did not arrive in chronological order."""
+
+
+class StudyRequestError(ValueError):
+    """The request's study parameters cannot produce a study.
+
+    Raised for unusable histogram geometry (non-positive width, span not an
+    integer multiple of width, or a bin count beyond :data:`MAX_BINS`) and
+    for a return series with no observations. Subclasses ``ValueError`` so
+    pure-function callers keep one catch, while the router maps exactly
+    this type — and not every internal ``ValueError`` — onto HTTP 400:
+    a malformed factor file or a corrupt lake zip is an operational 500,
+    not a caller error.
+    """
+
+    __module__ = "app.research.return_distribution"
 
 
 @dataclass(frozen=True)
@@ -432,15 +454,20 @@ def _bin_geometry(
     both endpoints; the open edge bins take everything outside.
     """
     if bin_width_pct <= 0:
-        raise ValueError(f"bin_width_pct must be positive, got {bin_width_pct}")
+        raise StudyRequestError(f"bin_width_pct must be positive, got {bin_width_pct}")
     if span_pct <= 0:
-        raise ValueError(f"span_pct must be positive, got {span_pct}")
+        raise StudyRequestError(f"span_pct must be positive, got {span_pct}")
     span_over_width = span_pct / bin_width_pct
     if not math.isclose(span_over_width, round(span_over_width), rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError(
+        raise StudyRequestError(
             f"span_pct ({span_pct}) must be an integer multiple of bin_width_pct ({bin_width_pct})"
         )
     step = round(span_over_width)
+    if step > MAX_BINS_PER_SIDE:
+        raise StudyRequestError(
+            f"span_pct / bin_width_pct = {step} exceeds the maximum of {MAX_BINS_PER_SIDE} "
+            f"bins per side (at most {2 * MAX_BINS_PER_SIDE + 1} bins total)"
+        )
     edges = [-span_pct + i * bin_width_pct for i in range(2 * step + 1)]
     return span_pct, edges
 
@@ -536,7 +563,7 @@ def compute_distribution_stats(
         raise ValueError("values, dates, and session anchors must have equal length")
     n = len(values_pct)
     if n < 1:
-        raise ValueError("need at least 1 return for distribution statistics, got 0")
+        raise StudyRequestError("need at least 1 return for distribution statistics, got 0")
 
     mean = math.fsum(values_pct) / n
     std = _sample_std(values_pct, mean)
@@ -673,8 +700,8 @@ def build_return_distribution(
         histogram = compute_histogram(values, bin_width_pct=bin_width_pct, span_pct=span_pct)
         try:
             stats = compute_distribution_stats(values, dates, anchors)
-        except ValueError as exc:
-            raise ValueError(f"{kind}: {exc}") from exc
+        except StudyRequestError as exc:
+            raise StudyRequestError(f"{kind}: {exc}") from exc
         kinds.append(
             KindDistribution(
                 kind=kind,

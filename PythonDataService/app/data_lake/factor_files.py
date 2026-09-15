@@ -217,7 +217,10 @@ def parse_factor_file(text: str) -> list[FactorRow]:
             row_date = datetime.strptime(raw_date, "%Y%m%d").date()
             price_factor = Decimal(raw_price_factor)
             split_factor = Decimal(raw_split_factor)
-        except ValueError as exc:
+        except (ValueError, ArithmeticError) as exc:
+            # ArithmeticError covers decimal.InvalidOperation (Decimal("abc")),
+            # which is not a ValueError — without it a garbage factor column
+            # escapes the documented malformed-row contract.
             raise ValueError(f"malformed factor file row {line!r}: {exc}") from exc
         rows.append(
             FactorRow(

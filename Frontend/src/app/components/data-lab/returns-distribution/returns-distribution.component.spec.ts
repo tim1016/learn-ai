@@ -205,8 +205,8 @@ describe('ReturnsDistributionComponent', () => {
     // with when the signal changes.
     await userEvent.click(screen.getByRole('button', { name: 'Session only' }));
     await waitFor(() => {
-      const chart = harness.instances.at(-1)!;
-      expect(chart.config.options.onClick).toBeTypeOf('function');
+      const chart = harness.instances.at(-1);
+      expect(chart?.config.options.onClick).toBeTypeOf('function');
     });
   });
 
@@ -221,14 +221,14 @@ describe('ReturnsDistributionComponent', () => {
 
     expect(screen.queryByText(/^Basket /)).toBeNull();
     await waitFor(() => expect(harness.instances.length).toBeGreaterThan(0));
-    harness.instances[0]!.config.options.onClick!(null, [{ index: 0 }]);
+    harness.instances[0]?.config.options.onClick?.(null, [{ index: 0 }]);
 
     expect(await screen.findByText('Basket 0.0% to 0.5% — 2 day(s)')).toBeTruthy();
     expect(screen.getByText('2024-07-02')).toBeTruthy();
 
     await userEvent.click(screen.getByRole('button', { name: /2024-07-02/ }));
     expect(await screen.findByText(/2024-07-02 — full trading day/)).toBeTruthy();
-    expect(service.minuteCandles).toHaveBeenCalledWith('SPY', '2024-07-02');
+    expect(service.minuteCandles).toHaveBeenCalledWith('SPY', DAY_MS(2));
   });
 
   it('asks for scope before anything else when the store has no committed window', async () => {

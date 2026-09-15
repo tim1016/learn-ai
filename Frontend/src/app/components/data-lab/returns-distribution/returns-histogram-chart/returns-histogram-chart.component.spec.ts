@@ -73,11 +73,13 @@ describe('ReturnsHistogramChartComponent', () => {
     });
 
     expect(harness.instances).toHaveLength(1);
-    const chart = harness.instances[0]!;
-    expect(chart.config.data.labels).toEqual(['< -5.0%', '-0.5…0.0%', '0.0…0.5%', '≥ 5.0%']);
-    expect(chart.config.data.datasets[0]!.data).toEqual([2, 120, 130, 1]);
-    expect(chart.config.data.datasets[1]!.type).toBe('line');
-    expect(chart.config.data.datasets[1]!.data).toEqual(DISTRIBUTION.normalExpectedCounts);
+    const chart = harness.instances[0];
+    expect(chart?.config.data.labels).toEqual(['< -5.0%', '-0.5…0.0%', '0.0…0.5%', '≥ 5.0%']);
+    const barDataset = chart?.config.data.datasets[0];
+    const lineDataset = chart?.config.data.datasets[1];
+    expect(barDataset?.data).toEqual([2, 120, 130, 1]);
+    expect(lineDataset?.type).toBe('line');
+    expect(lineDataset?.data).toEqual(DISTRIBUTION.normalExpectedCounts);
   });
 
   it('emits the clicked bin index through the chart click handler', async () => {
@@ -87,7 +89,7 @@ describe('ReturnsHistogramChartComponent', () => {
     });
     fixture.componentInstance.binSelected.subscribe((index: number) => emitted.push(index));
 
-    harness.instances[0]!.config.options.onClick!(null, [{ index: 2 }]);
+    harness.instances[0]?.config.options.onClick?.(null, [{ index: 2 }]);
 
     expect(emitted).toEqual([2]);
   });
@@ -104,6 +106,6 @@ describe('ReturnsHistogramChartComponent', () => {
     });
 
     expect(harness.instances).toHaveLength(2);
-    expect(harness.instances[0]!.destroy).toHaveBeenCalled();
+    expect(harness.instances[0]?.destroy).toHaveBeenCalled();
   });
 });

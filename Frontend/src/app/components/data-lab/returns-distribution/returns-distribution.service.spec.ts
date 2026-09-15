@@ -8,7 +8,7 @@ import { environment } from '../../../../environments/environment';
 import { ReturnsDistributionService } from './returns-distribution.service';
 
 const BASE = `${environment.pythonServiceUrl}/api/research/return-distribution`;
-const CHART_BASE = `${environment.pythonServiceUrl}/api/chart/data`;
+const DAY_CANDLES_BASE = `${environment.pythonServiceUrl}/api/research/return-distribution/day-candles`;
 const FROM_MS = Date.UTC(2024, 6, 1);
 const TO_MS = Date.UTC(2025, 5, 30, 23, 59, 59, 999);
 
@@ -120,19 +120,19 @@ describe('ReturnsDistributionService', () => {
     expect(study.coverage.missingSessions).toBe(2);
     expect(study.coverage.firstSessionOpenMsUtc).toBe(1719821400000);
 
-    const kind = study.kinds[0]!;
-    expect(kind.kind).toBe('close_to_close');
-    expect(kind.bins[0]!.isEdge).toBe(true);
-    expect(kind.bins[0]!.lowerPct).toBeNull();
+    const kind = study.kinds[0];
+    expect(kind?.kind).toBe('close_to_close');
+    expect(kind?.bins[0]?.isEdge).toBe(true);
+    expect(kind?.bins[0]?.lowerPct).toBeNull();
     expect(kind.normalExpectedCounts[1]).toBeCloseTo(118.2, 10);
-    expect(kind.stats.annualizedVolPct).toBeCloseTo(15.56, 10);
-    expect(kind.stats.worstDay.valuePct).toBeCloseTo(-5.4, 10);
+    expect(kind?.stats.annualizedVolPct).toBeCloseTo(15.56, 10);
+    expect(kind?.stats.worstDay.valuePct).toBeCloseTo(-5.4, 10);
 
-    const day = study.days[0]!;
-    expect(day.preMarketPct).toBeCloseTo(0.02, 10);
-    expect(day.afterHoursPct).toBeNull();
-    expect(day.volume).toBe(4_500_000);
-    expect(day.binIndices).toEqual({ close_to_close: 1, session: 1, overnight: null });
+    const day = study.days[0];
+    expect(day?.preMarketPct).toBeCloseTo(0.02, 10);
+    expect(day?.afterHoursPct).toBeNull();
+    expect(day?.volume).toBe(4_500_000);
+    expect(day?.binIndices).toEqual({ close_to_close: 1, session: 1, overnight: null });
   });
 
   it('maps undefined stats to null — undefined is data, not zero', async () => {
@@ -154,55 +154,33 @@ describe('ReturnsDistributionService', () => {
     );
     http.expectOne(BASE).flush(dto);
     const study = await pending;
-    expect(study.kinds[0]!.stats.skewness).toBeNull();
-    expect(study.kinds[0]!.stats.excessKurtosis).toBeNull();
+    expect(study.kinds[0]?.stats.skewness).toBeNull();
+    expect(study.kinds[0]?.stats.excessKurtosis).toBeNull();
   });
 
-  it('requests a single-day extended 1m window for the candle pane and maps generated-contract bars', async () => {
-    const pending = firstValueFrom(service.minuteCandles('SPY', '2024-07-02'));
+  it('requests the study day-candles read and maps generated-contract bars', async () => {
+    const sessionOpenMs = 1719907800000;
+    const pending = firstValueFrom(service.minuteCandles('SPY', sessionOpenMs));
 
-    const request = http.expectOne(CHART_BASE);
+    const request = http.expectOne(DAY_CANDLES_BASE);
     expect(request.request.method).toBe('POST');
     expect(request.request.body).toEqual({
-      ticker: 'SPY',
-      from_date: '2024-07-02',
-      to_date: '2024-07-02',
-      timeframe: '1m',
-      session: 'extended',
-      adjusted: true,
-      forward_fill: false,
-      indicators: [],
+      symbol: 'SPY',
+      session_open_ms_utc: sessionOpenMs,
     });
-    // The generated /api/chart/data contract: single-letter bar keys.
     request.flush({
+      symbol: 'SPY',
+      session_open_ms_utc: sessionOpenMs,
+      adjustment: 'split_and_dividend',
       bars: [{ t: 1719907200000, o: 545.1, h: 545.2, l: 545.0, c: 545.15, v: 1200 }],
-      indicators: [],
-      quality: {
-        raw_bar_count: 1,
-        duplicates_removed: 0,
-        gaps_found: 0,
-        largest_gap_minutes: 0,
-        missing_sessions: 0,
-        session_coverage_pct: 100,
-        synthetic_bars: 0,
-        resampled_bar_count: 1,
-        gap_details: [],
-        missing_session_dates: [],
-        flat_bars_detected: 0,
-        ohlc_violations_detected: 0,
-        out_of_order_fixed: 0,
-      },
-      allowed_timeframes: ['1m'],
-      estimated_bars_per_timeframe: { '1m': 1 },
-      recommended_timeframe: '1m',
-      meta: { cached_resample: false, cached_indicators: false },
     });
 
     const bars = await pending;
     expect(bars).toHaveLength(1);
-    expect(bars[0]!.timestamp).toBe(1719907200000);
-    expect(bars[0]!.open).toBeCloseTo(545.1, 10);
-    expect(bars[0]!.timespan).toBe('minute');
-    expect(bars[0]!.volumeWeightedAveragePrice).toBeNull();
+    const bar = bars[0];
+    expect(bar?.timestamp).toBe(1719907200000);
+    expect(bar?.open).toBeCloseTo(545.1, 10);
+    expect(bar?.timespan).toBe('minute');
+    expect(bar?.volumeWeightedAveragePrice).toBeNull();
   });
 });

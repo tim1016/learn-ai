@@ -5883,6 +5883,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/return-distribution/day-candles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Day Candles
+         * @description One captured trading day's minute candles on the study's price basis.
+         */
+        post: operations["run_day_candles_api_research_return_distribution_day_candles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/run-batch-options": {
         parameters: {
             query?: never;
@@ -12326,6 +12346,77 @@ export interface components {
             /** Jobid */
             jobId: string;
         };
+        /** DayCandleBarModel */
+        DayCandleBarModel: {
+            /** C */
+            c: number;
+            /** H */
+            h: number;
+            /** L */
+            l: number;
+            /** O */
+            o: number;
+            /**
+             * T
+             * @description Bar start as int64 ms UTC
+             */
+            t: number;
+            /**
+             * V
+             * @default 0
+             */
+            v?: number;
+        };
+        /** DayCandlesNotCapturedResponse */
+        DayCandlesNotCapturedResponse: {
+            detail: components["schemas"]["DayNotCapturedDetail"];
+        };
+        /**
+         * DayCandlesRequest
+         * @description One drill-down day: extended-session minute candles for a session that
+         *     a study response already named (``session_open_ms_utc`` is the day's
+         *     session-open anchor, so no date string travels).
+         */
+        DayCandlesRequest: {
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * DayCandlesResponse
+         * @description Minute candles on the study's own price basis.
+         *
+         *     Read from the same raw lake root and scaled by the same LEAN
+         *     factor-file multiplier the study applied to that day's anchors, so the
+         *     candle pane cannot disagree with the return being inspected (the
+         *     provider-adjusted chart feed applies split-only adjustment).
+         */
+        DayCandlesResponse: {
+            /**
+             * Adjustment
+             * @enum {string}
+             */
+            adjustment: "split_and_dividend" | "raw";
+            /** Bars */
+            bars: components["schemas"]["DayCandleBarModel"][];
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /** DayNotCapturedDetail */
+        DayNotCapturedDetail: {
+            /**
+             * Error Code
+             * @enum {string}
+             */
+            error_code: "NOT_CAPTURED" | "DAY_NOT_CAPTURED";
+            /** Message */
+            message: string;
+            /** Trading Date */
+            trading_date?: string | null;
+        };
         /**
          * DayReturnsModel
          * @description One day's returns plus ``bin_indices``: this day's histogram bin per
@@ -15771,6 +15862,24 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
+        /**
+         * InsufficientCoverageDetail
+         * @description The typed 400 body's ``detail`` for a too-thin usable sample.
+         */
+        InsufficientCoverageDetail: {
+            /** Available Sessions */
+            available_sessions: number;
+            /**
+             * Error Code
+             * @default INSUFFICIENT_COVERAGE
+             * @constant
+             */
+            error_code?: "INSUFFICIENT_COVERAGE";
+            /** Message */
+            message: string;
+            /** Requested Sessions */
+            requested_sessions: number;
+        };
         /** Iv30LiveRequest */
         Iv30LiveRequest: {
             /**
@@ -17546,6 +17655,24 @@ export interface components {
              * Format: date
              */
             trading_date: string;
+        };
+        /**
+         * NotCapturedDetail
+         * @description The typed 404 body's ``detail`` (minus the extra_forbidden quirks).
+         */
+        NotCapturedDetail: {
+            /** Capture Note */
+            capture_note?: string | null;
+            /** Captured Symbols */
+            captured_symbols?: string[];
+            /**
+             * Error Code
+             * @default NOT_CAPTURED
+             * @constant
+             */
+            error_code?: "NOT_CAPTURED";
+            /** Message */
+            message: string;
         };
         /**
          * NullDistribution
@@ -20102,6 +20229,10 @@ export interface components {
              */
             kind: "retire_replace";
         };
+        /** ReturnDistributionInsufficientCoverageResponse */
+        ReturnDistributionInsufficientCoverageResponse: {
+            detail: components["schemas"]["InsufficientCoverageDetail"];
+        };
         /** ReturnDistributionMeta */
         ReturnDistributionMeta: {
             /**
@@ -20128,6 +20259,13 @@ export interface components {
             to_ms_utc: number;
             /** Warnings */
             warnings?: string[];
+        };
+        /**
+         * ReturnDistributionNotCapturedResponse
+         * @description 404 body for a symbol the lake cannot address or capture could not fill.
+         */
+        ReturnDistributionNotCapturedResponse: {
+            detail: components["schemas"]["NotCapturedDetail"];
         };
         /**
          * ReturnDistributionRequest
@@ -35954,6 +36092,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReturnDistributionResponse"];
+                };
+            };
+            /** @description The window holds fewer usable sessions than the statistics floor, or the study geometry is unusable. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionInsufficientCoverageResponse"];
+                };
+            };
+            /** @description The symbol is not lake-addressable, or the on-demand capture could not populate the lake for it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionNotCapturedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_day_candles_api_research_return_distribution_day_candles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DayCandlesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayCandlesResponse"];
+                };
+            };
+            /** @description The symbol is not lake-addressable, or the lake holds no bars for that trading date. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayCandlesNotCapturedResponse"];
                 };
             };
             /** @description Validation Error */

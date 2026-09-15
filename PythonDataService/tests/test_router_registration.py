@@ -32,20 +32,29 @@ async def test_quantlib_router_is_mounted(client):
 
 
 @pytest.mark.anyio
-async def test_return_distribution_router_is_mounted(client):
-    """A typed NOT_CAPTURED answer proves the route exists; a missing
-    registration would surface as FastAPI's plain {"detail": "Not Found"}
-    404 instead (same class of bug as the quantlib probe above)."""
+async def test_return_distribution_router_is_mounted(client, monkeypatch):
+    """Any typed answer proves the route exists; a missing registration
+    would surface as FastAPI's plain {"detail": "Not Found"} 404 instead
+    (same class of bug as the quantlib probe above). The business outcome
+    (200 / 400 INSUFFICIENT_COVERAGE / 404 NOT_CAPTURED) depends on lake
+    contents and belongs to tests/routers/test_return_distribution_endpoint.py;
+    the capture boundary is stubbed so the probe never reaches the provider."""
+    from app.services import return_distribution_service
+
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return return_distribution_service.CaptureReceipt(
+            status="skipped", fetched_artifact_count=0, detail="stubbed for registration probe"
+        )
+
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _stub_capture)
     response = await client.post(
         "/api/research/return-distribution",
-        json={"symbol": "SPY", "from_date": "2024-07-01", "to_date": "2024-08-01"},
+        json={"symbol": "SPY", "from_ms_utc": 1719792000000, "to_ms_utc": 1722470399999},
     )
     body = response.json()
-    if response.status_code == 404:
-        detail = body["detail"]
-        assert isinstance(detail, dict) and detail.get("error_code") == "NOT_CAPTURED", (
-            "POST /api/research/return-distribution returned an untyped 404 — "
-            "return_distribution router is missing from app/main.py"
-        )
-    else:
-        assert response.status_code == 200, body
+    # An unmatched route always answers FastAPI's plain {"detail": "Not Found"}.
+    assert body != {"detail": "Not Found"}, (
+        "POST /api/research/return-distribution returned an untyped 404 — "
+        "return_distribution router is missing from app/main.py"
+    )
+    assert response.status_code in (200, 400, 404), body

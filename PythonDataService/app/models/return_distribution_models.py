@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.research.return_distribution import RETURN_KINDS
+from app.research.return_distribution import MAX_BINS_PER_SIDE, RETURN_KINDS
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 CaptureStatus = Literal["not_attempted", "skipped", "complete", "partial", "failed"]
@@ -47,6 +47,18 @@ class ReturnDistributionRequest(BaseModel):
     def _validate_window(self) -> ReturnDistributionRequest:
         if self.to_ms_utc < self.from_ms_utc:
             raise ValueError(f"to_ms_utc ({self.to_ms_utc}) must be >= from_ms_utc ({self.from_ms_utc})")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bin_count(self) -> ReturnDistributionRequest:
+        # Bounds the allocated edge list (memory) and the rendered bars; the
+        # integer-multiple rule itself is the study's to report.
+        ratio = self.span_pct / self.bin_width_pct
+        if ratio > MAX_BINS_PER_SIDE:
+            raise ValueError(
+                f"span_pct / bin_width_pct = {ratio:g} exceeds the maximum of "
+                f"{MAX_BINS_PER_SIDE} bins per side (at most {2 * MAX_BINS_PER_SIDE + 1} bins total)"
+            )
         return self
 
 
@@ -210,3 +222,75 @@ class ReturnDistributionResponse(BaseModel):
                 for d in result.days
             ],
         )
+
+
+class NotCapturedDetail(BaseModel):
+    """The typed 404 body's ``detail`` (minus the extra_forbidden quirks)."""
+
+    error_code: Literal["NOT_CAPTURED"] = "NOT_CAPTURED"
+    message: str
+    capture_note: str | None = None
+    captured_symbols: list[str] = Field(default_factory=list)
+
+
+class ReturnDistributionNotCapturedResponse(BaseModel):
+    """404 body for a symbol the lake cannot address or capture could not fill."""
+
+    detail: NotCapturedDetail
+
+
+class InsufficientCoverageDetail(BaseModel):
+    """The typed 400 body's ``detail`` for a too-thin usable sample."""
+
+    error_code: Literal["INSUFFICIENT_COVERAGE"] = "INSUFFICIENT_COVERAGE"
+    message: str
+    requested_sessions: int
+    available_sessions: int
+
+
+class ReturnDistributionInsufficientCoverageResponse(BaseModel):
+    detail: InsufficientCoverageDetail
+
+
+class DayCandlesRequest(BaseModel):
+    """One drill-down day: extended-session minute candles for a session that
+    a study response already named (``session_open_ms_utc`` is the day's
+    session-open anchor, so no date string travels)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20)
+    session_open_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
+
+
+class DayCandleBarModel(BaseModel):
+    t: int = Field(..., ge=0, description="Bar start as int64 ms UTC")
+    o: float
+    h: float
+    l: float
+    c: float
+    v: float = Field(default=0.0, ge=0.0)
+
+
+class DayCandlesResponse(BaseModel):
+    """Minute candles on the study's own price basis.
+
+    Read from the same raw lake root and scaled by the same LEAN
+    factor-file multiplier the study applied to that day's anchors, so the
+    candle pane cannot disagree with the return being inspected (the
+    provider-adjusted chart feed applies split-only adjustment)."""
+
+    symbol: str
+    session_open_ms_utc: int
+    adjustment: Literal["split_and_dividend", "raw"]
+    bars: list[DayCandleBarModel]
+
+
+class DayNotCapturedDetail(BaseModel):
+    error_code: Literal["NOT_CAPTURED", "DAY_NOT_CAPTURED"]
+    message: str
+    trading_date: str | None = None
+
+
+class DayCandlesNotCapturedResponse(BaseModel):
+    detail: DayNotCapturedDetail

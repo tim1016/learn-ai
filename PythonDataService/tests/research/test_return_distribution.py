@@ -346,6 +346,12 @@ def test_compute_histogram_rejects_invalid_geometry() -> None:
         rd.compute_histogram([], bin_width_pct=0.0, span_pct=5.0)
     with pytest.raises(ValueError, match="integer multiple"):
         rd.compute_histogram([], bin_width_pct=0.3, span_pct=5.0)
+    # The bin-count bound is a caller error of the same family: a valid-but-
+    # absurd width must refuse, not attempt to allocate the edge list.
+    with pytest.raises(rd.StudyRequestError, match="exceeds the maximum"):
+        rd.compute_histogram([], bin_width_pct=0.01, span_pct=5.0)
+    assert rd.MAX_BINS_PER_SIDE == 100
+    rd.compute_histogram([], bin_width_pct=0.05, span_pct=5.0)  # 100/side: allowed
 
 
 # ---------------------------------------------------------------------------

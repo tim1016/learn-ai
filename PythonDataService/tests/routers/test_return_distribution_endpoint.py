@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.data_lake.path_policy import LeanFactorFilePath
-from app.engine.data.lean_format import write_lean_day_zip
+from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.routers import return_distribution as return_distribution_router
@@ -316,13 +316,19 @@ async def test_return_distribution_unknown_symbol_is_typed_not_found(api: FastAP
     detail = response.json()["detail"]
     assert detail["error_code"] == "NOT_CAPTURED"
     assert SYMBOL in detail["captured_symbols"]
+    # The symbol IS lake-addressable and capture ran — the message must say
+    # the capture could not fill it, not claim it can never be held.
+    assert "could not populate" in detail["message"]
+    assert "lake-addressable" not in detail["message"]
 
 
 @pytest.mark.asyncio
 async def test_return_distribution_path_unsafe_symbol_is_typed_not_found(api: FastAPI) -> None:
     response = await _post(api, _request_body(symbol="../../etc/passwd"))
     assert response.status_code == 404
-    assert response.json()["detail"]["error_code"] == "NOT_CAPTURED"
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "NOT_CAPTURED"
+    assert "lake-addressable" in detail["message"]
 
 
 @pytest.mark.asyncio
@@ -344,6 +350,58 @@ async def test_return_distribution_bad_geometry_is_bad_request(api: FastAPI) -> 
     response = await _post(api, _request_body(span_pct=5.2))
     assert response.status_code == 400
     assert "integer multiple" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_rejects_excessive_bin_count(api: FastAPI) -> None:
+    """A valid-but-absurd bin width must be a validation error, not an
+    attempted allocation of billions of edges."""
+    response = await _post(api, _request_body(bin_width_pct=0.01, span_pct=5.0))
+    assert response.status_code == 422
+    assert "exceeds the maximum" in response.text
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_internal_data_error_is_not_a_client_error(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed factor file is lake corruption — an operational failure
+    the service must surface (500-class propagation), not a 400 telling the
+    caller their request is invalid."""
+    factor_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path()
+    factor_path = seeded_lake.joinpath(*factor_rel.parts)
+    factor_path.write_text("20240701,abc,1,99\n", encoding="ascii")
+
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_stub_capture)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        with pytest.raises(ValueError, match="malformed factor file row"):
+            await client.post("/api/research/return-distribution", json=_request_body())
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_coverage_floor_counts_usable_days(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MIN_SESSIONS floor applies after excluding captured sessions with
+    no RTH bars — 40 artifacts of which 12 are bar-less leave 28 usable
+    observations, below the advertised 30."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    for d in sessions[:12]:
+        # Pre-market-only zips: captured dates that contribute no session bars.
+        write_lean_day_zip(seeded_lake, SYMBOL, d, [_bar(d, 8, 0, 100.0, 100.5)])
+
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_stub_capture)
+    response = await _post(app, _request_body(to_ms_utc=_utc_day_end_ms(sessions[-1])))
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "INSUFFICIENT_COVERAGE"
+    assert detail["available_sessions"] == N_SESSIONS - 12
 
 
 @pytest.mark.asyncio
@@ -435,3 +493,82 @@ async def test_return_distribution_capture_failure_is_typed_not_found(
     assert detail["error_code"] == "NOT_CAPTURED"
     assert "could not populate" in detail["message"]
     assert "CatalogUnavailableError" in detail["capture_note"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/return-distribution/day-candles
+# ---------------------------------------------------------------------------
+
+
+async def _post_day_candles(
+    app: FastAPI, body: dict[str, object]
+) -> object:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.post("/api/research/return-distribution/day-candles", json=body)
+
+
+def _session_open_ms(d: date) -> int:
+    return _et_ms(d, 9, 30)
+
+
+@pytest.mark.asyncio
+async def test_day_candles_serve_study_price_basis(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The candle pane reads the same raw root and applies the same LEAN
+    factor multiplier the study used: bars on the dividend's covered dates
+    are scaled by 0.99, post-turnover bars are not."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    app = _app_with(seeded_lake, monkeypatch)
+
+    covered = await _post_day_candles(
+        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[2])}
+    )
+    assert covered.status_code == 200, covered.text
+    covered_body = covered.json()
+    assert covered_body["adjustment"] == "split_and_dividend"
+    raw_bars = list(LeanMinuteDataReader([seeded_lake], session="extended").read_day(SYMBOL, sessions[2]))
+    assert len(covered_body["bars"]) == len(raw_bars)
+    first_raw = next(iter(raw_bars))
+    assert covered_body["bars"][0]["o"] == pytest.approx(float(first_raw.open) * 0.99, abs=1e-9)
+    assert covered_body["bars"][0]["t"] == first_raw.start_ms
+
+    # After the factor row dated sessions[5], the multiplier is the
+    # terminal identity row — bars are raw.
+    post = await _post_day_candles(
+        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[10])}
+    )
+    assert post.status_code == 200, post.text
+    raw_post = list(
+        LeanMinuteDataReader([seeded_lake], session="extended").read_day(SYMBOL, sessions[10])
+    )
+    assert post.json()["bars"][0]["o"] == pytest.approx(float(raw_post[0].open), abs=1e-12)
+
+
+@pytest.mark.asyncio
+async def test_day_candles_unknown_day_is_typed_not_found(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app_with(seeded_lake, monkeypatch)
+    response = await _post_day_candles(
+        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(date(2025, 1, 2))}
+    )
+    # 2025-01-02 is a scheduled NYSE session far beyond the 40 seeded ones.
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "DAY_NOT_CAPTURED"
+    assert detail["trading_date"] == "2025-01-02"
+
+
+@pytest.mark.asyncio
+async def test_day_candles_unaddressable_symbol_is_typed_not_found(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app_with(seeded_lake, monkeypatch)
+    response = await _post_day_candles(
+        app, {"symbol": "../../etc/passwd", "session_open_ms_utc": _session_open_ms(date(2024, 7, 2))}
+    )
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "NOT_CAPTURED"
+    assert "lake-addressable" in detail["message"]

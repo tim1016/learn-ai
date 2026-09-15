@@ -54,6 +54,13 @@ def test_factor_multiplier_matches_lean_getscaling_factors_over_a_date_grid() ->
         day += timedelta(days=1)
 
 
+def test_parse_factor_file_non_numeric_factor_rejected() -> None:
+    # decimal.InvalidOperation is an ArithmeticError, not a ValueError — the
+    # handler must still deliver the documented malformed-row ValueError.
+    with pytest.raises(ValueError, match="malformed factor file row"):
+        parse_factor_file("20240701,abc,1,99\n")
+
+
 def test_factor_multiplier_empty_file_is_identity() -> None:
     assert factor_multiplier_as_of([], date(2024, 7, 1)) == Decimal(1)
 

@@ -1,4 +1,5 @@
 import {
+  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
@@ -14,9 +15,11 @@ import { KindDistribution } from '../returns-distribution.service';
 
 Chart.register(...registerables);
 
-/** Closed copy map: bin labels are presentation, authored here. */
+/** Closed copy map: bin labels are presentation, authored here.
+ * Edge bins have exactly one finite bound; the missing one is formatted
+ * from the other side. */
 function binLabel(lowerPct: number | null, upperPct: number | null): string {
-  if (lowerPct === null) return `< ${upperPct!.toFixed(1)}%`;
+  if (lowerPct === null) return `< ${(upperPct ?? 0).toFixed(1)}%`;
   if (upperPct === null) return `≥ ${lowerPct.toFixed(1)}%`;
   return `${lowerPct.toFixed(1)}…${upperPct.toFixed(1)}%`;
 }
@@ -25,22 +28,30 @@ function binLabel(lowerPct: number | null, upperPct: number | null): string {
  * The daily-returns histogram: one bar per bin (open edge bins visually
  * distinct) with the Python-computed normal overlay as a line. Purely
  * presentational — every count and overlay point arrives computed; the only
- * arithmetic here is axis labels. Clicking a bar emits its bin index.
+ * arithmetic here is axis labels. Clicking a bar (or focusing the canvas and
+ * using the keyboard) emits its bin index.
  */
 @Component({
   selector: 'app-returns-histogram-chart',
   template: `
     <div class="hist-wrap">
-      <canvas #histCanvas role="img" aria-label="Daily returns histogram"></canvas>
+      <canvas
+        #histCanvas
+        tabindex="0"
+        role="img"
+        aria-label="Daily returns histogram. Use left and right arrow keys to pick a basket, Enter or Space to open or close it."
+        (keydown)="onKeydown($event)"
+      ></canvas>
     </div>
   `,
   styles: `
     :host { display: block; }
     .hist-wrap { position: relative; height: 340px; }
+    canvas:focus-visible { outline: 2px solid #ff9800; outline-offset: 2px; }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ReturnsHistogramChartComponent implements OnChanges, OnDestroy {
+export class ReturnsHistogramChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   readonly distribution = input.required<KindDistribution>();
   readonly selectedBinIndex = input<number | null>(null);
   readonly binSelected = output<number>();
@@ -49,13 +60,54 @@ export class ReturnsHistogramChartComponent implements OnChanges, OnDestroy {
     viewChild.required<ElementRef<HTMLCanvasElement>>('histCanvas');
   private chart: Chart | null = null;
 
-  ngOnChanges(): void {
+  /** The required view query resolves by ngAfterViewInit; the initial
+   * ngOnChanges fires earlier, so the first render waits for the view and
+   * later input changes re-render only once the chart exists. */
+  ngAfterViewInit(): void {
     this.render();
+  }
+
+  ngOnChanges(): void {
+    if (this.chart !== null) this.render();
   }
 
   ngOnDestroy(): void {
     this.chart?.destroy();
     this.chart = null;
+  }
+
+  /** Keyboard bin selection: arrows/Home/End move the selection, Enter and
+   * Space toggle it — the same binSelected emission the canvas click
+   * produces, so keyboard users reach the drill-down identically. */
+  onKeydown(event: KeyboardEvent): void {
+    const bins = this.distribution().bins;
+    if (bins.length === 0) return;
+    const current = this.selectedBinIndex();
+    let target: number | null = null;
+    switch (event.key) {
+      case 'ArrowRight':
+        target = Math.min((current ?? -1) + 1, bins.length - 1);
+        break;
+      case 'ArrowLeft':
+        target = Math.max((current ?? bins.length) - 1, 0);
+        break;
+      case 'Home':
+        target = 0;
+        break;
+      case 'End':
+        target = bins.length - 1;
+        break;
+      case 'Enter':
+      case ' ':
+        if (current !== null) target = current;
+        break;
+      default:
+        return;
+    }
+    if (target !== null) {
+      event.preventDefault();
+      this.binSelected.emit(target);
+    }
   }
 
   private render(): void {
