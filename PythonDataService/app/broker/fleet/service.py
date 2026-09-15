@@ -1557,6 +1557,134 @@ class FleetControlService:
                 next_step="Mint a fresh idempotency key for the new attempt.",
             )
 
+    # ---- audit read surface (#2104) -----------------------------------------
+
+    def _capability_for_operation_kind(
+        self, *, broker: str, operation_kind: str, warned: set[tuple[str, str]]
+    ) -> str | None:
+        """The capability ``operation_kind`` currently maps to, or ``None``.
+
+        Resolved *at read time* from the live provider catalog -- ``capability``
+        and ``operation_kind`` are separate fields on ``ProviderOperation``
+        (many operation ids can share one capability; the reviewed Alpaca
+        catalog collapses 76 operations into 12 capabilities), and
+        ``RoutingReceiptRecord`` stores only ``operation_kind``. A receipt can
+        carry an ``operation_kind`` the current catalog no longer declares --
+        a retired operation, or a receipt written before a rename. That is
+        reported as ``None``, loudly logged, and never coerced to a wrong
+        capability or allowed to fail the whole read (owner principle: fail
+        loudly over silent pass).
+
+        ``warned`` is one request's dedup set, owned by the caller (#2133
+        P2-b): a page of receipts from one retired operation would otherwise
+        log once *per receipt* -- up to ``limit`` warnings per poll, forever,
+        for a single already-known fact. The warning still fires once per
+        distinct ``(broker, operation_kind)`` per request; it is never
+        silenced across requests, only de-duplicated within one.
+        """
+        adapter = self._provider_adapters.get(broker)
+        if adapter is not None:
+            for operation in adapter.operations():
+                if operation.operation_id == operation_kind:
+                    return operation.capability.value
+        key = (broker, operation_kind)
+        if key not in warned:
+            warned.add(key)
+            logger.warning(
+                "Audit read surface found no catalog operation for a routing "
+                "receipt's operation_kind; capability is unresolved.",
+                extra={
+                    "action": "audit_capability_unresolved",
+                    "broker": broker,
+                    "operation_kind": operation_kind,
+                },
+            )
+        return None
+
+    def list_routing_receipts(
+        self,
+        *,
+        since_ms: int,
+        clerk_id: str | None = None,
+        limit: int = 100,
+        before_ms: int | None = None,
+        before_correlation_id: str | None = None,
+    ) -> dict[str, object]:
+        """The routing-receipt audit trail, at or after ``since_ms``.
+
+        Read-only: no idempotency key, no command envelope, nothing is
+        opened or settled. ``since_ms`` is an inclusive lower bound on
+        ``created_at_ms``; the store already orders newest first.
+
+        ``before_ms``/``before_correlation_id`` continue a previous page's
+        keyset (#2133): a truncated page's oldest entry names them back to
+        the caller as ``next_before_ms``/``next_before_correlation_id``, and
+        passing them back here resumes exactly where that page ended — with
+        the correlation-id tiebreak, so a page boundary landing mid-timestamp
+        neither skips nor repeats a row. Without them the newest ``limit``
+        receipts are unreachable-past truncation: lowering ``since_ms`` alone
+        only re-selects the same newest rows.
+
+        The projection carries every field a reconciliation needs to match an
+        ``outcome_unknown`` receipt back to the provider's durable record and
+        the exact process that attempted it (#2133 P1-b): the pinned attempt
+        context (epoch, binding generation, agent instance), the caller's
+        idempotency and target identity, and the provider's own receipt
+        reference. Every field here is nonsecret by ``records.py``'s
+        contract; ``worker_key`` never appears.
+
+        A supplied ``clerk_id`` is validated against the registry and raises
+        :class:`ClerkNotFound` when unknown (#2133 P2-c): an unscoped-looking
+        empty result for a mistyped or stale id is indistinguishable from a
+        real clerk with no routing history. Omitting ``clerk_id`` entirely
+        keeps the unscoped, every-lane read working exactly as before.
+        """
+        if clerk_id is not None:
+            self._require_clerk(clerk_id)
+        now = self._clock()
+        fetched = self._store.list_routing_receipts(
+            clerk_id=clerk_id,
+            since_ms=since_ms,
+            before_ms=before_ms,
+            before_correlation_id=before_correlation_id,
+            limit=limit + 1,
+        )
+        has_more = len(fetched) > limit
+        page = fetched[:limit]
+        next_before_ms = page[-1].created_at_ms if has_more else None
+        next_before_correlation_id = page[-1].correlation_id if has_more else None
+        unresolved_capability_warned: set[tuple[str, str]] = set()
+        return {
+            "observed_at_ms": now,
+            "receipts": [
+                {
+                    "correlation_id": receipt.correlation_id,
+                    "clerk_id": receipt.clerk_id,
+                    "broker": receipt.broker,
+                    "operation_kind": receipt.operation_kind,
+                    "capability": self._capability_for_operation_kind(
+                        broker=receipt.broker,
+                        operation_kind=receipt.operation_kind,
+                        warned=unresolved_capability_warned,
+                    ),
+                    "routing_state": receipt.state.value,
+                    "nonsecret_target_ref": receipt.nonsecret_target_ref,
+                    "idempotency_key": receipt.idempotency_key,
+                    "upstream_receipt_ref": receipt.upstream_receipt_ref,
+                    "pinned_routing_epoch": receipt.pinned_routing_epoch,
+                    "pinned_binding_generation": receipt.pinned_binding_generation,
+                    "pinned_agent_instance_id": receipt.pinned_agent_instance_id,
+                    "created_at_ms": receipt.created_at_ms,
+                    "dispatched_at_ms": receipt.dispatched_at_ms,
+                    "updated_at_ms": receipt.updated_at_ms,
+                }
+                for receipt in page
+            ],
+            "has_more": has_more,
+            "next_before_ms": next_before_ms,
+            "next_before_correlation_id": next_before_correlation_id,
+        }
+
     # ---- directory ---------------------------------------------------------
 
     def directory(self, *, include_retired: bool = False) -> dict[str, object]:

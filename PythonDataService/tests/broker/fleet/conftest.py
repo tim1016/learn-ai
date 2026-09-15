@@ -51,8 +51,13 @@ FAKE_BETA_CAPABILITIES = frozenset(
 
 _FAKE_ALPHA_OPERATIONS = frozenset(
     {
+        # Operation ids deliberately differ from their capability's value
+        # (e.g. "read_account" vs. "account_read") — a fixture whose id and
+        # capability happen to read the same, as this one did before #2104's
+        # capability-resolution follow-up, cannot catch a bug where one field
+        # is substituted for the other.
         ProviderOperation(
-            operation_id="account_read",
+            operation_id="read_account",
             method="GET",
             path_template="/account",
             agent_path_template="/api/fake-alpha/account",
@@ -62,7 +67,7 @@ _FAKE_ALPHA_OPERATIONS = frozenset(
             idempotency=OperationIdempotency.READ,
         ),
         ProviderOperation(
-            operation_id="orders_read",
+            operation_id="read_orders",
             method="GET",
             path_template="/orders",
             agent_path_template="/api/fake-alpha/orders",
@@ -72,7 +77,7 @@ _FAKE_ALPHA_OPERATIONS = frozenset(
             idempotency=OperationIdempotency.READ,
         ),
         ProviderOperation(
-            operation_id="bot_action",
+            operation_id="submit_bot_action",
             method="POST",
             path_template="/bots/{sid}/actions",
             agent_path_template="/api/fake-alpha/bots/{sid}/actions",
@@ -86,7 +91,7 @@ _FAKE_ALPHA_OPERATIONS = frozenset(
 _FAKE_BETA_OPERATIONS = frozenset(
     {
         ProviderOperation(
-            operation_id="account_read",
+            operation_id="read_account",
             method="GET",
             path_template="/account",
             agent_path_template="/api/fake-beta/account",
@@ -311,15 +316,20 @@ def bind_lane(
 def downgrade_backup_to_v2(backup_dir: Path) -> None:
     """Rewrite a fresh backup into the v2 shape it carried before the upgrade.
 
-    Schema v3 adds exactly the nested-root index and trigger, so dropping the
-    pair and restamping the meta row produces genuine pre-upgrade evidence —
-    what a D-compatible rollback is for — without reconstructing the v2 DDL.
+    A fresh backup carries every object the *current* ``schema.SCHEMA_VERSION``
+    adds, not just v3's — so producing genuine pre-upgrade evidence means
+    dropping v3's nested-root index and trigger *and* v4's audit indexes
+    (#2133 P2-a), whatever the current version has grown to. Restamping the
+    meta row is what a D-compatible rollback is for, without reconstructing
+    the v2 DDL by hand.
     """
     database = backup_dir / BACKUP_DATABASE_FILENAME
     connection = sqlite3.connect(database)
     try:
         connection.execute("DROP TRIGGER trg_clerks_volume_root_not_nested")
         connection.execute("DROP INDEX ux_clerks_volume_root")
+        connection.execute("DROP INDEX ix_routing_receipts_created_at")
+        connection.execute("DROP INDEX ix_routing_receipts_clerk_created_at")
         connection.execute(
             "UPDATE fleet_meta SET schema_version = ? WHERE id = 1",
             (D_COMPATIBLE_SCHEMA_VERSION,),

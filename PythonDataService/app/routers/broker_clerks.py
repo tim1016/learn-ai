@@ -19,7 +19,7 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.broker.fleet.delivery import SseEvent
@@ -38,6 +38,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api", tags=["broker-clerks"])
 
@@ -153,6 +154,52 @@ async def describe_broker_clerk(
             )
         )
     return JSONResponse(fields)
+
+
+# ---- Audit read surface (#2104) --------------------------------------------
+
+
+@router.get(
+    "/broker-clerks/audit/routing-receipts",
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+    summary="Routing-receipt audit trail, since a lower bound (#2104)",
+)
+async def list_routing_receipts_audit(
+    request: Request,
+    since_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
+    clerk_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    before_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
+    before_correlation_id: str | None = Query(None, min_length=1, max_length=64),
+) -> Response:
+    """Routing receipts at or after ``since_ms``, newest first.
+
+    Read-only: no idempotency key, no command envelope, no ceremony. The
+    durable audit trail (routing receipts, assignment history, session
+    history) was otherwise reachable only by opening the coordinator's
+    SQLite file by hand.
+
+    ``before_ms``/``before_correlation_id`` continue a previous page's keyset
+    (#2133) -- pass back a truncated page's ``next_before_ms``/
+    ``next_before_correlation_id`` verbatim to walk the full window past
+    ``limit`` instead of only ever reaching the newest page.
+    """
+    try:
+        result = _fleet_service(request).list_routing_receipts(
+            since_ms=since_ms,
+            clerk_id=clerk_id,
+            limit=limit,
+            before_ms=before_ms,
+            before_correlation_id=before_correlation_id,
+        )
+    except FleetControlError as error:
+        return _refuse(error)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"reason": "audit_query_invalid", "message": str(exc)},
+        )
+    return JSONResponse(result)
 
 
 # ---- Catalog-generated operation routes (§10.2/§10.3) ----------------------

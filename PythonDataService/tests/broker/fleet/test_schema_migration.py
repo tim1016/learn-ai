@@ -103,6 +103,23 @@ def _build_v2_registry(control_dir: Path) -> None:
         conn.close()
 
 
+def _build_v3_registry(control_dir: Path) -> None:
+    """Materialize a populated v3 registry: the v2 shape plus the registered
+    v2 → v3 upgrade, so the v3 → v4 case starts from the real v3 DDL rather
+    than a reconstruction of it."""
+    _build_v2_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for statement in schema.SCHEMA_MIGRATIONS[2]:
+            conn.execute(statement)
+        conn.execute("UPDATE fleet_meta SET schema_version = 3 WHERE id = 1")
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
 _INSERT_CLERK_SQL = (
     "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
     "volume_root, deployment_namespace, volume_attestation_kind, "
@@ -355,5 +372,106 @@ def test_a_v2_registry_gains_the_nested_volume_root_fence(
         # the legacy root's characters, and is a separate physical volume.
         with store.transaction() as conn:
             conn.execute(_INSERT_CLERK_SQL, _clerk_values("g", "/volumes/legacy-2"))
+    finally:
+        store.close()
+
+
+def _query_plan(conn: sqlite3.Connection, sql: str, parameters: tuple) -> list[str]:
+    """The ``detail`` column of ``EXPLAIN QUERY PLAN`` for one query."""
+    return [
+        str(row[3])
+        for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", parameters).fetchall()
+    ]
+
+
+def test_a_v3_registry_gains_the_audit_indexes_and_data_survives(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """#2133 P2-a: the v3 → v4 upgrade installs the audit read surface's two
+    newest-first indexes byte-for-byte as a fresh v4 build carries them, every
+    pre-existing row survives the upgrade untouched, and both the global and
+    clerk-scoped audit queries actually use an index afterward -- not a full
+    table scan under the store's shared connection lock.
+
+    Built from a *populated* v3 registry (clerks, a session, an assignment,
+    three routing receipts), not a fresh empty one: the deliverable is that a
+    live registry's data survives this migration, not merely that a new
+    registry gets the indexes.
+    """
+    _build_v3_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION
+
+        def index_sql(conn: sqlite3.Connection) -> dict[str, str]:
+            return {
+                str(row[0]): str(row[1])
+                for row in conn.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE name IN "
+                    "('ix_routing_receipts_created_at', 'ix_routing_receipts_clerk_created_at')"
+                )
+            }
+
+        migrated = index_sql(store._conn)
+        assert set(migrated) == {
+            "ix_routing_receipts_created_at",
+            "ix_routing_receipts_clerk_created_at",
+        }
+        # Byte parity with a fresh build: a migrated registry and a new one
+        # carry the same index definitions, not merely the same names.
+        fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh")
+        try:
+            assert index_sql(fresh._conn) == migrated
+        finally:
+            fresh.close()
+
+        # Every pre-existing row survives the upgrade untouched.
+        clerk = store.read_clerk("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert clerk is not None
+        assert clerk.deployment_namespace == "host:local"
+        session = store.read_session("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert session is not None
+        assert session.routing_epoch == 4
+        assignment = store.read_assignment(
+            broker="fake_alpha", canonical_account_id="ACCT-LEGACY"
+        )
+        assert assignment is not None
+        assert assignment.state.value == "effective"
+        receipts = {
+            receipt.idempotency_key: receipt for receipt in store.list_routing_receipts()
+        }
+        assert set(receipts) == {"key-1", "key-2", "key-3"}
+        assert receipts["key-1"].state.value == "delivered"
+        assert receipts["key-1"].upstream_receipt_ref == "upstream/1"
+        assert receipts["key-2"].state.value == "provider_refused"
+        assert receipts["key-3"].state.value == "outcome_unknown"
+
+        # The audit surface's two access paths both use an index afterward --
+        # not "SCAN routing_receipts" over the whole append-only table.
+        columns = FleetRegistryStore._RECEIPT_COLUMNS
+        global_plan = _query_plan(
+            store._conn,
+            f"SELECT {columns} FROM routing_receipts WHERE created_at_ms >= ? "
+            "ORDER BY created_at_ms DESC, correlation_id DESC LIMIT ?",
+            (0, 100),
+        )
+        clerk_plan = _query_plan(
+            store._conn,
+            f"SELECT {columns} FROM routing_receipts WHERE clerk_id = ? AND created_at_ms >= ? "
+            "ORDER BY created_at_ms DESC, correlation_id DESC LIMIT ?",
+            ("clrk_aaaaaaaaaaaaaaaaaaaaaaaa", 0, 100),
+        )
+        assert any("USING INDEX ix_routing_receipts_created_at" in line for line in global_plan), (
+            global_plan
+        )
+        assert not any(line.startswith("SCAN routing_receipts") for line in global_plan), (
+            global_plan
+        )
+        assert any(
+            "USING INDEX ix_routing_receipts_clerk_created_at" in line for line in clerk_plan
+        ), clerk_plan
+        assert not any(line.startswith("SCAN routing_receipts") for line in clerk_plan), (
+            clerk_plan
+        )
     finally:
         store.close()

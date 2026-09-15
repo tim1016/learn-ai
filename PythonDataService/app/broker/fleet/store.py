@@ -850,16 +850,56 @@ class FleetRegistryStore:
         )
         return None if row is None else _receipt_from_row(row)
 
-    def list_routing_receipts(self, *, clerk_id: str | None = None, limit: int = 100) -> list[RoutingReceiptRecord]:
-        """List receipts, newest first, optionally for one clerk."""
+    def list_routing_receipts(
+        self,
+        *,
+        clerk_id: str | None = None,
+        since_ms: int | None = None,
+        before_ms: int | None = None,
+        before_correlation_id: str | None = None,
+        limit: int = 100,
+    ) -> list[RoutingReceiptRecord]:
+        """List receipts, newest first, optionally for one clerk, since a bound,
+        and/or continuing a keyset page.
+
+        ``since_ms``, when given, is an *inclusive* lower bound on
+        ``created_at_ms`` (``created_at_ms >= since_ms``) — the audit read
+        surface's contract (#2104).
+
+        ``before_ms``/``before_correlation_id``, when given together, seek
+        strictly before that ``(created_at_ms, correlation_id)`` pair in
+        exactly the tuple order of the ``ORDER BY`` below — the keyset
+        pagination contract (#2133). The tiebreak on ``correlation_id`` is
+        load-bearing: two receipts can share one ``created_at_ms`` (a frozen
+        test clock, or a genuine millisecond collision), and a bound on
+        ``created_at_ms`` alone would silently skip or repeat rows sharing
+        the page boundary's timestamp. The two values must be given together
+        — a caller cannot seek past a timestamp without also naming which row
+        at that timestamp it has already consumed.
+        """
+        if (before_ms is None) != (before_correlation_id is None):
+            raise ValueError(
+                "before_ms and before_correlation_id must be given together or not at all"
+            )
         sql = f"SELECT {self._RECEIPT_COLUMNS} FROM routing_receipts"
-        parameters: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        parameters: list[Any] = []
         if clerk_id is not None:
-            sql += " WHERE clerk_id = ?"
-            parameters = (clerk_id,)
+            clauses.append("clerk_id = ?")
+            parameters.append(clerk_id)
+        if since_ms is not None:
+            clauses.append("created_at_ms >= ?")
+            parameters.append(since_ms)
+        if before_ms is not None:
+            clauses.append(
+                "(created_at_ms < ? OR (created_at_ms = ? AND correlation_id < ?))"
+            )
+            parameters.extend([before_ms, before_ms, before_correlation_id])
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at_ms DESC, correlation_id DESC LIMIT ?"
-        parameters = (*parameters, limit)
-        return [_receipt_from_row(row) for row in self._query(sql, parameters)]
+        parameters.append(limit)
+        return [_receipt_from_row(row) for row in self._query(sql, tuple(parameters))]
 
     def insert_routing_receipt(
         self, conn: sqlite3.Connection, receipt: RoutingReceiptRecord
