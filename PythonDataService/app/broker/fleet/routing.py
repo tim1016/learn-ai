@@ -208,30 +208,21 @@ class LaneRouter:
                 next_step="The wrong lane answered; refresh and retry against "
                 "the lane's current resource.",
             ) from exc
-        except DeliveryContractViolation as exc:
-            # Not an identity mismatch: the handler returned the wrong Python
-            # type before any identity echo was even inspected. That is an
-            # internal dispatch defect, not a lane that answered wrong, so it
-            # must not carry "refresh and retry" advice that cannot fix a
-            # deterministic bug (#2119).
-            logger.warning(
-                "Lane delivery for %s on %s violated the delivery adapter's "
-                "own response-shape contract: %r",
-                operation.operation_id,
-                clerk_id,
-                exc,
-            )
-            raise ClerkUnreachable(
-                f"Clerk {clerk_id} could not serve {operation.operation_id}; "
-                "the transport detail is in the coordinator log.",
-                next_step="Retry the same identity once the lane is confirmed "
-                "reachable; the transport detail is in the coordinator log.",
-            ) from exc
         except FleetControlError:
             raise
         except Exception as exc:
             # The exception text can carry internal topology (hostnames,
             # ports, paths); it goes to the log, never the public refusal.
+            # This also covers DeliveryContractViolation (#2119): a handler
+            # returning the wrong Python type is not an identity mismatch,
+            # so it must not carry "refresh and retry" advice that cannot
+            # fix a deterministic bug -- and the generic ClerkUnreachable
+            # mapping here already gets that right without a dedicated
+            # except clause; the %r of the exception conveys the same
+            # contract-shape detail a bespoke message would have. Contrast
+            # stream_read() below, which maps the same exception to 409
+            # ClerkIdentityMismatch instead -- justified there by that
+            # branch never carrying "refresh and retry" advice.
             logger.warning(
                 "Lane delivery failed for %s on %s: %r",
                 operation.operation_id,
