@@ -45,6 +45,25 @@ test and proved both with mutations that stayed green:
    ``requestBody``, so an added query parameter (or a changed request body
    schema) on a shared route was invisible to it. Both are now compared,
    dereferenced the same way as responses.
+
+A second review (Codex, PR #2135) found three more:
+
+3. The response comparison read only ``content."application/json".schema``,
+   so a response with no JSON content -- a different media type, or one with
+   its content removed entirely -- normalized to ``None`` on *both* sides
+   and compared equal regardless of what actually diverged.
+   ``_response_media_schemas`` now compares every media type present on
+   either side.
+4. The probe used ``setdefault`` for the clerk capacity variables, so an
+   environment that explicitly exported ``FLEET_MAX_INFLIGHT_REQUESTS=0``
+   (the non-clerk default) kept that ``0`` and crashed the ``clerk_agent``
+   import. The probe now assigns them unconditionally: it is constructing
+   that role's posture, not inheriting the caller's.
+5. ``CHECKED_ROLES`` was a hardcoded tuple. A role added to
+   ``FleetSettings.ROLE``'s ``Literal`` without a matching entry here would
+   get zero coverage while every test kept passing -- the same failure shape
+   as findings 1-2, a guarantee reading broader than what runs.
+   ``CHECKED_ROLES`` is now derived from that ``Literal`` directly.
 """
 
 from __future__ import annotations
@@ -54,9 +73,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
+
+from app.config import FleetSettings
 
 #: Each role's document costs a real ``app.main`` import in its own
 #: subprocess, which is the whole point (see the probe below) and also makes
@@ -75,12 +96,23 @@ SERVICE_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = SERVICE_ROOT.parent
 COMMITTED_CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "openapi" / "python-data-service.openapi.json"
 
-#: Every role whose document this test can produce from a clean import.
-#: ``combined`` is what the committed contract itself is exported under
-#: (see ``scripts/export_openapi_contract.py``), so it is the reference, not
-#: a second thing to check. A ``combined`` role fixture only ever
-#: benchmarks the exporter, not the roles.
-CHECKED_ROLES = ("fleet_coordinator", "clerk_agent")
+#: Every role whose document this test checks -- derived from
+#: ``FleetSettings.ROLE``'s own ``Literal``, not hand-maintained. A
+#: hardcoded tuple stayed valid, and every test kept passing, the moment a
+#: role was added to that ``Literal`` but not copied here: the new role
+#: silently got zero coverage and nothing said so (an independent review's
+#: third finding on this module -- the same failure shape as the first two:
+#: a guarantee that reads broader than what actually runs). ``combined`` is
+#: subtracted explicitly, not derived away by accident: it is the role the
+#: committed contract itself is exported under (see
+#: ``scripts/export_openapi_contract.py``), so it is the reference every
+#: other role is compared against, not a second thing to check against
+#: itself. A role added to the ``Literal`` without matching support in
+#: ``app/main.py`` (or this probe's environment) fails loudly here --
+#: ``_export_role_openapi_document``'s subprocess-import assertion --
+#: rather than being silently skipped.
+_DECLARED_ROLES = frozenset(get_args(FleetSettings.model_fields["ROLE"].annotation))
+CHECKED_ROLES = tuple(sorted(_DECLARED_ROLES - {"combined"}))
 
 #: The two compatibility reads this test exists because of. Asserting their
 #: presence directly (rather than only asserting "coordinator paths are a
@@ -116,8 +148,13 @@ os.environ["FLEET_ROLE"] = sys.argv[1]
 # placeholder.
 os.environ.setdefault("FLEET_CONTROL_DIR", "contract-schema-fleet-role-probe")
 if sys.argv[1] == "clerk_agent":
-    os.environ.setdefault("FLEET_MAX_INFLIGHT_REQUESTS", "4")
-    os.environ.setdefault("FLEET_MAX_INFLIGHT_STREAMS", "4")
+    # Unconditional, not setdefault: this probe is constructing the
+    # clerk_agent posture specifically, so it must not inherit a caller's
+    # exported "0" (the non-clerk default) -- that value contradicts the
+    # posture being built and app.main raises at import for a non-positive
+    # pool size under this role.
+    os.environ["FLEET_MAX_INFLIGHT_REQUESTS"] = "4"
+    os.environ["FLEET_MAX_INFLIGHT_STREAMS"] = "4"
 
 from app.main import app
 
@@ -160,19 +197,28 @@ def _operations_by_path_method(document: dict[str, Any]) -> dict[tuple[str, str]
     }
 
 
-def _response_json_schema(response_object: dict[str, Any]) -> Any:
-    """The JSON-body schema a response declares, or ``None`` for e.g. 204s.
+def _response_media_schemas(response_object: dict[str, Any]) -> dict[str, Any]:
+    """Every media type this response declares, mapped to its schema --
+    e.g. ``{"application/json": {...}, "text/csv": {...}}`` -- or ``{}`` for
+    a response with no body (a 204) or whose content was removed entirely.
 
-    Only the schema -- not the sibling ``description`` string -- because
-    ``description`` is FastAPI's per-status boilerplate ("Successful
-    Response", "Validation Error") and carries no contract information the
-    schema doesn't already carry more precisely.
+    Comparing this whole mapping, instead of reading only the
+    ``application/json`` entry, is what catches a response that changed
+    media type, dropped a media type, or lost its content altogether: ``{}``
+    and ``{"application/json": {...}}`` are different dicts and compare
+    unequal, where reading only the JSON key would normalize *both* to the
+    same ``None`` (an independent review's finding -- a role diverging on a
+    non-JSON response, or dropping a response body, stayed invisible to a
+    comparison that only ever looked at one named key).
+
+    Only each media type's schema -- not the sibling ``description`` string
+    on the response object -- because ``description`` is FastAPI's
+    per-status boilerplate ("Successful Response", "Validation Error") and
+    carries no contract information the schema doesn't already carry more
+    precisely.
     """
     content = response_object.get("content") or {}
-    json_content = content.get("application/json")
-    if json_content is None:
-        return None
-    return json_content.get("schema")
+    return {media_type: media_object.get("schema") for media_type, media_object in content.items()}
 
 
 #: The only ``$ref`` shape FastAPI emits in this service's documents. A ref
@@ -229,27 +275,28 @@ def _operation_wire_shape_mismatches(
     committed_operation: dict[str, Any], committed_document: dict[str, Any],
 ) -> list[str]:
     """Every disagreement between one shared path+method's wire contract in
-    ``role_document`` and in ``committed_document``: response schemas (per
-    status code), ``parameters``, and ``requestBody`` -- each resolved
-    against its own document before comparing. ``operationId``, ``summary``,
-    ``description`` and ``tags`` are intentionally excluded (see the module
-    docstring): they name the handler and its router grouping, which
-    legitimately differ between a compat alias and the canonical route it
-    delegates to, and carry no information a caller of the API observes.
+    ``role_document`` and in ``committed_document``: every response's media
+    types and their schemas (per status code), ``parameters``, and
+    ``requestBody`` -- each resolved against its own document before
+    comparing. ``operationId``, ``summary``, ``description`` and ``tags``
+    are intentionally excluded (see the module docstring): they name the
+    handler and its router grouping, which legitimately differ between a
+    compat alias and the canonical route it delegates to, and carry no
+    information a caller of the API observes.
     """
     mismatches: list[str] = []
 
     role_responses = role_operation.get("responses", {})
     committed_responses = committed_operation.get("responses", {})
     for status_code in sorted(set(role_responses) | set(committed_responses)):
-        role_schema = _dereferenced(_response_json_schema(role_responses.get(status_code, {})), role_document)
-        committed_schema = _dereferenced(
-            _response_json_schema(committed_responses.get(status_code, {})), committed_document
+        role_media = _dereferenced(_response_media_schemas(role_responses.get(status_code, {})), role_document)
+        committed_media = _dereferenced(
+            _response_media_schemas(committed_responses.get(status_code, {})), committed_document
         )
-        if role_schema != committed_schema:
+        if role_media != committed_media:
             mismatches.append(
-                f"{method.upper()} {path} [{status_code}] response schema: "
-                f"FLEET_ROLE={role} resolved={role_schema!r} != committed resolved={committed_schema!r}"
+                f"{method.upper()} {path} [{status_code}] response media types: "
+                f"FLEET_ROLE={role} resolved={role_media!r} != committed resolved={committed_media!r}"
             )
 
     role_parameters = _dereferenced(role_operation.get("parameters", []), role_document)
@@ -335,11 +382,13 @@ def test_shared_operations_agree_with_the_committed_contract(
     role_openapi_documents: dict[str, dict[str, Any]],
 ) -> None:
     """For every path+method a role shares with the committed contract, the
-    wire contract must be identical: every declared response's JSON schema,
-    every parameter, and the request body -- each with ``$ref``s resolved
-    against its own document (see ``_dereferenced``), so a same-named
-    component schema that is *defined* differently on the two sides cannot
-    hide behind a pointer string that happens to match.
+    wire contract must be identical: every declared response's media types
+    and schemas, every parameter, and the request body -- each with
+    ``$ref``s resolved against its own document (see ``_dereferenced``), so
+    a same-named component schema that is *defined* differently on the two
+    sides cannot hide behind a pointer string that happens to match, and a
+    response that lost its body or changed media type cannot hide behind
+    two ``None``s that happen to match either.
 
     Deliberately narrow to that wire contract, not whole operation objects.
     ``operationId``, ``summary``, ``description`` and ``tags`` are
