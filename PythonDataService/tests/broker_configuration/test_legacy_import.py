@@ -49,7 +49,7 @@ def service(clerk_dir: Path, clock: FrozenClock) -> Iterator[BrokerConfiguration
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
         credential_slots=AlpacaCredentialSlotDirectory(
             environment=make_environment(
@@ -118,7 +118,7 @@ def observer(clerk_dir: Path, service: BrokerConfigurationService) -> Iterator[B
     observing = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
     )
     yield observing
     observing.close()

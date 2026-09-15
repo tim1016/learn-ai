@@ -24,9 +24,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app.broker_configuration.desk_state import WorkerRestartTarget
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
-from app.config import fleet_settings, settings
+from app.config import FleetSettings, fleet_settings, settings
 
 CLERK_DIR_ENV_VAR = "ALPACA_CLERK_DIR"
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,28 @@ def resolve_clerk_dir() -> Path:
     if configured is None or not configured.strip():
         return DEFAULT_CLERK_DIR
     return Path(configured)
+
+
+def worker_restart_target_from(fleet: FleetSettings) -> WorkerRestartTarget | None:
+    """The deployment's worker declaration as the desk's restart target.
+
+    Lives here rather than on ``FleetSettings`` because ``app.config`` cannot
+    import ``desk_state``: that module reaches ``records`` → ``envelope`` →
+    the Alpaca stack, whose ``fault_injection`` imports ``app.config`` back.
+    This module is already where the process reads ``fleet_settings``, so the
+    adapter sits at the same seam.
+
+    The service is the indispensable fact: a deployment that describes a
+    compose context but names no worker declares no target at all.
+    """
+    if fleet.WORKER_SERVICE is None:
+        return None
+    return WorkerRestartTarget(
+        service=fleet.WORKER_SERVICE,
+        compose_project=fleet.COMPOSE_PROJECT,
+        compose_files=fleet.get_compose_files(),
+        compose_profile=fleet.COMPOSE_PROFILE,
+    )
 
 
 def build_service(*, clerk_dir: Path | None = None) -> BrokerConfigurationService:
@@ -62,7 +85,7 @@ def build_service(*, clerk_dir: Path | None = None) -> BrokerConfigurationServic
     return BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=root),
         operator_identity=settings.PANEL_OPERATOR_IDENTITY,
-        worker_service=fleet_settings.WORKER_SERVICE,
+        worker_restart=worker_restart_target_from(fleet_settings),
         credential_slots=AlpacaCredentialSlotDirectory(),
         account_verifier=AlpacaAccountVerifier(),
     )

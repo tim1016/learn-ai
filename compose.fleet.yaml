@@ -132,6 +132,14 @@ services:
       # This service's own key, so the desk's restart command names this lane
       # rather than the coordinator. Must equal the service name above.
       FLEET_WORKER_SERVICE: alpaca-paper-clerk
+      # And the context that command must resolve it in: this file's own
+      # project, the file set the rollout starts the fleet with, and the
+      # profile these agents sit behind. Without all three a bare `podman
+      # compose restart` resolves the default project and compose.yaml alone,
+      # where this lane does not exist.
+      FLEET_COMPOSE_PROJECT: learn-ai-fleet
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.yaml
+      FLEET_COMPOSE_PROFILE: fleet
     volumes:
       - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
 
@@ -145,11 +153,16 @@ services:
       FLEET_ROLE: clerk_agent
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
+      # This is deliberately not an enablement switch. Existing per-account
+      # arming and Live gates remain the sole authority for any mutation.
       # This service's own key, so the desk's restart command names this lane
       # rather than the coordinator. Must equal the service name above.
       FLEET_WORKER_SERVICE: alpaca-live-clerk
-      # This is deliberately not an enablement switch. Existing per-account
-      # arming and Live gates remain the sole authority for any mutation.
+      # Same compose context as the paper lane above: this file's project, the
+      # rollout's file set, and the profile these agents sit behind.
+      FLEET_COMPOSE_PROJECT: learn-ai-fleet
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.yaml
+      FLEET_COMPOSE_PROFILE: fleet
     volumes:
       - fleet-alpaca-live-data:/app/artifacts/alpaca_clerk
 

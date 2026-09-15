@@ -151,13 +151,13 @@ def test_two_tabs_cannot_silently_clobber_a_staged_selection(
     first_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
     )
     second_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
     )
     try:
@@ -382,7 +382,7 @@ def test_a_crash_with_a_staged_selection_still_reads_the_last_effective_revision
     before_crash = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
     )
     effective = paper_profile(before_crash, display_name="Effective")
@@ -407,7 +407,7 @@ def test_a_crash_with_a_staged_selection_still_reads_the_last_effective_revision
     after_crash = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
     )
     try:

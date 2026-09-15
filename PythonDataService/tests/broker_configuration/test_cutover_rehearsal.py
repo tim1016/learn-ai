@@ -78,7 +78,7 @@ def service(
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
         credential_slots=AlpacaCredentialSlotDirectory(environment=credential_environment),
         account_verifier=FakeAccountVerifier(

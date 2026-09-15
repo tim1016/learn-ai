@@ -16,9 +16,21 @@ service key it sits under makes that rename a red test.
 
 The coordinator is the other half of the same fact: it is not a worker, has no
 staged profile to apply, and must therefore declare nothing at all.
+
+A service key alone is only enough where the host's Compose defaults already
+resolve it. ``compose.fleet.yaml`` runs its own project with an explicit file
+set behind a profile, and ``compose.fleet.dev.yaml`` must be named with `-f`
+because Compose auto-loads ``compose.override.yaml`` and not it — so a bare
+``podman compose restart <lane>`` there resolves the default project and
+``compose.yaml`` alone, where no lane exists, and the staged profile stays
+unapplied. The three ``FLEET_COMPOSE_*`` keys are how a deployment says which
+context its worker lives in, and the rules below pin each of them to a fact the
+*declaring file itself* states, so the same rename tripwire covers them.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterator
 
 import yaml
 
@@ -30,6 +42,19 @@ from tests.contracts.compose_files import (
 )
 
 DECLARATION_KEY = "FLEET_WORKER_SERVICE"
+COMPOSE_PROJECT_KEY = "FLEET_COMPOSE_PROJECT"
+COMPOSE_FILES_KEY = "FLEET_COMPOSE_FILES"
+COMPOSE_PROFILE_KEY = "FLEET_COMPOSE_PROFILE"
+
+# Every lane whose deployment must describe its own compose context. Named so
+# a sweep that stopped matching anything — a renamed key, a moved lane — fails
+# instead of passing vacuously.
+CONTEXT_DECLARING_LANES = {
+    ("compose.fleet.yaml", "alpaca-paper-clerk"),
+    ("compose.fleet.yaml", "alpaca-live-clerk"),
+    ("compose.fleet.dev.yaml", "alpaca-paper-clerk"),
+    ("compose.fleet.dev.yaml", "alpaca-live-clerk"),
+}
 
 # The combined/legacy posture: one process is both coordinator and worker, and
 # `compose.yaml` names it `python-service`. It declares no FLEET_ROLE at all,
@@ -44,18 +69,43 @@ COMBINED_WORKER = ("compose.yaml", "python-service")
 QUALIFICATION_OVERLAY = "compose.fleet.qualification.yaml"
 
 
-def _services(name: str) -> dict[str, dict[str, str]]:
-    """Every service in one committed compose file, as {service: env}.
-
-    Read per-file and unmerged, exactly as the env-example contract reads
-    them: an overlay is reviewed as written, not as one particular `-f`
-    combination happens to resolve it.
+def _document(name: str) -> dict[str, object]:
+    """One committed compose file, read per-file and unmerged, exactly as the
+    env-example contract reads them: an overlay is reviewed as written, not as
+    one particular `-f` combination happens to resolve it.
     """
-    document = render_module().load_compose_document(ROOT / name)
+    return render_module().load_compose_document(ROOT / name)
+
+
+def _services(name: str) -> dict[str, dict[str, str]]:
+    """Every service in one committed compose file, as {service: env}."""
     return {
         service: environment_as_key_value(spec.get("environment") or {})
-        for service, spec in (document.get("services") or {}).items()
+        for service, spec in (_document(name).get("services") or {}).items()
     }
+
+
+def _declaring_workers() -> Iterator[tuple[str, str, dict[str, object], dict[str, str]]]:
+    """Every (file, service, spec, environment) that declares a worker service.
+
+    The compose-context rules all start here: those keys only mean anything
+    beside a `FLEET_WORKER_SERVICE`, and a fenced-off empty declaration (the
+    dev overlay's coordinator) is not a worker.
+    """
+    for name in tracked_compose_files():
+        for service, spec in (_document(name).get("services") or {}).items():
+            environment = environment_as_key_value(spec.get("environment") or {})
+            if not environment.get(DECLARATION_KEY):
+                continue
+            yield name, service, spec, environment
+
+
+def _declared_compose_files(environment: dict[str, str]) -> tuple[str, ...]:
+    """One service's declared `-f` list, split the way the process will split
+    it (`FleetSettings.get_compose_files` in app/config.py) — a test-side
+    reader of a committed value, never a second parser for the app to use.
+    """
+    return tuple(entry.strip() for entry in environment.get(COMPOSE_FILES_KEY, "").split(",") if entry.strip())
 
 
 _PLAIN_MAP_TAG = "tag:yaml.org,2002:map"
@@ -91,14 +141,76 @@ def _environment_node_tag(name: str, service: str) -> str:
 def test_a_declared_worker_service_always_names_its_own_service_key() -> None:
     """Wherever the key appears, its value is the service it sits under. This
     is the rename tripwire, and it holds for any future worker too."""
-    for name in tracked_compose_files():
-        for service, environment in _services(name).items():
-            if not environment.get(DECLARATION_KEY):
-                continue
-            assert environment[DECLARATION_KEY] == service, (
-                f"{name}:{service} declares {DECLARATION_KEY}="
-                f"{environment[DECLARATION_KEY]!r}, not its own service name"
+    for name, service, _spec, environment in _declaring_workers():
+        assert environment[DECLARATION_KEY] == service, (
+            f"{name}:{service} declares {DECLARATION_KEY}="
+            f"{environment[DECLARATION_KEY]!r}, not its own service name"
+        )
+
+
+def test_a_declared_compose_file_list_resolves_the_declaring_file() -> None:
+    """Each named file is one this repo commits at its root, and the list names
+    the file the declaration itself lives in — the one file that must be on the
+    command line for the service to exist at all.
+    """
+    tracked = set(tracked_compose_files())
+    covered: set[tuple[str, str]] = set()
+    for name, service, _spec, environment in _declaring_workers():
+        declared = _declared_compose_files(environment)
+        if not declared:
+            continue
+        covered.add((name, service))
+        for candidate in declared:
+            assert candidate in tracked, (
+                f"{name}:{service} names {candidate!r} in {COMPOSE_FILES_KEY}, which this "
+                "repo does not commit as a compose file"
             )
+            assert (ROOT / candidate).is_file(), f"{name}:{service} names a missing {candidate!r}"
+        assert name in declared, (
+            f"{name}:{service} declares {COMPOSE_FILES_KEY}={declared!r}, which does not "
+            f"include {name} — the file that defines this very service"
+        )
+    assert covered >= CONTEXT_DECLARING_LANES
+
+
+def test_a_declared_compose_project_is_the_declaring_files_own_project() -> None:
+    """A file with a top-level `name:` runs its services in that project and
+    nowhere else, so that is the only project the command may name. A file
+    without one takes the project from the host's working directory — naming a
+    guess there would pin the command to a directory this repo cannot see.
+    """
+    for name, service, _spec, environment in _declaring_workers():
+        project = _document(name).get("name")
+        if project is None:
+            assert COMPOSE_PROJECT_KEY not in environment, (
+                f"{name}:{service} declares {COMPOSE_PROJECT_KEY} although {name} names no "
+                "project of its own; the host's working directory decides it"
+            )
+            continue
+        assert environment.get(COMPOSE_PROJECT_KEY) == project, (
+            f"{name}:{service} declares {COMPOSE_PROJECT_KEY}="
+            f"{environment.get(COMPOSE_PROJECT_KEY)!r}, not {name}'s own project {project!r}"
+        )
+
+
+def test_a_declared_compose_profile_is_one_the_service_runs_under() -> None:
+    """A service behind a profile is not started — and not restarted — unless
+    that profile is named, and a service behind none must name none or Compose
+    filters every other service out of the invocation.
+    """
+    for name, service, spec, environment in _declaring_workers():
+        profiles = tuple(spec.get("profiles") or ())
+        if not profiles:
+            assert COMPOSE_PROFILE_KEY not in environment, (
+                f"{name}:{service} declares {COMPOSE_PROFILE_KEY} although it sits behind no "
+                "profile"
+            )
+            continue
+        assert environment.get(COMPOSE_PROFILE_KEY) in profiles, (
+            f"{name}:{service} declares {COMPOSE_PROFILE_KEY}="
+            f"{environment.get(COMPOSE_PROFILE_KEY)!r}, which is not one of its own "
+            f"profiles {profiles!r}"
+        )
 
 
 def test_every_clerk_agent_declares_a_worker_service() -> None:

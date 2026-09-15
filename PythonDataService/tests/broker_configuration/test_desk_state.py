@@ -9,7 +9,7 @@ import pytest
 from app.broker_configuration.desk_state import project_desk_state, worker_restart_command
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.records import CredentialSlotStatus
-from app.broker_configuration.runtime import build_service
+from app.broker_configuration.runtime import build_service, worker_restart_target_from
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
 from app.config import FleetSettings, fleet_settings
@@ -19,6 +19,7 @@ from tests.broker_configuration.conftest import (
     FakeAccountVerifier,
     FrozenClock,
     paper_profile,
+    restart_target,
 )
 
 
@@ -54,8 +55,42 @@ async def _pinned_paper_profile(
 
 
 def test_worker_restart_command_names_the_declared_service() -> None:
-    assert worker_restart_command("alpaca-paper-clerk") == (
+    """A deployment whose compose defaults already resolve the service declares
+    nothing else, and the command stays the bare form it has always been."""
+    assert worker_restart_command(restart_target("alpaca-paper-clerk")) == (
         "podman compose restart alpaca-paper-clerk"
+    )
+
+
+def test_worker_restart_command_names_the_whole_declared_compose_context() -> None:
+    """`compose.fleet.yaml`'s posture: its own project, an explicit file set and
+    a profile. Without all three, `podman compose` resolves the default project
+    and `compose.yaml` alone, where the lane's service does not exist at all —
+    the restart fails and the staged profile stays unapplied.
+    """
+    target = restart_target(
+        "alpaca-paper-clerk",
+        compose_project="learn-ai-fleet",
+        compose_files=("compose.yaml", "compose.fleet.yaml"),
+        compose_profile="fleet",
+    )
+
+    assert worker_restart_command(target) == (
+        "podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml "
+        "--profile fleet restart alpaca-paper-clerk"
+    )
+
+
+def test_worker_restart_command_names_only_what_the_deployment_declared() -> None:
+    """`compose.fleet.dev.yaml`'s posture: the overlay deliberately keeps the
+    default `learn-ai` project and declares no profile, so the command names
+    neither — only the file set Compose does not auto-load."""
+    target = restart_target(
+        "alpaca-paper-clerk", compose_files=("compose.yaml", "compose.fleet.dev.yaml")
+    )
+
+    assert worker_restart_command(target) == (
+        "podman compose -f compose.yaml -f compose.fleet.dev.yaml restart alpaca-paper-clerk"
     )
 
 
@@ -65,7 +100,13 @@ def test_worker_restart_command_is_absent_when_the_deployment_declared_nothing()
     assert worker_restart_command(None) is None
 
 
-@pytest.mark.parametrize("service", ["alpaca-live-clerk"], indirect=True)
+def test_a_compose_context_without_a_worker_service_is_no_restart_target() -> None:
+    """The service is the one indispensable fact. A deployment that describes
+    its compose context but names no worker still authors no command."""
+    assert worker_restart_target_from(FleetSettings(COMPOSE_PROFILE="fleet")) is None
+
+
+@pytest.mark.parametrize("service", [restart_target("alpaca-live-clerk")], indirect=True)
 async def test_desk_state_carries_the_declared_workers_restart_command(
     service: BrokerConfigurationService,
 ) -> None:
@@ -93,12 +134,17 @@ def test_build_service_hands_the_service_the_deployments_declaration(
     """The one place the declaration enters the process, pinned end to end.
 
     ``fleet_settings`` is constructed at import, so ``setenv`` alone cannot
-    reach it; re-reading the environment into the attribute *on* the singleton
-    keeps the env var the thing under test while staying visible to
+    reach it; re-reading the environment into the attributes *on* the singleton
+    keeps the env vars the thing under test while staying visible to
     ``runtime``'s from-import binding.
     """
     monkeypatch.setenv("FLEET_WORKER_SERVICE", "alpaca-paper-clerk")
-    monkeypatch.setattr(fleet_settings, "WORKER_SERVICE", FleetSettings().WORKER_SERVICE)
+    monkeypatch.setenv("FLEET_COMPOSE_PROJECT", "learn-ai-fleet")
+    monkeypatch.setenv("FLEET_COMPOSE_FILES", "compose.yaml,compose.fleet.yaml")
+    monkeypatch.setenv("FLEET_COMPOSE_PROFILE", "fleet")
+    declared = FleetSettings()
+    for field in ("WORKER_SERVICE", "COMPOSE_PROJECT", "COMPOSE_FILES", "COMPOSE_PROFILE"):
+        monkeypatch.setattr(fleet_settings, field, getattr(declared, field))
 
     built = build_service(clerk_dir=tmp_path / "clerk")
     try:
@@ -106,7 +152,10 @@ def test_build_service_hands_the_service_the_deployments_declaration(
     finally:
         built.close()
 
-    assert state.restart_command == "podman compose restart alpaca-paper-clerk"
+    assert state.restart_command == (
+        "podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml "
+        "--profile fleet restart alpaca-paper-clerk"
+    )
 
 
 def test_desk_state_does_not_probe_credential_availability(
@@ -116,7 +165,7 @@ def test_desk_state_does_not_probe_credential_availability(
     service = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=None,
+        worker_restart=None,
         clock=clock,
         credential_slots=slots,
         account_verifier=verifier,
@@ -212,7 +261,7 @@ async def test_projector_authors_the_live_choice_safety_copy(
         effective_revision=None,
         nicknames=service.list_nicknames(),
         has_archived_profiles=False,
-        worker_service=None,
+        worker_restart=None,
     )
 
     assert state.choices[0].description == (

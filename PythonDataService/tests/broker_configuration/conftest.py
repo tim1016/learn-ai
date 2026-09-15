@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker_configuration.desk_state import WorkerRestartTarget
 from app.broker_configuration.records import CredentialSlotStatus, EndpointMode, ObservedAccount
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
@@ -33,6 +34,27 @@ LIVE_ENVELOPE_PAYLOAD: dict[str, float | int] = {
 }
 
 OPERATOR_IDENTITY = "test-operator"
+
+
+def restart_target(
+    service: str,
+    *,
+    compose_project: str | None = None,
+    compose_files: tuple[str, ...] = (),
+    compose_profile: str | None = None,
+) -> WorkerRestartTarget:
+    """One lane as its own deployment declares it.
+
+    The defaults are the posture whose compose defaults already resolve the
+    service (``compose.yaml``'s combined worker); a test about a topology that
+    needs an explicit project, file set or profile names those instead.
+    """
+    return WorkerRestartTarget(
+        service=service,
+        compose_project=compose_project,
+        compose_files=compose_files,
+        compose_profile=compose_profile,
+    )
 
 
 class FrozenClock:
@@ -126,13 +148,13 @@ def service(
 ) -> Iterator[BrokerConfigurationService]:
     """A service over a tmp_path database, for a deployment that declares no
     worker service. A test that cares parametrises this fixture indirectly
-    with the compose service name its deployment declares.
+    with the ``restart_target`` its deployment declares.
     """
-    worker_service: str | None = getattr(request, "param", None)
+    worker_restart: WorkerRestartTarget | None = getattr(request, "param", None)
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
-        worker_service=worker_service,
+        worker_restart=worker_restart,
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=verifier,

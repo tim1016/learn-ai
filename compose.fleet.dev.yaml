@@ -128,6 +128,12 @@ services:
       # This service's own key — never the shared anchor's, since each lane
       # must name itself. The desk pastes it into the restart command.
       FLEET_WORKER_SERVICE: alpaca-live-clerk
+      # Compose auto-loads compose.override.yaml, not this file (see the header
+      # above), so the restart command must name the same `-f` pair the header
+      # does or it resolves compose.yaml alone, where this lane does not exist.
+      # No project and no profile: this overlay deliberately stays in the
+      # default `learn-ai` project and puts its services behind no profile.
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
       # Distinct read-only market-data client ID per lane.
       IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1}
       TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-live-clerk
@@ -145,8 +151,9 @@ services:
       <<: *alpaca-clerk-agent-env
       # Same deletion as the live lane above — env_file only.
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
-      # Same per-lane self-naming as the live lane above.
+      # Same per-lane self-naming and same `-f` pair as the live lane above.
       FLEET_WORKER_SERVICE: alpaca-paper-clerk
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
       IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-2}
       TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk
 

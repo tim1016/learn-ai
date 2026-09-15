@@ -31,7 +31,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker_configuration import selection
-from app.broker_configuration.desk_state import project_desk_state
+from app.broker_configuration.desk_state import WorkerRestartTarget, project_desk_state
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.errors import (
     AccountModeDisagreement,
@@ -148,20 +148,20 @@ class BrokerConfigurationService:
         *,
         store: ProfilesStore,
         operator_identity: str,
-        worker_service: str | None,
+        worker_restart: WorkerRestartTarget | None,
         clock: Clock = now_ms_utc,
         credential_slots: CredentialSlotDirectory | None = None,
         account_verifier: AccountVerifier | None = None,
     ) -> None:
         self._store = store
         self._operator_identity = operator_identity
-        # The compose service name of the worker this process is, exactly as
-        # its own deployment declares it, or ``None`` when the deployment
-        # declared nothing. Deployment configuration like the operator
-        # identity beside it, so it enters once here rather than per request —
-        # and it has no default, so "declared nothing" can never be confused
-        # with "a caller forgot to pass it".
-        self._worker_service = worker_service
+        # The compose context of the worker this process is, exactly as its own
+        # deployment declares it, or ``None`` when the deployment declared
+        # nothing. Deployment configuration like the operator identity beside
+        # it, so it enters once here rather than per request — and it has no
+        # default, so "declared nothing" can never be confused with "a caller
+        # forgot to pass it".
+        self._worker_restart = worker_restart
         self._clock = clock
         self._slots = credential_slots or UnconfiguredCredentialSlotDirectory()
         self._verifier = account_verifier or UnconfiguredAccountVerifier()
@@ -596,7 +596,7 @@ class BrokerConfigurationService:
             effective_revision=effective_revision,
             nicknames=nicknames,
             has_archived_profiles=len(all_profiles) > len(profiles),
-            worker_service=self._worker_service,
+            worker_restart=self._worker_restart,
         )
 
     def stage_selection(
