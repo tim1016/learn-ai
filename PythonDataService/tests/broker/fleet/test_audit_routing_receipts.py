@@ -246,8 +246,15 @@ def test_service_list_routing_receipts_envelope_shape(
         "operation_kind",
         "capability",
         "routing_state",
+        "nonsecret_target_ref",
+        "idempotency_key",
+        "upstream_receipt_ref",
+        "pinned_routing_epoch",
+        "pinned_binding_generation",
+        "pinned_agent_instance_id",
         "created_at_ms",
         "dispatched_at_ms",
+        "updated_at_ms",
     }
     assert entry["correlation_id"] == settled.correlation_id
     assert entry["clerk_id"] == lane.clerk_id
@@ -255,8 +262,50 @@ def test_service_list_routing_receipts_envelope_shape(
     assert entry["operation_kind"] == _RESOLVABLE_OPERATION_KIND
     assert entry["capability"] == "bot_action"
     assert entry["routing_state"] == "delivered"
+    assert entry["nonsecret_target_ref"] == settled.nonsecret_target_ref
+    assert entry["idempotency_key"] == settled.idempotency_key
+    assert entry["upstream_receipt_ref"] == settled.upstream_receipt_ref
+    assert entry["pinned_routing_epoch"] == settled.pinned_routing_epoch
+    assert entry["pinned_binding_generation"] == settled.pinned_binding_generation
+    assert entry["pinned_agent_instance_id"] == settled.pinned_agent_instance_id
     assert entry["created_at_ms"] == settled.created_at_ms
     assert entry["dispatched_at_ms"] == settled.dispatched_at_ms
+    assert entry["updated_at_ms"] == settled.updated_at_ms
+
+
+def test_service_projects_reconciliation_identity_for_an_outcome_unknown_receipt(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """An ``outcome_unknown`` receipt -- the state whose own contract (#2133
+    P1-b, ``records.py``) says it "must be reconciled by identity, never
+    resubmitted blindly" -- carries every field that identity requires: the
+    pinned attempt context (epoch, binding generation, agent instance), the
+    caller's idempotency key and target, and (correctly, for this outcome)
+    no upstream receipt reference yet.
+    """
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="reconcile", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-reconcile")
+    settled = _open_and_settle(
+        fleet_service,
+        lane,
+        key="reconcile-1",
+        target="strategy/sid-reconcile",
+        outcome=RoutingReceiptState.OUTCOME_UNKNOWN,
+    )
+    assert settled.upstream_receipt_ref is None  # the fixture's own premise
+
+    result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+
+    entry = result["receipts"][0]
+    assert entry["routing_state"] == "outcome_unknown"
+    assert entry["nonsecret_target_ref"] == "strategy/sid-reconcile"
+    assert entry["idempotency_key"] == "reconcile-1"
+    assert entry["upstream_receipt_ref"] is None
+    assert entry["pinned_routing_epoch"] == 1
+    assert entry["pinned_binding_generation"] == 1
+    assert entry["pinned_agent_instance_id"] == "agnt_111111111111111111111111"
 
 
 # ---- service: capability is resolved read-time, not hardcoded, not the ----
@@ -682,6 +731,7 @@ async def test_http_response_carries_only_int64_ms_utc_timestamps(
     assert isinstance(body["observed_at_ms"], int)
     for entry in body["receipts"]:
         assert isinstance(entry["created_at_ms"], int)
+        assert isinstance(entry["updated_at_ms"], int)
         assert entry["dispatched_at_ms"] is None or isinstance(entry["dispatched_at_ms"], int)
 
 

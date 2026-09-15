@@ -1612,6 +1612,14 @@ class FleetControlService:
         neither skips nor repeats a row. Without them the newest ``limit``
         receipts are unreachable-past truncation: lowering ``since_ms`` alone
         only re-selects the same newest rows.
+
+        The projection carries every field a reconciliation needs to match an
+        ``outcome_unknown`` receipt back to the provider's durable record and
+        the exact process that attempted it (#2133 P1-b): the pinned attempt
+        context (epoch, binding generation, agent instance), the caller's
+        idempotency and target identity, and the provider's own receipt
+        reference. Every field here is nonsecret by ``records.py``'s
+        contract; ``worker_key`` never appears.
         """
         now = self._clock()
         fetched = self._store.list_routing_receipts(
@@ -1637,8 +1645,15 @@ class FleetControlService:
                         broker=receipt.broker, operation_kind=receipt.operation_kind
                     ),
                     "routing_state": receipt.state.value,
+                    "nonsecret_target_ref": receipt.nonsecret_target_ref,
+                    "idempotency_key": receipt.idempotency_key,
+                    "upstream_receipt_ref": receipt.upstream_receipt_ref,
+                    "pinned_routing_epoch": receipt.pinned_routing_epoch,
+                    "pinned_binding_generation": receipt.pinned_binding_generation,
+                    "pinned_agent_instance_id": receipt.pinned_agent_instance_id,
                     "created_at_ms": receipt.created_at_ms,
                     "dispatched_at_ms": receipt.dispatched_at_ms,
+                    "updated_at_ms": receipt.updated_at_ms,
                 }
                 for receipt in page
             ],
