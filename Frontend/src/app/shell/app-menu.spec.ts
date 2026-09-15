@@ -105,6 +105,19 @@ describe('app menu projections', () => {
     expect(activeMenuNodeFor('/data-lab')?.item.route).toBe('/data-lab');
   });
 
+  it('reaches the Return Distribution study from the Stocks group', () => {
+    // The study route is longer than the Stocks entry, so the longest-match
+    // resolution must prefer it — the page highlights its own item.
+    const entry = menuItemsFor('/data-lab/returns')
+      .find((group) => group.label === 'Stocks')
+      ?.items?.find((item) => item.label === 'Return Distribution');
+
+    expect(entry?.routerLink).toBe('/data-lab/returns');
+    expect(entry?.styleClass).toBe(ACTIVE_ITEM_CLASS);
+    expect(activeMenuNodeFor('/data-lab/returns')?.item.route).toBe('/data-lab/returns');
+    expect(pageTitleFor('/data-lab/returns')).toBe('Return Distribution');
+  });
+
   it('nests Edge Analysis within Research instead of using a separate top-level group', () => {
     const groups = menuItemsFor('/edge/regimes');
     const research = groups.find((group) => group.label === 'Research');
