@@ -189,6 +189,11 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
     app = FastAPI()
+    # Production-shaped: app.main registers this too (#2067) -- the
+    # control-secret guard raises a FleetControlError from a dependency.
+    from app.utils.error_handlers import install_fleet_control_error_handler
+
+    install_fleet_control_error_handler(app)
     app.include_router(router)
     try:
         yield app, repo, port, health

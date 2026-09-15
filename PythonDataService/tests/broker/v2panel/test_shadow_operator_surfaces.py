@@ -149,6 +149,13 @@ async def shadow_app_and_broker(
     get_broker_registry().register(broker)  # type: ignore[arg-type]
     set_bot_task_registry(_FakeDeployRegistry())  # type: ignore[arg-type]
     app = FastAPI()
+    # Production-shaped: app.main registers this too. The control-secret
+    # guard (app.security.data_plane_control) raises a FleetControlError
+    # from a dependency, which resolves before any route-local try/except
+    # can reach it (#2067).
+    from app.utils.error_handlers import install_fleet_control_error_handler
+
+    install_fleet_control_error_handler(app)
     app.include_router(panel_router)
     app.include_router(brokers_router)
     try:

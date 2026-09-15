@@ -150,6 +150,7 @@ class _CoordinatorApp:
 
     def __init__(self, control_dir: Path, tokens: dict[str, str]) -> None:
         from app.routers.internal_fleet import router as internal_router
+        from app.utils.error_handlers import install_fleet_control_error_handler
 
         self.service = FleetControlService(
             store=FleetRegistryStore.open(control_dir=control_dir),
@@ -159,6 +160,10 @@ class _CoordinatorApp:
         self.app.state.fleet_service = self.service
         self.app.state.fleet_agent_tokens_text = json.dumps(tokens)
         self.app.include_router(internal_router)
+        # Production-shaped: the coordinator's real app registers this
+        # handler too (app.main), because the agent-token guard raises
+        # outside any route-local try/except (#2067).
+        install_fleet_control_error_handler(self.app)
 
 
 #: The agent's own served identity — what its runtime actually is, never a
@@ -468,6 +473,87 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
             effective_revision=2,
         )
     finally:
+        service.close()
+
+
+async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_too(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-066 also covers refusal, not only unreachability.
+
+    Distinct from ``test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple``
+    above: that test dials a dead port and never gets a response at all. Here
+    the coordinator is a real, reachable process that answers every
+    boot-time ``expectation()`` call with a plain 403 — a wrong token or an
+    unknown clerk, never a connection failure.
+
+    The only reason this still reaches the FR-066 offline fallback is that
+    ``RemotePresence.expectation``'s non-200 branch in
+    ``app/broker/fleet/presence.py`` raises ``FleetPresenceError``. Before
+    that reclassification it raised the base ``FleetControlError``, which
+    ``fleet_boot.py``'s ``except FleetPresenceError as exc:`` does not catch
+    — boot would crash instead of falling back to the already-confirmed
+    evidence, for an already-confirmed live lane.
+    """
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    coordinator = FastAPI()
+
+    @coordinator.get("/internal/fleet/clerks/{clerk_id}/volume-expectation")
+    async def volume_expectation(clerk_id: str) -> JSONResponse:
+        # Reachable, but refuses: a wrong token or an unknown clerk both
+        # surface as a plain 4xx, never a socket error.
+        del clerk_id
+        return JSONResponse({"detail": "agent token refused"}, status_code=403)
+
+    server = _RealServer(coordinator)
+    server.start()
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        write_confirmation_evidence(
+            root,
+            ConfirmationEvidence(
+                clerk_id=provisioned.clerk.clerk_id,
+                volume_id=provisioned.clerk.volume_id,
+                registry_id="fltr_refused0000000000000000",
+                assignment_generation=1,
+                canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+                binding_generation=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+                confirmed_at_ms=1,
+                agent_instance_id="agnt_0000000000000000000000aa",
+                routing_epoch=1,
+            ),
+        )
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            COORDINATOR_URL=server.base_url,
+            AGENT_SERVICE_TOKEN="svct_" + "1" * 32,
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+        )
+        from app.broker.alpaca.clerk.fleet_boot import offline_boot_matches, open_fleet_lane
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+
+        assert boot is not None
+        assert not boot.online
+        assert boot.offline_reason is not None
+        assert "refused" in boot.offline_reason
+        assert offline_boot_matches(
+            boot,
+            canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
+    finally:
+        server.stop()
         service.close()
 
 

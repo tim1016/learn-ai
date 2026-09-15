@@ -21,10 +21,15 @@ import json
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.broker.fleet.errors import FleetControlError
+from app.broker.fleet.errors import (
+    FleetAgentTokenRefused,
+    FleetControlError,
+    FleetControlPlaneNotInstalled,
+)
 from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
@@ -81,20 +86,34 @@ def _service(request: Request) -> FleetControlService:
     """The coordinator's fleet service, installed by the lifespan."""
     service = getattr(request.app.state, "fleet_service", None)
     if service is None:
-        raise HTTPException(status_code=503, detail="fleet coordinator not installed")
+        raise FleetControlPlaneNotInstalled(
+            "fleet coordinator not installed",
+            next_step="Confirm this process's lifespan installed "
+            "app.state.fleet_service before serving internal fleet calls.",
+        )
     return service
 
 
 def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
     """Refuse any agent whose transport token is not the mapped one."""
     mapping_text = getattr(request.app.state, "fleet_agent_tokens_text", "")
+    mapping_unreadable_next_step = (
+        "Fix FLEET_AGENT_SERVICE_TOKENS_JSON's syntax; a coordinator cannot "
+        "authenticate agents against a mapping it cannot parse."
+    )
     try:
         mapping = json.loads(mapping_text) if mapping_text else {}
     except ValueError:
         # A malformed mapping is a misconfigured coordinator: fail closed.
-        raise HTTPException(status_code=503, detail="agent token mapping unreadable")
+        raise FleetControlPlaneNotInstalled(
+            "agent token mapping unreadable",
+            next_step=mapping_unreadable_next_step,
+        ) from None
     if not isinstance(mapping, dict):
-        raise HTTPException(status_code=503, detail="agent token mapping unreadable")
+        raise FleetControlPlaneNotInstalled(
+            "agent token mapping unreadable",
+            next_step=mapping_unreadable_next_step,
+        )
     expected = mapping.get(clerk_id)
     if (
         not isinstance(expected, str)
@@ -105,12 +124,19 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
             "internal fleet call refused for unknown or mismatched agent token",
             extra={"clerk_id": clerk_id},
         )
-        raise HTTPException(status_code=403, detail="agent token refused")
+        raise FleetAgentTokenRefused(
+            "agent token refused",
+            next_step="Present the X-Fleet-Agent-Token issued for this clerk "
+            "in FLEET_AGENT_SERVICE_TOKENS_JSON.",
+        )
 
 
-def _refuse(control_error: FleetControlError) -> HTTPException:
-    """Translate one typed fleet refusal to its pinned HTTP shape."""
-    return HTTPException(status_code=control_error.status_code, detail=control_error.detail())
+def _refuse(control_error: FleetControlError) -> Response:
+    """One typed fleet refusal, at its pinned status, flat (not nested under
+    FastAPI's ``detail`` key) -- the same wire shape
+    ``app.routers.broker_clerks._refuse`` writes for the public surface.
+    """
+    return JSONResponse(status_code=control_error.status_code, content=control_error.detail())
 
 
 def _assignment_body(assignment: AccountAssignmentRecord) -> dict[str, Any]:
@@ -134,26 +160,26 @@ def _assignment_body(assignment: AccountAssignmentRecord) -> dict[str, Any]:
     }
 
 
-@router.get("/clerks/{clerk_id}/volume-expectation")
+@router.get("/clerks/{clerk_id}/volume-expectation", response_model=None)
 async def volume_expectation(
     clerk_id: str,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | Response:
     """Serve the clerk's expected volume identity for local agent proof."""
     _authorized_agent(request, clerk_id, x_fleet_agent_token or "")
     try:
         return _service(request).clerk_volume_expectation(clerk_id)
     except FleetControlError as exc:
-        raise _refuse(exc) from exc
+        return _refuse(exc)
 
 
-@router.post("/sessions")
+@router.post("/sessions", response_model=None)
 async def register_session(
     payload: RegistrationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | Response:
     """Install one agent session under a fresh routing epoch."""
     _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
     try:
@@ -166,19 +192,19 @@ async def register_session(
             fleet_protocol_version=payload.fleet_protocol_version,
         )
     except FleetControlError as exc:
-        raise _refuse(exc) from exc
+        return _refuse(exc)
     return {
         "agent_instance_id": session.agent_instance_id,
         "routing_epoch": session.routing_epoch,
     }
 
 
-@router.post("/sessions/observe")
+@router.post("/sessions/observe", response_model=None)
 async def observe_session(
     payload: ObservationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | Response:
     """Record one heartbeat; observations never confirm anything."""
     _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
     try:
@@ -191,16 +217,16 @@ async def observe_session(
             reported_summary=payload.reported_summary,
         )
     except FleetControlError as exc:
-        raise _refuse(exc) from exc
+        return _refuse(exc)
     return {"observed": touched}
 
 
-@router.post("/assignments/reserve")
+@router.post("/assignments/reserve", response_model=None)
 async def reserve_assignment(
     payload: ReserveRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | Response:
     """Reserve the broker-qualified account for the authenticated clerk."""
     _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
     try:
@@ -210,16 +236,16 @@ async def reserve_assignment(
             external_account_id=payload.external_account_id,
         )
     except FleetControlError as exc:
-        raise _refuse(exc) from exc
+        return _refuse(exc)
     return _assignment_body(assignment)
 
 
-@router.post("/assignments/confirm")
+@router.post("/assignments/confirm", response_model=None)
 async def confirm_assignment(
     payload: ConfirmRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | Response:
     """Record the confirmed binding observation fenced by its session."""
     _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
     try:
@@ -234,7 +260,7 @@ async def confirm_assignment(
             effective_revision=payload.effective_revision,
         )
     except FleetControlError as exc:
-        raise _refuse(exc) from exc
+        return _refuse(exc)
     return _assignment_body(assignment)
 
 

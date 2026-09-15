@@ -215,11 +215,15 @@ class LaneRouter:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} could not serve {operation.operation_id}; "
                 "the transport detail is in the coordinator log.",
+                next_step="Retry the same identity once the lane is confirmed "
+                "reachable; the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} failed serving {operation.operation_id} "
                 f"with {result.status_code}.",
+                next_step="Retry once the lane recovers from the reported "
+                "server error.",
             )
         return RoutedDelivery(
             status_code=result.status_code,
@@ -280,11 +284,15 @@ class LaneRouter:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} could not open {operation.operation_id}; "
                 "the transport detail is in the coordinator log.",
+                next_step="Retry opening the stream once the lane is confirmed "
+                "reachable; the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} failed opening {operation.operation_id} "
                 f"with {result.status_code}.",
+                next_step="Retry opening the stream once the lane recovers "
+                "from the reported server error.",
             )
         return RoutedStream(
             status_code=result.status_code,
@@ -703,6 +711,8 @@ def coordinator_delivery_for(
                 f"Clerk {session.clerk_id} cites endpoint "
                 f"{session.endpoint_ref!r}, which no approved endpoint row "
                 "backs; the host ceremony must approve it before routing.",
+                next_step="Have the host ceremony approve this clerk's "
+                "endpoint before routing resumes.",
             )
         token = coordinator_tokens.get(session.clerk_id)
         if not token:
@@ -710,6 +720,8 @@ def coordinator_delivery_for(
                 f"No coordinator service token is provisioned for clerk "
                 f"{session.clerk_id}; routing refuses rather than sending "
                 "unauthenticated.",
+                next_step="Provision a coordinator service token for this "
+                "clerk before routing resumes.",
             )
         return HttpLaneDelivery(
             base_url=endpoint.base_url, coordinator_service_token=token

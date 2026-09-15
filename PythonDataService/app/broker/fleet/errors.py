@@ -218,6 +218,46 @@ class FleetRegistryRecoveryPending(FleetControlError):
     status_code: ClassVar[int] = 409
 
 
+class DataPlaneControlSecretRefused(FleetControlError):
+    """The presented data-plane control secret does not match the configured one.
+
+    Distinct from :class:`FleetControlPlaneNotInstalled`: the guard itself is
+    configured and reachable, but this caller's credential is wrong. Wraps
+    ``app/security/data_plane_control.py``'s wrong-secret 403, which
+    previously answered with a bare ``{"detail": "..."}`` at the exact guard
+    every browser call to the data plane passes through (#2067).
+    """
+
+    reason: ClassVar[str] = "data_plane_control_secret_refused"
+    status_code: ClassVar[int] = 403
+
+
+class FleetControlPlaneNotInstalled(FleetControlError):
+    """A required fleet control-plane component is not configured or installed
+    on this process.
+
+    Covers the shared control secret (unset or a retired public value), the
+    fleet registry, the lane router, the internal coordinator service, and
+    the agent-token mapping -- a deployment/environment state, never the
+    caller's fault, so it fails closed with 503 rather than the bare
+    ``{"detail": "..."}`` these sites previously answered with (#2067).
+    """
+
+    reason: ClassVar[str] = "fleet_control_plane_not_installed"
+    status_code: ClassVar[int] = 503
+
+
+class FleetAgentTokenRefused(FleetControlError):
+    """The presented ``X-Fleet-Agent-Token`` does not match the mapped token
+    for this clerk (or no mapping names this clerk at all).
+
+    Wraps ``app/routers/internal_fleet.py``'s wrong-token 403 (#2067).
+    """
+
+    reason: ClassVar[str] = "fleet_agent_token_refused"
+    status_code: ClassVar[int] = 403
+
+
 __all__ = [
     "BrokerAndClerkRequired",
     "BrokerClerkCapabilityUnavailable",
@@ -237,7 +277,10 @@ __all__ = [
     "ClerkVolumeIdentityMismatch",
     "ClerkVolumeIdentityMissing",
     "ClerkVolumeMountUnproven",
+    "DataPlaneControlSecretRefused",
+    "FleetAgentTokenRefused",
     "FleetControlError",
+    "FleetControlPlaneNotInstalled",
     "FleetProtocolIncompatible",
     "FleetRegistryRecoveryPending",
     "FleetRegistryUnavailable",

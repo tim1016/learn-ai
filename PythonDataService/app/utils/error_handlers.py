@@ -4,7 +4,7 @@ import logging
 import math
 from typing import Any
 
-from fastapi import Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -182,3 +182,44 @@ async def broker_profile_exception_handler(request: Request, exc: Exception) -> 
         extra={"action": "broker_profile_refusal", "reason_code": exc.reason},
     )
     return JSONResponse(status_code=exc.http_status, content={"detail": exc.as_detail()})
+
+
+async def fleet_control_error_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer a ``FleetControlError`` that reached FastAPI uncaught, flat.
+
+    Every fleet router catches ``FleetControlError`` explicitly and writes its
+    pinned flat wire shape itself (``_refuse`` in ``broker_clerks.py`` and
+    ``internal_fleet.py``). Three families raise from a place no router-local
+    ``try``/``except`` can reach: the control-secret and agent-token guards
+    run as a FastAPI dependency, which resolves *before* the route body and
+    propagates past whatever the route itself would catch, and the
+    "not installed" guards are called by some routes with no local try at
+    all (#2067). Without this handler those refusals fell through to the
+    catch-all 500 -- on the exact guard every browser call to the data plane
+    passes through.
+    """
+    from app.broker.fleet.errors import FleetControlError
+
+    if not isinstance(exc, FleetControlError):  # pragma: no cover - registration is exact
+        raise exc
+    logger.warning(
+        "Fleet control-plane request refused outside a router's own try/except",
+        extra={"action": "fleet_control_error_uncaught", "reason_code": exc.reason},
+    )
+    return JSONResponse(status_code=exc.status_code, content=exc.detail())
+
+
+def install_fleet_control_error_handler(app: FastAPI) -> None:
+    """Register :func:`fleet_control_error_exception_handler` on ``app``.
+
+    The coordinator's real ASGI app is not the only ``FastAPI`` instance that
+    mounts a fleet guard or router -- a lane's own agent-side app (the
+    "combined" posture) does too, and so do the test harnesses that mount
+    ``internal_fleet.router`` or a data-plane-control-secret dependency in
+    isolation for speed rather than booting the full coordinator app. Call
+    this on every one of them; it is the single place that knows which
+    exception type and handler pair the fleet contract needs.
+    """
+    from app.broker.fleet.errors import FleetControlError
+
+    app.add_exception_handler(FleetControlError, fleet_control_error_exception_handler)

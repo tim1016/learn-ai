@@ -1,0 +1,141 @@
+{
+  "$comment": "Snapshot of the fleet control plane's closed refusal vocabulary (#2067): the 28-class FleetControlError subclass closure plus 5 codes minted outside it. Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/fleet/test_refusal_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live subclass closure. The Frontend Vitest surface reads the Frontend-tree copy. Adding a family requires (a) declaring it in refusal_vocabulary.py, (b) re-running PythonDataService/scripts/regenerate_fleet_refusal_vocabulary_snapshot.py, (c) adding the Frontend copy entry. Any missing step fails a parity test.",
+  "generated_by": "PythonDataService/scripts/regenerate_fleet_refusal_vocabulary_snapshot.py",
+  "source_files": [
+    "PythonDataService/app/broker/fleet/refusal_vocabulary.py (FLEET_REFUSAL_REASONS)"
+  ],
+  "reasons": {
+    "broker_and_clerk_required": {
+      "status_code": 400,
+      "meaning": "A clerk-scoped request arrived without both a broker and a clerk identity."
+    },
+    "broker_clerk_capability_unavailable": {
+      "status_code": 409,
+      "meaning": "The provider adapter does not declare the requested capability for this lane."
+    },
+    "broker_not_supported": {
+      "status_code": 404,
+      "meaning": "No production adapter is registered for the named provider."
+    },
+    "clerk_account_mismatch": {
+      "status_code": 409,
+      "meaning": "The account named by the command is not the clerk's effective account."
+    },
+    "clerk_assignment_conflict": {
+      "status_code": 409,
+      "meaning": "Another clerk already owns the broker-qualified account assignment."
+    },
+    "clerk_binding_generation_conflict": {
+      "status_code": 409,
+      "meaning": "The command's expected binding generation is not the clerk's current one."
+    },
+    "clerk_broker_mismatch": {
+      "status_code": 409,
+      "meaning": "The path broker differs from the clerk's immutable broker."
+    },
+    "clerk_endpoint_not_approved": {
+      "status_code": 409,
+      "meaning": "A registration cites an endpoint the deployment has not approved."
+    },
+    "clerk_identity_mismatch": {
+      "status_code": 409,
+      "meaning": "A session presented facts that contradict the clerk's registry identity."
+    },
+    "clerk_not_found": {
+      "status_code": 404,
+      "meaning": "No clerk carries this identity, including malformed or retired ones."
+    },
+    "clerk_routing_attempt_conflict": {
+      "status_code": 409,
+      "meaning": "An illegal transition or idempotency-key reuse on a routing attempt."
+    },
+    "clerk_routing_outcome_unknown": {
+      "status_code": 503,
+      "meaning": "The routing attempt's outcome is unknown; retry the same identity."
+    },
+    "clerk_unreachable": {
+      "status_code": 503,
+      "meaning": "The clerk's agent cannot currently be reached; retry when it recovers."
+    },
+    "clerk_volume_already_registered": {
+      "status_code": 409,
+      "meaning": "A different active clerk already owns this volume identity."
+    },
+    "clerk_volume_clone_detected": {
+      "status_code": 409,
+      "meaning": "A copied volume presented another clerk's identity marker."
+    },
+    "clerk_volume_identity_mismatch": {
+      "status_code": 409,
+      "meaning": "The marker on the volume contradicts the registry's expectation."
+    },
+    "clerk_volume_identity_missing": {
+      "status_code": 409,
+      "meaning": "The volume root carries no identity marker."
+    },
+    "clerk_volume_mount_unproven": {
+      "status_code": 409,
+      "meaning": "The root is not the canonical mounted volume (symlinked or noncanonical)."
+    },
+    "command_envelope_invalid": {
+      "status_code": 422,
+      "meaning": "A \u00a710.3 command envelope failed validation before any routing decision."
+    },
+    "compatibility_read_retired": {
+      "status_code": 410,
+      "meaning": "This compatibility read has retired; use its canonical broker and clerk route."
+    },
+    "compatibility_retirement_state_invalid": {
+      "status_code": 503,
+      "meaning": "The compatibility retirement evidence is unreadable; host operator action is required."
+    },
+    "confirmation_evidence_invalid": {
+      "status_code": 409,
+      "meaning": "The clerk's durable confirmation evidence is unreadable or contradicts its volume."
+    },
+    "data_plane_control_secret_refused": {
+      "status_code": 403,
+      "meaning": "The presented data-plane control secret does not match the configured one."
+    },
+    "fleet_agent_token_refused": {
+      "status_code": 403,
+      "meaning": "The presented X-Fleet-Agent-Token does not match the mapped token for this clerk."
+    },
+    "fleet_boot_refused": {
+      "status_code": 409,
+      "meaning": "The lane may not open authority under the fleet's admission rules."
+    },
+    "fleet_control_error": {
+      "status_code": 409,
+      "meaning": "An unclassified fleet refusal; no code in current use should raise the base directly."
+    },
+    "fleet_control_plane_not_installed": {
+      "status_code": 503,
+      "meaning": "A required fleet control-plane component is not configured or installed on this process."
+    },
+    "fleet_lane_capacity_exhausted": {
+      "status_code": 503,
+      "meaning": "A lane's bounded request or stream budget could not admit the caller."
+    },
+    "fleet_presence_unavailable": {
+      "status_code": 503,
+      "meaning": "The coordinator could not be reached or refused the agent's presence call."
+    },
+    "fleet_protocol_incompatible": {
+      "status_code": 409,
+      "meaning": "An agent and coordinator speak different fleet protocol versions."
+    },
+    "fleet_registry_recovery_pending": {
+      "status_code": 409,
+      "meaning": "A restored registry has not yet reconciled its original lanes."
+    },
+    "fleet_registry_unavailable": {
+      "status_code": 503,
+      "meaning": "The fleet registry (the coordinator's own store) cannot be opened or read."
+    },
+    "qualification_market_status_unavailable": {
+      "status_code": 503,
+      "meaning": "The market-liveness dependency this qualification probe requires is not available."
+    }
+  }
+}

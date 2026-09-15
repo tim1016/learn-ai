@@ -285,6 +285,11 @@ async def test_shared_status_endpoint_requires_auth_and_preserves_evidence(
     primary.handle_frame(json.dumps([{"T":"s","S":"SPY","sc":"H","t":_iso_ms(_NOW)}]))
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control")
     app = FastAPI()
+    # Production-shaped: app.main registers this too (#2067) -- the
+    # control-secret guard raises a FleetControlError from a dependency.
+    from app.utils.error_handlers import install_fleet_control_error_handler
+
+    install_fleet_control_error_handler(app)
     app.include_router(router)
     app.dependency_overrides[get_market_liveness_store] = lambda: store
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

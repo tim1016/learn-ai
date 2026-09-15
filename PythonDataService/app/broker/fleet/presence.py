@@ -273,8 +273,11 @@ class RemotePresence:
             )
         if response.status_code != 200:
             detail = _error_detail(response)
-            raise FleetControlError(
+            raise FleetPresenceError(
                 f"The fleet coordinator refused {path}: {detail or response.status_code}",
+                next_step="Retry once the coordinator is reachable; an "
+                "already-confirmed lane may recover its last-effective "
+                "binding meanwhile.",
             )
         try:
             body = response.json()
@@ -313,9 +316,11 @@ class RemotePresence:
                 f"for clerk {clerk_id}: {response.status_code}.",
             )
         if response.status_code != 200:
-            raise FleetControlError(
+            raise FleetPresenceError(
                 "The fleet coordinator refused to serve the volume expectation "
                 f"for clerk {clerk_id}: {_error_detail(response) or response.status_code}",
+                next_step="Retry the volume-expectation call once the "
+                "coordinator is reachable.",
             )
         try:
             body = response.json()
