@@ -17,6 +17,7 @@ the running coordinator actually needs so a fresh clone can populate them.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -51,15 +52,48 @@ SECRET_KEYS = frozenset(
 )
 
 
+# Matches `${SECRET_KEY:-clause}`, `${SECRET_KEY-clause}`, `${SECRET_KEY:?clause}`
+# and `${SECRET_KEY?clause}` for any name in SECRET_KEYS. The operator is
+# captured separately from the clause: `:-`/`-` supply a fallback *value* that
+# becomes the actual runtime value whenever the variable is unset — hiding a
+# real credential there defeats env_file exactly like a bare literal. `:?`/`?`
+# supply a diagnostic *message* shown only when a required variable is
+# missing (compose.yaml's own `${DATA_PLANE_CONTROL_SECRET:?Set ... before
+# starting the stack}`) — that text never becomes the value, so it is exempt.
+_SECRET_DEFAULT_PATTERN = re.compile(
+    r"\$\{(" + "|".join(re.escape(key) for key in SECRET_KEYS) + r")(:-|-|:\?|\?)([^}]*)\}"
+)
+
+
+def _embeds_secret_default(value: str) -> str | None:
+    """Returns the culprit key when `value` embeds a non-empty `${KEY:-...}`
+    or `${KEY-...}` fallback for some key in SECRET_KEYS — the bypass of the
+    `${VAR}`-passthrough carve-out below: wrapping a real credential as the
+    variable's *own* default still ships it in the committed file whenever
+    nothing overrides that variable at deploy time.
+    """
+    for match in _SECRET_DEFAULT_PATTERN.finditer(value):
+        key, operator, clause = match.group(1), match.group(2), match.group(3)
+        if operator in (":-", "-") and clause.strip():
+            return key
+    return None
+
+
 def _is_hardcoded_literal(value: str) -> bool:
     """A value containing a `${VAR}` substitution resolves from the shell or
     `.env` at render time — it carries no secret in the committed file. That
     is `compose.yaml`'s long-standing, legitimate pattern (e.g. a templated
     connection string with an embedded `${POSTGRES_PASSWORD}`). The bug this
-    test guards is the opposite: a bare, fully-hardcoded value (a 37-char
-    token, a JSON token map) that shadows `env_file:` for the same key.
+    test guards is a bare, fully-hardcoded value (a 37-char token, a JSON
+    token map) that shadows `env_file:` for the same key — or that same
+    value smuggled in as a variable's own fallback default
+    (`${FLEET_WORKER_KEY:-<the secret>}`), which is just as committed.
     """
-    return value != "" and "${" not in value
+    if value == "":
+        return False
+    if _embeds_secret_default(value) is not None:
+        return True
+    return "${" not in value
 
 
 def _environment_as_key_value(environment: object) -> dict[str, str]:
@@ -76,6 +110,34 @@ def _example_keys(name: str) -> set[str]:
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#") and "=" in line
     }
+
+
+def test_hardcoded_literal_check_catches_a_bare_secret_value() -> None:
+    assert _is_hardcoded_literal("wkrk_deadbeefdeadbeefdeadbeefdeadbeef") is True
+
+
+def test_hardcoded_literal_check_catches_the_default_clause_bypass() -> None:
+    """A real credential wrapped as the variable's own `${KEY:-...}` fallback
+    evades a naive "contains ${" carve-out entirely — it still ships in the
+    committed file, unconditionally, whenever the variable is unset."""
+    assert _is_hardcoded_literal("${FLEET_WORKER_KEY:-sk-live-should-never-ship-1234567890}") is True
+    assert _is_hardcoded_literal("${DATA_PLANE_CONTROL_SECRET-another-hidden-default}") is True
+    assert _is_hardcoded_literal("prefix-${ALPACA_API_SECRET_KEY:-embedded-secret}-suffix") is True
+
+
+def test_hardcoded_literal_check_leaves_legitimate_interpolation_green() -> None:
+    """Non-secret defaults (this repo's own compose idiom, e.g.
+    FLEET_DEPLOYMENT_NAMESPACE throughout compose.fleet.dev.yaml), Compose's
+    required-with-message form (compose.yaml's own DATA_PLANE_CONTROL_SECRET
+    usage), a bare passthrough, and a templated connection string whose
+    embedded variable is not itself a secret name must all stay green — or
+    the fix trades a false negative for a false positive."""
+    assert _is_hardcoded_literal("${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai}") is False
+    assert _is_hardcoded_literal(
+        "${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}"
+    ) is False
+    assert _is_hardcoded_literal("${FLEET_WORKER_KEY}") is False
+    assert _is_hardcoded_literal("redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0") is False
 
 
 def test_no_committed_compose_file_carries_a_fleet_secret_literal() -> None:

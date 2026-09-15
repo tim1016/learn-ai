@@ -118,7 +118,9 @@ sys.exit(0)
 '''
 
 
-def _run(tmp_path: Path, project_name: str) -> dict[str, list[str]]:
+def _fake_podman_environment(
+    tmp_path: Path, project_name: str, extra_env: dict[str, str] | None = None,
+) -> tuple[dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "podman"
@@ -139,7 +141,13 @@ def _run(tmp_path: Path, project_name: str) -> dict[str, list[str]]:
         # Drive the verdict without waiting the production poll budget.
         "RESTART_HEALTH_ATTEMPTS": "3",
         "RESTART_HEALTH_INTERVAL": "0",
+        **(extra_env or {}),
     }
+    return environment, calls
+
+
+def _run(tmp_path: Path, project_name: str) -> dict[str, list[str]]:
+    environment, calls = _fake_podman_environment(tmp_path, project_name)
     # The reap happens long before the health wait, so its record is already on
     # disk even if the script never settles. A script that never reaches a
     # verdict must still be judged on what it destroyed.
@@ -153,6 +161,21 @@ def _run(tmp_path: Path, project_name: str) -> dict[str, list[str]]:
     # can never reach a healthy verdict, and what this test guards is which
     # containers were destroyed, not whether the stack came up.
     return json.loads(calls.read_text(encoding="utf-8"))
+
+
+def _run_capturing(
+    tmp_path: Path, argv: list[str] | None = None, extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, list[str]]]:
+    """Like `_run`, but also returns the process result. Tests asserting on
+    argument handling (exit code, usage text, an unbound-variable crash) need
+    the result itself, not only which containers were touched."""
+    environment, calls = _fake_podman_environment(tmp_path, _PROJECT, extra_env)
+    completed = subprocess.run(
+        ["bash", str(RESTART_SCRIPT), *(argv or [])],
+        capture_output=True, text=True, env=environment,
+        cwd=REPOSITORY_ROOT, timeout=60,
+    )
+    return completed, json.loads(calls.read_text(encoding="utf-8"))
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
@@ -208,6 +231,55 @@ def test_restart_passes_the_committed_fleet_overlay_to_every_compose_call(tmp_pa
     for call in compose_calls:
         assert call.count("--file") >= 2, call
         assert any(arg.endswith("compose.fleet.dev.yaml") for arg in call), call
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_help_flag_exits_zero_and_touches_no_compose_call(tmp_path: Path) -> None:
+    """The incident this guards against: `./restart.sh --help`, before `--help`
+    was a recognised flag, fell straight through to the teardown path. Only an
+    unrelated SIGPIPE from a piped consumer aborted it before `podman compose
+    down` ran against two live broker clerks — that was luck, not a guarantee.
+    """
+    completed, calls = _run_capturing(tmp_path, argv=["--help"])
+
+    assert completed.returncode == 0
+    assert not calls.get("compose"), f"--help must touch no compose command; got {calls.get('compose')}"
+    assert "Usage" in completed.stdout
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_short_help_flag_also_exits_zero_and_touches_no_compose_call(tmp_path: Path) -> None:
+    completed, calls = _run_capturing(tmp_path, argv=["-h"])
+
+    assert completed.returncode == 0
+    assert not calls.get("compose")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_an_unrecognised_argument_is_refused_before_touching_compose(tmp_path: Path) -> None:
+    """Any argument the script does not recognise must be refused before its
+    very first destructive action (`podman compose down`), never fall through
+    to it — the exact shape of the `--help` incident above, generalised."""
+    completed, calls = _run_capturing(tmp_path, argv=["--bogus"])
+
+    assert completed.returncode != 0
+    assert not calls.get("compose"), (
+        f"an unrecognised argument reached a compose command: {calls.get('compose')}"
+    )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_an_explicit_compose_file_env_var_does_not_crash_under_set_u(tmp_path: Path) -> None:
+    """`COMPOSE_FILE` set leaves `COMPOSE_ARGS` an empty array (Compose's own
+    documented override takes over entirely). This host's `/usr/bin/env bash`
+    is 3.2 (macOS default), where `set -u` treats a bare `"${ARR[@]}"` on an
+    empty array as an unbound-variable error — every `podman compose` call
+    site must use the bash-3.2-safe `${ARR[@]+"${ARR[@]}"}` idiom instead.
+    """
+    completed, calls = _run_capturing(tmp_path, extra_env={"COMPOSE_FILE": "compose.yaml"})
+
+    assert "unbound variable" not in completed.stderr, completed.stderr
+    assert calls.get("compose"), "restart.sh made no compose call under COMPOSE_FILE"
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")

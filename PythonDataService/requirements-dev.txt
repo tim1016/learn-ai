@@ -18,6 +18,16 @@ respx>=0.21      # HTTP mocking for lean_sidecar launcher_client + router tests
 responses>=0.25
 # (pyarrow lives in requirements-heavy.txt now — used at runtime by the
 # vol-surface cache, not just by tests.)
+# scripts/render_fleet_topology.py (repo-root scripts/, never shipped in the
+# runtime image — the runtime stage's Docker build context is
+# ./PythonDataService, so `COPY ./scripts ./scripts` only copies
+# PythonDataService/scripts/) parses compose.yaml/compose.fleet.dev.yaml
+# statically, including Compose's `!override`/`!reset` merge tags and YAML
+# anchors — a real parser is the right tool there, not regex. Its contract
+# tests (tests/contracts/test_fleet_env_example_completeness.py) import the
+# same loader. Pinned explicitly rather than relying on it arriving only
+# transitively via `responses` above.
+PyYAML==6.0.3
 
 # Linting & Formatting
 ruff>=0.8

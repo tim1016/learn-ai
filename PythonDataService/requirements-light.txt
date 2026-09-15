@@ -10,12 +10,6 @@ pandas-ta==0.4.71b0
 pandas_market_calendars==5.4.0
 httpx==0.28.1
 requests>=2.28
-# scripts/render_fleet_topology.py parses compose.yaml/compose.fleet.dev.yaml
-# statically to render the secret-free fleet topology snapshot (declared
-# explicitly rather than relying on it arriving transitively via
-# requirements-dev.txt's `responses`, since the script also runs standalone
-# in the CI render-gate job and is not itself test-only).
-PyYAML==6.0.3
 python-multipart==0.0.20
 redis>=5.0,<6
 reportlab>=4.0
