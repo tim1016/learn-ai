@@ -78,7 +78,7 @@ def test_importing_the_spine_loads_no_provider_execution_module() -> None:
                 )
             )
         ]
-        print(json.dumps(loaded))
+        sys.stdout.write(json.dumps(loaded) + "\\n")
         """
     )
     result = subprocess.run(
