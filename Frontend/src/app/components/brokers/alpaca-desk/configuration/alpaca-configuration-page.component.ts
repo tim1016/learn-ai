@@ -257,6 +257,15 @@ export class AlpacaConfigurationPageComponent {
     () => this.effectiveRevision.hasValue() ? this.effectiveRevision.value().endpoint_mode : null,
   );
 
+  // Three states, deliberately: `undefined` while the desk read is unknown —
+  // in flight or failed — `null` when the deployment declared no worker
+  // service, and the authored command otherwise. Collapsing the first two
+  // would have the guide claim "this deployment declared nothing" on a read
+  // that never landed.
+  protected readonly restartCommand = computed(() =>
+    this.deskState.hasValue() ? this.deskState.value().restart_command : undefined,
+  );
+
   protected readonly supplementalReadFailed = computed(() => Boolean(
     this.nicknames.error() || this.revisions.error()
     || this.stagedRevision.error() || this.effectiveRevision.error()

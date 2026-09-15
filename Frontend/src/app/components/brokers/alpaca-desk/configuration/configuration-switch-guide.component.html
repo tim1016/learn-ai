@@ -35,7 +35,7 @@
               copiedLabel="Command copied"
               ariaLabel="Copy worker restart command" />
           </div>
-        } @else {
+        } @else if (restartCommand() === null) {
           <p class="switch-guide__command-unknown">{{ noWorkerServiceDeclared }}</p>
         }
       </div>

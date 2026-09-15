@@ -37,12 +37,18 @@ PAPER_BODY = {"credential_slot": "alpaca_paper_primary", "endpoint_mode": "paper
 
 
 @pytest.fixture
-async def client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[AsyncClient]:
+async def client(
+    clerk_dir: Path, clock: FrozenClock, request: pytest.FixtureRequest
+) -> AsyncIterator[AsyncClient]:
+    """A client over a service whose deployment declares no worker service. A
+    test that cares parametrises this fixture indirectly with the compose
+    service name its deployment declares."""
     from app.main import app
 
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=getattr(request, "param", None),
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(
@@ -143,14 +149,13 @@ async def test_desk_state_reports_no_active_account_through_one_read_model(
     }
 
 
+@pytest.mark.parametrize("client", ["alpaca-paper-clerk"], indirect=True)
 async def test_desk_state_authors_the_restart_command_from_the_declared_worker_service(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
 ) -> None:
     """The lane's own compose service, not the fleet coordinator. Nothing the
-    desk holds maps a lane to a service, so the deployment declares it and the
-    route is the only place that reads the declaration."""
-    monkeypatch.setattr("app.config.fleet_settings.WORKER_SERVICE", "alpaca-paper-clerk")
-
+    desk holds maps a lane to a service, so the deployment declares it once,
+    into the service, and the route carries it out unchanged."""
     response = await client.get(f"{PREFIX}/desk-state")
 
     assert response.status_code == 200
@@ -158,10 +163,8 @@ async def test_desk_state_authors_the_restart_command_from_the_declared_worker_s
 
 
 async def test_desk_state_reports_no_restart_command_when_no_worker_service_is_declared(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
 ) -> None:
-    monkeypatch.setattr("app.config.fleet_settings.WORKER_SERVICE", None)
-
     response = await client.get(f"{PREFIX}/desk-state")
 
     assert response.status_code == 200
@@ -364,6 +367,7 @@ async def refusing_client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=_RefusingVerifier(),

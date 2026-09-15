@@ -49,6 +49,7 @@ def service(clerk_dir: Path, clock: FrozenClock) -> Iterator[BrokerConfiguration
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=AlpacaCredentialSlotDirectory(
             environment=make_environment(
@@ -115,7 +116,9 @@ def _saved_state(service: BrokerConfigurationService) -> tuple[object, ...]:
 def observer(clerk_dir: Path, service: BrokerConfigurationService) -> Iterator[BrokerConfigurationService]:
     """A separate connection must never see half an import, even before refusal."""
     observing = BrokerConfigurationService(
-        store=ProfilesStore.open(clerk_dir=clerk_dir), operator_identity=OPERATOR_IDENTITY
+        store=ProfilesStore.open(clerk_dir=clerk_dir),
+        operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
     )
     yield observing
     observing.close()

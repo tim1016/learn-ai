@@ -33,6 +33,7 @@ def _service(clerk_dir: Path, clock: FrozenClock, **kwargs: object) -> BrokerCon
     return BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         **kwargs,  # type: ignore[arg-type]
     )

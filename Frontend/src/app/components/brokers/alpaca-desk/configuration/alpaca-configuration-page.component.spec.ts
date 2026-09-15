@@ -299,6 +299,21 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
   });
 
+  it('keeps the switch guide and its safety boundary when the desk state cannot be read', async () => {
+    const service = new FakeConfigurationService();
+    service.readDeskState.mockRejectedValue(new Error('Desk state unavailable'));
+
+    await renderPage(service);
+
+    expect(await screen.findByRole('heading', { name: 'Switch between Paper and Live' })).toBeTruthy();
+    expect(screen.getByText('Stage the destination profile')).toBeTruthy();
+    expect(screen.getByText('Record Apply')).toBeTruthy();
+    expect(screen.getByText('Restart the worker')).toBeTruthy();
+    expect(screen.getByText('Verify before deploying')).toBeTruthy();
+    expect(screen.getByText(/never retargets, arms, or launches an existing bot/)).toBeTruthy();
+    expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
+  });
+
   it('never claims a worker service is undeclared before the desk state has loaded', async () => {
     const service = new FakeConfigurationService();
     service.readDeskState = vi.fn(() => new Promise<AlpacaDeskState>(() => {}));

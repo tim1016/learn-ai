@@ -62,9 +62,7 @@
     <p class="configuration__loading" role="status">Reading the installation's selection…</p>
   }
 
-  @if (deskState.hasValue()) {
-    <app-configuration-switch-guide [restartCommand]="deskState.value().restart_command" />
-  }
+  <app-configuration-switch-guide [restartCommand]="restartCommand()" />
 
   <app-configuration-handoff-script />
 

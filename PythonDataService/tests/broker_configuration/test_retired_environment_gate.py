@@ -71,6 +71,7 @@ def service(
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=AlpacaCredentialSlotDirectory(environment=environment),
         account_verifier=FakeAccountVerifier(
@@ -294,6 +295,7 @@ async def test_a_pre_cutover_installation_still_boots_from_the_environment(
     empty = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=AlpacaCredentialSlotDirectory(environment=environment),
         account_verifier=FakeAccountVerifier(),

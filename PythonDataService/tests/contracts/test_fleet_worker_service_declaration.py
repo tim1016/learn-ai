@@ -20,17 +20,14 @@ staged profile to apply, and must therefore declare nothing at all.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import yaml
 
-from tests.contracts.test_fleet_env_example_completeness import (
-    _environment_as_key_value,
-    _render_module,
-    _tracked_compose_files,
+from tests.contracts.compose_files import (
+    ROOT,
+    environment_as_key_value,
+    render_module,
+    tracked_compose_files,
 )
-
-ROOT = Path(__file__).resolve().parents[3]
 
 DECLARATION_KEY = "FLEET_WORKER_SERVICE"
 
@@ -42,9 +39,9 @@ COMBINED_WORKER = ("compose.yaml", "python-service")
 # The qualification overlay is never rendered alone: its harness always passes
 # `compose.fleet.yaml -f compose.fleet.qualification.yaml`
 # (scripts/run_broker_fleet_compose_qualification.py). Like every other fleet
-# key it inherits, it re-declares nothing — so the declaration is checked
-# through that merge instead of in the overlay's own text.
-QUALIFICATION_MERGE = ("compose.fleet.yaml", "compose.fleet.qualification.yaml")
+# key it inherits, it re-declares nothing — so what the overlay owes this
+# contract is that it leaves each lane's inherited declaration alone.
+QUALIFICATION_OVERLAY = "compose.fleet.qualification.yaml"
 
 
 def _services(name: str) -> dict[str, dict[str, str]]:
@@ -54,28 +51,28 @@ def _services(name: str) -> dict[str, dict[str, str]]:
     them: an overlay is reviewed as written, not as one particular `-f`
     combination happens to resolve it.
     """
-    document = _render_module().load_compose_document(ROOT / name)
+    document = render_module().load_compose_document(ROOT / name)
     return {
-        service: _environment_as_key_value(spec.get("environment") or {})
+        service: environment_as_key_value(spec.get("environment") or {})
         for service, spec in (document.get("services") or {}).items()
     }
 
 
-def _merged_environment(names: tuple[str, ...], service: str) -> dict[str, str]:
-    """MODELS Compose's key-for-key `environment:` merge across several
-    files — for plain, UNTAGGED maps only. `load_compose_document` parses
-    `!override`/`!reset` as ordinary data (see its own docstring), so this
-    model cannot see a tag and would silently misreport a merge that one
-    changes. `_environment_node_tag` below guards that blind spot directly
-    rather than leaving it implicit.
-    """
-    merged: dict[str, str] = {}
-    for name in names:
-        merged.update(_services(name).get(service, {}))
-    return merged
-
-
 _PLAIN_MAP_TAG = "tag:yaml.org,2002:map"
+
+
+def _mapping_entry(node: yaml.Node | None, key: str, *, where: str) -> yaml.Node:
+    """One value node out of a YAML mapping node, or a readable failure.
+
+    Raw node trees are walked here rather than constructed dicts, and a bare
+    `next()` over one reports a missing key as `StopIteration` — which names
+    neither the file, the service, nor the key that moved.
+    """
+    assert isinstance(node, yaml.MappingNode), f"{where} is not a YAML mapping"
+    for key_node, value_node in node.value:
+        if key_node.value == key:
+            return value_node
+    raise AssertionError(f"{where} declares no {key!r}")
 
 
 def _environment_node_tag(name: str, service: str) -> str:
@@ -83,20 +80,18 @@ def _environment_node_tag(name: str, service: str) -> str:
     read without construction so a Compose merge tag is visible.
     `load_compose_document` (via `ComposeTagTolerantLoader`) constructs
     `!override`/`!reset` nodes into plain dicts indistinguishable from an
-    untagged map — exactly the blind spot `_merged_environment` above
-    cannot see through.
+    untagged map, so `_services` above cannot tell the two apart.
     """
     root = yaml.compose((ROOT / name).read_text(encoding="utf-8"), Loader=yaml.SafeLoader)
-    services_node = next(value for key, value in root.value if key.value == "services")
-    service_node = next(value for key, value in services_node.value if key.value == service)
-    environment_node = next(value for key, value in service_node.value if key.value == "environment")
-    return environment_node.tag
+    services_node = _mapping_entry(root, "services", where=name)
+    service_node = _mapping_entry(services_node, service, where=f"{name}:services")
+    return _mapping_entry(service_node, "environment", where=f"{name}:{service}").tag
 
 
 def test_a_declared_worker_service_always_names_its_own_service_key() -> None:
     """Wherever the key appears, its value is the service it sits under. This
     is the rename tripwire, and it holds for any future worker too."""
-    for name in _tracked_compose_files():
+    for name in tracked_compose_files():
         for service, environment in _services(name).items():
             if not environment.get(DECLARATION_KEY):
                 continue
@@ -110,7 +105,7 @@ def test_every_clerk_agent_declares_a_worker_service() -> None:
     """A lane whose deployment says nothing renders no restart command at all,
     which leaves the operator with a recorded Apply and no way to finish."""
     covered: set[tuple[str, str]] = set()
-    for name in _tracked_compose_files():
+    for name in tracked_compose_files():
         for service, environment in _services(name).items():
             if environment.get("FLEET_ROLE") != "clerk_agent":
                 continue
@@ -143,7 +138,7 @@ def test_no_coordinator_names_a_worker_service() -> None:
     base file's worker name neutralizes it with `""`, the same fence
     `ALPACA_CLERK_DIR` already uses on this role.
     """
-    for name in _tracked_compose_files():
+    for name in tracked_compose_files():
         for service, environment in _services(name).items():
             if environment.get("FLEET_ROLE") != "fleet_coordinator":
                 continue
@@ -159,27 +154,26 @@ def test_the_fleet_coordinator_fences_off_the_base_files_worker_name() -> None:
     `python-service` and hand an operator the exact wrong restart command.
     """
     assert _services("compose.fleet.dev.yaml")["python-service"][DECLARATION_KEY] == ""
-    assert _merged_environment(("compose.yaml", "compose.fleet.dev.yaml"), "python-service")[
-        DECLARATION_KEY
-    ] == ""
 
 
-def test_the_qualification_overlay_inherits_each_lanes_declaration() -> None:
-    """The overlay re-declares nothing; this proves the omission is safe by
-    checking the merge `_merged_environment` MODELS for the harness that
-    actually runs it, not the overlay alone. That model only holds while the
-    overlay's own `environment:` nodes stay untagged — the overlay already
-    uses `!override` on `depends_on:`/`volumes:` for other services in this
-    same file (`fleet-coordinator`), so the second assertion below pins that
-    the lanes' `environment:` has not been given the same treatment; a future
-    `!override` there would silently invalidate the model above without it.
+def test_the_qualification_overlay_leaves_each_lanes_declaration_alone() -> None:
+    """The overlay declares nothing of its own and lets `compose.fleet.yaml`'s
+    declaration through, which are the two ways it could take the lane's
+    restart command away: re-declaring the key with a stale value, or tagging
+    its `environment:` `!override`/`!reset` so Compose replaces the base map
+    wholesale instead of merging key-for-key. The overlay already uses
+    `!override` on `depends_on:`/`volumes:` for `fleet-coordinator` in this
+    same file, so the second is a live possibility, not a hypothetical.
     """
     for lane in ("alpaca-paper-clerk", "alpaca-live-clerk"):
-        assert _merged_environment(QUALIFICATION_MERGE, lane)[DECLARATION_KEY] == lane
-        assert _environment_node_tag(QUALIFICATION_MERGE[1], lane) == _PLAIN_MAP_TAG, (
-            f"{QUALIFICATION_MERGE[1]}:{lane} tags its environment: node — "
-            "the key-for-key merge model above no longer reflects Compose's "
-            "actual merge for this service"
+        assert DECLARATION_KEY not in _services(QUALIFICATION_OVERLAY)[lane], (
+            f"{QUALIFICATION_OVERLAY}:{lane} re-declares {DECLARATION_KEY}, a second "
+            "place for a service rename to leave a stale name behind"
+        )
+        assert _environment_node_tag(QUALIFICATION_OVERLAY, lane) == _PLAIN_MAP_TAG, (
+            f"{QUALIFICATION_OVERLAY}:{lane} tags its environment: node, so Compose "
+            "replaces the base map instead of merging it and the lane loses its "
+            f"inherited {DECLARATION_KEY}"
         )
 
 
@@ -187,7 +181,7 @@ def test_the_declaration_is_never_a_secret_or_an_endpoint() -> None:
     """The value is a bare compose service name — never a URL, a host:port, or
     anything carrying a credential. It ships in a committed file and is
     rendered into the browser."""
-    for name in _tracked_compose_files():
+    for name in tracked_compose_files():
         for service, environment in _services(name).items():
             declared = environment.get(DECLARATION_KEY)
             if declared is None:

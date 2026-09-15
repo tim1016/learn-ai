@@ -148,12 +148,20 @@ class BrokerConfigurationService:
         *,
         store: ProfilesStore,
         operator_identity: str,
+        worker_service: str | None,
         clock: Clock = now_ms_utc,
         credential_slots: CredentialSlotDirectory | None = None,
         account_verifier: AccountVerifier | None = None,
     ) -> None:
         self._store = store
         self._operator_identity = operator_identity
+        # The compose service name of the worker this process is, exactly as
+        # its own deployment declares it, or ``None`` when the deployment
+        # declared nothing. Deployment configuration like the operator
+        # identity beside it, so it enters once here rather than per request —
+        # and it has no default, so "declared nothing" can never be confused
+        # with "a caller forgot to pass it".
+        self._worker_service = worker_service
         self._clock = clock
         self._slots = credential_slots or UnconfiguredCredentialSlotDirectory()
         self._verifier = account_verifier or UnconfiguredAccountVerifier()
@@ -548,7 +556,7 @@ class BrokerConfigurationService:
         """Staged **and** effective, so no surface can render one as the other."""
         return self._store.read_selection()
 
-    def desk_state(self, *, worker_service: str | None = None) -> AlpacaDeskState:
+    def desk_state(self) -> AlpacaDeskState:
         """Project durable account selection into backend-authored desk copy.
 
         The projection is intentionally broker-free: it does not resolve a
@@ -556,10 +564,10 @@ class BrokerConfigurationService:
         concerns. A desk choice is admitted only after the operator explicitly
         verified and pinned an account on a complete saved revision.
 
-        ``worker_service`` is the compose service name this process's own
-        deployment declares; it only ever authors the restart command the desk
-        shows. This service never reads it from the environment itself — the
-        transport passes it, so the projection stays a pure function.
+        The restart command the desk shows is authored from the worker service
+        this instance was constructed with. This service never reads it from
+        the environment itself — ``runtime.build_service`` hands it over — so
+        the projection stays a pure function of what the service holds.
         """
         with self._store.read_snapshot():
             current = self._store.read_selection()
@@ -588,7 +596,7 @@ class BrokerConfigurationService:
             effective_revision=effective_revision,
             nicknames=nicknames,
             has_archived_profiles=len(all_profiles) > len(profiles),
-            worker_service=worker_service,
+            worker_service=self._worker_service,
         )
 
     def stage_selection(

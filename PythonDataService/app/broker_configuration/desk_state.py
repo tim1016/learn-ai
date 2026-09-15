@@ -229,7 +229,7 @@ def project_desk_state(
     effective_revision: ProfileRevision | None,
     nicknames: Sequence[AccountNickname],
     has_archived_profiles: bool,
-    worker_service: str | None = None,
+    worker_service: str | None,
 ) -> AlpacaDeskState:
     """Build the desk read model without probing credentials or Alpaca."""
     profile_by_id = {profile.profile_id: profile for profile in profiles}

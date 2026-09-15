@@ -51,6 +51,7 @@ async def client(
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.broker_configuration.desk_state import project_desk_state, worker_restart_command
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.records import CredentialSlotStatus
+from app.broker_configuration.runtime import build_service
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
+from app.config import FleetSettings, fleet_settings
 from tests.broker_configuration.conftest import (
     LIVE_ENVELOPE_PAYLOAD,
     OPERATOR_IDENTITY,
@@ -61,12 +65,13 @@ def test_worker_restart_command_is_absent_when_the_deployment_declared_nothing()
     assert worker_restart_command(None) is None
 
 
+@pytest.mark.parametrize("service", ["alpaca-live-clerk"], indirect=True)
 async def test_desk_state_carries_the_declared_workers_restart_command(
     service: BrokerConfigurationService,
 ) -> None:
     await _pinned_paper_profile(service)
 
-    state = service.desk_state(worker_service="alpaca-live-clerk")
+    state = service.desk_state()
 
     assert state.restart_command == "podman compose restart alpaca-live-clerk"
 
@@ -74,9 +79,34 @@ async def test_desk_state_carries_the_declared_workers_restart_command(
 async def test_desk_state_omits_a_restart_command_for_an_undeclared_worker(
     service: BrokerConfigurationService,
 ) -> None:
+    """The fixture's default is a deployment that declared nothing, which is a
+    different fact from a caller that forgot to say — the service is handed the
+    declaration once, at construction, so there is no forgetting to model."""
     await _pinned_paper_profile(service)
 
     assert service.desk_state().restart_command is None
+
+
+def test_build_service_hands_the_service_the_deployments_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one place the declaration enters the process, pinned end to end.
+
+    ``fleet_settings`` is constructed at import, so ``setenv`` alone cannot
+    reach it; re-reading the environment into the attribute *on* the singleton
+    keeps the env var the thing under test while staying visible to
+    ``runtime``'s from-import binding.
+    """
+    monkeypatch.setenv("FLEET_WORKER_SERVICE", "alpaca-paper-clerk")
+    monkeypatch.setattr(fleet_settings, "WORKER_SERVICE", FleetSettings().WORKER_SERVICE)
+
+    built = build_service(clerk_dir=tmp_path / "clerk")
+    try:
+        state = built.desk_state()
+    finally:
+        built.close()
+
+    assert state.restart_command == "podman compose restart alpaca-paper-clerk"
 
 
 def test_desk_state_does_not_probe_credential_availability(
@@ -86,6 +116,7 @@ def test_desk_state_does_not_probe_credential_availability(
     service = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=None,
         clock=clock,
         credential_slots=slots,
         account_verifier=verifier,
@@ -181,6 +212,7 @@ async def test_projector_authors_the_live_choice_safety_copy(
         effective_revision=None,
         nicknames=service.list_nicknames(),
         has_archived_profiles=False,
+        worker_service=None,
     )
 
     assert state.choices[0].description == (

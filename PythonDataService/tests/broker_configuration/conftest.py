@@ -119,11 +119,20 @@ def verifier() -> FakeAccountVerifier:
 
 @pytest.fixture
 def service(
-    clerk_dir: Path, clock: FrozenClock, verifier: FakeAccountVerifier
+    clerk_dir: Path,
+    clock: FrozenClock,
+    verifier: FakeAccountVerifier,
+    request: pytest.FixtureRequest,
 ) -> Iterator[BrokerConfigurationService]:
+    """A service over a tmp_path database, for a deployment that declares no
+    worker service. A test that cares parametrises this fixture indirectly
+    with the compose service name its deployment declares.
+    """
+    worker_service: str | None = getattr(request, "param", None)
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_service=worker_service,
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=verifier,

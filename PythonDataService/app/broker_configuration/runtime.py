@@ -26,7 +26,7 @@ from pathlib import Path
 
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import ProfilesStore
-from app.config import settings
+from app.config import fleet_settings, settings
 
 CLERK_DIR_ENV_VAR = "ALPACA_CLERK_DIR"
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +62,7 @@ def build_service(*, clerk_dir: Path | None = None) -> BrokerConfigurationServic
     return BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=root),
         operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+        worker_service=fleet_settings.WORKER_SERVICE,
         credential_slots=AlpacaCredentialSlotDirectory(),
         account_verifier=AlpacaAccountVerifier(),
     )

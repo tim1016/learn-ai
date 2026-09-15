@@ -34,6 +34,15 @@ describe('ConfigurationSwitchGuideComponent', () => {
     expect(screen.queryByText(/podman compose restart/)).toBeNull();
   });
 
+  it('says nothing about the worker service while the desk state is unknown', async () => {
+    await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand: undefined } });
+
+    expect(screen.getByText('Restart the worker')).toBeTruthy();
+    expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy worker restart command' })).toBeNull();
+    expect(screen.queryByText(/podman compose restart/)).toBeNull();
+  });
+
   it('has no detectable accessibility violations with a command', async () => {
     await render(ConfigurationSwitchGuideComponent, {
       inputs: { restartCommand: 'podman compose restart alpaca-paper-clerk' },
@@ -48,6 +57,16 @@ describe('ConfigurationSwitchGuideComponent', () => {
 
   it('has no detectable accessibility violations without a command', async () => {
     await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand: null } });
+
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+
+    expect(results.violations).toEqual([]);
+  });
+
+  it('has no detectable accessibility violations while the command is unknown', async () => {
+    await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand: undefined } });
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false } },
