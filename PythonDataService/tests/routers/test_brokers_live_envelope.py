@@ -83,4 +83,6 @@ async def test_the_clear_is_refused_without_the_control_secret(
     response = await _post(app, _CLEAR_PATH)
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body

@@ -121,6 +121,14 @@ _NAMESPACE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,63}$")
 _ENDPOINT_REF_PATTERN = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,63}$")
 _ADAPTER_VERSION_MAX_CHARS = 64
 
+#: Shared next_step prose for refusals that are the same remediation at every
+#: call site (a clerk's broker is immutable; a clerk id the registry has never
+#: seen), rather than tailored per-context like most of the backfill (#2067).
+_BROKER_IMMUTABLE_NEXT_STEP = (
+    "Use the broker this clerk was provisioned under; a clerk's broker is immutable."
+)
+_UNKNOWN_CLERK_NEXT_STEP = "Confirm the clerk id against the fleet directory before retrying."
+
 
 @dataclass(frozen=True, slots=True)
 class ProvisionedClerk:
@@ -224,6 +232,8 @@ class FleetControlService:
         if not broker or not display_label:
             raise BrokerAndClerkRequired(
                 "Provisioning requires a broker and a display label.",
+                next_step="Pass a non-empty broker id and display label; "
+                "provisioning has no default for either.",
             )
         self._adapter(broker)  # unknown production provider fails closed here
         if _NAMESPACE_PATTERN.fullmatch(deployment_namespace) is None:
@@ -460,7 +470,11 @@ class FleetControlService:
                 retired_at_ms=now,
             )
         if not updated:
-            raise ClerkNotFound(f"No clerk carries identity {clerk_id!r}.")
+            raise ClerkNotFound(
+                f"No clerk carries identity {clerk_id!r}.",
+                next_step="Confirm the clerk id; a clerk that never existed "
+                "cannot be retired.",
+            )
         logger.info("fleet clerk retired", extra={"broker": clerk.broker, "clerk_id": clerk_id})
         retired = self._store.read_clerk(clerk_id)
         assert retired is not None
@@ -557,6 +571,8 @@ class FleetControlService:
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             raise ClerkNotFound(
                 f"Clerk {clerk_id} is retired; a retired lane never returns to service.",
+                next_step="Provision a new clerk; a retired lane's identity is "
+                "never reinstated.",
             )
         if adapter_version is not None and len(adapter_version) > _ADAPTER_VERSION_MAX_CHARS:
             raise ClerkIdentityMismatch(
@@ -670,7 +686,11 @@ class FleetControlService:
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
-            raise ClerkNotFound(f"Clerk {clerk_id} is retired.")
+            raise ClerkNotFound(
+                f"Clerk {clerk_id} is retired.",
+                next_step="Stop sending heartbeats for a retired clerk; its "
+                "identity is never reinstated.",
+            )
         summary_json = None
         if reported_summary is not None:
             try:
@@ -726,17 +746,24 @@ class FleetControlService:
         """
         self._require_recovery_hold_clear()
         if not broker:
-            raise BrokerAndClerkRequired("A reservation requires a broker.")
+            raise BrokerAndClerkRequired(
+                "A reservation requires a broker.",
+                next_step="Include broker in the reservation request; no "
+                "default provider is assumed.",
+            )
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
                 f"Clerk {clerk_id} belongs to broker {clerk.broker!r}, not {broker!r}.",
+                next_step=_BROKER_IMMUTABLE_NEXT_STEP,
             )
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             # A retired clerk's routes are gone for good: to the fleet it is
             # simply absent, not a conflict to resolve.
             raise ClerkNotFound(
                 f"Clerk {clerk_id} is retired; only a provisioned clerk reserves accounts.",
+                next_step="Provision a new clerk to reserve an account; a "
+                "retired clerk's routes are gone for good.",
             )
         if clerk.lifecycle_state != StoredLifecycleState.PROVISIONED:
             raise ClerkAssignmentConflict(
@@ -749,6 +776,9 @@ class FleetControlService:
             raise ClerkAccountMismatch(
                 f"Provider {broker!r} canonicalized account {external_account_id!r} "
                 "to an empty identity.",
+                next_step="Verify the external account id with the provider "
+                "directly; this deployment cannot route to an empty canonical "
+                "identity.",
             )
         if volume_root is not None:
             self._verify_volume(clerk, volume_root)
@@ -875,6 +905,7 @@ class FleetControlService:
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
                 f"Clerk {clerk_id} belongs to broker {clerk.broker!r}, not {broker!r}.",
+                next_step=_BROKER_IMMUTABLE_NEXT_STEP,
             )
         if binding_generation < 1:
             raise ClerkBindingGenerationConflict(
@@ -896,6 +927,8 @@ class FleetControlService:
             if session is None:
                 raise ClerkUnreachable(
                     f"Clerk {clerk_id} has no registered agent session.",
+                    next_step="Have the agent register a session before "
+                    "confirming; retry once registration completes.",
                 )
             if (
                 session.agent_instance_id != agent_instance_id
@@ -1100,6 +1133,7 @@ class FleetControlService:
             raise ClerkBrokerMismatch(
                 f"Successor clerk {successor_clerk_id} belongs to broker "
                 f"{successor.broker!r}, not {broker!r}.",
+                next_step=_BROKER_IMMUTABLE_NEXT_STEP,
             )
         if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
             raise ClerkAssignmentConflict(
@@ -1216,29 +1250,41 @@ class FleetControlService:
         if not broker or not clerk_id:
             raise BrokerAndClerkRequired(
                 "A clerk-scoped operation requires both broker and clerk identity.",
+                next_step="Call this route with both the broker and clerk_id "
+                "path segments populated.",
             )
         clerk = self._require_clerk(clerk_id)
         if clerk.broker != broker:
             raise ClerkBrokerMismatch(
                 f"Route broker {broker!r} does not match clerk {clerk_id}'s "
                 f"immutable broker {clerk.broker!r}.",
+                next_step=_BROKER_IMMUTABLE_NEXT_STEP,
             )
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
-            raise ClerkNotFound(f"Clerk {clerk_id} is retired; its routes are gone.")
+            raise ClerkNotFound(
+                f"Clerk {clerk_id} is retired; its routes are gone.",
+                next_step="Provision a new clerk; a retired clerk's routes are "
+                "gone for good.",
+            )
         if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} is draining and accepts no routed operations.",
+                next_step="Wait for the clerk to finish draining, or route to "
+                "its successor if one is assigned.",
             )
         session = self._store.read_session(clerk_id)
         if session is None:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} has no registered agent session.",
+                next_step="Wait for the agent to register a session, then retry.",
             )
         if self._clock() - session.last_seen_at_ms > self._session_stale_after_ms:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id}'s last heartbeat is older than "
                 f"{self._session_stale_after_ms} ms; an unreachable lane accepts no "
                 "routed operations until it recovers.",
+                next_step="Wait for the agent to send a fresh heartbeat, then "
+                "retry.",
             )
         if (
             expected_routing_epoch is not None
@@ -1257,6 +1303,8 @@ class FleetControlService:
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} holds no effective account assignment; "
                 "execution routing stays closed until a confirmed binding exists.",
+                next_step="Wait for a confirmed binding before routing; "
+                "execution stays closed until one exists.",
             )
         if len(effective) > 1:
             raise ClerkIdentityMismatch(
@@ -1269,6 +1317,8 @@ class FleetControlService:
                 f"Clerk {clerk_id}'s assignment for "
                 f"{assignment.canonical_external_account_id} has no confirmed "
                 "binding observation; a starting lane is not command-routable.",
+                next_step="Wait for the agent to confirm its binding before "
+                "retrying.",
             )
         if (
             assignment.confirmed_agent_instance_id != session.agent_instance_id
@@ -1283,6 +1333,7 @@ class FleetControlService:
                 f"{assignment.confirmed_routing_epoch}; the current session "
                 f"{session.agent_instance_id}/{session.routing_epoch} has not "
                 "re-confirmed it.",
+                next_step="Wait for the current session to re-confirm its binding before retrying.",
             )
         if (
             expected_binding_generation is not None
@@ -1301,6 +1352,8 @@ class FleetControlService:
                 raise ClerkAccountMismatch(
                     f"Account {canonical_expected} is not clerk {clerk_id}'s "
                     f"confirmed account {assignment.canonical_external_account_id}.",
+                    next_step="Re-read the clerk's confirmed account before "
+                    "retrying; the command's expected account no longer matches.",
                 )
         return clerk, session, assignment
 
@@ -1650,10 +1703,16 @@ class FleetControlService:
         # callers learn nothing about any real clerk from the distinction.
         """Resolve one clerk or refuse; malformed ids are simply absent."""
         if not is_clerk_id(clerk_id):
-            raise ClerkNotFound(f"No clerk carries identity {clerk_id!r}.")
+            raise ClerkNotFound(
+                f"No clerk carries identity {clerk_id!r}.",
+                next_step=_UNKNOWN_CLERK_NEXT_STEP,
+            )
         clerk = self._store.read_clerk(clerk_id)
         if clerk is None:
-            raise ClerkNotFound(f"No clerk carries identity {clerk_id!r}.")
+            raise ClerkNotFound(
+                f"No clerk carries identity {clerk_id!r}.",
+                next_step=_UNKNOWN_CLERK_NEXT_STEP,
+            )
         return clerk
 
 

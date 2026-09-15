@@ -26,6 +26,7 @@ from app.broker.fleet.delivery import SseEvent
 from app.broker.fleet.errors import (
     BrokerClerkCapabilityUnavailable,
     FleetControlError,
+    FleetControlPlaneNotInstalled,
 )
 from app.broker.fleet.provider import (
     OperationIdempotency,
@@ -53,11 +54,10 @@ def _fleet_service(request: Request) -> Any:
     """The registry-backed fleet service this coordinator surface routes on."""
     service = getattr(request.app.state, "fleet_service", None)
     if service is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=503,
-            detail="no fleet registry is installed on this process",
+        raise FleetControlPlaneNotInstalled(
+            "no fleet registry is installed on this process",
+            next_step="Confirm this process's lifespan installed "
+            "app.state.fleet_service before routing fleet traffic to it.",
         )
     return service
 
@@ -66,11 +66,10 @@ def _lane_router(request: Request) -> LaneRouter:
     """The routing core bound to this process's delivery posture."""
     lane_router = getattr(request.app.state, "fleet_lane_router", None)
     if lane_router is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=503,
-            detail="no fleet lane router is installed on this process",
+        raise FleetControlPlaneNotInstalled(
+            "no fleet lane router is installed on this process",
+            next_step="Confirm this process's lifespan installed "
+            "app.state.fleet_lane_router before routing fleet traffic to it.",
         )
     return lane_router
 

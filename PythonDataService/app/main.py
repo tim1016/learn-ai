@@ -21,6 +21,7 @@ from app.broker.alpaca.active_binding import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.alpaca.profile import BrokerProfileError
+from app.broker.fleet.errors import FleetControlError
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -98,6 +99,7 @@ from app.utils.error_handlers import (
     broker_unbound_exception_handler,
     catalog_schema_not_ready_exception_handler,
     clerk_sqlite_exception_handler,
+    install_fleet_control_error_handler,
     polygon_exception_handler,
     request_validation_exception_handler,
 )
@@ -213,7 +215,6 @@ async def _open_verified_fleet_lane() -> FleetLaneBoot | None:
     if not _ROLE_RUNS_CLERK:
         return None
     from app.broker.alpaca.clerk.fleet_boot import open_fleet_lane
-    from app.broker.fleet.errors import FleetControlError
     from app.broker_configuration.runtime import resolve_clerk_dir
 
     try:
@@ -1310,6 +1311,13 @@ app.add_exception_handler(BrokerUnbound, broker_unbound_exception_handler)
 # Same reasoning: a mid-deploy catalog-schema race (#1883 Codex P2 finding)
 # is a transient deploy-ordering state, not an unexpected fault.
 app.add_exception_handler(CatalogSchemaNotReadyError, catalog_schema_not_ready_exception_handler)
+# The fleet control plane's own refusal vocabulary (#2067): the control-secret
+# and agent-token guards raise from a FastAPI dependency, which resolves
+# before any route-local try/except can reach it, and a few "not installed"
+# call sites have no local try at all. Without this, those refusals fell
+# through to the catch-all 500 on the guard every browser call to the data
+# plane passes through.
+install_fleet_control_error_handler(app)
 app.add_exception_handler(Exception, polygon_exception_handler)
 
 

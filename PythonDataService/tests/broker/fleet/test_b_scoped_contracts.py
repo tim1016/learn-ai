@@ -64,11 +64,16 @@ def _build_agent_app(
         FleetIdentityMiddleware,
     )
     from app.security.data_plane_control import require_data_plane_control_secret_always
+    from app.utils.error_handlers import install_fleet_control_error_handler
 
     agent = FastAPI()
     agent.add_middleware(
         FleetIdentityMiddleware, refuse_unpinned_mutations=refuse_unpinned_mutations
     )
+    # Production-shaped: the coordinator's real app registers this handler
+    # too (app.main), because the control-secret guard raises outside any
+    # route-local try/except (#2067).
+    install_fleet_control_error_handler(agent)
     ledger = minted_receipts if minted_receipts is not None else []
 
     def _served() -> dict[str, object] | None:

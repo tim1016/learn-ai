@@ -287,6 +287,23 @@ jobs:
             echo "$status"
             exit 1
           fi
+      - name: Regenerate the fleet refusal vocabulary snapshot and require it to match both committed copies
+        run: |
+          python -m scripts.regenerate_fleet_refusal_vocabulary_snapshot
+          cd ..
+          git diff --exit-code -- \
+            PythonDataService/app/broker/fleet/refusal_vocabulary.snapshot.json \
+            Frontend/src/app/fleet/fleet-refusal-vocabulary.snapshot.json
+          # Same untracked-file gap as above: a deleted-and-regenerated
+          # snapshot would pass `git diff` unnoticed without this check.
+          status=$(git status --porcelain -- \
+            PythonDataService/app/broker/fleet/refusal_vocabulary.snapshot.json \
+            Frontend/src/app/fleet/fleet-refusal-vocabulary.snapshot.json)
+          if [ -n "$status" ]; then
+            echo "Regenerated fleet refusal vocabulary snapshot is untracked or otherwise dirty:"
+            echo "$status"
+            exit 1
+          fi
 
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/12

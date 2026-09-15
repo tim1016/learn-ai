@@ -7,11 +7,14 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
+from app.broker.fleet.errors import (
+    DataPlaneControlSecretRefused,
+    FleetControlPlaneNotInstalled,
+)
 from app.config import settings
 from app.main import app
 from app.security.data_plane_control import (
@@ -219,7 +222,10 @@ async def test_control_mutation_rejects_missing_secret_header(monkeypatch) -> No
         response = await client.post(_MUTATION_PATH)
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -234,7 +240,10 @@ async def test_control_mutation_rejects_wrong_secret_header(monkeypatch) -> None
         )
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -250,7 +259,7 @@ async def test_control_mutation_accepts_valid_secret_header(monkeypatch) -> None
 
     assert response.status_code != 403
     if response.status_code == 503:
-        assert CONTROL_SECRET_ENV_VAR not in response.json()["detail"]
+        assert CONTROL_SECRET_ENV_VAR not in response.json()["message"]
 
 
 @pytest.mark.asyncio
@@ -263,7 +272,7 @@ async def test_control_get_does_not_require_secret_header(monkeypatch) -> None:
 
     assert response.status_code != 403
     if response.status_code == 503:
-        assert CONTROL_SECRET_ENV_VAR not in response.json()["detail"]
+        assert CONTROL_SECRET_ENV_VAR not in response.json()["message"]
 
 
 def test_retired_protected_read_surfaces_are_absent_from_routes_and_manifest() -> None:
@@ -310,7 +319,10 @@ async def test_account_transaction_read_rejects_missing_or_wrong_secret(
         response = await client.get(_ACCOUNT_TRANSACTIONS_READ_PATH, headers=headers)
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body
 
 
 def test_broker_v2_routes_declare_always_on_guard() -> None:
@@ -342,7 +354,10 @@ async def test_broker_v2_read_rejects_missing_or_wrong_secret(
         response = await client.get(_BROKERS_READ_PATH, headers=headers)
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -390,7 +405,10 @@ async def test_alpaca_clerk_sqlite_read_rejects_missing_or_wrong_secret(
         response = await client.get(_ALPACA_CLERK_SQLITE_READ_PATH, headers=headers)
 
     assert response.status_code == 403
-    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == DataPlaneControlSecretRefused.reason
+    assert CONTROL_SECRET_HEADER in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -402,7 +420,10 @@ async def test_control_mutation_fails_closed_when_secret_is_not_configured(monke
         response = await client.post(_MUTATION_PATH)
 
     assert response.status_code == 503
-    assert CONTROL_SECRET_ENV_VAR in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == FleetControlPlaneNotInstalled.reason
+    assert CONTROL_SECRET_ENV_VAR in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -421,7 +442,10 @@ async def test_control_mutation_fails_closed_for_retired_public_secret(monkeypat
         )
 
     assert response.status_code == 503
-    assert CONTROL_SECRET_ENV_VAR in response.json()["detail"]
+    body = response.json()
+    assert body["reason"] == FleetControlPlaneNotInstalled.reason
+    assert CONTROL_SECRET_ENV_VAR in body["message"]
+    assert "detail" not in body
 
 
 @pytest.mark.asyncio
@@ -434,7 +458,7 @@ async def test_control_mutation_local_dev_opt_out_is_explicit(monkeypatch) -> No
 
     assert response.status_code != 403
     if response.status_code == 503:
-        assert CONTROL_SECRET_ENV_VAR not in response.json()["detail"]
+        assert CONTROL_SECRET_ENV_VAR not in response.json()["message"]
 
 
 @pytest.mark.asyncio
@@ -442,7 +466,7 @@ async def test_control_mutation_compares_header_as_bytes(monkeypatch) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "tëst-control-secret")
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(DataPlaneControlSecretRefused) as exc_info:
         await require_data_plane_control_secret(_request("POST"), supplied="test-control-secret")
     assert exc_info.value.status_code == 403
 
