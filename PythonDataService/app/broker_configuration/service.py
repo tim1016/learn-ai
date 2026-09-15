@@ -548,13 +548,18 @@ class BrokerConfigurationService:
         """Staged **and** effective, so no surface can render one as the other."""
         return self._store.read_selection()
 
-    def desk_state(self) -> AlpacaDeskState:
+    def desk_state(self, *, worker_service: str | None = None) -> AlpacaDeskState:
         """Project durable account selection into backend-authored desk copy.
 
         The projection is intentionally broker-free: it does not resolve a
         credential slot or test connectivity. Those are separate current-state
         concerns. A desk choice is admitted only after the operator explicitly
         verified and pinned an account on a complete saved revision.
+
+        ``worker_service`` is the compose service name this process's own
+        deployment declares; it only ever authors the restart command the desk
+        shows. This service never reads it from the environment itself — the
+        transport passes it, so the projection stays a pure function.
         """
         with self._store.read_snapshot():
             current = self._store.read_selection()
@@ -583,6 +588,7 @@ class BrokerConfigurationService:
             effective_revision=effective_revision,
             nicknames=nicknames,
             has_archived_profiles=len(all_profiles) > len(profiles),
+            worker_service=worker_service,
         )
 
     def stage_selection(

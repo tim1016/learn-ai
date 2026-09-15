@@ -7278,6 +7278,8 @@ export interface components {
             lifecycle: components["schemas"]["DeskLifecycleStepResponse"][];
             /** Profiles Requiring Setup */
             profiles_requiring_setup: number;
+            /** Restart Command */
+            restart_command: string | null;
             /** Selection Generation */
             selection_generation: number;
             /** Selection Label */

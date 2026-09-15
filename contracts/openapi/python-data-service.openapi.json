@@ -698,6 +698,17 @@
             "title": "Profiles Requiring Setup",
             "type": "integer"
           },
+          "restart_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Command"
+          },
           "selection_generation": {
             "minimum": 0.0,
             "title": "Selection Generation",
@@ -743,7 +754,8 @@
           "choices",
           "empty_choices_message",
           "profiles_requiring_setup",
-          "setup_required_message"
+          "setup_required_message",
+          "restart_command"
         ],
         "title": "AlpacaDeskStateResponse",
         "type": "object"

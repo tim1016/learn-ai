@@ -1,10 +1,17 @@
 """Application configuration loaded from environment variables"""
 
+import re
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Compose's own service-name shape: lowercase alphanumerics plus `_`, `.` and
+# `-`, starting with an alphanumeric. Anything else is a deployment mistake,
+# not a service this repo could restart.
+_COMPOSE_SERVICE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 
 class FleetSettings(BaseSettings):
@@ -71,6 +78,32 @@ class FleetSettings(BaseSettings):
     # queue and deadline. A zero queue limit refuses immediately.
     REQUEST_QUEUE_LIMIT: int = 0
     REQUEST_QUEUE_TIMEOUT_MS: int = 0
+    # The compose service name of THIS worker process, declared by the
+    # deployment beside the service it names. Its only use is authoring the
+    # operator's restart command on the Alpaca desk: nothing the desk holds
+    # maps a lane to a compose service, and the coordinator's service name
+    # restarts the wrong process. Never an endpoint, never a credential, and
+    # never projected into the public fleet directory (ADR 0062 §3).
+    WORKER_SERVICE: str | None = None
+
+    @field_validator("WORKER_SERVICE")
+    @classmethod
+    def _validate_worker_service(cls, value: str | None) -> str | None:
+        """Fail at boot on a declaration no compose service could answer to.
+
+        The value is pasted verbatim into a command an operator runs, so a
+        malformed declaration must stop the process rather than reach a copy
+        button. An empty value is Compose writing an unset ``${VAR}`` through
+        — that is "undeclared", not a service named "".
+        """
+        if value is None or value == "":
+            return None
+        if not _COMPOSE_SERVICE_NAME.fullmatch(value):
+            raise ValueError(
+                f"FLEET_WORKER_SERVICE={value!r} is not a compose service name "
+                "(lowercase alphanumerics, '_', '.' and '-', starting alphanumeric)."
+            )
+        return value
 
 
 class Settings(BaseSettings):

@@ -43,6 +43,21 @@ _RESTART_CONSEQUENCE = (
 )
 
 
+def worker_restart_command(worker_service: str | None) -> str | None:
+    """The restart command for the worker this process is, or ``None``.
+
+    The deployment declares its own compose service name; the desk never
+    infers one. In the fleet posture each lane is its own service, so the
+    coordinator's name would restart a process that applies no lane's staged
+    profile — and in the deployed compose files ``container_name`` equals the
+    service key, so this is also the form the runbook's ``podman restart
+    <lane>`` resolves to.
+    """
+    if worker_service is None:
+        return None
+    return f"podman compose restart {worker_service}"
+
+
 def _same_selection(
     left_profile_id: str,
     left_revision: int,
@@ -214,6 +229,7 @@ def project_desk_state(
     effective_revision: ProfileRevision | None,
     nicknames: Sequence[AccountNickname],
     has_archived_profiles: bool,
+    worker_service: str | None = None,
 ) -> AlpacaDeskState:
     """Build the desk read model without probing credentials or Alpaca."""
     profile_by_id = {profile.profile_id: profile for profile in profiles}
@@ -371,7 +387,8 @@ def project_desk_state(
         ),
         profiles_requiring_setup=profiles_requiring_setup,
         setup_required_message=_setup_message(profiles_requiring_setup),
+        restart_command=worker_restart_command(worker_service),
     )
 
 
-__all__ = ["project_desk_state"]
+__all__ = ["project_desk_state", "worker_restart_command"]

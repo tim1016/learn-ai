@@ -139,7 +139,33 @@ async def test_desk_state_reports_no_active_account_through_one_read_model(
         "empty_choices_message": "No account configurations are saved yet. Set one up to continue.",
         "profiles_requiring_setup": 0,
         "setup_required_message": None,
+        "restart_command": None,
     }
+
+
+async def test_desk_state_authors_the_restart_command_from_the_declared_worker_service(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane's own compose service, not the fleet coordinator. Nothing the
+    desk holds maps a lane to a service, so the deployment declares it and the
+    route is the only place that reads the declaration."""
+    monkeypatch.setattr("app.config.fleet_settings.WORKER_SERVICE", "alpaca-paper-clerk")
+
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["restart_command"] == "podman compose restart alpaca-paper-clerk"
+
+
+async def test_desk_state_reports_no_restart_command_when_no_worker_service_is_declared(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.config.fleet_settings.WORKER_SERVICE", None)
+
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["restart_command"] is None
 
 
 async def test_desk_state_returns_verified_choices_without_configuration_secrets(

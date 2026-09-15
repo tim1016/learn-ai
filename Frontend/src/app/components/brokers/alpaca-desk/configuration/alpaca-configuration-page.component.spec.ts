@@ -118,6 +118,7 @@ function deskState(overrides: Partial<AlpacaDeskState> = {}): AlpacaDeskState {
     empty_choices_message: null,
     profiles_requiring_setup: 0,
     setup_required_message: null,
+    restart_command: null,
     ...overrides,
   };
 }
@@ -286,6 +287,26 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.getByRole('button', { name: 'Stage revision 1' })).toBeTruthy();
     expect(service.staged).toEqual([]);
     expect(service.applied).toEqual([]);
+  });
+
+  it('shows the restart command the backend authored for this lane', async () => {
+    const service = new FakeConfigurationService();
+    service.desk = deskState({ restart_command: 'podman compose restart alpaca-paper-clerk' });
+
+    await renderPage(service);
+
+    expect(await screen.findByText('podman compose restart alpaca-paper-clerk')).toBeTruthy();
+    expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
+  });
+
+  it('never claims a worker service is undeclared before the desk state has loaded', async () => {
+    const service = new FakeConfigurationService();
+    service.readDeskState = vi.fn(() => new Promise<AlpacaDeskState>(() => {}));
+
+    await renderPage(service);
+
+    expect(await screen.findByRole('heading', { name: 'Broker configuration' })).toBeTruthy();
+    expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
   });
 
   it('shows restart guidance when the selected revision already has Apply recorded', async () => {

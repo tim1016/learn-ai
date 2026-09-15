@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from app.config import Settings
+import pytest
+from pydantic import ValidationError
+
+from app.config import FleetSettings, Settings
 from app.research.config import ResearchConfig
 from app.research.signal.config import SignalConfig
 
@@ -29,6 +32,28 @@ def test_settings_allowed_origins_parses_comma_separated(monkeypatch):
         "http://b.test",
         "http://c.test",
     ]
+
+
+def test_fleet_worker_service_accepts_a_compose_service_name():
+    assert FleetSettings(WORKER_SERVICE="alpaca-paper-clerk").WORKER_SERVICE == (
+        "alpaca-paper-clerk"
+    )
+
+
+def test_fleet_worker_service_reads_an_undeclared_deployment_as_none():
+    """An empty declaration is "this deployment said nothing", not a service
+    named "". Compose writes an unset `${VAR}` through as an empty string, so
+    the two must collapse to the same absent value."""
+    assert FleetSettings(WORKER_SERVICE="").WORKER_SERVICE is None
+
+
+@pytest.mark.parametrize("declared", ["alpaca paper", "a;rm -rf", "Alpaca-Paper", "-leading"])
+def test_fleet_worker_service_refuses_a_value_no_compose_service_could_be(declared: str):
+    """The value is pasted verbatim into a command the operator runs. A
+    declaration that is not a compose service name is a deployment mistake and
+    must stop the process at boot rather than reach a copy button."""
+    with pytest.raises(ValidationError):
+        FleetSettings(WORKER_SERVICE=declared)
 
 
 def test_research_config_defaults_are_frozen_and_stable():

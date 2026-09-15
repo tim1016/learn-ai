@@ -129,6 +129,9 @@ services:
       FLEET_ROLE: clerk_agent
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
+      # This service's own key, so the desk's restart command names this lane
+      # rather than the coordinator. Must equal the service name above.
+      FLEET_WORKER_SERVICE: alpaca-paper-clerk
     volumes:
       - fleet-alpaca-paper-data:/app/artifacts/alpaca_clerk
 
@@ -142,6 +145,9 @@ services:
       FLEET_ROLE: clerk_agent
       FLEET_COORDINATOR_URL: http://fleet-coordinator:8000
       FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
+      # This service's own key, so the desk's restart command names this lane
+      # rather than the coordinator. Must equal the service name above.
+      FLEET_WORKER_SERVICE: alpaca-live-clerk
       # This is deliberately not an enablement switch. Existing per-account
       # arming and Live gates remain the sole authority for any mutation.
     volumes:

@@ -45,6 +45,7 @@ from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.broker_configuration.service import MAX_EVENT_PAGE, BrokerConfigurationService
+from app.config import fleet_settings
 from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
@@ -183,7 +184,13 @@ async def patch_owner(service: ServiceDep, body: OwnerPatchRequest) -> OwnerResp
 )
 async def read_desk_state(service: ServiceDep) -> AlpacaDeskStateResponse:
     """One backend-authored account-selection model for the Alpaca desk."""
-    projected = await asyncio.to_thread(service.desk_state)
+    # The worker's own compose service name is deployment configuration, not
+    # durable configuration state, so it enters here rather than through the
+    # store — the desk's restart command is then this lane's, not whatever
+    # service name a browser happened to be built with.
+    projected = await asyncio.to_thread(
+        service.desk_state, worker_service=fleet_settings.WORKER_SERVICE
+    )
     return AlpacaDeskStateResponse.from_record(projected)
 
 

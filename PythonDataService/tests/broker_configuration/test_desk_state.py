@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.broker_configuration.desk_state import project_desk_state
+from app.broker_configuration.desk_state import project_desk_state, worker_restart_command
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.records import CredentialSlotStatus
 from app.broker_configuration.service import BrokerConfigurationService
@@ -47,6 +47,36 @@ async def _pinned_paper_profile(
         account_id="PA000PAPER",
     )
     return created.profile.profile_id
+
+
+def test_worker_restart_command_names_the_declared_service() -> None:
+    assert worker_restart_command("alpaca-paper-clerk") == (
+        "podman compose restart alpaca-paper-clerk"
+    )
+
+
+def test_worker_restart_command_is_absent_when_the_deployment_declared_nothing() -> None:
+    """The desk must not guess a service name — a guessed command restarts
+    some other process (the coordinator, historically) and applies nothing."""
+    assert worker_restart_command(None) is None
+
+
+async def test_desk_state_carries_the_declared_workers_restart_command(
+    service: BrokerConfigurationService,
+) -> None:
+    await _pinned_paper_profile(service)
+
+    state = service.desk_state(worker_service="alpaca-live-clerk")
+
+    assert state.restart_command == "podman compose restart alpaca-live-clerk"
+
+
+async def test_desk_state_omits_a_restart_command_for_an_undeclared_worker(
+    service: BrokerConfigurationService,
+) -> None:
+    await _pinned_paper_profile(service)
+
+    assert service.desk_state().restart_command is None
 
 
 def test_desk_state_does_not_probe_credential_availability(

@@ -78,6 +78,7 @@ const deskState: AlpacaDeskState = {
   ],
   profiles_requiring_setup: 0,
   setup_required_message: null,
+  restart_command: null,
 };
 
 describe('AlpacaAccountActivationComponent', () => {
