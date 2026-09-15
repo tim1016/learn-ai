@@ -15,7 +15,18 @@ numerical-rigor.md``:
   -> refused);
 - the 503-when-uninstalled path, proved against a working positive control;
 - that every timestamp on the wire is ``int64 ms UTC`` -- no ISO string, no
-  ``datetime`` object, anywhere in the response.
+  ``datetime`` object, anywhere in the response;
+- ``capability``, resolved read-time from the live provider catalog by
+  ``(broker, operation_kind)`` -- proved to be a real many-to-one lookup
+  (not a hardcoded value, not ``operation_kind`` echoed back), and proved to
+  report ``None`` rather than raise or guess for an operation the current
+  catalog no longer declares.
+
+The fake catalogs in ``conftest.py`` deliberately give every operation an id
+that differs from its capability's value (``read_account`` vs.
+``account_read``, ``submit_bot_action`` vs. ``bot_action``) -- a fixture
+whose id and capability happen to read the same cannot catch a bug where one
+field is substituted for the other.
 """
 
 from __future__ import annotations
@@ -28,18 +39,29 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
+from app.broker.fleet.provider import (
+    Capability,
+    OperationIdempotency,
+    OperationReadiness,
+    ProviderOperation,
+)
 from app.broker.fleet.records import RoutingReceiptRecord, RoutingReceiptState
 from app.broker.fleet.service import FleetControlService
+from app.broker.fleet.store import FleetRegistryStore
 from app.config import settings
 from app.routers import broker_clerks
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.error_handlers import install_fleet_control_error_handler
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from tests.broker.fleet.conftest import FrozenClock, bind_lane, provision_lane
+from tests.broker.fleet.conftest import FakeProviderAdapter, FrozenClock, bind_lane, provision_lane
 
 ROUTE = "/api/broker-clerks/audit/routing-receipts"
 _TEST_SECRET = "test-audit-secret"
 _ISO_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+#: The renamed fake-alpha bot-action operation (conftest.py) -- its id
+#: deliberately differs from its capability's value ("bot_action").
+_RESOLVABLE_OPERATION_KIND = "submit_bot_action"
 
 
 def _coordinator_app(fleet_service: FleetControlService | None) -> FastAPI:
@@ -58,13 +80,14 @@ def _open_and_settle(
     *,
     key: str,
     target: str = "strategy/sid-audit",
+    operation_kind: str = _RESOLVABLE_OPERATION_KIND,
     outcome: RoutingReceiptState = RoutingReceiptState.DELIVERED,
 ) -> RoutingReceiptRecord:
     """Open, dispatch and settle one routing attempt; return the settled receipt."""
     attempt = fleet_service.open_routing_attempt(
         broker=lane.broker,
         clerk_id=lane.clerk_id,
-        operation_kind="bot_action",
+        operation_kind=operation_kind,
         nonsecret_target_ref=target,
         idempotency_key=key,
         pinned_routing_epoch=1,
@@ -75,6 +98,59 @@ def _open_and_settle(
     upstream_ref = "upstream/r-1" if outcome == RoutingReceiptState.DELIVERED else None
     return fleet_service.settle_routing_attempt(
         correlation_id=attempt.correlation_id, outcome=outcome, upstream_receipt_ref=upstream_ref
+    )
+
+
+#: A dedicated two-operation, one-capability catalog: real many-to-one
+#: evidence (the reviewed live Alpaca catalog collapses 76 operations into 12
+#: capabilities; ``custody_command`` alone covers 10). Two *different*
+#: operation ids share one capability so a hardcoded or hand-wavy lookup
+#: cannot coincidentally pass -- only a genuine per-operation catalog scan
+#: reports the same capability for both.
+_CUSTODY_OPERATIONS = frozenset(
+    {
+        ProviderOperation(
+            operation_id="reconcile_custody",
+            method="POST",
+            path_template="/custody/reconcile",
+            agent_path_template="/api/fake-custody/custody/reconcile",
+            capability=Capability.CUSTODY_COMMAND,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=True,
+            idempotency=OperationIdempotency.ONE_SHOT,
+        ),
+        ProviderOperation(
+            operation_id="release_custody_hold",
+            method="POST",
+            path_template="/custody/release-hold",
+            agent_path_template="/api/fake-custody/custody/release-hold",
+            capability=Capability.CUSTODY_COMMAND,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=True,
+            idempotency=OperationIdempotency.ONE_SHOT,
+        ),
+        ProviderOperation(
+            operation_id="read_positions_snapshot",
+            method="GET",
+            path_template="/positions",
+            agent_path_template="/api/fake-custody/positions",
+            capability=Capability.POSITIONS_READ,
+            readiness=OperationReadiness.EXECUTION,
+            requires_effective_account=False,
+            idempotency=OperationIdempotency.READ,
+        ),
+    }
+)
+
+
+def _custody_adapter() -> FakeProviderAdapter:
+    """A fake provider whose catalog collapses two operations into one
+    capability -- the many-to-one shape this audit read must resolve."""
+    return FakeProviderAdapter(
+        provider_id="fake_custody",
+        capabilities=frozenset({Capability.CUSTODY_COMMAND, Capability.POSITIONS_READ}),
+        declared_operations=_CUSTODY_OPERATIONS,
+        canonical_rule=lambda raw: raw.strip().upper(),
     )
 
 
@@ -153,6 +229,7 @@ def test_service_list_routing_receipts_envelope_shape(
         "clerk_id",
         "broker",
         "operation_kind",
+        "capability",
         "routing_state",
         "created_at_ms",
         "dispatched_at_ms",
@@ -160,10 +237,113 @@ def test_service_list_routing_receipts_envelope_shape(
     assert entry["correlation_id"] == settled.correlation_id
     assert entry["clerk_id"] == lane.clerk_id
     assert entry["broker"] == lane.broker
-    assert entry["operation_kind"] == "bot_action"
+    assert entry["operation_kind"] == _RESOLVABLE_OPERATION_KIND
+    assert entry["capability"] == "bot_action"
     assert entry["routing_state"] == "delivered"
     assert entry["created_at_ms"] == settled.created_at_ms
     assert entry["dispatched_at_ms"] == settled.dispatched_at_ms
+
+
+# ---- service: capability is resolved read-time, not hardcoded, not the ----
+# ---- operation_kind echoed back, and genuinely many-to-one -----------------
+
+
+def test_capability_is_resolved_per_operation_not_a_constant_or_echo(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """Two different operations on the same lane resolve to two different,
+    correct capabilities.
+
+    Reddens if the lookup returned a hardcoded constant (both would then
+    report that one constant, at most one correct). Reddens if the lookup
+    echoed ``operation_kind`` back unchanged (the fake catalog's ids
+    deliberately differ from their capability values, so an echo would fail
+    both assertions below).
+    """
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="per-op", tmp_path=control_dir.parent)
+    bind_lane(fleet_service, lane, account="acct-per-op")
+
+    account_read = _open_and_settle(
+        fleet_service, lane, key="per-op-account", operation_kind="read_account"
+    )
+    bot_action = _open_and_settle(
+        fleet_service, lane, key="per-op-bot", operation_kind="submit_bot_action"
+    )
+
+    result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+    by_id = {entry["correlation_id"]: entry for entry in result["receipts"]}
+
+    assert by_id[account_read.correlation_id]["capability"] == "account_read"
+    assert by_id[bot_action.correlation_id]["capability"] == "bot_action"
+
+
+def test_capability_is_genuinely_many_to_one_across_two_operation_ids(
+    control_dir: Path, clock: FrozenClock
+) -> None:
+    """Two *different* operation ids that share one capability both report
+    that same capability.
+
+    A test using a single operation cannot tell a real per-operation catalog
+    lookup from a hardcoded string; this one can only pass if the lookup
+    actually scans the catalog for each receipt independently, since
+    ``reconcile_custody`` and ``release_custody_hold`` are unrelated strings
+    that happen to share ``custody_command`` -- exactly the shape the live
+    Alpaca catalog exhibits (10 operation ids under ``custody_command``).
+    """
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters={"fake_custody": _custody_adapter()},
+        clock=clock,
+    )
+    try:
+        lane = provision_lane(
+            service, broker="fake_custody", label="many-to-one", tmp_path=control_dir.parent
+        )
+        bind_lane(service, lane, account="acct-many-to-one")
+
+        reconcile = _open_and_settle(
+            service, lane, key="m2o-reconcile", operation_kind="reconcile_custody"
+        )
+        release = _open_and_settle(
+            service, lane, key="m2o-release", operation_kind="release_custody_hold"
+        )
+
+        result = service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+        by_id = {entry["correlation_id"]: entry for entry in result["receipts"]}
+
+        assert reconcile.operation_kind != release.operation_kind  # the fixture's own premise
+        assert by_id[reconcile.correlation_id]["capability"] == "custody_command"
+        assert by_id[release.correlation_id]["capability"] == "custody_command"
+    finally:
+        service.close()
+
+
+def test_capability_is_none_for_an_operation_kind_the_catalog_no_longer_declares(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A receipt whose ``operation_kind`` is retired or pre-dates a rename
+    reports ``capability: null`` -- never raises, never guesses.
+
+    The unfiltered read is asserted first (positive control) so this is not
+    a vacuous pass against a read that silently returns nothing.
+    """
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="retired", tmp_path=control_dir.parent)
+    bind_lane(fleet_service, lane, account="acct-retired")
+    settled = _open_and_settle(
+        fleet_service, lane, key="retired-1", operation_kind="operation_retired_2019"
+    )
+
+    with caplog.at_level("WARNING", logger="app.broker.fleet.service"):
+        result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+
+    assert result["receipts"], "positive control: the unfiltered read is not empty"
+    entry = result["receipts"][0]
+    assert entry["correlation_id"] == settled.correlation_id
+    assert entry["operation_kind"] == "operation_retired_2019"
+    assert entry["capability"] is None
+    assert any(
+        record.__dict__.get("action") == "audit_capability_unresolved" for record in caplog.records
+    ), "the unresolved capability is logged loudly, not silently swallowed"
 
 
 # ---- HTTP: the secret gate, proved in both directions ---------------------

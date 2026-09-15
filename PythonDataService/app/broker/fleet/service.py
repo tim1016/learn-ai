@@ -1559,6 +1559,36 @@ class FleetControlService:
 
     # ---- audit read surface (#2104) -----------------------------------------
 
+    def _capability_for_operation_kind(self, *, broker: str, operation_kind: str) -> str | None:
+        """The capability ``operation_kind`` currently maps to, or ``None``.
+
+        Resolved *at read time* from the live provider catalog -- ``capability``
+        and ``operation_kind`` are separate fields on ``ProviderOperation``
+        (many operation ids can share one capability; the reviewed Alpaca
+        catalog collapses 76 operations into 12 capabilities), and
+        ``RoutingReceiptRecord`` stores only ``operation_kind``. A receipt can
+        carry an ``operation_kind`` the current catalog no longer declares --
+        a retired operation, or a receipt written before a rename. That is
+        reported as ``None``, loudly logged, and never coerced to a wrong
+        capability or allowed to fail the whole read (owner principle: fail
+        loudly over silent pass).
+        """
+        adapter = self._provider_adapters.get(broker)
+        if adapter is not None:
+            for operation in adapter.operations():
+                if operation.operation_id == operation_kind:
+                    return operation.capability.value
+        logger.warning(
+            "Audit read surface found no catalog operation for a routing "
+            "receipt's operation_kind; capability is unresolved.",
+            extra={
+                "action": "audit_capability_unresolved",
+                "broker": broker,
+                "operation_kind": operation_kind,
+            },
+        )
+        return None
+
     def list_routing_receipts(
         self, *, since_ms: int, clerk_id: str | None = None, limit: int = 100
     ) -> dict[str, object]:
@@ -1580,6 +1610,9 @@ class FleetControlService:
                     "clerk_id": receipt.clerk_id,
                     "broker": receipt.broker,
                     "operation_kind": receipt.operation_kind,
+                    "capability": self._capability_for_operation_kind(
+                        broker=receipt.broker, operation_kind=receipt.operation_kind
+                    ),
                     "routing_state": receipt.state.value,
                     "created_at_ms": receipt.created_at_ms,
                     "dispatched_at_ms": receipt.dispatched_at_ms,

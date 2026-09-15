@@ -304,7 +304,7 @@ async def test_a_provider_refusing_the_served_context_closes_the_route(
 
     router = LaneRouter(service=service, delivery_for=_never)
     operation = next(
-        op for op in strict.operations() if op.operation_id == "account_read"
+        op for op in strict.operations() if op.operation_id == "read_account"
     )
     with pytest.raises(BrokerClerkCapabilityUnavailable, match="refuses to serve"):
         await router.deliver_read(
@@ -348,7 +348,7 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
 
     router = LaneRouter(service=service, delivery_for=_never)
     operation = next(
-        op for op in strict.operations() if op.operation_id == "account_read"
+        op for op in strict.operations() if op.operation_id == "read_account"
     )
     with pytest.raises(ClerkAssignmentConflict, match="already claimed"):
         await router.deliver_read(
@@ -400,7 +400,7 @@ async def test_a_delivery_contract_violation_on_a_read_is_not_misdiagnosed_as_id
 
     router = LaneRouter(service=service, delivery_for=lambda broker, session: _ContractViolatingDelivery())
     operation = next(
-        op for op in fake_alpha().operations() if op.operation_id == "account_read"
+        op for op in fake_alpha().operations() if op.operation_id == "read_account"
     )
 
     caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
@@ -465,7 +465,7 @@ async def test_a_delivery_contract_violation_on_a_stream_is_reported_as_identity
         service=service, delivery_for=lambda broker, session: _ContractViolatingStreamDelivery()
     )
     operation = next(
-        op for op in fake_alpha().operations() if op.operation_id == "account_read"
+        op for op in fake_alpha().operations() if op.operation_id == "read_account"
     )
 
     caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
