@@ -423,10 +423,12 @@ def _fence_writable_roots(*, volume_root: Path) -> None:
 
     The bot-binding root (``IBKR_LIVE_RUNS_ROOT``'s parent — the live_state
     tree and arming seals) and the live-bars aggregation root must resolve
-    inside the clerk volume in the clerk-agent role; a deployment that left
-    them on the shared artifacts tree would let two lanes write one root,
-    which is exactly what the fleet exists to prevent (fleet A2 inventory;
-    audit 2026-09-13, finding 5).
+    inside the clerk volume for every enrolled lane — ``combined``-with-a-
+    marker included, since two enrolled combined processes on one host share
+    the same shared artifacts tree exactly as two agents would; a deployment
+    that left them on the shared artifacts tree would let two lanes write one
+    root, which is exactly what the fleet exists to prevent (fleet A2
+    inventory; audit 2026-09-13, finding 5).
     """
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 

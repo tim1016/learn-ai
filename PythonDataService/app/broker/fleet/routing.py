@@ -697,7 +697,7 @@ def coordinator_delivery_for(
         return lambda broker, session: build_local_delivery(local_app)
 
     def resolve(broker: str, session: ClerkSessionRecord) -> Any:
-        endpoint = service._store.read_approved_endpoint(session.clerk_id)
+        endpoint = service.approved_endpoint(session.clerk_id)
         if endpoint is None or endpoint.endpoint_ref != session.endpoint_ref:
             raise ClerkUnreachable(
                 f"Clerk {session.clerk_id} cites endpoint "
