@@ -383,9 +383,22 @@ async def _await_beat_at(
     clerk_id: str,
     clock: FrozenClock,
     *,
+    reported_state: str,
     deadline_s: float = 5.0,
 ) -> ClerkSessionRecord:
     """Wait for an observation stamped at the current frozen instant.
+
+    The stamp alone does not identify a beat: ``confirm_assignment`` touches
+    the session row from inside its own transaction too, with
+    ``last_seen_at_ms=now`` and ``reported_state="binding_confirmed"``
+    (``app/broker/fleet/service.py``). A caller that confirms and then polls
+    would read the *confirmation's* touch and return before a single beat had
+    run, leaving the heartbeat assertions to pass with no heartbeat at all.
+
+    So the expected ``reported_state`` is required, not optional — and a
+    caller that confirms first must still advance the clock past the
+    confirmation's stamp, because a confirmed lane beats the very state the
+    confirmation just wrote.
 
     The deadline is 50x the 0.05 s interval these tests run the heartbeat at:
     a test that asserts on real asyncio scheduling flakes under a loaded box,
@@ -396,12 +409,18 @@ async def _await_beat_at(
     give_up_at = loop.time() + deadline_s
     while True:
         session = service._store.read_session(clerk_id)
-        if session is not None and session.last_seen_at_ms == clock():
+        if (
+            session is not None
+            and session.last_seen_at_ms == clock()
+            and session.reported_state == reported_state
+        ):
             return session
         if loop.time() >= give_up_at:
             raise AssertionError(
-                f"no heartbeat landed for {clerk_id} within {deadline_s}s: "
+                f"no {reported_state!r} heartbeat landed for {clerk_id} within "
+                f"{deadline_s}s: "
                 f"last_seen_at_ms={None if session is None else session.last_seen_at_ms}, "
+                f"reported_state={None if session is None else session.reported_state!r}, "
                 f"clock={clock()}"
             )
         await asyncio.sleep(0.01)
@@ -687,7 +706,9 @@ async def test_a_reserved_only_lane_heartbeats_and_stays_configuration_routable(
             is_paper=True,
             interval_s=0.05,
         )
-        session = await _await_beat_at(service, boot.clerk_id, clock)
+        session = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_pending"
+        )
 
         assert session.reported_state == "binding_pending"
         assert session.reported_binding_generation is None
@@ -708,13 +729,14 @@ async def test_a_reserved_only_lane_heartbeats_and_stays_configuration_routable(
         # Three further beats land on the SAME session: a summary the
         # coordinator refused would have re-registered the lane once per
         # beat and climbed the routing epoch with it.
+        settled = session
         for _ in range(3):
             clock.advance(1)
-            await _await_beat_at(service, boot.clerk_id, clock)
-        settled = service._store.read_session(boot.clerk_id)
+            settled = await _await_beat_at(
+                service, boot.clerk_id, clock, reported_state="binding_pending"
+            )
         assert settled.routing_epoch == epoch_at_registration
         assert boot.session.routing_epoch == epoch_at_registration
-        assert settled.reported_state == "binding_pending"
     finally:
         if heartbeat is not None:
             heartbeat.cancel()
@@ -779,6 +801,11 @@ async def test_a_confirmed_lane_still_confirms_at_boot_and_heartbeats_binding_co
             is_paper=True,
             interval_s=0.05,
         )
+        # The confirmation stamped `last_seen_at_ms` itself (and with the same
+        # `binding_confirmed` a confirmed lane beats), so move off that instant
+        # — otherwise the wait below returns on the confirmation's own touch
+        # and the heartbeat assertions never see a heartbeat.
+        clock.advance(1)
 
         stored = service._store.read_assignment(
             broker="alpaca", canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789"
@@ -790,7 +817,9 @@ async def test_a_confirmed_lane_still_confirms_at_boot_and_heartbeats_binding_co
         assert evidence is not None
         assert evidence.binding_generation == 1
 
-        session = await _await_beat_at(service, boot.clerk_id, clock)
+        session = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_confirmed"
+        )
         assert session.reported_state == "binding_confirmed"
         assert session.reported_binding_generation == 1
         assert session.routing_epoch == epoch_at_registration
