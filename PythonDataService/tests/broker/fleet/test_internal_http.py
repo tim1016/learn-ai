@@ -12,16 +12,41 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
+from collections.abc import Callable
 
 import httpx
 import pytest
 from httpx._transports.asgi import ASGITransport
 
+from app.broker.fleet import internal_http
 from app.broker.fleet.internal_http import (
     FleetStreamError,
     build_internal_client,
     iter_sse_from_response,
 )
+from app.utils.throttle import TtlCache
+
+
+@pytest.fixture(autouse=True)
+def _reset_private_host_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test gets its own fresh cache instance.
+
+    ``_PRIVATE_HOST_CACHE`` is module-global state; without this, which test
+    happens to run first would decide whether a given host name is already
+    cached private, making the TTL/eviction/rebinding tests below order
+    -dependent on tests elsewhere in this file. ``TtlCache`` has no
+    ``clear()``, so a fresh instance (same TTL/bound as production) replaces
+    the module global instead.
+    """
+    monkeypatch.setattr(
+        internal_http,
+        "_PRIVATE_HOST_CACHE",
+        TtlCache(
+            ttl_seconds=internal_http._PRIVATE_HOST_CACHE_TTL_S,
+            max_size=internal_http._PRIVATE_HOST_CACHE_MAX_ENTRIES,
+        ),
+    )
 
 
 async def _read_request(reader: asyncio.StreamReader) -> tuple[str, dict[str, str]]:
@@ -352,3 +377,145 @@ def test_cleartext_fleet_traffic_stays_inside_the_private_boundary() -> None:
         enforce_private_http_target("ftp://127.0.0.1:9001")
     with pytest.raises(FleetTransportRefused, match="does not resolve"):
         enforce_private_http_target("http://no-such-fleet-host.invalid:9001")
+
+
+def _fake_resolution(address: str) -> list[tuple]:
+    """Build a ``socket.getaddrinfo``-shaped result resolving to one address."""
+    return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 0))]
+
+
+def _swap_in_private_host_cache(
+    monkeypatch: pytest.MonkeyPatch, *, now: Callable[[], float] = lambda: 0.0
+) -> None:
+    """Replace the module-global cache with a fresh instance on a controlled
+    clock — ``TtlCache``'s ``now=`` parameter is the test seam; the clock is
+    never controlled by patching ``time.monotonic`` itself."""
+    monkeypatch.setattr(
+        internal_http,
+        "_PRIVATE_HOST_CACHE",
+        TtlCache(
+            ttl_seconds=internal_http._PRIVATE_HOST_CACHE_TTL_S,
+            max_size=internal_http._PRIVATE_HOST_CACHE_MAX_ENTRIES,
+            now=now,
+        ),
+    )
+
+
+def test_a_cached_private_verdict_expires_after_the_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A private verdict is not trusted forever: once the TTL elapses, the
+    next call re-resolves the host instead of trusting the stale cache entry
+    (issue #2112 requirement (a))."""
+    resolve_calls: list[str] = []
+
+    def fake_getaddrinfo(host: str, port: object) -> list[tuple]:
+        resolve_calls.append(host)
+        return _fake_resolution("10.0.0.5")
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(internal_http.socket, "getaddrinfo", fake_getaddrinfo)
+    _swap_in_private_host_cache(monkeypatch, now=lambda: clock["now"])
+
+    internal_http.enforce_private_http_target("http://ttl-host.internal:8000")
+    assert resolve_calls == ["ttl-host.internal"]
+
+    # Still inside the TTL window: served from cache, no second resolution.
+    clock["now"] += internal_http._PRIVATE_HOST_CACHE_TTL_S - 1.0
+    internal_http.enforce_private_http_target("http://ttl-host.internal:8000")
+    assert resolve_calls == ["ttl-host.internal"]
+
+    # Past the TTL: the cached verdict has expired, so this re-resolves.
+    clock["now"] += 2.0
+    internal_http.enforce_private_http_target("http://ttl-host.internal:8000")
+    assert resolve_calls == ["ttl-host.internal", "ttl-host.internal"]
+
+
+def test_the_private_host_cache_is_bounded_by_eviction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Feeding more distinct private hosts than the bound evicts the oldest
+    entry: proven behaviorally through the public cache API (no reaching
+    into ``TtlCache`` internals) — the oldest host re-resolves once the
+    bound is exceeded, while the most recent stays cached (issue #2112
+    requirement (b))."""
+    resolve_calls: list[str] = []
+
+    def fake_getaddrinfo(host: str, port: object) -> list[tuple]:
+        resolve_calls.append(host)
+        return _fake_resolution("10.0.0.5")
+
+    monkeypatch.setattr(internal_http.socket, "getaddrinfo", fake_getaddrinfo)
+    _swap_in_private_host_cache(monkeypatch)
+
+    bound = internal_http._PRIVATE_HOST_CACHE_MAX_ENTRIES
+    hosts = [f"http://bounded-host-{index}.internal:8000" for index in range(bound)]
+    for host_url in hosts:
+        internal_http.enforce_private_http_target(host_url)
+    assert len(resolve_calls) == bound
+
+    # One more distinct host exceeds the bound: the oldest entry (host 0)
+    # is evicted to make room.
+    internal_http.enforce_private_http_target("http://bounded-host-overflow.internal:8000")
+    assert len(resolve_calls) == bound + 1
+
+    # The oldest host is no longer cached: querying it again re-resolves.
+    internal_http.enforce_private_http_target(hosts[0])
+    assert resolve_calls[-1] == "bounded-host-0.internal"
+    assert len(resolve_calls) == bound + 2
+
+    # The most recent host inserted before the overflow is still cached.
+    internal_http.enforce_private_http_target(hosts[-1])
+    assert len(resolve_calls) == bound + 2
+
+
+def test_a_host_that_rebinds_public_after_ttl_expiry_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DNS-rebinding-adjacent shape the issue names: with the TTL in
+    place, a host that resolves private, then resolves public after its
+    cached verdict's TTL elapses, is refused on the next call rather than
+    silently allowed off a stale cache hit (issue #2112 requirement (c)).
+
+    This exercises the fixed implementation directly by swapping in a
+    ``TtlCache`` on a controlled clock, so it cannot also run unmodified
+    against pre-fix code (the module-global cache's type changed from a
+    plain ``dict`` to a ``TtlCache`` instance). The standalone reproduction
+    against unmodified master — two plain calls with the resolution changed
+    between them, no test-seam dependency, showing the second is silently
+    allowed — is captured in the PR description instead.
+    """
+    responses = iter([_fake_resolution("10.0.0.5"), _fake_resolution("93.184.216.34")])
+
+    def fake_getaddrinfo(host: str, port: object) -> list[tuple]:
+        del host, port
+        return next(responses)
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(internal_http.socket, "getaddrinfo", fake_getaddrinfo)
+    _swap_in_private_host_cache(monkeypatch, now=lambda: clock["now"])
+
+    internal_http.enforce_private_http_target("http://rebind-host.internal:8000")
+
+    clock["now"] += internal_http._PRIVATE_HOST_CACHE_TTL_S + 1.0
+    with pytest.raises(internal_http.FleetTransportRefused, match="public address"):
+        internal_http.enforce_private_http_target("http://rebind-host.internal:8000")
+
+
+def test_a_public_verdict_is_never_cached_and_always_re_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refusals must keep re-resolving on every call, never getting cached
+    (issue #2112 requirement (d) — the property the TTL/eviction fix must not
+    disturb)."""
+    resolve_calls: list[str] = []
+
+    def fake_getaddrinfo(host: str, port: object) -> list[tuple]:
+        resolve_calls.append(host)
+        return _fake_resolution("93.184.216.34")
+
+    monkeypatch.setattr(internal_http.socket, "getaddrinfo", fake_getaddrinfo)
+    _swap_in_private_host_cache(monkeypatch)
+
+    for _ in range(3):
+        with pytest.raises(internal_http.FleetTransportRefused, match="public address"):
+            internal_http.enforce_private_http_target("http://public-host.internal:8000")
+
+    assert resolve_calls == ["public-host.internal"] * 3
+    assert internal_http._PRIVATE_HOST_CACHE.get("public-host.internal") is None
