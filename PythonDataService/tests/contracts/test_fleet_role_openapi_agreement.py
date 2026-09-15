@@ -30,6 +30,21 @@ an issue. Role gating happens at Python import time (``app/main.py`` reads
 real ``app.main`` import in its own subprocess — an in-process
 ``importlib.reload`` would leave stale role-gated modules in ``sys.modules``
 and prove nothing about how the deployed process actually boots.
+
+An independent review found two blind spots in the first version of this
+test and proved both with mutations that stayed green:
+
+1. Comparing ``{"$ref": "#/components/schemas/AlpacaLiveVerdict"}`` as an
+   opaque string passes even when the two documents define
+   ``AlpacaLiveVerdict`` itself differently -- two documents can agree on
+   every pointer while disagreeing on everything the pointers point at.
+   ``_dereferenced`` below resolves every ``$ref`` against its *own*
+   document's ``components.schemas``, recursively, before any comparison
+   happens.
+2. The response-only comparison never looked at ``parameters`` or
+   ``requestBody``, so an added query parameter (or a changed request body
+   schema) on a shared route was invisible to it. Both are now compared,
+   dereferenced the same way as responses.
 """
 
 from __future__ import annotations
@@ -147,6 +162,102 @@ def _response_json_schema(response_object: dict[str, Any]) -> Any:
     return json_content.get("schema")
 
 
+#: The only ``$ref`` shape FastAPI emits in this service's documents. A ref
+#: into ``#/components/responses`` or ``#/components/parameters`` would not
+#: match this prefix and would pass through ``_dereferenced`` unresolved;
+#: none exist today (every sampled response/parameter/requestBody schema in
+#: both the committed contract and every checked role points only into
+#: ``components/schemas``), so under-resolving a form that does not occur is
+#: not a live gap, but it is why this is a named constant instead of a
+#: silent assumption buried in the recursion.
+_COMPONENT_SCHEMA_REF_PREFIX = "#/components/schemas/"
+
+
+def _dereferenced(fragment: Any, document: dict[str, Any], visiting: frozenset[str] = frozenset()) -> Any:
+    """Recursively replace every ``{"$ref": "#/components/schemas/Name"}``
+    node with ``document``'s own definition of ``Name``.
+
+    Comparing raw fragments treats two documents that reference the same
+    schema *name* as agreeing, even when that name is defined differently in
+    each document's own ``components.schemas`` -- exactly the blind spot an
+    independent review caught (adding a field to ``AlpacaLiveVerdict``
+    stayed invisible to a test that only ever compared the pointer string).
+    Resolving against each side's own document, recursively, closes that:
+    a divergence anywhere in the reachable definition surfaces at the first
+    fragment that reaches it.
+
+    ``visiting`` is the chain of schema names currently being expanded on
+    *this* recursion path, not a single global set. Component schemas can be
+    mutually recursive, so a name that is its own ancestor is a genuine cycle
+    and stops there, leaving the raw pointer rather than recursing forever.
+    The same name reached again from an unrelated sibling branch is not a
+    cycle -- it is expanded independently and in full, so a divergence
+    reachable through only one of two occurrences of a shared schema is never
+    skipped just because the other occurrence already "used up" the name.
+    """
+    if isinstance(fragment, dict):
+        ref = fragment.get("$ref")
+        if isinstance(ref, str) and ref.startswith(_COMPONENT_SCHEMA_REF_PREFIX):
+            name = ref[len(_COMPONENT_SCHEMA_REF_PREFIX):]
+            if name in visiting:
+                return fragment
+            target = document.get("components", {}).get("schemas", {}).get(name)
+            if target is None:
+                return fragment
+            return _dereferenced(target, document, visiting | {name})
+        return {key: _dereferenced(value, document, visiting) for key, value in fragment.items()}
+    if isinstance(fragment, list):
+        return [_dereferenced(item, document, visiting) for item in fragment]
+    return fragment
+
+
+def _operation_wire_shape_mismatches(
+    *, role: str, path: str, method: str, role_operation: dict[str, Any], role_document: dict[str, Any],
+    committed_operation: dict[str, Any], committed_document: dict[str, Any],
+) -> list[str]:
+    """Every disagreement between one shared path+method's wire contract in
+    ``role_document`` and in ``committed_document``: response schemas (per
+    status code), ``parameters``, and ``requestBody`` -- each resolved
+    against its own document before comparing. ``operationId``, ``summary``,
+    ``description`` and ``tags`` are intentionally excluded (see the module
+    docstring): they name the handler and its router grouping, which
+    legitimately differ between a compat alias and the canonical route it
+    delegates to, and carry no information a caller of the API observes.
+    """
+    mismatches: list[str] = []
+
+    role_responses = role_operation.get("responses", {})
+    committed_responses = committed_operation.get("responses", {})
+    for status_code in sorted(set(role_responses) | set(committed_responses)):
+        role_schema = _dereferenced(_response_json_schema(role_responses.get(status_code, {})), role_document)
+        committed_schema = _dereferenced(
+            _response_json_schema(committed_responses.get(status_code, {})), committed_document
+        )
+        if role_schema != committed_schema:
+            mismatches.append(
+                f"{method.upper()} {path} [{status_code}] response schema: "
+                f"FLEET_ROLE={role} resolved={role_schema!r} != committed resolved={committed_schema!r}"
+            )
+
+    role_parameters = _dereferenced(role_operation.get("parameters", []), role_document)
+    committed_parameters = _dereferenced(committed_operation.get("parameters", []), committed_document)
+    if role_parameters != committed_parameters:
+        mismatches.append(
+            f"{method.upper()} {path} parameters: FLEET_ROLE={role} resolved={role_parameters!r} != "
+            f"committed resolved={committed_parameters!r}"
+        )
+
+    role_request_body = _dereferenced(role_operation.get("requestBody"), role_document)
+    committed_request_body = _dereferenced(committed_operation.get("requestBody"), committed_document)
+    if role_request_body != committed_request_body:
+        mismatches.append(
+            f"{method.upper()} {path} requestBody: FLEET_ROLE={role} resolved={role_request_body!r} != "
+            f"committed resolved={committed_request_body!r}"
+        )
+
+    return mismatches
+
+
 @pytest.fixture(scope="module")
 def committed_contract() -> dict[str, Any]:
     return _load_committed_contract()
@@ -206,22 +317,27 @@ def test_role_served_paths_are_a_subset_of_the_committed_contract(
         )
 
 
-def test_shared_response_schemas_agree_with_the_committed_contract(
+def test_shared_operations_agree_with_the_committed_contract(
     committed_contract: dict[str, Any],
     role_openapi_documents: dict[str, dict[str, Any]],
 ) -> None:
-    """For every path+method a role shares with the committed contract, every
-    declared response's JSON schema must be identical.
+    """For every path+method a role shares with the committed contract, the
+    wire contract must be identical: every declared response's JSON schema,
+    every parameter, and the request body -- each with ``$ref``s resolved
+    against its own document (see ``_dereferenced``), so a same-named
+    component schema that is *defined* differently on the two sides cannot
+    hide behind a pointer string that happens to match.
 
-    Deliberately narrow to response schemas. ``operationId``, ``summary``,
-    ``description`` and ``tags`` are legitimately different between a compat
-    alias (``get_legacy_live_verdict``, tagged ``fleet-compatibility-reads``)
-    and the canonical route it delegates to (``get_live_verdict``, tagged
-    ``brokers-v2``) -- different function names and different router tags are
-    not divergence, they are two names for the same wire contract. Comparing
-    whole operation objects would make this test permanently red for exactly
-    the routes it exists to protect. The response *schema* is the part the
-    frontend's codegen actually consumes.
+    Deliberately narrow to that wire contract, not whole operation objects.
+    ``operationId``, ``summary``, ``description`` and ``tags`` are
+    legitimately different between a compat alias
+    (``get_legacy_live_verdict``, tagged ``fleet-compatibility-reads``) and
+    the canonical route it delegates to (``get_live_verdict``, tagged
+    ``brokers-v2``) -- different function names and different router tags
+    are not divergence, they are two names for the same wire contract.
+    Comparing whole operation objects would make this test permanently red
+    for exactly the routes it exists to protect. Responses, parameters, and
+    the request body are what the frontend's codegen actually consumes.
     """
     committed_ops = _operations_by_path_method(committed_contract)
 
@@ -232,16 +348,16 @@ def test_shared_response_schemas_agree_with_the_committed_contract(
 
         mismatches: list[str] = []
         for path, method in sorted(shared):
-            role_responses = role_ops[(path, method)].get("responses", {})
-            committed_responses = committed_ops[(path, method)].get("responses", {})
-            for status_code in sorted(set(role_responses) | set(committed_responses)):
-                role_schema = _response_json_schema(role_responses.get(status_code, {}))
-                committed_schema = _response_json_schema(committed_responses.get(status_code, {}))
-                if role_schema != committed_schema:
-                    mismatches.append(
-                        f"{method.upper()} {path} [{status_code}]: "
-                        f"FLEET_ROLE={role} schema={role_schema!r} != "
-                        f"committed schema={committed_schema!r}"
-                    )
+            mismatches.extend(
+                _operation_wire_shape_mismatches(
+                    role=role,
+                    path=path,
+                    method=method,
+                    role_operation=role_ops[(path, method)],
+                    role_document=document,
+                    committed_operation=committed_ops[(path, method)],
+                    committed_document=committed_contract,
+                )
+            )
 
         assert not mismatches, "\n".join(mismatches)
