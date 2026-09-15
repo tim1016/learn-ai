@@ -29,3 +29,23 @@ async def test_quantlib_router_is_mounted(client):
     body = response.json()
     assert "available" in body
     assert "engines" in body
+
+
+@pytest.mark.anyio
+async def test_return_distribution_router_is_mounted(client):
+    """A typed NOT_CAPTURED answer proves the route exists; a missing
+    registration would surface as FastAPI's plain {"detail": "Not Found"}
+    404 instead (same class of bug as the quantlib probe above)."""
+    response = await client.post(
+        "/api/research/return-distribution",
+        json={"symbol": "SPY", "from_date": "2024-07-01", "to_date": "2024-08-01"},
+    )
+    body = response.json()
+    if response.status_code == 404:
+        detail = body["detail"]
+        assert isinstance(detail, dict) and detail.get("error_code") == "NOT_CAPTURED", (
+            "POST /api/research/return-distribution returned an untyped 404 — "
+            "return_distribution router is missing from app/main.py"
+        )
+    else:
+        assert response.status_code == 200, body

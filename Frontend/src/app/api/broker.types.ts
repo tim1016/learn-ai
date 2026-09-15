@@ -5863,6 +5863,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/return-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Return Distribution
+         * @description Compute the daily-return distribution for one symbol and window.
+         */
+        post: operations["run_return_distribution_api_research_return_distribution_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/run-batch-options": {
         parameters: {
             query?: never;
@@ -10962,6 +10982,21 @@ export interface components {
             /** Trading Date Ms */
             trading_date_ms: number;
         };
+        /** CoverageInfo */
+        CoverageInfo: {
+            /** Excluded Sessions */
+            excluded_sessions: number;
+            /** First Session Open Ms Utc */
+            first_session_open_ms_utc: number | null;
+            /** Last Session Open Ms Utc */
+            last_session_open_ms_utc: number | null;
+            /** Missing Sessions */
+            missing_sessions: number;
+            /** Requested Sessions */
+            requested_sessions: number;
+            /** Returned Sessions */
+            returned_sessions: number;
+        };
         /** CoverageResponse */
         CoverageResponse: {
             /**
@@ -12157,6 +12192,27 @@ export interface components {
             /** Jobid */
             jobId: string;
         };
+        /** DayReturnsModel */
+        DayReturnsModel: {
+            /** After Hours Pct */
+            after_hours_pct: number | null;
+            /** Afternoon Pct */
+            afternoon_pct: number | null;
+            /** Close To Close Pct */
+            close_to_close_pct: number | null;
+            /** Morning Pct */
+            morning_pct: number | null;
+            /** Overnight Pct */
+            overnight_pct: number | null;
+            /** Pre Market Pct */
+            pre_market_pct: number | null;
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Session Pct */
+            session_pct: number | null;
+            /** Volume */
+            volume: number;
+        };
         /**
          * DaySnapshot
          * @description Day OHLCV for an options contract snapshot
@@ -12429,6 +12485,27 @@ export interface components {
             kind: "DifferenceBps";
             left: components["schemas"]["IndicatorRef"];
             right: components["schemas"]["IndicatorRef"];
+        };
+        /** DistributionStatsModel */
+        DistributionStatsModel: {
+            /** Annualized Vol Pct */
+            annualized_vol_pct: number;
+            best_day: components["schemas"]["ExtremeDayModel"];
+            /** Cvar 95 Pct */
+            cvar_95_pct: number;
+            /** Excess Kurtosis */
+            excess_kurtosis: number;
+            /** Mean Pct */
+            mean_pct: number;
+            /** N Days */
+            n_days: number;
+            /** Skewness */
+            skewness: number;
+            /** Std Pct */
+            std_pct: number;
+            /** Var 95 Pct */
+            var_95_pct: number;
+            worst_day: components["schemas"]["ExtremeDayModel"];
         };
         /**
          * DivergenceCategory
@@ -13251,6 +13328,13 @@ export interface components {
             acknowledged_at_ms: number;
             /** External Order Id */
             external_order_id: string;
+        };
+        /** ExtremeDayModel */
+        ExtremeDayModel: {
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Value Pct */
+            value_pct: number;
         };
         /**
          * FeatureInfoResponse
@@ -14430,6 +14514,17 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HistogramBinModel */
+        HistogramBinModel: {
+            /** Count */
+            count: number;
+            /** Is Edge */
+            is_edge: boolean;
+            /** Lower Pct */
+            lower_pct: number | null;
+            /** Upper Pct */
+            upper_pct: number | null;
         };
         /** HistoricalExecutionRecoveryConfirmRequest */
         HistoricalExecutionRecoveryConfirmRequest: {
@@ -15679,6 +15774,19 @@ export interface components {
             variance_contribution_synthetic: number;
         };
         JsonValue: unknown;
+        /** KindDistributionModel */
+        KindDistributionModel: {
+            /** Bins */
+            bins: components["schemas"]["HistogramBinModel"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "close_to_close" | "session" | "overnight";
+            /** Normal Expected Counts */
+            normal_expected_counts: number[];
+            stats: components["schemas"]["DistributionStatsModel"];
+        };
         /**
          * LastQuoteSnapshot
          * @description Last quote (bid/ask) for an options contract snapshot
@@ -19844,6 +19952,69 @@ export interface components {
              * @enum {string}
              */
             kind: "retire_replace";
+        };
+        /** ReturnDistributionMeta */
+        ReturnDistributionMeta: {
+            /**
+             * Adjustment
+             * @enum {string}
+             */
+            adjustment: "split_and_dividend" | "raw";
+            /** Bin Width Pct */
+            bin_width_pct: number;
+            /** From Date */
+            from_date: string;
+            /**
+             * Resolution
+             * @default 1m
+             * @constant
+             */
+            resolution?: "1m";
+            /** Span Pct */
+            span_pct: number;
+            /** Symbol */
+            symbol: string;
+            /** To Date */
+            to_date: string;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /**
+         * ReturnDistributionRequest
+         * @description One study request: minute bars for ``symbol`` over a calendar window.
+         *
+         *     Deliberately standalone rather than a ``TickerRequest`` subclass: the
+         *     study always reads 1-minute extended-session bars from the lake, so the
+         *     sampling block (``timespan``/``multiplier``/``session``) of the bar
+         *     family does not apply and accepting it would promise a knob that does
+         *     not exist.
+         */
+        ReturnDistributionRequest: {
+            /**
+             * Bin Width Pct
+             * @default 0.5
+             */
+            bin_width_pct?: number;
+            /** From Date */
+            from_date: string;
+            /**
+             * Span Pct
+             * @default 5
+             */
+            span_pct?: number;
+            /** Symbol */
+            symbol: string;
+            /** To Date */
+            to_date: string;
+        };
+        /** ReturnDistributionResponse */
+        ReturnDistributionResponse: {
+            coverage: components["schemas"]["CoverageInfo"];
+            /** Days */
+            days: components["schemas"]["DayReturnsModel"][];
+            /** Kinds */
+            kinds: components["schemas"]["KindDistributionModel"][];
+            meta: components["schemas"]["ReturnDistributionMeta"];
         };
         /** ReviewGoldenRunRequest */
         ReviewGoldenRunRequest: {
@@ -35596,6 +35767,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecencyTradeResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_return_distribution_api_research_return_distribution_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnDistributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionResponse"];
                 };
             };
             /** @description Validation Error */

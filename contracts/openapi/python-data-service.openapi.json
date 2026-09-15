@@ -10273,6 +10273,58 @@
         "title": "CoverageDay",
         "type": "object"
       },
+      "CoverageInfo": {
+        "properties": {
+          "excluded_sessions": {
+            "title": "Excluded Sessions",
+            "type": "integer"
+          },
+          "first_session_open_ms_utc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Session Open Ms Utc"
+          },
+          "last_session_open_ms_utc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Open Ms Utc"
+          },
+          "missing_sessions": {
+            "title": "Missing Sessions",
+            "type": "integer"
+          },
+          "requested_sessions": {
+            "title": "Requested Sessions",
+            "type": "integer"
+          },
+          "returned_sessions": {
+            "title": "Returned Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested_sessions",
+          "returned_sessions",
+          "missing_sessions",
+          "excluded_sessions",
+          "first_session_open_ms_utc",
+          "last_session_open_ms_utc"
+        ],
+        "title": "CoverageInfo",
+        "type": "object"
+      },
       "CoverageResponse": {
         "properties": {
           "data_root_id": {
@@ -12233,6 +12285,108 @@
         "title": "DatasetZipJobRequest",
         "type": "object"
       },
+      "DayReturnsModel": {
+        "properties": {
+          "after_hours_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Hours Pct"
+          },
+          "afternoon_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Afternoon Pct"
+          },
+          "close_to_close_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close To Close Pct"
+          },
+          "morning_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Morning Pct"
+          },
+          "overnight_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overnight Pct"
+          },
+          "pre_market_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Market Pct"
+          },
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "session_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Pct"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms_utc",
+          "close_to_close_pct",
+          "session_pct",
+          "overnight_pct",
+          "pre_market_pct",
+          "morning_pct",
+          "afternoon_pct",
+          "after_hours_pct",
+          "volume"
+        ],
+        "title": "DayReturnsModel",
+        "type": "object"
+      },
       "DaySnapshot": {
         "description": "Day OHLCV for an options contract snapshot",
         "properties": {
@@ -12819,6 +12973,62 @@
           "right"
         ],
         "title": "DifferenceBps",
+        "type": "object"
+      },
+      "DistributionStatsModel": {
+        "properties": {
+          "annualized_vol_pct": {
+            "title": "Annualized Vol Pct",
+            "type": "number"
+          },
+          "best_day": {
+            "$ref": "#/components/schemas/ExtremeDayModel"
+          },
+          "cvar_95_pct": {
+            "title": "Cvar 95 Pct",
+            "type": "number"
+          },
+          "excess_kurtosis": {
+            "title": "Excess Kurtosis",
+            "type": "number"
+          },
+          "mean_pct": {
+            "title": "Mean Pct",
+            "type": "number"
+          },
+          "n_days": {
+            "title": "N Days",
+            "type": "integer"
+          },
+          "skewness": {
+            "title": "Skewness",
+            "type": "number"
+          },
+          "std_pct": {
+            "title": "Std Pct",
+            "type": "number"
+          },
+          "var_95_pct": {
+            "title": "Var 95 Pct",
+            "type": "number"
+          },
+          "worst_day": {
+            "$ref": "#/components/schemas/ExtremeDayModel"
+          }
+        },
+        "required": [
+          "n_days",
+          "mean_pct",
+          "std_pct",
+          "annualized_vol_pct",
+          "skewness",
+          "excess_kurtosis",
+          "var_95_pct",
+          "cvar_95_pct",
+          "best_day",
+          "worst_day"
+        ],
+        "title": "DistributionStatsModel",
         "type": "object"
       },
       "DivergenceCategory": {
@@ -14843,6 +15053,24 @@
           "ack_operator"
         ],
         "title": "ExternalOrderAcknowledgementResponse",
+        "type": "object"
+      },
+      "ExtremeDayModel": {
+        "properties": {
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "value_pct": {
+            "title": "Value Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "session_open_ms_utc",
+          "value_pct"
+        ],
+        "title": "ExtremeDayModel",
         "type": "object"
       },
       "FeatureInfoResponse": {
@@ -17558,6 +17786,48 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HistogramBinModel": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "is_edge": {
+            "title": "Is Edge",
+            "type": "boolean"
+          },
+          "lower_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lower Pct"
+          },
+          "upper_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upper Pct"
+          }
+        },
+        "required": [
+          "lower_pct",
+          "upper_pct",
+          "count",
+          "is_edge"
+        ],
+        "title": "HistogramBinModel",
+        "type": "object"
+      },
       "HistoricalExecutionRecoveryConfirmRequest": {
         "additionalProperties": false,
         "properties": {
@@ -20156,6 +20426,44 @@
         "type": "object"
       },
       "JsonValue": {},
+      "KindDistributionModel": {
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramBinModel"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "close_to_close",
+              "session",
+              "overnight"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "normal_expected_counts": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Normal Expected Counts",
+            "type": "array"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/DistributionStatsModel"
+          }
+        },
+        "required": [
+          "kind",
+          "bins",
+          "normal_expected_counts",
+          "stats"
+        ],
+        "title": "KindDistributionModel",
+        "type": "object"
+      },
       "LastQuoteSnapshot": {
         "description": "Last quote (bid/ask) for an options contract snapshot",
         "properties": {
@@ -29784,6 +30092,135 @@
           "kind"
         ],
         "title": "RetireReplaceAction",
+        "type": "object"
+      },
+      "ReturnDistributionMeta": {
+        "properties": {
+          "adjustment": {
+            "enum": [
+              "split_and_dividend",
+              "raw"
+            ],
+            "title": "Adjustment",
+            "type": "string"
+          },
+          "bin_width_pct": {
+            "title": "Bin Width Pct",
+            "type": "number"
+          },
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "resolution": {
+            "const": "1m",
+            "default": "1m",
+            "title": "Resolution"
+          },
+          "span_pct": {
+            "title": "Span Pct",
+            "type": "number"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "symbol",
+          "from_date",
+          "to_date",
+          "bin_width_pct",
+          "span_pct",
+          "adjustment"
+        ],
+        "title": "ReturnDistributionMeta",
+        "type": "object"
+      },
+      "ReturnDistributionRequest": {
+        "additionalProperties": false,
+        "description": "One study request: minute bars for ``symbol`` over a calendar window.\n\nDeliberately standalone rather than a ``TickerRequest`` subclass: the\nstudy always reads 1-minute extended-session bars from the lake, so the\nsampling block (``timespan``/``multiplier``/``session``) of the bar\nfamily does not apply and accepting it would promise a knob that does\nnot exist.",
+        "properties": {
+          "bin_width_pct": {
+            "default": 0.5,
+            "exclusiveMinimum": 0.0,
+            "maximum": 2.0,
+            "title": "Bin Width Pct",
+            "type": "number"
+          },
+          "from_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "From Date",
+            "type": "string"
+          },
+          "span_pct": {
+            "default": 5.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 20.0,
+            "title": "Span Pct",
+            "type": "number"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "from_date",
+          "to_date"
+        ],
+        "title": "ReturnDistributionRequest",
+        "type": "object"
+      },
+      "ReturnDistributionResponse": {
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageInfo"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DayReturnsModel"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/KindDistributionModel"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ReturnDistributionMeta"
+          }
+        },
+        "required": [
+          "meta",
+          "coverage",
+          "kinds",
+          "days"
+        ],
+        "title": "ReturnDistributionResponse",
         "type": "object"
       },
       "ReviewGoldenRunRequest": {
@@ -62321,6 +62758,48 @@
         "summary": "List Recency Trades",
         "tags": [
           "research-recency"
+        ]
+      }
+    },
+    "/api/research/return-distribution": {
+      "post": {
+        "description": "Compute the daily-return distribution for one symbol and window.",
+        "operationId": "run_return_distribution_api_research_return_distribution_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReturnDistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Return Distribution",
+        "tags": [
+          "research"
         ]
       }
     },

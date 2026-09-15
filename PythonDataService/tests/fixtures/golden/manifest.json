@@ -1616,6 +1616,52 @@
       "validated_by": [
         "tests/fixtures/test_alpaca_regulatory_fees_fixture.py"
       ]
+    },
+    {
+      "id": "RD-001",
+      "name": "Daily return distribution from minute bars (bins, moments, VaR/CVaR, normal overlay)",
+      "category": "return-distribution",
+      "canonical_module": "PythonDataService/app/research/return_distribution.py",
+      "canonical_callable": "build_return_distribution",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "numpy + scipy.stats recomputation from input.arrow (np.log series, boolean-mask binning, skew/kurtosis bias=False, np.percentile linear, scipy.stats.norm.cdf)",
+        "citation": "Fama (1965) The Behavior of Stock-Market Prices; scipy.stats docs for skew(bias=False)/kurtosis(fisher=True,bias=False); McNeil, Frey & Embrechts, Quantitative Risk Management (2e) sections 2.2-2.3 for historical VaR/CVaR."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/return_distribution.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Oracle (numpy pairwise / scipy) vs canonical (math.fsum loops) differ by summation order only: <1e-13 at n=60; 1e-9 leaves four orders of headroom. Bin counts are exact integer equality."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "6c3c3c3c0ba9d130e996c6474ea00100037ddff6001c1d20ad7dcc129429b01a",
+            "output.arrow": "567b0881797ff74b8415ee916e847a0fe27995385e1ce1cab3cf481b75a14348",
+            "attribution.md": "5ab5291fd44cf9ffb856e4291e87d85a350912ab92a327abaed1e59fdb6ce5dd"
+          },
+          "file_sha256": {
+            "input.arrow": "859aaee2fe59d694c18f99c64e4c8f201d671d5e6622e89a57f86995a2dad64f",
+            "output.arrow": "c7fa0b60aa2e44ca6e46c8e8076d721c1413da25b525997103ae02eec57657dc",
+            "attribution.md": "5ab5291fd44cf9ffb856e4291e87d85a350912ab92a327abaed1e59fdb6ce5dd"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_return_distribution_golden.py",
+        "tests/research/test_return_distribution.py"
+      ]
     }
   ]
 }

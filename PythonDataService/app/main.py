@@ -75,6 +75,7 @@ from app.routers import (
     research,
     research_divergence,
     research_runs,
+    return_distribution,
     run_replay,
     sanitize,
     snapshot,
@@ -1056,6 +1057,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
     app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
+    app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
     # ``research_runs`` so the literal ``/walk-forward`` segment wins
     # against the ``GET /{run_id}`` route on the parent router.

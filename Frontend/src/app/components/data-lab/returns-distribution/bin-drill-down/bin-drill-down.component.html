@@ -1,0 +1,48 @@
+<section class="drill" aria-label="Days in the selected basket">
+  <h3 class="drill__title">Basket {{ binTitle() }} — {{ basketDays().length }} day(s)</h3>
+
+  @if (basketDays().length === 0) {
+    <p class="drill__empty">No days landed in this basket.</p>
+  } @else {
+    <div class="drill__legend" aria-hidden="true">
+      @for (seg of segmentLegend; track seg.label) {
+        <span class="drill__legend-item">
+          <span class="drill__legend-dot"></span>
+          {{ seg.label }} · <small>{{ seg.hint }}</small>
+        </span>
+      }
+    </div>
+
+    <ul class="drill__days">
+      @for (day of basketDays(); track day.sessionOpenMsUtc) {
+        <li class="drill__day">
+          <button
+            type="button"
+            class="drill__day-head"
+            (click)="daySelected.emit(day.sessionOpenMsUtc)"
+          >
+            <span class="drill__date">{{ day.etDate }}</span>
+            <span class="drill__day-pct" [class.drill__day-pct--neg]="(day.dayPct ?? 0) < 0">
+              {{ day.dayPct === null ? '—' : (day.dayPct | number: '1.2-2') + '%' }}
+            </span>
+            <span class="drill__vol">{{ day.volume | number }} shares</span>
+          </button>
+          <div class="drill__segments">
+            @for (seg of day.segments; track seg.label) {
+              <span class="drill__seg">
+                <span class="drill__seg-name">{{ seg.label }}</span>
+                <span class="drill__seg-bar" [title]="seg.hint">
+                  <span class="drill__seg-fill" [class.drill__seg-fill--neg]="seg.negative"
+                        [style.width.%]="seg.widthShare * 50"></span>
+                </span>
+                <span class="drill__seg-val" [class.drill__seg-val--neg]="seg.negative">
+                  {{ seg.valuePct === null ? 'no data' : (seg.valuePct | number: '1.2-2') + '%' }}
+                </span>
+              </span>
+            }
+          </div>
+        </li>
+      }
+    </ul>
+  }
+</section>
