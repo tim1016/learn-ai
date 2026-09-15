@@ -4,12 +4,14 @@
 // optional `next_step`.
 //
 // This is deliberately not `components/broker/operation-error.ts`. That module
-// reads a different wire shape (`reason_code` / `remediation`) and derives
-// remediation copy from an `OperationKind` × status table; this surface
-// authors every word server-side and the client must not compose one. The one
-// thing this module writes itself is the sentence for a response that carried
-// no refusal at all — a transport failure or an untyped status — and that
-// sentence is about the request, never about the configuration domain.
+// answers a narrower question — it returns the server's literal message string
+// (or a caller-supplied fallback) and classifies nothing. This surface needs
+// the refusal's `reason` as well, to tell a stale write (contract §5) apart
+// from every other rejection. Both modules share the same rule: every word the
+// operator reads is authored server-side and the client must not compose one.
+// The one thing this module writes itself is the sentence for a response that
+// carried no refusal at all — a transport failure or an untyped status — and
+// that sentence is about the request, never about the configuration domain.
 
 import { HttpErrorResponse } from '@angular/common/http';
 import { refusalBody } from '../../../../shared/errors/refusal-body';
