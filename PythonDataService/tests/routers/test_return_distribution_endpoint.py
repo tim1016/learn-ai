@@ -2,13 +2,16 @@
 
 The endpoint reads the lake only (no provider fallback), so every test
 seeds a byte-accurate lake in tmp_path through the canonical zip writer
-and pins the service's root resolution to it. Assertions cover the happy
-path, the two typed coverage errors, and the request-validation surface.
+and pins the service's root resolution to it. The window travels as int64
+ms UTC (UTC-midnight start / final-instant end, the Data Lab convention)
+and Python resolves the calendar dates. Assertions cover the happy path,
+the two typed coverage errors, the request-validation surface, and the
+capture-on-demand boundary (probe → receipt → typed errors).
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -28,10 +31,16 @@ from app.services import return_distribution_service
 ET = ZoneInfo("America/New_York")
 N_SESSIONS = 40
 SYMBOL = "SPY"
+FROM_MS = int(datetime(2024, 7, 1, tzinfo=UTC).timestamp() * 1000)
+TO_MS = int(datetime(2025, 6, 30, 23, 59, 59, 999000, tzinfo=UTC).timestamp() * 1000)
 
 
 def _et_ms(d: date, h: int, m: int) -> int:
     return int(datetime(d.year, d.month, d.day, h, m, tzinfo=ET).timestamp() * 1000)
+
+
+def _utc_day_end_ms(d: date) -> int:
+    return int(datetime(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=UTC).timestamp() * 1000)
 
 
 def _bar(d: date, h: int, m: int, open_: float, close: float) -> TradeBar:
@@ -87,6 +96,24 @@ def _seed_lake(root: Path) -> list[date]:
     return sessions
 
 
+def _seed_flat_lake(root: Path) -> list[date]:
+    """40 sessions at an unchanging price — zero variance, defined stats."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    for d in sessions:
+        write_lean_day_zip(
+            root,
+            SYMBOL,
+            d,
+            [
+                _bar(d, 9, 30, 100.0, 100.0),
+                _bar(d, 11, 59, 100.0, 100.0),
+                _bar(d, 12, 0, 100.0, 100.0),
+                _bar(d, 15, 59, 100.0, 100.0),
+            ],
+        )
+    return sessions
+
+
 @pytest.fixture
 def seeded_lake(tmp_path: Path) -> Path:
     root = tmp_path / "lake"
@@ -95,32 +122,37 @@ def seeded_lake(tmp_path: Path) -> Path:
 
 
 def _complete_capture_receipt() -> return_distribution_service.CaptureReceipt:
-    return return_distribution_service.CaptureReceipt(
-        attempted=True, status="complete", fetched_artifact_count=0
-    )
+    return return_distribution_service.CaptureReceipt(status="complete", fetched_artifact_count=0)
 
 
-@pytest.fixture
-async def api(seeded_lake: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+def _app_with(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capture=None
+) -> FastAPI:
     monkeypatch.setattr(
-        return_distribution_service, "resolve_lake_root", lambda _mode: seeded_lake
+        return_distribution_service, "resolve_lake_root", lambda _mode: root
     )
-    # The real capture boundary needs the catalog + provider; the seeded lake
-    # covers the window, so the stub just records a completed capture.
-    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
-        return _complete_capture_receipt()
-
-    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _stub_capture)
+    if capture is not None:
+        monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", capture)
     app = FastAPI()
     app.include_router(return_distribution_router.router, prefix="/api/research")
     return app
 
 
+@pytest.fixture
+async def api(seeded_lake: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    # The real capture boundary needs the catalog + provider; the seeded lake
+    # needs capture for its lead-in, so the stub records a completed capture.
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    return _app_with(seeded_lake, monkeypatch, capture=_stub_capture)
+
+
 def _request_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "symbol": SYMBOL,
-        "from_date": "2024-07-01",
-        "to_date": "2025-06-30",
+        "from_ms_utc": FROM_MS,
+        "to_ms_utc": TO_MS,
     }
     body.update(overrides)
     return body
@@ -140,6 +172,10 @@ async def test_return_distribution_happy_path(api: FastAPI, seeded_lake: Path) -
     assert body["meta"]["symbol"] == SYMBOL
     assert body["meta"]["adjustment"] == "split_and_dividend"
     assert body["meta"]["resolution"] == "1m"
+    # The numeric window echoes verbatim — Python resolved the dates, the
+    # wire never carried a date string.
+    assert body["meta"]["from_ms_utc"] == FROM_MS
+    assert body["meta"]["to_ms_utc"] == TO_MS
     # The requested calendar window is wider than the seeded lake (40
     # sessions inside 2024-07-01..2025-06-30), so coverage reports the gap
     # honestly instead of implying the window is complete.
@@ -167,6 +203,14 @@ async def test_return_distribution_happy_path(api: FastAPI, seeded_lake: Path) -
     assert all(d["session_pct"] is not None for d in days)
     assert days[0]["close_to_close_pct"] is None  # no prior session in the lake
     assert days[1]["close_to_close_pct"] is not None
+    # Every day carries its per-kind bin identity — the stamped membership
+    # the drill-down selects by, never re-derived client-side.
+    assert set(days[0]["bin_indices"]) == {"close_to_close", "session", "overnight"}
+    assert days[0]["bin_indices"]["close_to_close"] is None
+    assert isinstance(days[0]["bin_indices"]["session"], int)
+    bin_indices = [d["bin_indices"]["session"] for d in days]
+    for bin_index, bin_model in enumerate(kinds["session"]["bins"]):
+        assert bin_indices.count(bin_index) == bin_model["count"]
     # Extended segments alternate in the seed: even sessions have pre-market,
     # every third has after-hours.
     assert any(d["pre_market_pct"] is not None for d in days)
@@ -175,8 +219,94 @@ async def test_return_distribution_happy_path(api: FastAPI, seeded_lake: Path) -
 
     assert body["coverage"]["returned_sessions"] == N_SESSIONS
     assert body["coverage"]["first_session_open_ms_utc"] == days[0]["session_open_ms_utc"]
-    assert body["meta"]["capture"]["attempted"] is True
     assert body["meta"]["capture"]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_inverted_window_rejected(api: FastAPI) -> None:
+    response = await _post(api, _request_body(to_ms_utc=FROM_MS - 1))
+    assert response.status_code == 422
+    assert "to_ms_utc" in response.text
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_constant_series_has_defined_stats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flat price series is valid input: zero variance, None standardized
+    moments, a zero overlay — never a server error."""
+    root = tmp_path / "lake"
+    _seed_flat_lake(root)
+    app = _app_with(root, monkeypatch, capture=None)
+    # The flat lake starts at the window's first date, so the lead-in probe
+    # wants capture; a no-op completed receipt keeps the read synchronous.
+    async def _noop_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _noop_capture)
+
+    response = await _post(app, _request_body())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    for kind in body["kinds"]:
+        stats = kind["stats"]
+        assert stats["std_pct"] == 0.0
+        assert stats["annualized_vol_pct"] == 0.0
+        assert stats["skewness"] is None
+        assert stats["excess_kurtosis"] is None
+        assert stats["var_95_pct"] == 0.0
+        assert kind["normal_expected_counts"] == [0.0] * len(kind["bins"])
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_skips_capture_when_lead_in_covered(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lake that holds the window *and its lead-in* is not re-captured."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    from_ms = int(
+        datetime(sessions[10].year, sessions[10].month, sessions[10].day, tzinfo=UTC).timestamp() * 1000
+    )
+    to_ms = _utc_day_end_ms(sessions[-1])
+
+    calls: list[object] = []
+
+    async def _recording_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        calls.append(kwargs)
+        return _complete_capture_receipt()
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_recording_capture)
+    response = await _post(app, _request_body(from_ms_utc=from_ms, to_ms_utc=to_ms))
+    assert response.status_code == 200, response.text
+    assert calls == []
+    assert response.json()["meta"]["capture"]["status"] == "not_attempted"
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_probe_captures_the_lead_in_before_the_window(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lake holding the requested dates but not the fortnight before them
+    still triggers capture, and the capture span reaches into the lead-in —
+    the first session's close-to-close return needs that previous close."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    spans: list[tuple[date, date]] = []
+
+    async def _recording_capture(
+        *, symbol: str, start: date, end: date
+    ) -> return_distribution_service.CaptureReceipt:
+        spans.append((start, end))
+        return _complete_capture_receipt()
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_recording_capture)
+    # Request from the lake's first captured session: the window itself is
+    # fully held, only the lead-in is missing.
+    response = await _post(app, _request_body())
+    assert response.status_code == 200, response.text
+    assert len(spans) == 1
+    captured_start, captured_end = spans[0]
+    assert captured_start < sessions[0], "capture must reach before the window"
+    assert sessions[0] <= captured_end <= date(2025, 6, 30)
 
 
 @pytest.mark.asyncio
@@ -197,7 +327,9 @@ async def test_return_distribution_path_unsafe_symbol_is_typed_not_found(api: Fa
 
 @pytest.mark.asyncio
 async def test_return_distribution_thin_window_is_typed_bad_request(api: FastAPI) -> None:
-    response = await _post(api, _request_body(to_date="2024-07-05"))
+    response = await _post(
+        api, _request_body(to_ms_utc=_utc_day_end_ms(date(2024, 7, 5)))
+    )
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert detail["error_code"] == "INSUFFICIENT_COVERAGE"
@@ -226,16 +358,11 @@ async def test_return_distribution_missing_factor_file_warns_unadjusted(
 ) -> None:
     factor_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path()
     (seeded_lake.joinpath(*factor_rel.parts)).unlink()
-    monkeypatch.setattr(
-        return_distribution_service, "resolve_lake_root", lambda _mode: seeded_lake
-    )
 
     async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
         return _complete_capture_receipt()
 
-    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _stub_capture)
-    app = FastAPI()
-    app.include_router(return_distribution_router.router, prefix="/api/research")
+    app = _app_with(seeded_lake, monkeypatch, capture=_stub_capture)
     response = await _post(app, _request_body())
     assert response.status_code == 200, response.text
     body = response.json()
@@ -260,13 +387,10 @@ async def test_return_distribution_captures_missing_symbol_into_lake_before_read
         capture_calls.append((symbol, start, end))
         _seed_lake(root)
         return return_distribution_service.CaptureReceipt(
-            attempted=True, status="complete", fetched_artifact_count=N_SESSIONS
+            status="complete", fetched_artifact_count=N_SESSIONS
         )
 
-    monkeypatch.setattr(return_distribution_service, "resolve_lake_root", lambda _mode: root)
-    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _seeding_capture)
-    app = FastAPI()
-    app.include_router(return_distribution_router.router, prefix="/api/research")
+    app = _app_with(root, monkeypatch, capture=_seeding_capture)
 
     response = await _post(app, _request_body())
     assert response.status_code == 200, response.text
@@ -281,7 +405,6 @@ async def test_return_distribution_captures_missing_symbol_into_lake_before_read
     # The study read what the capture wrote.
     assert len(body["days"]) == N_SESSIONS
     assert body["meta"]["capture"] == {
-        "attempted": True,
         "status": "complete",
         "fetched_artifact_count": N_SESSIONS,
         "detail": None,
@@ -299,16 +422,12 @@ async def test_return_distribution_capture_failure_is_typed_not_found(
 
     async def _failing_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
         return return_distribution_service.CaptureReceipt(
-            attempted=True,
             status="failed",
             fetched_artifact_count=0,
             detail="CatalogUnavailableError: pool not initialized",
         )
 
-    monkeypatch.setattr(return_distribution_service, "resolve_lake_root", lambda _mode: root)
-    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _failing_capture)
-    app = FastAPI()
-    app.include_router(return_distribution_router.router, prefix="/api/research")
+    app = _app_with(root, monkeypatch, capture=_failing_capture)
 
     response = await _post(app, _request_body())
     assert response.status_code == 404

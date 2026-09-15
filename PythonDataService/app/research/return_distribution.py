@@ -38,13 +38,27 @@ Conventions (all deliberate, all tested):
     float64 once, at the anchor boundary — the same precision seam the chart
     documents (app/services/chart_bar_source.py, "Known precision seam").
   * Corporate-action adjustment multiplies each day's anchors by the LEAN
-    factor file's ``price_factor · split_factor`` as of that date (row dated D
-    covers data up to and including D; LEAN applies the event on D's
-    successor). Data dated before the first row uses the first row's factors,
-    matching LEAN's own factor-file application.
+    factor file's ``price_factor · split_factor`` as of that date, resolved
+    by the canonical data-lake lookup (``app/data_lake/factor_files.py::
+    factor_multiplier_as_of`` — the earliest row dated on or after the bar;
+    identity when the bar postdates every row; LEAN
+    ``CorporateFactorProvider.GetScalingFactors`` semantics, parity-tested
+    in tests/data_lake/test_factor_files.py).
   * Bin membership: left edge bin is R < −span, right edge bin is R ≥ +span,
     inner bins are [lo, hi) with edges at multiples of the bin width so 0 is
-    always an edge. The union covers ℝ with no overlap.
+    always an edge. The union covers ℝ with no overlap. Each response day
+    carries its bin index per return kind, computed by the same membership
+    function the histogram counts use — consumers render, never re-classify.
+  * Close-to-close/overnight chains follow *scheduled-session adjacency*
+    (the NYSE calendar from ``trading_calendar.expected_sessions``): a day
+    returns against the immediately previous scheduled session only, and a
+    capture gap resets the chain (that day's close-to-close/overnight are
+    ``None``) rather than manufacturing a multi-session "daily" return.
+  * Statistics are total over their domain: a series with n < 2 has no
+    sample std, and skew/kurtosis are undefined for n < 4 or zero variance
+    — those fields are ``None`` rather than raising, and the normal overlay
+    is all zeros when the fitted σ is not positive. VaR/CVaR/best/worst are
+    defined for any non-empty series.
   * Timestamps on output are int64 ms UTC anchored at each session's
     scheduled open (the lake's trading-date wire convention,
     app/data_lake/types.py). Session boundaries and half-day closes come
@@ -54,14 +68,14 @@ Conventions (all deliberate, all tested):
 from __future__ import annotations
 
 import math
-from bisect import bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.data_lake.factor_files import FactorRow, factor_multiplier_as_of
 from app.engine.data.trade_bar import TradeBar
 
 TRADING_DAYS_PER_YEAR = 252
@@ -97,15 +111,6 @@ class NonMonotonicBarError(ValueError):
 
 
 @dataclass(frozen=True)
-class FactorRow:
-    """One LEAN factor-file row: factors in effect for data up to ``row_date``."""
-
-    row_date: date
-    price_factor: Decimal
-    split_factor: Decimal
-
-
-@dataclass(frozen=True)
 class DayAnchors:
     """The five price anchors of one trading day, unadjusted (raw lake grid).
 
@@ -132,6 +137,11 @@ class DailyReturns:
 
     Every percentage field is ``None`` when the anchors it needs are absent;
     the log-space identities that do hold are listed in SEGMENT_NAMES above.
+    ``bin_indices`` is filled by ``build_return_distribution`` — the day's
+    bin per return kind under the response's geometry (index into the
+    histogram's bins tuple, edge bins included; ``None`` when that kind's
+    value is absent). It is ``None`` until geometry exists, i.e. between
+    ``compute_daily_returns`` and ``build_return_distribution``.
     """
 
     trading_date: date
@@ -144,6 +154,7 @@ class DailyReturns:
     afternoon_pct: float | None
     after_hours_pct: float | None
     volume: int
+    bin_indices: tuple[int | None, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -177,14 +188,20 @@ class ExtremeDay:
 
 @dataclass(frozen=True)
 class DistributionStats:
-    """Sample statistics of one return series, in simple-percent units."""
+    """Sample statistics of one return series, in simple-percent units.
+
+    ``None`` means "undefined for this sample", never zero: the sample std
+    needs n ≥ 2, and the standardized sample skew/kurtosis need n ≥ 4 with
+    positive variance. VaR/CVaR and best/worst are defined for any
+    non-empty series.
+    """
 
     n_days: int
     mean_pct: float
-    std_pct: float
-    annualized_vol_pct: float
-    skewness: float
-    excess_kurtosis: float
+    std_pct: float | None
+    annualized_vol_pct: float | None
+    skewness: float | None
+    excess_kurtosis: float | None
     var_95_pct: float
     cvar_95_pct: float
     best_day: ExtremeDay
@@ -218,56 +235,6 @@ def noon_et_ms_utc(d: date) -> int:
     """
     noon_et = datetime(d.year, d.month, d.day, 12, 0, tzinfo=_ET)
     return int(noon_et.timestamp() * 1000)
-
-
-def parse_factor_file(text: str) -> list[FactorRow]:
-    """Parse a LEAN factor-file CSV body (``date,price_factor,split_factor,
-    reference_price``, no header) into rows sorted ascending by date.
-
-    Malformed rows raise ``ValueError`` — a factor file this repo's own
-    writers produced is trusted input, but a hand-edited or truncated one
-    must fail loudly rather than silently mis-adjust a two-year series.
-    """
-    rows: list[FactorRow] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split(",")
-        if len(parts) != 4:
-            raise ValueError(f"factor file row does not have 4 columns: {line!r}")
-        raw_date, raw_price_factor, raw_split_factor, _reference = parts
-        try:
-            row_date = datetime.strptime(raw_date, "%Y%m%d").date()
-            price_factor = Decimal(raw_price_factor)
-            split_factor = Decimal(raw_split_factor)
-        except ValueError as exc:
-            raise ValueError(f"malformed factor file row {line!r}: {exc}") from exc
-        rows.append(
-            FactorRow(
-                row_date=row_date,
-                price_factor=price_factor,
-                split_factor=split_factor,
-            )
-        )
-    rows.sort(key=lambda r: r.row_date)
-    return rows
-
-
-def factor_multiplier_as_of(rows: Sequence[FactorRow], d: date) -> Decimal:
-    """The cumulative adjustment multiplier ``price_factor · split_factor``
-    in effect for data dated ``d``.
-
-    The latest row dated ≤ ``d`` wins; data before the first row uses the
-    first row's factors (LEAN's own application — the file's factors are
-    cumulative from file start). An empty file is the identity multiplier,
-    which is the honest reading of "no corporate actions in the capture
-    window" (see the factor-file builder, app/data_lake/factor_files.py).
-    """
-    if not rows:
-        return Decimal(1)
-    idx = bisect_right([r.row_date for r in rows], d) - 1
-    row = rows[0] if idx < 0 else rows[idx]
-    return row.price_factor * row.split_factor
 
 
 def extract_day_anchors(
@@ -378,25 +345,34 @@ def _ln_later_over_earlier(later: Decimal, earlier: Decimal) -> float:
     return math.log(float(later) / float(earlier))
 
 
-def compute_daily_returns(anchors: Sequence[DayAnchors]) -> list[DailyReturns]:
+def compute_daily_returns(
+    anchors: Sequence[DayAnchors],
+    *,
+    scheduled_sessions: Sequence[date],
+) -> list[DailyReturns]:
     """Turn adjusted anchors into per-day returns (simple percent).
 
     Days whose own RTH anchors are missing are skipped entirely (counted by
-    the caller as excluded sessions); the first day in the sequence has no
-    previous close, so its ``close_to_close_pct``/``overnight_pct`` are
-    ``None`` while its session/segment fields are still populated.
+    the caller as excluded sessions).
+
+    Close-to-close and overnight returns follow **scheduled-session
+    adjacency**: a day returns against the immediately previous session of
+    ``scheduled_sessions`` (the NYSE calendar — callers pass
+    ``trading_calendar.expected_sessions``), and only if that session has an
+    anchor with an RTH close. When it does not — the window's first
+    scheduled session, or a capture gap — the chain resets: the day keeps
+    its session/segment returns but its ``close_to_close_pct`` and
+    ``overnight_pct`` are ``None``. Chaining across a gap would manufacture
+    a multi-session move and label it a daily return, contaminating the
+    histogram and every tail statistic downstream.
     """
+    anchor_by_date = {a.trading_date: a for a in anchors}
+    sessions = sorted(set(scheduled_sessions))
+    previous_scheduled = {sessions[i]: (sessions[i - 1] if i > 0 else None) for i in range(len(sessions))}
+
     out: list[DailyReturns] = []
-    prev: DayAnchors | None = None
     for a in anchors:
         if a.rth_open is None or a.rth_close is None:
-            # A skipped day still hands its close to the chain when it has
-            # one (an openless day is pathological but its last RTH price is
-            # a usable previous close); with neither anchor the chain keeps
-            # the last usable close rather than resetting — an RTH-less day
-            # must not erase the return across it.
-            if a.rth_close is not None:
-                prev = a
             continue
 
         session_log = _ln_later_over_earlier(a.rth_close, a.rth_open)
@@ -418,6 +394,8 @@ def compute_daily_returns(anchors: Sequence[DayAnchors]) -> list[DailyReturns]:
         else:
             after_hours_log = None
 
+        prev_date = previous_scheduled.get(a.trading_date)
+        prev = anchor_by_date.get(prev_date) if prev_date is not None else None
         if prev is not None and prev.rth_close is not None:
             close_to_close_log = _ln_later_over_earlier(a.rth_close, prev.rth_close)
             overnight_log = _ln_later_over_earlier(a.rth_open, prev.rth_close)
@@ -439,8 +417,55 @@ def compute_daily_returns(anchors: Sequence[DayAnchors]) -> list[DailyReturns]:
                 volume=a.volume,
             )
         )
-        prev = a
     return out
+
+
+def _bin_geometry(
+    *,
+    bin_width_pct: float,
+    span_pct: float,
+) -> tuple[float, list[float]]:
+    """Validate the (width, span) pair and return ``(span, inner_edges)``.
+
+    ``inner_edges`` are the ``2·span/width + 1`` inner bin edges at
+    multiples of ``bin_width_pct`` covering ``[−span, +span]``, including
+    both endpoints; the open edge bins take everything outside.
+    """
+    if bin_width_pct <= 0:
+        raise ValueError(f"bin_width_pct must be positive, got {bin_width_pct}")
+    if span_pct <= 0:
+        raise ValueError(f"span_pct must be positive, got {span_pct}")
+    span_over_width = span_pct / bin_width_pct
+    if not math.isclose(span_over_width, round(span_over_width), rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError(
+            f"span_pct ({span_pct}) must be an integer multiple of bin_width_pct ({bin_width_pct})"
+        )
+    step = round(span_over_width)
+    edges = [-span_pct + i * bin_width_pct for i in range(2 * step + 1)]
+    return span_pct, edges
+
+
+def _bin_index(value: float, *, span_pct: float, edges: Sequence[float]) -> int:
+    """Index of ``value`` into the full bins tuple (edge bins included).
+
+    The single membership authority: ``compute_histogram`` counts through
+    it and ``build_return_distribution`` stamps each day's ``bin_indices``
+    with it, so a basket's histogram count and its drill-down day list are
+    the same classification by construction. Membership is left edge bin
+    ``v < −span``, right edge bin ``v ≥ +span``, inner ``[lo, hi)``.
+    """
+    if value < -span_pct:
+        return 0
+    if value >= span_pct:
+        return len(edges)
+    # Scale by 1/bin_width in float can straddle a boundary by one ulp, so
+    # locate by comparison against the edge list instead.
+    idx = 1
+    for edge in edges[1:]:
+        if value < edge:
+            break
+        idx += 1
+    return idx
 
 
 def compute_histogram(
@@ -455,37 +480,19 @@ def compute_histogram(
     +span]``; membership is ``[lo, hi)`` with the left edge bin taking
     ``v < −span`` and the right edge bin ``v ≥ +span``.
     """
-    if bin_width_pct <= 0:
-        raise ValueError(f"bin_width_pct must be positive, got {bin_width_pct}")
-    if span_pct <= 0:
-        raise ValueError(f"span_pct must be positive, got {span_pct}")
-    span_over_width = span_pct / bin_width_pct
-    if not math.isclose(span_over_width, round(span_over_width), rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError(
-            f"span_pct ({span_pct}) must be an integer multiple of bin_width_pct ({bin_width_pct})"
-        )
-
-    step = round(span_over_width)
-    edges = [-span_pct + i * bin_width_pct for i in range(2 * step + 1)]
+    span_pct, edges = _bin_geometry(bin_width_pct=bin_width_pct, span_pct=span_pct)
     counts = [0] * (len(edges) - 1)
     left_edge = 0
     right_edge = 0
 
     for v in values_pct:
-        if v < -span_pct:
+        idx = _bin_index(v, span_pct=span_pct, edges=edges)
+        if idx == 0:
             left_edge += 1
-        elif v >= span_pct:
+        elif idx == len(edges):
             right_edge += 1
         else:
-            # Values in (-span, span): the bin whose [lo, hi) contains v.
-            # Scale by 1/bin_width in float can straddle a boundary by one
-            # ulp, so locate by comparison against the edge list instead.
-            idx = 0
-            for edge in edges[1:]:
-                if v < edge:
-                    break
-                idx += 1
-            counts[idx] += 1
+            counts[idx - 1] += 1
 
     bins = [
         HistogramBin(lower_pct=edges[i], upper_pct=edges[i + 1], count=counts[i], is_edge=False)
@@ -500,10 +507,11 @@ def compute_histogram(
     )
 
 
-def _sample_std(values: Sequence[float]) -> float:
+def _sample_std(values: Sequence[float], mean: float) -> float | None:
     n = len(values)
-    m = math.fsum(values) / n
-    return math.sqrt(math.fsum((v - m) ** 2 for v in values) / (n - 1))
+    if n < 2:
+        return None
+    return math.sqrt(math.fsum((v - mean) ** 2 for v in values) / (n - 1))
 
 
 def compute_distribution_stats(
@@ -518,26 +526,36 @@ def compute_distribution_stats(
     definitions — see module provenance); VaR-95 as the 5th percentile with
     linear interpolation (numpy's default method); CVaR-95 as the mean of
     the values at or below VaR-95.
+
+    Total over valid numerical input — never raises on a short or constant
+    series. A sample of one has no std; a sample smaller than four (or with
+    zero variance, whose standardized moments are undefined) has no
+    skew/kurtosis. Those fields are ``None``; the caller renders the gap.
     """
     if len(values_pct) != len(dates) or len(values_pct) != len(session_open_ms):
         raise ValueError("values, dates, and session anchors must have equal length")
     n = len(values_pct)
-    if n < 3:
-        raise ValueError(f"need at least 3 returns for distribution statistics, got {n}")
+    if n < 1:
+        raise ValueError("need at least 1 return for distribution statistics, got 0")
 
     mean = math.fsum(values_pct) / n
-    std = _sample_std(values_pct)
+    std = _sample_std(values_pct, mean)
+    annualized_vol = None if std is None else std * math.sqrt(TRADING_DAYS_PER_YEAR)
 
-    # G1 and G2 in their sample-standardized forms: z_i = (x_i − mean)/std
-    # with the ddof=1 std, exactly as scipy evaluates bias=False on the
-    # same inputs (scipy.stats.skew/kurtosis reduce to these closed forms).
-    z3 = math.fsum(((v - mean) / std) ** 3 for v in values_pct)
-    z4 = math.fsum(((v - mean) / std) ** 4 for v in values_pct)
-    skewness = (n / ((n - 1) * (n - 2))) * z3
-    excess_kurtosis = (
-        (n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3)) * z4
-        - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
-    )
+    skewness: float | None = None
+    excess_kurtosis: float | None = None
+    if std is not None and std > 0.0 and n >= 4:
+        # G1 and G2 in their sample-standardized forms: z_i = (x_i − mean)/std
+        # with the ddof=1 std, exactly as scipy evaluates bias=False on the
+        # same inputs (scipy.stats.skew/kurtosis reduce to these closed
+        # forms). n ≥ 4 keeps every denominator (n−2)(n−3) nonzero.
+        z3 = math.fsum(((v - mean) / std) ** 3 for v in values_pct)
+        z4 = math.fsum(((v - mean) / std) ** 4 for v in values_pct)
+        skewness = (n / ((n - 1) * (n - 2))) * z3
+        excess_kurtosis = (
+            (n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3)) * z4
+            - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+        )
 
     ordered = sorted(values_pct)
     var_95 = _percentile_linear(ordered, 5.0)
@@ -550,7 +568,7 @@ def compute_distribution_stats(
         n_days=n,
         mean_pct=mean,
         std_pct=std,
-        annualized_vol_pct=std * math.sqrt(TRADING_DAYS_PER_YEAR),
+        annualized_vol_pct=annualized_vol,
         skewness=skewness,
         excess_kurtosis=excess_kurtosis,
         var_95_pct=var_95,
@@ -590,13 +608,15 @@ def _normal_cdf(x: float) -> float:
 def normal_expected_counts(
     histogram: Histogram,
     mean_pct: float,
-    std_pct: float,
+    std_pct: float | None,
 ) -> tuple[float, ...]:
     """Expected bin counts under Normal(mean_pct, std_pct) fitted to the
     same series — the bell-curve overlay. Each inner bin gets
-    ``N · (Φ(hi) − Φ(lo))``; edge bins take the open tails."""
+    ``N · (Φ(hi) − Φ(lo))``; edge bins take the open tails. A non-positive
+    or undefined σ has no normal fit: the overlay is all zeros (rendered
+    flat), not an exception."""
     n = histogram.total_count
-    if std_pct <= 0:
+    if std_pct is None or std_pct <= 0:
         return (0.0,) * len(histogram.bins)
     out: list[float] = []
     for b in histogram.bins:
@@ -606,6 +626,15 @@ def normal_expected_counts(
     return tuple(out)
 
 
+def _value_of_kind(day: DailyReturns, kind: ReturnKind) -> float | None:
+    """The day's value for one return kind (``None`` when absent)."""
+    if kind == "close_to_close":
+        return day.close_to_close_pct
+    if kind == "session":
+        return day.session_pct
+    return day.overnight_pct
+
+
 def _values_for_kind(days: Sequence[DailyReturns], kind: ReturnKind) -> tuple[list[float], list[date], list[int], int]:
     """The non-None series for one kind, plus how many days were excluded."""
     values: list[float] = []
@@ -613,13 +642,7 @@ def _values_for_kind(days: Sequence[DailyReturns], kind: ReturnKind) -> tuple[li
     anchors: list[int] = []
     excluded = 0
     for d in days:
-        v: float | None
-        if kind == "close_to_close":
-            v = d.close_to_close_pct
-        elif kind == "session":
-            v = d.session_pct
-        else:
-            v = d.overnight_pct
+        v = _value_of_kind(d, kind)
         if v is None:
             excluded += 1
         else:
@@ -636,12 +659,22 @@ def build_return_distribution(
     span_pct: float = DEFAULT_SPAN_PCT,
     adjustment: Literal["split_and_dividend", "raw"] = "split_and_dividend",
 ) -> ReturnDistributionResult:
-    """Histogram + stats + overlay for all three return kinds over ``days``."""
+    """Histogram + stats + overlay for all three return kinds over ``days``.
+
+    Every day comes back stamped with ``bin_indices`` — its bin per return
+    kind under this response's geometry, from the same membership function
+    the histograms were counted with — so a consumer can select a basket's
+    days without re-implementing any classification.
+    """
+    span, edges = _bin_geometry(bin_width_pct=bin_width_pct, span_pct=span_pct)
     kinds: list[KindDistribution] = []
     for kind in RETURN_KINDS:
         values, dates, anchors, _excluded = _values_for_kind(days, kind)
         histogram = compute_histogram(values, bin_width_pct=bin_width_pct, span_pct=span_pct)
-        stats = compute_distribution_stats(values, dates, anchors)
+        try:
+            stats = compute_distribution_stats(values, dates, anchors)
+        except ValueError as exc:
+            raise ValueError(f"{kind}: {exc}") from exc
         kinds.append(
             KindDistribution(
                 kind=kind,
@@ -652,9 +685,23 @@ def build_return_distribution(
                 ),
             )
         )
+
+    stamped: list[DailyReturns] = []
+    for d in days:
+        stamped.append(
+            replace(
+                d,
+                bin_indices=tuple(
+                    None
+                    if _value_of_kind(d, kind) is None
+                    else _bin_index(_value_of_kind(d, kind), span_pct=span, edges=edges)
+                    for kind in RETURN_KINDS
+                ),
+            )
+        )
     return ReturnDistributionResult(
         kinds=tuple(kinds),
-        days=tuple(days),
+        days=tuple(stamped),
         bin_width_pct=bin_width_pct,
         span_pct=span_pct,
         adjustment=adjustment,

@@ -6748,12 +6748,8 @@
         "type": "object"
       },
       "CaptureReceiptModel": {
-        "description": "What the on-demand lake capture did for this request.",
+        "description": "What the on-demand lake capture did for this request.\n\n``status`` is the closed contract of\n``app.services.return_distribution_service.CaptureStatus``; clients\nmust render every state (the generated union type enforces it).",
         "properties": {
-          "attempted": {
-            "title": "Attempted",
-            "type": "boolean"
-          },
           "detail": {
             "anyOf": [
               {
@@ -6770,12 +6766,18 @@
             "type": "integer"
           },
           "status": {
+            "enum": [
+              "not_attempted",
+              "skipped",
+              "complete",
+              "partial",
+              "failed"
+            ],
             "title": "Status",
             "type": "string"
           }
         },
         "required": [
-          "attempted",
           "status",
           "fetched_artifact_count"
         ],
@@ -6923,6 +6925,98 @@
         "title": "ChartBar",
         "type": "object"
       },
+      "ChartDataBar": {
+        "description": "One resampled OHLCV bar of the /api/chart/data success payload.",
+        "properties": {
+          "c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "l": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "L"
+          },
+          "o": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Open; null when the source row was absent",
+            "title": "O"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only on bars the resampler tagged",
+            "title": "Session"
+          },
+          "synthetic": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True only on gap-filled synthetic bars",
+            "title": "Synthetic"
+          },
+          "t": {
+            "description": "Bar timestamp as int64 ms UTC",
+            "minimum": 0.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "o"
+        ],
+        "title": "ChartDataBar",
+        "type": "object"
+      },
       "ChartDataRequest": {
         "description": "Request for chart data with resampled bars and indicators.\n\nTemporal authority (data-lab workspace redesign PRD \u00a712): the numeric\n``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and\neach field takes precedence over its date-string counterpart when\nsupplied. Each value resolves by flooring to its UTC calendar date \u2014\nthe exact inverse of the frontend's ``utcMsToIsoDate`` \u2014 so a numeric\nwindow and the date string the same request carries never disagree,\nwhatever instant inside the day the anchors name (the Data Lab commits\nUTC midnight for the start and the day's final UTC instant for the\nend). Both endpoints of the resolved window are inclusive trading\ndates, matching ``from_date``/``to_date``.",
         "properties": {
@@ -7018,6 +7112,75 @@
         "title": "ChartDataRequest",
         "type": "object"
       },
+      "ChartDataResponse": {
+        "description": "Success payload of POST /api/chart/data.\n\nThe route's handler computes a plain dict; declaring it as the\n``response_model`` publishes the contract (ADR 0031 generated OpenAPI\ntypes) and pins the bar keys (``t``/``o``/``h``/``l``/``c``/``v``) the\nData Lab charts already consume, so no client invents a transport\nmirror. Error responses are typed ``detail`` payloads raised as\nHTTPException and are therefore not part of this model.",
+        "properties": {
+          "allowed_timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Timeframes",
+            "type": "array"
+          },
+          "bar_sources": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-source ingest receipts; present only when the lake is in the read path",
+            "title": "Bar Sources"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartDataBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "estimated_bars_per_timeframe": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Estimated Bars Per Timeframe",
+            "type": "object"
+          },
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorResult"
+            },
+            "title": "Indicators",
+            "type": "array"
+          },
+          "meta": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Meta",
+            "type": "object"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/ChartQualityReport"
+          },
+          "recommended_timeframe": {
+            "title": "Recommended Timeframe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bars",
+          "quality",
+          "allowed_timeframes",
+          "estimated_bars_per_timeframe",
+          "recommended_timeframe",
+          "meta"
+        ],
+        "title": "ChartDataResponse",
+        "type": "object"
+      },
       "ChartFillMarker": {
         "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
@@ -7059,6 +7222,34 @@
           "event_key"
         ],
         "title": "ChartFillMarker",
+        "type": "object"
+      },
+      "ChartGapDetail": {
+        "properties": {
+          "after_ts": {
+            "title": "After Ts",
+            "type": "integer"
+          },
+          "before_ts": {
+            "title": "Before Ts",
+            "type": "integer"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "duration_minutes": {
+            "title": "Duration Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "before_ts",
+          "after_ts",
+          "duration_minutes",
+          "classification"
+        ],
+        "title": "ChartGapDetail",
         "type": "object"
       },
       "ChartHistoryResponse": {
@@ -7473,6 +7664,84 @@
           "source"
         ],
         "title": "ChartOverlayNoticeView",
+        "type": "object"
+      },
+      "ChartQualityReport": {
+        "description": "Resample-quality receipt mirroring chart_service.QualityReport.",
+        "properties": {
+          "duplicates_removed": {
+            "title": "Duplicates Removed",
+            "type": "integer"
+          },
+          "flat_bars_detected": {
+            "title": "Flat Bars Detected",
+            "type": "integer"
+          },
+          "gap_details": {
+            "items": {
+              "$ref": "#/components/schemas/ChartGapDetail"
+            },
+            "title": "Gap Details",
+            "type": "array"
+          },
+          "gaps_found": {
+            "title": "Gaps Found",
+            "type": "integer"
+          },
+          "largest_gap_minutes": {
+            "title": "Largest Gap Minutes",
+            "type": "integer"
+          },
+          "missing_session_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Session Dates",
+            "type": "array"
+          },
+          "missing_sessions": {
+            "title": "Missing Sessions",
+            "type": "integer"
+          },
+          "ohlc_violations_detected": {
+            "title": "Ohlc Violations Detected",
+            "type": "integer"
+          },
+          "out_of_order_fixed": {
+            "title": "Out Of Order Fixed",
+            "type": "integer"
+          },
+          "raw_bar_count": {
+            "title": "Raw Bar Count",
+            "type": "integer"
+          },
+          "resampled_bar_count": {
+            "title": "Resampled Bar Count",
+            "type": "integer"
+          },
+          "session_coverage_pct": {
+            "title": "Session Coverage Pct",
+            "type": "number"
+          },
+          "synthetic_bars": {
+            "title": "Synthetic Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "raw_bar_count",
+          "duplicates_removed",
+          "gaps_found",
+          "largest_gap_minutes",
+          "missing_sessions",
+          "session_coverage_pct",
+          "synthetic_bars",
+          "resampled_bar_count",
+          "flat_bars_detected",
+          "ohlc_violations_detected",
+          "out_of_order_fixed"
+        ],
+        "title": "ChartQualityReport",
         "type": "object"
       },
       "ChartRangePreset": {
@@ -12321,6 +12590,7 @@
         "type": "object"
       },
       "DayReturnsModel": {
+        "description": "One day's returns plus ``bin_indices``: this day's histogram bin per\nreturn kind (index into that kind's ``bins`` list, edge bins included),\nstamped by the same membership function the counts were tallied with.\nConsumers select a basket's days by identity \u2014 they never re-derive\nmembership. ``None`` when that kind's value is undefined for the day.",
         "properties": {
           "after_hours_pct": {
             "anyOf": [
@@ -12343,6 +12613,20 @@
               }
             ],
             "title": "Afternoon Pct"
+          },
+          "bin_indices": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Bin Indices",
+            "type": "object"
           },
           "close_to_close_pct": {
             "anyOf": [
@@ -12417,7 +12701,8 @@
           "morning_pct",
           "afternoon_pct",
           "after_hours_pct",
-          "volume"
+          "volume",
+          "bin_indices"
         ],
         "title": "DayReturnsModel",
         "type": "object"
@@ -13011,10 +13296,18 @@
         "type": "object"
       },
       "DistributionStatsModel": {
+        "description": "``None`` stats are undefined for the sample (n too small, or zero\nvariance for the standardized moments) \u2014 not zero.",
         "properties": {
           "annualized_vol_pct": {
-            "title": "Annualized Vol Pct",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualized Vol Pct"
           },
           "best_day": {
             "$ref": "#/components/schemas/ExtremeDayModel"
@@ -13024,8 +13317,15 @@
             "type": "number"
           },
           "excess_kurtosis": {
-            "title": "Excess Kurtosis",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excess Kurtosis"
           },
           "mean_pct": {
             "title": "Mean Pct",
@@ -13036,12 +13336,26 @@
             "type": "integer"
           },
           "skewness": {
-            "title": "Skewness",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skewness"
           },
           "std_pct": {
-            "title": "Std Pct",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std Pct"
           },
           "var_95_pct": {
             "title": "Var 95 Pct",
@@ -30153,9 +30467,9 @@
               }
             ]
           },
-          "from_date": {
-            "title": "From Date",
-            "type": "string"
+          "from_ms_utc": {
+            "title": "From Ms Utc",
+            "type": "integer"
           },
           "resolution": {
             "const": "1m",
@@ -30170,9 +30484,9 @@
             "title": "Symbol",
             "type": "string"
           },
-          "to_date": {
-            "title": "To Date",
-            "type": "string"
+          "to_ms_utc": {
+            "title": "To Ms Utc",
+            "type": "integer"
           },
           "warnings": {
             "items": {
@@ -30184,8 +30498,8 @@
         },
         "required": [
           "symbol",
-          "from_date",
-          "to_date",
+          "from_ms_utc",
+          "to_ms_utc",
           "bin_width_pct",
           "span_pct",
           "adjustment"
@@ -30195,7 +30509,7 @@
       },
       "ReturnDistributionRequest": {
         "additionalProperties": false,
-        "description": "One study request: minute bars for ``symbol`` over a calendar window.\n\nDeliberately standalone rather than a ``TickerRequest`` subclass: the\nstudy always reads 1-minute extended-session bars from the lake, so the\nsampling block (``timespan``/``multiplier``/``session``) of the bar\nfamily does not apply and accepting it would promise a knob that does\nnot exist.",
+        "description": "One study request: minute bars for ``symbol`` over a numeric window.\n\nDeliberately standalone rather than a ``TickerRequest`` subclass: the\nstudy always reads 1-minute extended-session bars from the lake, so the\nsampling block (``timespan``/``multiplier``/``session``) of the bar\nfamily does not apply and accepting it would promise a knob that does\nnot exist. The window travels as int64 ms UTC instants and resolves to\ninclusive UTC calendar dates inside Python (the Data Lab window\nconvention: start anchors the UTC midnight of the first trading date,\nend the final instant of the last \u2014 ``resolve_request_dates`` is the\nshared conversion authority).",
         "properties": {
           "bin_width_pct": {
             "default": 0.5,
@@ -30204,10 +30518,11 @@
             "title": "Bin Width Pct",
             "type": "number"
           },
-          "from_date": {
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "title": "From Date",
-            "type": "string"
+          "from_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms Utc",
+            "type": "integer"
           },
           "span_pct": {
             "default": 5.0,
@@ -30222,16 +30537,17 @@
             "title": "Symbol",
             "type": "string"
           },
-          "to_date": {
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "title": "To Date",
-            "type": "string"
+          "to_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "To Ms Utc",
+            "type": "integer"
           }
         },
         "required": [
           "symbol",
-          "from_date",
-          "to_date"
+          "from_ms_utc",
+          "to_ms_utc"
         ],
         "title": "ReturnDistributionRequest",
         "type": "object"
@@ -57581,7 +57897,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ChartDataResponse"
+                }
               }
             },
             "description": "Successful Response"

@@ -9643,16 +9643,21 @@ export interface components {
         /**
          * CaptureReceiptModel
          * @description What the on-demand lake capture did for this request.
+         *
+         *     ``status`` is the closed contract of
+         *     ``app.services.return_distribution_service.CaptureStatus``; clients
+         *     must render every state (the generated union type enforces it).
          */
         CaptureReceiptModel: {
-            /** Attempted */
-            attempted: boolean;
             /** Detail */
             detail?: string | null;
             /** Fetched Artifact Count */
             fetched_artifact_count: number;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_attempted" | "skipped" | "complete" | "partial" | "failed";
         };
         /**
          * ChannelHealth
@@ -9740,6 +9745,43 @@ export interface components {
             volume: number;
         };
         /**
+         * ChartDataBar
+         * @description One resampled OHLCV bar of the /api/chart/data success payload.
+         */
+        ChartDataBar: {
+            /** C */
+            c?: number | null;
+            /** H */
+            h?: number | null;
+            /** L */
+            l?: number | null;
+            /**
+             * O
+             * @description Open; null when the source row was absent
+             */
+            o: number | null;
+            /**
+             * Session
+             * @description Present only on bars the resampler tagged
+             */
+            session?: string | null;
+            /**
+             * Synthetic
+             * @description True only on gap-filled synthetic bars
+             */
+            synthetic?: boolean | null;
+            /**
+             * T
+             * @description Bar timestamp as int64 ms UTC
+             */
+            t: number;
+            /**
+             * V
+             * @default 0
+             */
+            v?: number;
+        };
+        /**
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          *
@@ -9817,6 +9859,41 @@ export interface components {
             to_date: string;
         };
         /**
+         * ChartDataResponse
+         * @description Success payload of POST /api/chart/data.
+         *
+         *     The route's handler computes a plain dict; declaring it as the
+         *     ``response_model`` publishes the contract (ADR 0031 generated OpenAPI
+         *     types) and pins the bar keys (``t``/``o``/``h``/``l``/``c``/``v``) the
+         *     Data Lab charts already consume, so no client invents a transport
+         *     mirror. Error responses are typed ``detail`` payloads raised as
+         *     HTTPException and are therefore not part of this model.
+         */
+        ChartDataResponse: {
+            /** Allowed Timeframes */
+            allowed_timeframes: string[];
+            /**
+             * Bar Sources
+             * @description Per-source ingest receipts; present only when the lake is in the read path
+             */
+            bar_sources?: Record<string, never> | null;
+            /** Bars */
+            bars: components["schemas"]["ChartDataBar"][];
+            /** Estimated Bars Per Timeframe */
+            estimated_bars_per_timeframe: {
+                [key: string]: number;
+            };
+            /** Indicators */
+            indicators?: components["schemas"]["ChartIndicatorResult"][];
+            /** Meta */
+            meta: {
+                [key: string]: boolean;
+            };
+            quality: components["schemas"]["ChartQualityReport"];
+            /** Recommended Timeframe */
+            recommended_timeframe: string;
+        };
+        /**
          * ChartFillMarker
          * @description One fill marker for a chart pane (§8, §10).
          *
@@ -9839,6 +9916,17 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+        };
+        /** ChartGapDetail */
+        ChartGapDetail: {
+            /** After Ts */
+            after_ts: number;
+            /** Before Ts */
+            before_ts: number;
+            /** Classification */
+            classification: string;
+            /** Duration Minutes */
+            duration_minutes: number;
         };
         /**
          * ChartHistoryResponse
@@ -10012,6 +10100,38 @@ export interface components {
              * @constant
              */
             source: "polygon";
+        };
+        /**
+         * ChartQualityReport
+         * @description Resample-quality receipt mirroring chart_service.QualityReport.
+         */
+        ChartQualityReport: {
+            /** Duplicates Removed */
+            duplicates_removed: number;
+            /** Flat Bars Detected */
+            flat_bars_detected: number;
+            /** Gap Details */
+            gap_details?: components["schemas"]["ChartGapDetail"][];
+            /** Gaps Found */
+            gaps_found: number;
+            /** Largest Gap Minutes */
+            largest_gap_minutes: number;
+            /** Missing Session Dates */
+            missing_session_dates?: string[];
+            /** Missing Sessions */
+            missing_sessions: number;
+            /** Ohlc Violations Detected */
+            ohlc_violations_detected: number;
+            /** Out Of Order Fixed */
+            out_of_order_fixed: number;
+            /** Raw Bar Count */
+            raw_bar_count: number;
+            /** Resampled Bar Count */
+            resampled_bar_count: number;
+            /** Session Coverage Pct */
+            session_coverage_pct: number;
+            /** Synthetic Bars */
+            synthetic_bars: number;
         };
         /**
          * ChartRangePreset
@@ -12206,12 +12326,23 @@ export interface components {
             /** Jobid */
             jobId: string;
         };
-        /** DayReturnsModel */
+        /**
+         * DayReturnsModel
+         * @description One day's returns plus ``bin_indices``: this day's histogram bin per
+         *     return kind (index into that kind's ``bins`` list, edge bins included),
+         *     stamped by the same membership function the counts were tallied with.
+         *     Consumers select a basket's days by identity — they never re-derive
+         *     membership. ``None`` when that kind's value is undefined for the day.
+         */
         DayReturnsModel: {
             /** After Hours Pct */
             after_hours_pct: number | null;
             /** Afternoon Pct */
             afternoon_pct: number | null;
+            /** Bin Indices */
+            bin_indices: {
+                [key: string]: number | null;
+            };
             /** Close To Close Pct */
             close_to_close_pct: number | null;
             /** Morning Pct */
@@ -12500,23 +12631,27 @@ export interface components {
             left: components["schemas"]["IndicatorRef"];
             right: components["schemas"]["IndicatorRef"];
         };
-        /** DistributionStatsModel */
+        /**
+         * DistributionStatsModel
+         * @description ``None`` stats are undefined for the sample (n too small, or zero
+         *     variance for the standardized moments) — not zero.
+         */
         DistributionStatsModel: {
             /** Annualized Vol Pct */
-            annualized_vol_pct: number;
+            annualized_vol_pct: number | null;
             best_day: components["schemas"]["ExtremeDayModel"];
             /** Cvar 95 Pct */
             cvar_95_pct: number;
             /** Excess Kurtosis */
-            excess_kurtosis: number;
+            excess_kurtosis: number | null;
             /** Mean Pct */
             mean_pct: number;
             /** N Days */
             n_days: number;
             /** Skewness */
-            skewness: number;
+            skewness: number | null;
             /** Std Pct */
-            std_pct: number;
+            std_pct: number | null;
             /** Var 95 Pct */
             var_95_pct: number;
             worst_day: components["schemas"]["ExtremeDayModel"];
@@ -19977,8 +20112,8 @@ export interface components {
             /** Bin Width Pct */
             bin_width_pct: number;
             capture?: components["schemas"]["CaptureReceiptModel"] | null;
-            /** From Date */
-            from_date: string;
+            /** From Ms Utc */
+            from_ms_utc: number;
             /**
              * Resolution
              * @default 1m
@@ -19989,20 +20124,24 @@ export interface components {
             span_pct: number;
             /** Symbol */
             symbol: string;
-            /** To Date */
-            to_date: string;
+            /** To Ms Utc */
+            to_ms_utc: number;
             /** Warnings */
             warnings?: string[];
         };
         /**
          * ReturnDistributionRequest
-         * @description One study request: minute bars for ``symbol`` over a calendar window.
+         * @description One study request: minute bars for ``symbol`` over a numeric window.
          *
          *     Deliberately standalone rather than a ``TickerRequest`` subclass: the
          *     study always reads 1-minute extended-session bars from the lake, so the
          *     sampling block (``timespan``/``multiplier``/``session``) of the bar
          *     family does not apply and accepting it would promise a knob that does
-         *     not exist.
+         *     not exist. The window travels as int64 ms UTC instants and resolves to
+         *     inclusive UTC calendar dates inside Python (the Data Lab window
+         *     convention: start anchors the UTC midnight of the first trading date,
+         *     end the final instant of the last — ``resolve_request_dates`` is the
+         *     shared conversion authority).
          */
         ReturnDistributionRequest: {
             /**
@@ -20010,8 +20149,8 @@ export interface components {
              * @default 0.5
              */
             bin_width_pct?: number;
-            /** From Date */
-            from_date: string;
+            /** From Ms Utc */
+            from_ms_utc: number;
             /**
              * Span Pct
              * @default 5
@@ -20019,8 +20158,8 @@ export interface components {
             span_pct?: number;
             /** Symbol */
             symbol: string;
-            /** To Date */
-            to_date: string;
+            /** To Ms Utc */
+            to_ms_utc: number;
         };
         /** ReturnDistributionResponse */
         ReturnDistributionResponse: {
@@ -32448,7 +32587,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ChartDataResponse"];
                 };
             };
             /** @description Validation Error */

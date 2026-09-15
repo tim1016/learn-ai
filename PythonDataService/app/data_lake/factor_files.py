@@ -40,10 +40,13 @@ capture, the build fails loudly rather than emitting a poison row.
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Mapping
-from datetime import date
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 
+from app.data_lake.path_policy import LeanFactorFilePath
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
 
 _FACTOR_QUANTUM = Decimal("0.0000000001")
@@ -173,3 +176,88 @@ def _fmt_factor(x: Decimal) -> str:
 def _fmt_price(x: Decimal) -> str:
     """Reference price in fixed (non-scientific) notation."""
     return format(x.normalize(), "f")
+
+
+# ---------------------------------------------------------------------------
+# Read side: parsing the CSV and resolving the LEAN as-of lookup
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FactorRow:
+    """One LEAN factor-file row: factors in effect for data up to ``row_date``.
+
+    A row dated D covers data ≤ D back to the previous row's date (the
+    builder dates each row at the last completed session *before* the
+    corporate action's ex-date, so the event lands on D's successor).
+    """
+
+    row_date: date
+    price_factor: Decimal
+    split_factor: Decimal
+
+
+def parse_factor_file(text: str) -> list[FactorRow]:
+    """Parse a LEAN factor-file CSV body (``date,price_factor,split_factor,
+    reference_price``, no header) into rows sorted ascending by date.
+
+    Malformed rows raise ``ValueError`` — a factor file this repo's own
+    writers produced is trusted input, but a hand-edited or truncated one
+    must fail loudly rather than silently mis-adjust a two-year series.
+    """
+    rows: list[FactorRow] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(",")
+        if len(parts) != 4:
+            raise ValueError(f"factor file row does not have 4 columns: {line!r}")
+        raw_date, raw_price_factor, raw_split_factor, _reference = parts
+        try:
+            row_date = datetime.strptime(raw_date, "%Y%m%d").date()
+            price_factor = Decimal(raw_price_factor)
+            split_factor = Decimal(raw_split_factor)
+        except ValueError as exc:
+            raise ValueError(f"malformed factor file row {line!r}: {exc}") from exc
+        rows.append(
+            FactorRow(
+                row_date=row_date,
+                price_factor=price_factor,
+                split_factor=split_factor,
+            )
+        )
+    rows.sort(key=lambda r: r.row_date)
+    return rows
+
+
+def factor_multiplier_as_of(rows: Sequence[FactorRow], d: date) -> Decimal:
+    """The cumulative adjustment multiplier ``price_factor · split_factor``
+    in effect for data dated ``d``, per LEAN's own application.
+
+    LEAN's ``CorporateFactorProvider.GetScalingFactors`` (QuantConnect/Lean,
+    ``Common/Data/Auxiliary/CorporateFactorProvider.cs``) walks the factor
+    file newest-to-oldest and keeps the last row whose date is ≥ the search
+    date — i.e. the **earliest row dated on or after** ``d`` wins, and a
+    search date newer than every row resolves to the identity. Because a
+    row dated D covers data ≤ D, this lookup returns that row for every bar
+    in ``(previous_row_date, D]``; data before the first row uses the first
+    row's factors (the file's factors are cumulative from file start).
+
+    An empty file is the identity multiplier — the honest reading of "no
+    corporate actions in the capture window".
+    """
+    if not rows:
+        return Decimal(1)
+    idx = bisect_left([r.row_date for r in rows], d)
+    if idx >= len(rows):
+        return Decimal(1)
+    row = rows[idx]
+    return row.price_factor * row.split_factor
+
+
+def read_factor_rows(lake_root: Path, *, market: str, symbol: str) -> list[FactorRow]:
+    """Read a symbol's factor file from a lake root; ``[]`` when none exists."""
+    factor_path = lake_root.joinpath(*LeanFactorFilePath(market=market, symbol=symbol).relative_path().parts)
+    if not factor_path.exists():
+        return []
+    return parse_factor_file(factor_path.read_text(encoding="ascii"))

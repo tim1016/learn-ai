@@ -37,17 +37,9 @@ interface DayView {
   segments: readonly SegmentView[];
 }
 
-/** The bin membership rule, restated for day filtering: left edge v < −span,
- * right edge v ≥ +span, inner [lo, hi). Mirrors the Python module's rule —
- * the days list itself always comes from the response, this only *selects*
- * which of Python's numbers to display for the clicked basket. */
-function inBin(value: number | null, bin: HistogramBin): boolean {
-  if (value === null) return false;
-  if (bin.lowerPct === null) return value < (bin.upperPct ?? Number.POSITIVE_INFINITY);
-  if (bin.upperPct === null) return value >= bin.lowerPct;
-  return value >= bin.lowerPct && value < bin.upperPct;
-}
-
+/** Field routing for display only: which Python-computed percentage the
+ * active return kind labels. Bin *membership* is never derived here — the
+ * days are selected by Python's stamped ``binIndices``. */
 function valueForKind(day: DayReturns, kind: ReturnKind): number | null {
   if (kind === 'close_to_close') return day.closeToClosePct;
   if (kind === 'session') return day.sessionPct;
@@ -55,11 +47,12 @@ function valueForKind(day: DayReturns, kind: ReturnKind): number | null {
 }
 
 /**
- * The clicked basket, opened up: every date that landed in it, each with the
- * full 24-hour session breakdown (overnight gap, pre-market, morning,
- * afternoon, after-hours). Segment bars are center-split: red grows left,
- * green grows right, width proportional to |segment| against the widest
- * segment shown. Clicking a date emits its session anchor for the candle pane.
+ * The clicked basket, opened up: every date Python stamped into it, each
+ * with the full 24-hour session breakdown (overnight gap, pre-market,
+ * morning, afternoon, after-hours). Segment bars are center-split: red
+ * grows left, green grows right, width proportional to |segment| against
+ * the widest segment shown. Clicking a date emits its session anchor for
+ * the candle pane.
  */
 @Component({
   selector: 'app-bin-drill-down',
@@ -72,6 +65,10 @@ export class BinDrillDownComponent {
   readonly days = input.required<readonly DayReturns[]>();
   readonly bin = input.required<HistogramBin>();
   readonly kind = input.required<ReturnKind>();
+  /** The clicked bin's index in the kind's bins array — matched against
+   * each day's Python-stamped ``binIndices`` so the drill-down day list is
+   * the histogram count's own membership, not a client re-derivation. */
+  readonly binIndex = input.required<number>();
   readonly daySelected = output<number>();
 
   readonly segmentLegend = SEGMENTS;
@@ -84,8 +81,9 @@ export class BinDrillDownComponent {
   });
 
   readonly basketDays = computed<readonly DayView[]>(() => {
-    const bin = this.bin();
-    const members = this.days().filter((d) => inBin(valueForKind(d, this.kind()), bin));
+    const index = this.binIndex();
+    const kind = this.kind();
+    const members = this.days().filter((d) => d.binIndices[kind] === index);
     const scale = Math.max(
       0.0001,
       ...members.flatMap((d) =>
@@ -96,7 +94,7 @@ export class BinDrillDownComponent {
       .map((d) => ({
         etDate: etIsoDate(d.sessionOpenMsUtc),
         sessionOpenMsUtc: d.sessionOpenMsUtc,
-        dayPct: valueForKind(d, this.kind()),
+        dayPct: valueForKind(d, kind),
         volume: d.volume,
         segments: SEGMENTS.map(({ key, label, hint }) => {
           const valuePct = d[key] as number | null;

@@ -19,6 +19,7 @@ const DAYS: DayReturns[] = [
     afternoonPct: 0.12,
     afterHoursPct: null,
     volume: 4_500_000,
+    binIndices: { close_to_close: 0, session: 0, overnight: 1 },
   },
   {
     sessionOpenMsUtc: DAY_MS(3),
@@ -30,10 +31,11 @@ const DAYS: DayReturns[] = [
     afternoonPct: 0.15,
     afterHoursPct: 0.01,
     volume: 3_000_000,
+    binIndices: { close_to_close: 0, session: 0, overnight: 0 },
   },
   {
     sessionOpenMsUtc: DAY_MS(5),
-    closeToClosePct: 1.2, // outside the [0, 0.5) basket
+    closeToClosePct: 1.2, // Python stamped it into a different basket
     sessionPct: 1.0,
     overnightPct: 0.2,
     preMarketPct: null,
@@ -41,15 +43,16 @@ const DAYS: DayReturns[] = [
     afternoonPct: 0.5,
     afterHoursPct: null,
     volume: 9_000_000,
+    binIndices: { close_to_close: 3, session: 2, overnight: 1 },
   },
 ];
 
 const BIN = { lowerPct: 0, upperPct: 0.5, count: 2, isEdge: false };
 
 describe('BinDrillDownComponent', () => {
-  it('lists only the days inside the basket, with the full segment breakdown', async () => {
+  it('lists exactly the days Python stamped into the basket, with the full segment breakdown', async () => {
     await render(BinDrillDownComponent, {
-      componentInputs: { days: DAYS, bin: BIN, kind: 'close_to_close' },
+      componentInputs: { days: DAYS, bin: BIN, kind: 'close_to_close', binIndex: 0 },
     });
 
     expect(screen.getByText('Basket 0.0% to 0.5% — 2 day(s)')).toBeTruthy();
@@ -64,10 +67,20 @@ describe('BinDrillDownComponent', () => {
     expect(screen.getByText(/4,500,000 shares/)).toBeTruthy();
   });
 
+  it('selects by the stamped bin identity per kind — the same basket index under another kind swaps the list', async () => {
+    await render(BinDrillDownComponent, {
+      componentInputs: { days: DAYS, bin: BIN, kind: 'overnight', binIndex: 1 },
+    });
+
+    // All three days carry overnight bin 1 in this fixture.
+    expect(screen.getByText('Basket 0.0% to 0.5% — 2 day(s)')).toBeTruthy();
+    expect(screen.getByText('2024-07-05')).toBeTruthy();
+  });
+
   it('emits the clicked day’s session anchor for the candle pane', async () => {
     const daySelected = vi.fn();
     const { fixture } = await render(BinDrillDownComponent, {
-      componentInputs: { days: DAYS, bin: BIN, kind: 'close_to_close' },
+      componentInputs: { days: DAYS, bin: BIN, kind: 'close_to_close', binIndex: 0 },
     });
     fixture.componentInstance.daySelected.subscribe(daySelected);
 

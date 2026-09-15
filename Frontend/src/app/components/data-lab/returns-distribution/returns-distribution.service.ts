@@ -9,13 +9,18 @@ import { environment } from '../../../../environments/environment';
 type ReturnDistributionResponseDto = components['schemas']['ReturnDistributionResponse'];
 type ReturnDistributionRequestDto = components['schemas']['ReturnDistributionRequest'];
 type ChartDataRequestDto = components['schemas']['ChartDataRequest'];
+type ChartDataResponseDto = components['schemas']['ChartDataResponse'];
 
 export type ReturnKind = 'close_to_close' | 'session' | 'overnight';
 
+/** The closed capture-status contract from the Python service — every state
+ * must be renderable (the component maps them exhaustively). */
+export type CaptureStatus = 'not_attempted' | 'skipped' | 'complete' | 'partial' | 'failed';
+
 export interface StudyQuery {
   symbol: string;
-  fromDate: string;
-  toDate: string;
+  fromMsUtc: number;
+  toMsUtc: number;
   binWidthPct: number;
   spanPct: number;
 }
@@ -35,10 +40,10 @@ export interface ExtremeDay {
 export interface DistStats {
   nDays: number;
   meanPct: number;
-  stdPct: number;
-  annualizedVolPct: number;
-  skewness: number;
-  excessKurtosis: number;
+  stdPct: number | null;
+  annualizedVolPct: number | null;
+  skewness: number | null;
+  excessKurtosis: number | null;
   var95Pct: number;
   cvar95Pct: number;
   bestDay: ExtremeDay;
@@ -52,6 +57,10 @@ export interface KindDistribution {
   stats: DistStats;
 }
 
+/** Python's per-kind bin identity for one day, stamped by the same
+ * membership function that tallied the histogram — selection only. */
+export type BinIndices = Readonly<Record<ReturnKind, number | null>>;
+
 export interface DayReturns {
   sessionOpenMsUtc: number;
   closeToClosePct: number | null;
@@ -62,6 +71,7 @@ export interface DayReturns {
   afternoonPct: number | null;
   afterHoursPct: number | null;
   volume: number;
+  binIndices: BinIndices;
 }
 
 export interface StudyCoverage {
@@ -74,8 +84,7 @@ export interface StudyCoverage {
 }
 
 export interface CaptureReceipt {
-  attempted: boolean;
-  status: string;
+  status: CaptureStatus;
   fetchedArtifactCount: number;
   detail: string | null;
 }
@@ -89,15 +98,6 @@ export interface ReturnDistributionStudy {
   days: readonly DayReturns[];
 }
 
-interface MinuteBarDto {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
 /** The explicit boundary adapter: the wire DTO is Python's snake_case; the
  * page's model is camelCase. Mapping only — every number arrives computed. */
 function toStudy(dto: ReturnDistributionResponseDto): ReturnDistributionStudy {
@@ -106,7 +106,6 @@ function toStudy(dto: ReturnDistributionResponseDto): ReturnDistributionStudy {
     warnings: dto.meta.warnings ?? [],
     capture: dto.meta.capture
       ? {
-          attempted: dto.meta.capture.attempted,
           status: dto.meta.capture.status,
           fetchedArtifactCount: dto.meta.capture.fetched_artifact_count,
           detail: dto.meta.capture.detail ?? null,
@@ -158,14 +157,21 @@ function toStudy(dto: ReturnDistributionResponseDto): ReturnDistributionStudy {
       afternoonPct: d.afternoon_pct,
       afterHoursPct: d.after_hours_pct,
       volume: d.volume,
+      binIndices: {
+        close_to_close: d.bin_indices['close_to_close'] ?? null,
+        session: d.bin_indices['session'] ?? null,
+        overnight: d.bin_indices['overnight'] ?? null,
+      },
     })),
   };
 }
 
 /**
  * Return-distribution study reads over FastAPI (ADR 0031 direct boundary).
- * Python authors every number — bins, stats, overlay, segments; this service
- * owns only the wire-to-model adapter and the day-candles side read.
+ * Python authors every number — bins, stats, overlay, segments, bin
+ * membership — and the window travels as int64 ms UTC exactly as the
+ * workspace committed it; this service owns only the wire-to-model adapter
+ * and the day-candles side read.
  */
 @Injectable({ providedIn: 'root' })
 export class ReturnsDistributionService {
@@ -176,8 +182,8 @@ export class ReturnsDistributionService {
   distribution(query: StudyQuery): Observable<ReturnDistributionStudy> {
     const body: ReturnDistributionRequestDto = {
       symbol: query.symbol,
-      from_date: query.fromDate,
-      to_date: query.toDate,
+      from_ms_utc: query.fromMsUtc,
+      to_ms_utc: query.toMsUtc,
       bin_width_pct: query.binWidthPct,
       span_pct: query.spanPct,
     };
@@ -186,12 +192,8 @@ export class ReturnsDistributionService {
       .pipe(map(toStudy));
   }
 
-  /** One trading day's extended-session minute candles for the drill-down.
-   *
-   * The generated contract types `/api/chart/data`'s 200 body as `unknown`
-   * (the route declares no response model), so this refines it to the six
-   * keys both the lake and provider paths guarantee — the same bar contract
-   * `data-lab-chart` consumes. */
+  /** One trading day's extended-session minute candles for the drill-down,
+   * typed by the generated `/api/chart/data` response contract. */
   minuteCandles(ticker: string, isoDate: string): Observable<StockAggregate[]> {
     const body: ChartDataRequestDto = {
       ticker,
@@ -203,18 +205,18 @@ export class ReturnsDistributionService {
       forward_fill: false,
       indicators: [],
     };
-    return this.http.post<{ bars: MinuteBarDto[] }>(this.chartBase, body).pipe(
+    return this.http.post<ChartDataResponseDto>(this.chartBase, body).pipe(
       map((response) =>
         response.bars.map((bar) => ({
           id: 0,
           tickerId: 0,
-          open: bar.open,
-          high: bar.high,
-          low: bar.low,
-          close: bar.close,
-          volume: bar.volume,
+          open: bar.o ?? 0,
+          high: bar.h ?? 0,
+          low: bar.l ?? 0,
+          close: bar.c ?? 0,
+          volume: bar.v ?? 0,
           volumeWeightedAveragePrice: null,
-          timestamp: bar.timestamp,
+          timestamp: bar.t,
           timespan: 'minute',
           multiplier: 1,
           transactionCount: null,

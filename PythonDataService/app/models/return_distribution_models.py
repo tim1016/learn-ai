@@ -1,49 +1,52 @@
 """Request/response models for the return-distribution study.
 
 Wire conventions: snake_case fields; every temporal value is ``int64 ms
-UTC`` anchored at the session's scheduled open (the lake's trading-date
-wire convention); percentages are simple returns in percent units, never
-fractions; ``None`` means "this segment genuinely produced no data", not
-zero.
+UTC`` (window boundaries resolve to inclusive UTC calendar dates inside
+Python, through the same authority the chart endpoint uses — there is no
+date-string type on this wire); percentages are simple returns in percent
+units, never fractions; ``None`` means "this value is genuinely undefined"
+(missing segment, or a statistic whose estimator needs a larger sample),
+never zero.
 """
 
 from __future__ import annotations
 
-from datetime import date as Date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.ticker_request import DATE_PATTERN
+from app.research.return_distribution import RETURN_KINDS
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+CaptureStatus = Literal["not_attempted", "skipped", "complete", "partial", "failed"]
 
 
 class ReturnDistributionRequest(BaseModel):
-    """One study request: minute bars for ``symbol`` over a calendar window.
+    """One study request: minute bars for ``symbol`` over a numeric window.
 
     Deliberately standalone rather than a ``TickerRequest`` subclass: the
     study always reads 1-minute extended-session bars from the lake, so the
     sampling block (``timespan``/``multiplier``/``session``) of the bar
     family does not apply and accepting it would promise a knob that does
-    not exist.
+    not exist. The window travels as int64 ms UTC instants and resolves to
+    inclusive UTC calendar dates inside Python (the Data Lab window
+    convention: start anchors the UTC midnight of the first trading date,
+    end the final instant of the last — ``resolve_request_dates`` is the
+    shared conversion authority).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     symbol: str = Field(..., min_length=1, max_length=20)
-    from_date: str = Field(..., pattern=DATE_PATTERN)
-    to_date: str = Field(..., pattern=DATE_PATTERN)
+    from_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
+    to_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
     bin_width_pct: float = Field(default=0.5, gt=0.0, le=2.0)
     span_pct: float = Field(default=5.0, gt=0.0, le=20.0)
 
     @model_validator(mode="after")
-    def _validate_dates(self) -> ReturnDistributionRequest:
-        try:
-            f = Date.fromisoformat(self.from_date)
-            t = Date.fromisoformat(self.to_date)
-        except ValueError as e:
-            raise ValueError(f"invalid calendar date: {e}") from e
-        if t < f:
-            raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")
+    def _validate_window(self) -> ReturnDistributionRequest:
+        if self.to_ms_utc < self.from_ms_utc:
+            raise ValueError(f"to_ms_utc ({self.to_ms_utc}) must be >= from_ms_utc ({self.from_ms_utc})")
         return self
 
 
@@ -62,12 +65,15 @@ class ExtremeDayModel(BaseModel):
 
 
 class DistributionStatsModel(BaseModel):
+    """``None`` stats are undefined for the sample (n too small, or zero
+    variance for the standardized moments) — not zero."""
+
     n_days: int
     mean_pct: float
-    std_pct: float
-    annualized_vol_pct: float
-    skewness: float
-    excess_kurtosis: float
+    std_pct: float | None
+    annualized_vol_pct: float | None
+    skewness: float | None
+    excess_kurtosis: float | None
     var_95_pct: float
     cvar_95_pct: float
     best_day: ExtremeDayModel
@@ -89,6 +95,12 @@ class KindDistributionModel(BaseModel):
 
 
 class DayReturnsModel(BaseModel):
+    """One day's returns plus ``bin_indices``: this day's histogram bin per
+    return kind (index into that kind's ``bins`` list, edge bins included),
+    stamped by the same membership function the counts were tallied with.
+    Consumers select a basket's days by identity — they never re-derive
+    membership. ``None`` when that kind's value is undefined for the day."""
+
     session_open_ms_utc: int
     close_to_close_pct: float | None
     session_pct: float | None
@@ -98,21 +110,26 @@ class DayReturnsModel(BaseModel):
     afternoon_pct: float | None
     after_hours_pct: float | None
     volume: int
+    bin_indices: dict[str, int | None]
 
 
 class CaptureReceiptModel(BaseModel):
-    """What the on-demand lake capture did for this request."""
+    """What the on-demand lake capture did for this request.
 
-    attempted: bool
-    status: str
+    ``status`` is the closed contract of
+    ``app.services.return_distribution_service.CaptureStatus``; clients
+    must render every state (the generated union type enforces it).
+    """
+
+    status: CaptureStatus
     fetched_artifact_count: int
     detail: str | None = None
 
 
 class ReturnDistributionMeta(BaseModel):
     symbol: str
-    from_date: str
-    to_date: str
+    from_ms_utc: int
+    to_ms_utc: int
     resolution: Literal["1m"] = "1m"
     bin_width_pct: float
     span_pct: float
@@ -188,6 +205,7 @@ class ReturnDistributionResponse(BaseModel):
                     afternoon_pct=d.afternoon_pct,
                     after_hours_pct=d.after_hours_pct,
                     volume=d.volume,
+                    bin_indices=dict(zip(RETURN_KINDS, d.bin_indices, strict=True)),
                 )
                 for d in result.days
             ],

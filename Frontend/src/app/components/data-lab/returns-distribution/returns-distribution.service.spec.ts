@@ -9,19 +9,20 @@ import { ReturnsDistributionService } from './returns-distribution.service';
 
 const BASE = `${environment.pythonServiceUrl}/api/research/return-distribution`;
 const CHART_BASE = `${environment.pythonServiceUrl}/api/chart/data`;
+const FROM_MS = Date.UTC(2024, 6, 1);
+const TO_MS = Date.UTC(2025, 5, 30, 23, 59, 59, 999);
 
 /** One complete snake_case response, small enough to verify every mapping. */
 const RESPONSE_DTO = {
   meta: {
     symbol: 'SPY',
-    from_date: '2024-07-01',
-    to_date: '2025-06-30',
+    from_ms_utc: FROM_MS,
+    to_ms_utc: TO_MS,
     resolution: '1m',
     bin_width_pct: 0.5,
     span_pct: 5,
     adjustment: 'split_and_dividend',
     capture: {
-      attempted: true,
       status: 'complete',
       fetched_artifact_count: 42,
       detail: null,
@@ -69,6 +70,7 @@ const RESPONSE_DTO = {
       afternoon_pct: 0.12,
       after_hours_pct: null,
       volume: 4_500_000,
+      bin_indices: { close_to_close: 1, session: 1, overnight: null },
     },
   ],
 };
@@ -85,12 +87,12 @@ describe('ReturnsDistributionService', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  it('posts the study request as declared and maps the response to camelCase', async () => {
+  it('posts the numeric ms window verbatim and maps the response to camelCase', async () => {
     const pending = firstValueFrom(
       service.distribution({
         symbol: 'SPY',
-        fromDate: '2024-07-01',
-        toDate: '2025-06-30',
+        fromMsUtc: FROM_MS,
+        toMsUtc: TO_MS,
         binWidthPct: 0.5,
         spanPct: 5,
       }),
@@ -100,8 +102,8 @@ describe('ReturnsDistributionService', () => {
     expect(request.request.method).toBe('POST');
     expect(request.request.body).toEqual({
       symbol: 'SPY',
-      from_date: '2024-07-01',
-      to_date: '2025-06-30',
+      from_ms_utc: FROM_MS,
+      to_ms_utc: TO_MS,
       bin_width_pct: 0.5,
       span_pct: 5,
     });
@@ -111,7 +113,6 @@ describe('ReturnsDistributionService', () => {
     expect(study.adjustment).toBe('split_and_dividend');
     expect(study.warnings).toHaveLength(1);
     expect(study.capture).toEqual({
-      attempted: true,
       status: 'complete',
       fetchedArtifactCount: 42,
       detail: null,
@@ -131,9 +132,33 @@ describe('ReturnsDistributionService', () => {
     expect(day.preMarketPct).toBeCloseTo(0.02, 10);
     expect(day.afterHoursPct).toBeNull();
     expect(day.volume).toBe(4_500_000);
+    expect(day.binIndices).toEqual({ close_to_close: 1, session: 1, overnight: null });
   });
 
-  it('requests a single-day extended 1m window for the candle pane and maps bars', async () => {
+  it('maps undefined stats to null — undefined is data, not zero', async () => {
+    const dto = {
+      ...RESPONSE_DTO,
+      kinds: RESPONSE_DTO.kinds.map((k) => ({
+        ...k,
+        stats: { ...k.stats, skewness: null, excess_kurtosis: null },
+      })),
+    };
+    const pending = firstValueFrom(
+      service.distribution({
+        symbol: 'SPY',
+        fromMsUtc: FROM_MS,
+        toMsUtc: TO_MS,
+        binWidthPct: 0.5,
+        spanPct: 5,
+      }),
+    );
+    http.expectOne(BASE).flush(dto);
+    const study = await pending;
+    expect(study.kinds[0]!.stats.skewness).toBeNull();
+    expect(study.kinds[0]!.stats.excessKurtosis).toBeNull();
+  });
+
+  it('requests a single-day extended 1m window for the candle pane and maps generated-contract bars', async () => {
     const pending = firstValueFrom(service.minuteCandles('SPY', '2024-07-02'));
 
     const request = http.expectOne(CHART_BASE);
@@ -148,15 +173,35 @@ describe('ReturnsDistributionService', () => {
       forward_fill: false,
       indicators: [],
     });
+    // The generated /api/chart/data contract: single-letter bar keys.
     request.flush({
-      bars: [
-        { timestamp: 1719907200000, open: 545.1, high: 545.2, low: 545.0, close: 545.15, volume: 1200 },
-      ],
+      bars: [{ t: 1719907200000, o: 545.1, h: 545.2, l: 545.0, c: 545.15, v: 1200 }],
+      indicators: [],
+      quality: {
+        raw_bar_count: 1,
+        duplicates_removed: 0,
+        gaps_found: 0,
+        largest_gap_minutes: 0,
+        missing_sessions: 0,
+        session_coverage_pct: 100,
+        synthetic_bars: 0,
+        resampled_bar_count: 1,
+        gap_details: [],
+        missing_session_dates: [],
+        flat_bars_detected: 0,
+        ohlc_violations_detected: 0,
+        out_of_order_fixed: 0,
+      },
+      allowed_timeframes: ['1m'],
+      estimated_bars_per_timeframe: { '1m': 1 },
+      recommended_timeframe: '1m',
+      meta: { cached_resample: false, cached_indicators: false },
     });
 
     const bars = await pending;
     expect(bars).toHaveLength(1);
     expect(bars[0]!.timestamp).toBe(1719907200000);
+    expect(bars[0]!.open).toBeCloseTo(545.1, 10);
     expect(bars[0]!.timespan).toBe('minute');
     expect(bars[0]!.volumeWeightedAveragePrice).toBeNull();
   });

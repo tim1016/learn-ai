@@ -9,9 +9,12 @@ import {
 import { rxResource } from '@angular/core/rxjs-interop';
 import { EMPTY } from 'rxjs';
 
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { etIsoDate } from '../../../shared/date/et-midnight';
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
 import {
+  CaptureStatus,
+  HistogramBin,
   ReturnDistributionStudy,
   ReturnKind,
   ReturnsDistributionService,
@@ -28,23 +31,54 @@ const KIND_LABELS: readonly { kind: ReturnKind; label: string; hint: string }[] 
 
 interface StudyRequest {
   ticker: string;
-  fromDate: string | null;
-  toDate: string | null;
+  startMsUtc: number | null;
+  endMsUtc: number | null;
   binWidthPct: number;
+}
+
+/** Exhaustive capture-status copy — one branch per member of the closed
+ * Python contract, so a new state fails to compile here rather than
+ * rendering as a stale "already up to date". */
+function captureLineFor(receipt: {
+  status: CaptureStatus;
+  fetchedArtifactCount: number;
+  detail: string | null;
+}): string | null {
+  switch (receipt.status) {
+    case 'not_attempted':
+      return null;
+    case 'skipped':
+      return null;
+    case 'complete':
+      return receipt.fetchedArtifactCount > 0
+        ? `This request populated the data lake with ${receipt.fetchedArtifactCount} artifact(s) first.`
+        : 'This request found the data lake already up to date.';
+    case 'partial':
+      return (
+        `This request captured ${receipt.fetchedArtifactCount} artifact(s), but the lake is still missing some ` +
+        `sessions — the study covers what was captured${receipt.detail ? ` (${receipt.detail})` : ''}.`
+      );
+    case 'failed':
+      return (
+        'This request could not populate the data lake' +
+        `${receipt.detail ? ` (${receipt.detail})` : ''} — it shows whatever the lake already held.`
+      );
+  }
 }
 
 /**
  * The Return Distribution study: a histogram of daily moves over the Data
  * Lab's committed ticker + window, populated entirely by Python (bins,
- * normal overlay, statistics, per-day session segments). Toggling the return
- * kind or clicking a basket is presentation-only; changing scope or bin
- * width refetches.
+ * normal overlay, statistics, per-day session segments, bin membership).
+ * Toggling the return kind or clicking a basket is presentation-only;
+ * changing scope or bin width refetches. The window travels to Python as
+ * the workspace's int64 ms UTC numbers — no client-side date math.
  */
 @Component({
   selector: 'app-returns-distribution',
   templateUrl: './returns-distribution.component.html',
   styleUrl: './returns-distribution.component.scss',
-  imports: [DecimalPipe, ReturnsHistogramChartComponent, BinDrillDownComponent, DayCandlesComponent],
+  imports: [DecimalPipe, AssetIdentityComponent, ReturnsHistogramChartComponent, BinDrillDownComponent, DayCandlesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ReturnsDistributionComponent {
@@ -59,30 +93,25 @@ export class ReturnsDistributionComponent {
 
   readonly ticker = computed(() => this.store.committedTicker());
 
-  /** The study window comes from the shared workspace scope: the committed
-   * window's UTC dates are the calendar window the study requests. */
-  readonly fromDate = computed(() => {
-    const window = this.store.committedWindow();
-    return window ? etIsoDate(window.startMsUtc) : null;
-  });
-  readonly toDate = computed(() => {
-    const window = this.store.committedWindow();
-    return window ? etIsoDate(window.endMsUtc) : null;
-  });
+  /** The study window is the shared workspace scope, passed through
+   * verbatim (half-open [start, end) ms UTC); Python resolves the
+   * inclusive calendar dates. */
+  readonly windowStartMs = computed(() => this.store.committedWindow()?.startMsUtc ?? null);
+  readonly windowEndMs = computed(() => this.store.committedWindow()?.endMsUtc ?? null);
 
   readonly study = rxResource<ReturnDistributionStudy, StudyRequest>({
     params: (): StudyRequest => ({
       ticker: this.ticker(),
-      fromDate: this.fromDate(),
-      toDate: this.toDate(),
+      startMsUtc: this.windowStartMs(),
+      endMsUtc: this.windowEndMs(),
       binWidthPct: this.binWidthPct(),
     }),
     stream: ({ params }) =>
-      params.ticker && params.fromDate && params.toDate
+      params.ticker && params.startMsUtc !== null && params.endMsUtc !== null
         ? this.service.distribution({
             symbol: params.ticker,
-            fromDate: params.fromDate,
-            toDate: params.toDate,
+            fromMsUtc: params.startMsUtc,
+            toMsUtc: params.endMsUtc,
             binWidthPct: params.binWidthPct,
             spanPct: 5,
           })
@@ -101,20 +130,20 @@ export class ReturnsDistributionComponent {
   /** One-line receipt of the on-demand lake capture, when one ran. */
   readonly captureLine = computed<string | null>(() => {
     const capture = this.study.value()?.capture;
-    if (!capture?.attempted) return null;
-    const count =
-      capture.fetchedArtifactCount > 0
-        ? `populated the data lake with ${capture.fetchedArtifactCount} artifact(s) first`
-        : 'found the data lake already up to date';
-    return `This request ${count}.`;
+    return capture ? captureLineFor(capture) : null;
   });
 
-  readonly selectedBin = computed(() => {
+  readonly selectedBinInfo = computed<{ bin: HistogramBin; index: number } | null>(() => {
     const dist = this.activeKindDistribution();
     const index = this.selectedBinIndex();
     if (!dist || index === null) return null;
-    return dist.bins[index] ?? null;
+    const bin = dist.bins[index];
+    return bin ? { bin, index } : null;
   });
+
+  private static fmt(value: number | null, digits: number, suffix = ''): string {
+    return value === null ? '—' : `${value.toFixed(digits)}${suffix}`;
+  }
 
   readonly statsRows = computed(() => {    const dist = this.activeKindDistribution();
     if (!dist) return [];
@@ -122,10 +151,10 @@ export class ReturnsDistributionComponent {
     return [
       { label: 'Days studied', value: String(s.nDays), hint: 'Sessions with usable data in the window' },
       { label: 'Average daily move', value: `${s.meanPct.toFixed(3)}%`, hint: 'Mean of the daily returns' },
-      { label: 'Daily volatility (σ)', value: `${s.stdPct.toFixed(3)}%`, hint: 'Sample standard deviation (ddof=1)' },
-      { label: 'Annualized vol', value: `${s.annualizedVolPct.toFixed(1)}%`, hint: 'σ × √252' },
-      { label: 'Skewness', value: s.skewness.toFixed(2), hint: 'Sign of the tail: negative = crash-prone' },
-      { label: 'Excess kurtosis', value: s.excessKurtosis.toFixed(2), hint: 'Fat tails: 0 = normal, higher = more wild days' },
+      { label: 'Daily volatility (σ)', value: ReturnsDistributionComponent.fmt(s.stdPct, 3, '%'), hint: 'Sample standard deviation (ddof=1)' },
+      { label: 'Annualized vol', value: ReturnsDistributionComponent.fmt(s.annualizedVolPct, 1, '%'), hint: 'σ × √252' },
+      { label: 'Skewness', value: ReturnsDistributionComponent.fmt(s.skewness, 2), hint: 'Sign of the tail: negative = crash-prone (undefined for flat series)' },
+      { label: 'Excess kurtosis', value: ReturnsDistributionComponent.fmt(s.excessKurtosis, 2), hint: 'Fat tails: 0 = normal, higher = more wild days (undefined for flat series)' },
       { label: 'VaR 95% (1 day)', value: `${s.var95Pct.toFixed(2)}%`, hint: 'On the worst 5% of days you lose at least this much' },
       { label: 'CVaR 95% (1 day)', value: `${s.cvar95Pct.toFixed(2)}%`, hint: 'Average loss across those worst 5% of days' },
       { label: 'Best day', value: `${s.bestDay.valuePct.toFixed(2)}%`, hint: etIsoDate(s.bestDay.sessionOpenMsUtc) },

@@ -39,8 +39,8 @@ async def run_return_distribution(
     try:
         outcome = await compute_return_distribution(
             symbol=request.symbol,
-            from_date=request.from_date,
-            to_date=request.to_date,
+            from_ms_utc=request.from_ms_utc,
+            to_ms_utc=request.to_ms_utc,
             bin_width_pct=request.bin_width_pct,
             span_pct=request.span_pct,
         )
@@ -85,13 +85,12 @@ async def run_return_distribution(
     )
     meta = ReturnDistributionMeta(
         symbol=request.symbol.upper(),
-        from_date=request.from_date,
-        to_date=request.to_date,
+        from_ms_utc=request.from_ms_utc,
+        to_ms_utc=request.to_ms_utc,
         bin_width_pct=request.bin_width_pct,
         span_pct=request.span_pct,
         adjustment=outcome.result.adjustment,
         capture=CaptureReceiptModel(
-            attempted=outcome.capture.attempted,
             status=outcome.capture.status,
             fetched_artifact_count=outcome.capture.fetched_artifact_count,
             detail=outcome.capture.detail,

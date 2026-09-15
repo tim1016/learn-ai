@@ -138,104 +138,53 @@ def test_extract_day_anchors_date_without_scheduled_session_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# factor files
+# factor adjustment (lookup lives in app/data_lake/factor_files.py — see
+# tests/data_lake/test_factor_files.py for the LEAN parity oracle)
 # ---------------------------------------------------------------------------
 
 
-def test_parse_factor_file_round_trip_and_sorting() -> None:
-    body = "20240703,0.98,1,100\n20240701,0.99,1,99\n20240830,1,1,105\n"
-    rows = rd.parse_factor_file(body)
-    assert [r.row_date for r in rows] == [date(2024, 7, 1), date(2024, 7, 3), date(2024, 8, 30)]
-    assert rows[0].price_factor == Decimal("0.99")
-
-
-def test_parse_factor_file_malformed_row_rejected() -> None:
-    with pytest.raises(ValueError, match="factor file row"):
-        rd.parse_factor_file("20240701,0.99\n")
-
-
-def test_factor_multiplier_as_of_uses_latest_row_not_after() -> None:
-    rows = [
-        rd.FactorRow(date(2024, 7, 1), Decimal("0.99"), Decimal(1)),
-        rd.FactorRow(date(2024, 7, 3), Decimal(1), Decimal(1)),
-    ]
-    # Before the first row: the first row's factors (LEAN application).
-    assert rd.factor_multiplier_as_of(rows, date(2024, 6, 30)) == Decimal("0.99")
-    # On and between row dates.
-    assert rd.factor_multiplier_as_of(rows, date(2024, 7, 1)) == Decimal("0.99")
-    assert rd.factor_multiplier_as_of(rows, date(2024, 7, 2)) == Decimal("0.99")
-    assert rd.factor_multiplier_as_of(rows, date(2024, 7, 3)) == Decimal(1)
-    assert rd.factor_multiplier_as_of(rows, date(2025, 1, 1)) == Decimal(1)
-    # Empty file: identity (no corporate actions in the capture window).
-    assert rd.factor_multiplier_as_of([], D1) == Decimal(1)
+def _flat_day(d: date, close: float) -> rd.DayAnchors:
+    return rd.DayAnchors(
+        trading_date=d,
+        session_open_ms_utc=_et_ms(d, 9, 30),
+        first_open=Decimal(str(close)),
+        rth_open=Decimal(str(close)),
+        noon_boundary_close=Decimal(str(close)),
+        rth_close=Decimal(str(close)),
+        last_close=Decimal(str(close)),
+        volume=1,
+        has_pre_market=False,
+        has_after_hours=False,
+    )
 
 
 def test_adjust_anchors_dividend_restores_total_return_across_ex_date() -> None:
-    # Raw closes: 100.0 on D1, 99.0 on D2 (a $1 ex-dividend drop), 100.0 on D5.
-    def day(d: date, close: float) -> rd.DayAnchors:
-        return rd.DayAnchors(
-            trading_date=d,
-            session_open_ms_utc=_et_ms(d, 9, 30),
-            first_open=Decimal(str(close)),
-            rth_open=Decimal(str(close)),
-            noon_boundary_close=Decimal(str(close)),
-            rth_close=Decimal(str(close)),
-            last_close=Decimal(str(close)),
-            volume=1,
-            has_pre_market=False,
-            has_after_hours=False,
-        )
-
-    anchors = [day(D1, 100.0), day(D2, 99.0), day(D5, 100.0)]
-
-    # Case 1 — rows dated D1 and D5: D2's as-of row is still D1's, so both
-    # sides of the D1→D2 return carry the same 0.99 multiplier and the raw
-    # −1% survives (this pins the as-of lookup, not the economics).
-    rows = [
-        rd.FactorRow(D1, Decimal("0.99"), Decimal(1)),
-        rd.FactorRow(D5, Decimal(1), Decimal(1)),
-    ]
+    # Raw closes: 100.0 on D1, 99.0 on D2 (a $1 ex-dividend drop on D2),
+    # 100.0 on D5. The factor row is dated D1 — the last completed session
+    # before the ex-date (LEAN's row convention) — so D1's data carries the
+    # 0.99 back-adjustment and D2 onward does not.
+    anchors = [_flat_day(D1, 100.0), _flat_day(D2, 99.0), _flat_day(D5, 100.0)]
+    rows = [rd.FactorRow(D1, Decimal("0.99"), Decimal(1))]
     adjusted = rd.adjust_anchors(anchors, rows)
     assert adjusted[0].rth_close == Decimal("99.00")
-    assert adjusted[1].rth_close == Decimal("98.01")
+    assert adjusted[1].rth_close == Decimal("99.0")
 
-    # Case 2 — the row dated D2 turns the factor over on D2 (LEAN: a row
-    # dated D covers data through D; D's successor uses the next row):
-    # D1 carries 0.99, D2 carries 1.0, so the −1% price drop is exactly the
-    # dividend being restored — the adjusted D1→D2 return is flat.
-    rows_between = [
-        rd.FactorRow(D1, Decimal("0.99"), Decimal(1)),
-        rd.FactorRow(D2, Decimal(1), Decimal(1)),
-    ]
-    adjusted_between = rd.adjust_anchors(anchors, rows_between)
-    returns = rd.compute_daily_returns(adjusted_between)
+    returns = rd.compute_daily_returns(adjusted, scheduled_sessions=[D1, D2, D5])
+    # The −1% raw drop is exactly the dividend being restored: adjusted
+    # D1→D2 is flat.
     assert returns[1].close_to_close_pct == pytest.approx(0.0, abs=1e-12)
-    # D5 vs D2: multipliers both 1 → plain raw move ln(100/99).
+    # D2 → D5: both post-event, plain raw move ln(100/99).
     assert returns[2].close_to_close_pct == pytest.approx(
         math.expm1(math.log(100.0 / 99.0)) * 100.0, abs=1e-12
     )
 
 
 def test_adjust_anchors_split_continuity() -> None:
-    def day(d: date, close: float) -> rd.DayAnchors:
-        return rd.DayAnchors(
-            trading_date=d,
-            session_open_ms_utc=_et_ms(d, 9, 30),
-            first_open=Decimal(str(close)),
-            rth_open=Decimal(str(close)),
-            noon_boundary_close=Decimal(str(close)),
-            rth_close=Decimal(str(close)),
-            last_close=Decimal(str(close)),
-            volume=1,
-            has_pre_market=False,
-            has_after_hours=False,
-        )
-
-    anchors = [day(D1, 200.0), day(D2, 100.5)]  # 2:1 split between D1 and D2
-    # The row dated D2 turns the split factor over on D2 (LEAN: a row dated
-    # D covers data through D), so D1 carries 0.5 and D2 carries 1.
-    rows = [rd.FactorRow(D1, Decimal(1), Decimal("0.5")), rd.FactorRow(D2, Decimal(1), Decimal(1))]
-    returns = rd.compute_daily_returns(rd.adjust_anchors(anchors, rows))
+    anchors = [_flat_day(D1, 200.0), _flat_day(D2, 100.5)]  # 2:1 split ex-date D2
+    # Row dated D1 (the session before the ex-date) carries split_factor 0.5
+    # for data through D1; D2 is post-split and unadjusted.
+    rows = [rd.FactorRow(D1, Decimal(1), Decimal("0.5"))]
+    returns = rd.compute_daily_returns(rd.adjust_anchors(anchors, rows), scheduled_sessions=[D1, D2])
     # Adjusted: D1 close 100, D2 close 100.5 → +0.5%, not −49.75%.
     assert returns[1].close_to_close_pct == pytest.approx(0.5, abs=1e-9)
 
@@ -272,7 +221,7 @@ def _pct_of(log_return: float) -> float:
 
 def test_compute_daily_returns_hand_computed_percentages() -> None:
     anchors = rd.extract_day_anchors(_two_days_bars(), _windows(D1, D2))
-    (first, second) = rd.compute_daily_returns(anchors)
+    (first, second) = rd.compute_daily_returns(anchors, scheduled_sessions=[D1, D2])
 
     # First day: no previous close in-window.
     assert first.close_to_close_pct is None
@@ -292,7 +241,7 @@ def test_compute_daily_returns_hand_computed_percentages() -> None:
 
 def test_compute_daily_returns_log_identities() -> None:
     anchors = rd.extract_day_anchors(_two_days_bars(), _windows(D1, D2))
-    second = rd.compute_daily_returns(anchors)[1]
+    second = rd.compute_daily_returns(anchors, scheduled_sessions=[D1, D2])[1]
 
     # morning + afternoon = session: constructed by subtraction in log
     # space, so the round-tripped logs agree to ulp level (1e-12 floor).
@@ -317,16 +266,50 @@ def test_compute_daily_returns_log_identities() -> None:
 
 
 def test_compute_daily_returns_skips_day_without_rth_bars() -> None:
-    # D2 has only pre-market bars: no session/close anchors → excluded, and
-    # close-to-close chains D1 → D5 directly.
+    # D2 has only pre-market bars: no session/close anchors → excluded from
+    # every series. It is still the previous *scheduled* session for D5, so
+    # D5's close-to-close cannot return against D1 two sessions back — the
+    # chain resets and D5 keeps only its session return.
     bars = {
         D1: [_bar(D1, 9, 30, 100.0, 100.5), _bar(D1, 15, 59, 100.9, 101.0)],
         D2: [_bar(D2, 8, 0, 100.8, 101.0)],
         D5: [_bar(D5, 9, 30, 102.0, 102.1), _bar(D5, 15, 59, 103.9, 104.0)],
     }
-    returns = rd.compute_daily_returns(rd.extract_day_anchors(bars, _windows(D1, D2, D5)))
+    returns = rd.compute_daily_returns(
+        rd.extract_day_anchors(bars, _windows(D1, D2, D5)),
+        scheduled_sessions=[D1, D2, D5],
+    )
     assert [r.trading_date for r in returns] == [D1, D5]
-    assert returns[1].close_to_close_pct == pytest.approx(_pct_of(math.log(104.0 / 101.0)), abs=1e-12)
+    assert returns[1].close_to_close_pct is None
+    assert returns[1].overnight_pct is None
+    assert returns[1].session_pct == pytest.approx(_pct_of(math.log(104.0 / 102.0)), abs=1e-12)
+
+
+def test_compute_daily_returns_resets_chain_across_capture_gap() -> None:
+    # D2 is entirely absent from the anchors (a capture gap). Returning D5
+    # against D1 would label a two-session move a daily return; the chain
+    # resets instead, and the session after the gap resumes adjacency.
+    bars = {
+        D1: [_bar(D1, 9, 30, 100.0, 100.5), _bar(D1, 15, 59, 100.9, 101.0)],
+        D5: [_bar(D5, 9, 30, 102.0, 102.1), _bar(D5, 15, 59, 103.9, 104.0)],
+        date(2024, 7, 8): [_bar(date(2024, 7, 8), 9, 30, 104.0, 104.1), _bar(date(2024, 7, 8), 15, 59, 104.9, 105.0)],
+    }
+    D8 = date(2024, 7, 8)
+    returns = rd.compute_daily_returns(
+        rd.extract_day_anchors(bars, _windows(D1, D5, D8)),
+        scheduled_sessions=[D1, D2, D5, D8],
+    )
+    assert [r.trading_date for r in returns] == [D1, D5, D8]
+    # D5's previous scheduled session (D2) is not captured → reset.
+    assert returns[1].close_to_close_pct is None
+    assert returns[1].overnight_pct is None
+    # D8's previous scheduled session is D5, which is captured → adjacent.
+    assert returns[2].close_to_close_pct == pytest.approx(
+        _pct_of(math.log(105.0 / 104.0)), abs=1e-12
+    )
+    assert returns[2].overnight_pct == pytest.approx(
+        _pct_of(math.log(104.0 / 104.0)), abs=1e-12
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +391,52 @@ def test_compute_distribution_stats_matches_scipy_numpy_oracle() -> None:
     assert s.worst_day.value_pct == values[worst_i]
 
 
-def test_compute_distribution_stats_rejects_short_series() -> None:
-    with pytest.raises(ValueError, match="at least 3"):
-        rd.compute_distribution_stats([1.0, 2.0], [D1, D2], [0, 1])
+def test_compute_distribution_stats_total_on_short_series() -> None:
+    # n=2: std exists, the standardized moments do not — None, not a crash.
+    s = rd.compute_distribution_stats([1.0, 2.0], [D1, D2], [0, 1])
+    assert s.n_days == 2
+    assert s.mean_pct == pytest.approx(1.5)
+    assert s.std_pct == pytest.approx(float(np.std([1.0, 2.0], ddof=1)), abs=1e-12)
+    assert s.annualized_vol_pct == pytest.approx(s.std_pct * math.sqrt(252.0), abs=1e-12)
+    assert s.skewness is None
+    assert s.excess_kurtosis is None
+    # VaR/CVaR stay defined (percentile of two points interpolates; the
+    # tail at-or-below it holds only the single worst point).
+    assert s.var_95_pct == pytest.approx(1.05)
+    assert s.cvar_95_pct == pytest.approx(1.0)
+
+    # n=3: kurtosis's (n−3) denominator would be zero — still no crash.
+    s3 = rd.compute_distribution_stats([1.0, 2.0, 4.0], [D1, D2, D5], [0, 1, 2])
+    assert s3.skewness is None
+    assert s3.excess_kurtosis is None
+    assert s3.std_pct is not None
+
+    # n=1: no std at all.
+    s1 = rd.compute_distribution_stats([3.0], [D1], [0])
+    assert s1.std_pct is None
+    assert s1.annualized_vol_pct is None
+    assert s1.var_95_pct == 3.0
+
+    # n=0 is the only rejection left.
+    with pytest.raises(ValueError, match="at least 1"):
+        rd.compute_distribution_stats([], [], [])
+
+
+def test_compute_distribution_stats_constant_series_is_defined_not_crashing() -> None:
+    # A flat price series: std 0, standardized moments undefined (None), the
+    # overlay degenerate to zeros — never a ZeroDivisionError.
+    values = [0.5] * 30
+    dates = [D1 + timedelta(days=i) for i in range(30)]
+    s = rd.compute_distribution_stats(values, dates, list(range(30)))
+    assert s.mean_pct == 0.5
+    assert s.std_pct == 0.0
+    assert s.annualized_vol_pct == 0.0
+    assert s.skewness is None
+    assert s.excess_kurtosis is None
+    assert s.var_95_pct == 0.5
+    assert s.cvar_95_pct == 0.5
+    h = rd.compute_histogram(values)
+    assert rd.normal_expected_counts(h, s.mean_pct, s.std_pct) == (0.0,) * len(h.bins)
 
 
 # ---------------------------------------------------------------------------
@@ -493,12 +519,12 @@ def test_build_return_distribution_covers_all_kinds_and_days() -> None:
     bars_by_day = _synthetic_session_bars()
     sessions = sorted(bars_by_day)
     anchors = rd.extract_day_anchors(bars_by_day, _windows(*sessions))
-    days = rd.compute_daily_returns(anchors)
+    days = rd.compute_daily_returns(anchors, scheduled_sessions=sessions)
     assert len(days) == len(sessions)
 
     result = rd.build_return_distribution(days, adjustment="split_and_dividend")
     assert [k.kind for k in result.kinds] == ["close_to_close", "session", "overnight"]
-    assert result.days == tuple(days)
+    assert [d.trading_date for d in result.days] == sessions
     assert result.adjustment == "split_and_dividend"
 
     by_kind = {k.kind: k for k in result.kinds}
@@ -512,3 +538,27 @@ def test_build_return_distribution_covers_all_kinds_and_days() -> None:
         assert len(kind.normal_expected_counts) == len(kind.histogram.bins)
         # Each day lands in exactly one bin of its kind's histogram.
         assert sum(b.count for b in kind.histogram.bins) == kind.stats.n_days
+
+
+def test_build_return_distribution_bin_indices_match_histogram_counts() -> None:
+    # The stamped per-day bin identity and the histogram counts must be the
+    # same classification: for every kind and every bin index, the number of
+    # days stamped with that index equals the bin's count. This is the
+    # contract the frontend drill-down relies on instead of re-deriving
+    # membership.
+    bars_by_day = _synthetic_session_bars(n_sessions=60, seed=23)
+    sessions = sorted(bars_by_day)
+    anchors = rd.extract_day_anchors(bars_by_day, _windows(*sessions))
+    days = rd.compute_daily_returns(anchors, scheduled_sessions=sessions)
+    result = rd.build_return_distribution(
+        days, bin_width_pct=1.0, span_pct=5.0, adjustment="split_and_dividend"
+    )
+
+    for ki, kind in enumerate(result.kinds):
+        for bin_index, bin_model in enumerate(kind.histogram.bins):
+            stamped = sum(1 for d in result.days if d.bin_indices[ki] == bin_index)
+            assert stamped == bin_model.count, (kind.kind, bin_index)
+        # Days without a value for the kind carry None, matching the count
+        # deficit between days and the kind's n.
+        n_none = sum(1 for d in result.days if d.bin_indices[ki] is None)
+        assert n_none == len(result.days) - kind.stats.n_days

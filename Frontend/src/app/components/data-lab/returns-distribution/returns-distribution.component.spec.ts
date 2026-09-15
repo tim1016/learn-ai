@@ -75,6 +75,7 @@ const DAYS: DayReturns[] = [
     afternoonPct: 0.12,
     afterHoursPct: null,
     volume: 4_500_000,
+    binIndices: { close_to_close: 0, session: 0, overnight: 1 },
   },
   {
     sessionOpenMsUtc: DAY_MS(3),
@@ -86,6 +87,7 @@ const DAYS: DayReturns[] = [
     afternoonPct: 0.2,
     afterHoursPct: 0.01,
     volume: 3_000_000,
+    binIndices: { close_to_close: 0, session: 0, overnight: 1 },
   },
 ];
 
@@ -93,7 +95,6 @@ const STUDY: ReturnDistributionStudy = {
   adjustment: 'split_and_dividend',
   warnings: [],
   capture: {
-    attempted: true,
     status: 'complete',
     fetchedArtifactCount: 480,
     detail: null,
@@ -165,6 +166,29 @@ describe('ReturnsDistributionComponent', () => {
     expect(screen.getByRole('button', { name: 'Close → close' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Session only' })).toBeTruthy();
     expect(document.querySelector('canvas')).toBeTruthy();
+  });
+
+  it('renders every capture state distinctly — failure never reads as success', async () => {
+    const failedStudy: ReturnDistributionStudy = {
+      ...STUDY,
+      capture: { status: 'failed', fetchedArtifactCount: 0, detail: 'TimeoutError: deadline' },
+    };
+    const service = {
+      distribution: vi.fn(() => of(failedStudy)),
+      minuteCandles: vi.fn(() => of([])),
+    } as unknown as ReturnsDistributionService;
+    await render(ReturnsDistributionComponent, {
+      providers: [
+        { provide: DataLabWorkspaceStore, useValue: fakeStore() },
+        { provide: ReturnsDistributionService, useValue: service },
+      ],
+    });
+
+    expect(
+      screen.getByText(/This request could not populate the data lake/),
+    ).toBeTruthy();
+    expect(screen.getByText(/TimeoutError: deadline/)).toBeTruthy();
+    expect(screen.queryByText(/already up to date/)).toBeNull();
   });
 
   it('switches the shown distribution when the return kind toggles', async () => {
