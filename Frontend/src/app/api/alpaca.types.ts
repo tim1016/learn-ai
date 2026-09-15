@@ -11,7 +11,6 @@ export type AlpacaLiveVerdict = components['schemas']['AlpacaLiveVerdict'];
 export type BrokerActivity = components['schemas']['BrokerActivity'];
 export type BrokerPosition = components['schemas']['BrokerPosition'];
 export type BrokerOrder = components['schemas']['BrokerOrder'];
-export type BrokerOrderGroup = components['schemas']['BrokerOrderGroup'];
 export type BrokerOrderEvent = components['schemas']['BrokerOrderEvent'];
 export type BrokerPortfolioHistory = components['schemas']['BrokerPortfolioHistory'];
 export type PortfolioHistoryRange = components['schemas']['PortfolioHistoryRange'];

@@ -7,7 +7,7 @@ import {
   type AuthenticatedSseConnection,
   type AuthenticatedSseStatus,
 } from '../../../../../services/authenticated-sse-connection';
-import { accountUrl } from '../../../../../fleet/clerk-scoped-url';
+import { operationUrl } from '../../../../../fleet/operation-url';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 import type {
   GalleryBotView,
@@ -358,13 +358,13 @@ export class GalleryLiveStore {
   }
 
   private snapshotUrl(request: GalleryRequest): string {
-    return accountUrl(request, '/gallery/snapshot');
+    return operationUrl('gallery_snapshot', request);
   }
 
   private streamUrl(request: GalleryRequest): string {
     const params = new URLSearchParams();
     if (this.epoch !== '') params.set('cursor', `${this.epoch}:${this.surfaceVersion}`);
     const query = params.toString();
-    return `${accountUrl(request, '/gallery/stream')}${query ? `?${query}` : ''}`;
+    return `${operationUrl('gallery_stream', request)}${query ? `?${query}` : ''}`;
   }
 }

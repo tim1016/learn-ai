@@ -99,21 +99,6 @@ describe('BrokersService', () => {
     ]);
   });
 
-  it('GETs symbol-grouped orders with the requested filters', async () => {
-    const promise = service.listOrderGroups('alpaca', { status: 'all', limit: 50 });
-
-    const req = httpMock.expectOne(
-      (request) =>
-        request.url === '/api/brokers/alpaca/order-groups' &&
-        request.params.get('status') === 'all' &&
-        request.params.get('limit') === '50',
-    );
-    expect(req.request.method).toBe('GET');
-    req.flush([]);
-
-    await expect(promise).resolves.toEqual([]);
-  });
-
   it('keeps generic broker orders available only for diagnostics', async () => {
     const promise = service.listOrders(TEST_CLERK_ID, { status: 'all', limit: 50 });
 

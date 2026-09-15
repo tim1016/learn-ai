@@ -8,7 +8,7 @@ import {
   type ResourceTarget,
   withCommand,
 } from '../fleet/resource-target';
-import { accountUrl, laneUrl } from '../fleet/clerk-scoped-url';
+import { operationUrl } from '../fleet/operation-url';
 import { firstValueFrom } from 'rxjs';
 
 import { PolledReadScheduler } from './polled-read-scheduler';
@@ -18,7 +18,6 @@ import type {
   BrokerAccountSnapshot,
   BrokerActivity,
   BrokerOrder,
-  BrokerOrderGroup,
   BrokerPortfolioHistory,
   PortfolioHistoryProof,
   BrokerPosition,
@@ -106,7 +105,7 @@ export class BrokersService {
     // by lane (FR-093): one lane's failure or restart never serves another
     // lane's account snapshot.
     const promise = this.polls.get<BrokerAccountSnapshot>(
-      laneUrl(target, '/account'),
+      operationUrl('account_read', target),
     );
     const entry = {
       expiresAtMs: Date.now() + BrokersService.ACCOUNT_CACHE_MS,
@@ -135,7 +134,7 @@ export class BrokersService {
 
   listPositions(target: ResourceTarget): Promise<BrokerPosition[]> {
     return firstValueFrom(
-      this.http.get<BrokerPosition[]>(laneUrl(target, '/positions')),
+      this.http.get<BrokerPosition[]>(operationUrl('positions_read', target)),
     );
   }
 
@@ -158,7 +157,7 @@ export class BrokersService {
       params = params.set('current_session', true);
     }
     return firstValueFrom(
-      this.http.get<BrokerActivity[]>(laneUrl(target, '/activities'), { params }),
+      this.http.get<BrokerActivity[]>(operationUrl('activities_read', target), { params }),
     );
   }
 
@@ -169,7 +168,7 @@ export class BrokersService {
   ): Promise<BrokerPortfolioHistory> {
     const params = new HttpParams().set('range', historyRange);
     return firstValueFrom(
-      this.http.get<BrokerPortfolioHistory>(laneUrl(target, '/portfolio-history'), { params }),
+      this.http.get<BrokerPortfolioHistory>(operationUrl('portfolio_history_read', target), { params }),
     );
   }
 
@@ -180,23 +179,7 @@ export class BrokersService {
   ): Promise<PortfolioHistoryProof> {
     const params = new HttpParams().set('range', historyRange);
     return firstValueFrom(
-      this.http.get<PortfolioHistoryProof>(laneUrl(target, '/portfolio-history-proof'), { params }),
-    );
-  }
-
-  listOrderGroups(
-    broker = 'alpaca',
-    options: { status?: 'open' | 'closed' | 'all'; limit?: number } = {},
-  ): Promise<BrokerOrderGroup[]> {
-    let params = new HttpParams();
-    if (options.status) {
-      params = params.set('status', options.status);
-    }
-    if (options.limit != null) {
-      params = params.set('limit', options.limit);
-    }
-    return firstValueFrom(
-      this.http.get<BrokerOrderGroup[]>(`${this.base}/${broker}/order-groups`, { params }),
+      this.http.get<PortfolioHistoryProof>(operationUrl('portfolio_history_proof_read', target), { params }),
     );
   }
 
@@ -213,7 +196,7 @@ export class BrokersService {
       params = params.set('limit', options.limit);
     }
     return firstValueFrom(
-      this.http.get<BrokerOrder[]>(laneUrl({ broker, clerkId }, '/orders'), { params }),
+      this.http.get<BrokerOrder[]>(operationUrl('orders_read', { broker, clerkId }), { params }),
     );
   }
 
@@ -224,7 +207,7 @@ export class BrokersService {
   ): Promise<ManualOrderCapability> {
     return firstValueFrom(
       this.http.get<ManualOrderCapability>(
-        accountUrl({ broker: 'alpaca', clerkId, accountId }, '/manual-orders/capability'),
+        operationUrl('manual_orders_capability', { broker: 'alpaca', clerkId, accountId }),
       ),
     );
   }
@@ -237,7 +220,7 @@ export class BrokersService {
     // A computation over durable state: read-idempotent, no envelope.
     return firstValueFrom(
       this.http.post<ManualOrderPreview>(
-        accountUrl({ broker: 'alpaca', clerkId, accountId }, '/manual-orders/preview'),
+        operationUrl('manual_orders_preview', { broker: 'alpaca', clerkId, accountId }),
         request,
       ),
     );
@@ -250,7 +233,7 @@ export class BrokersService {
   ): Promise<ManualOrderTicket> {
     return firstValueFrom(
       this.http.put<ManualOrderTicket>(
-        accountUrl(target, `/manual-order-tickets/${encodeURIComponent(ticketId)}`),
+        operationUrl('manual_order_ticket_put', { ...target, ticketId }),
         this.commandBody(target, 'manual_orders', request),
       ),
     );
@@ -264,7 +247,7 @@ export class BrokersService {
   ): Promise<ManualOrderTicket> {
     return firstValueFrom(
       this.http.post<ManualOrderTicket>(
-        accountUrl(target, `/manual-order-tickets/${encodeURIComponent(ticketId)}/continue`),
+        operationUrl('manual_order_ticket_continue', { ...target, ticketId }),
         this.commandBody(target, 'manual_orders', request),
       ),
     );
@@ -278,7 +261,7 @@ export class BrokersService {
   ): Promise<ManualOrderTicket> {
     return firstValueFrom(
       this.http.post<ManualOrderTicket>(
-        accountUrl(target, `/manual-order-tickets/${encodeURIComponent(ticketId)}/cancel`),
+        operationUrl('manual_order_ticket_cancel', { ...target, ticketId }),
         this.commandBody(target, 'manual_orders', request),
       ),
     );
@@ -291,10 +274,7 @@ export class BrokersService {
   ): Promise<ManualOrderTicket> {
     return firstValueFrom(
       this.http.get<ManualOrderTicket>(
-        accountUrl(
-          { broker: 'alpaca', clerkId, accountId },
-          `/manual-order-tickets/${encodeURIComponent(ticketId)}`,
-        ),
+        operationUrl('manual_order_ticket_read', { broker: 'alpaca', clerkId, accountId, ticketId }),
       ),
     );
   }
@@ -307,7 +287,7 @@ export class BrokersService {
   ): Promise<ManualOrderCancellation> {
     return firstValueFrom(
       this.http.post<ManualOrderCancellation>(
-        accountUrl(target, `/manual-orders/${encodeURIComponent(orderRef)}/cancel`),
+        operationUrl('manual_order_cancel', { ...target, orderRef }),
         this.commandBody(target, 'manual_orders', request),
       ),
     );
@@ -321,7 +301,7 @@ export class BrokersService {
   getClerkStatus(target: ResourceTarget): Promise<ClerkStatus> {
     // Shares the roster page's poll guard with getAccount (S7), and its
     // scheduler: the two fire on the same 15 s tick (#1912).
-    return this.polls.get<ClerkStatus>(laneUrl(target, '/clerk/status'));
+    return this.polls.get<ClerkStatus>(operationUrl('clerk_status_read', target));
   }
 
   /**
@@ -332,7 +312,7 @@ export class BrokersService {
    */
   getCustodyDiagnosis(target: ResourceTarget): Promise<CustodyDiagnosis> {
     return firstValueFrom(
-      this.http.get<CustodyDiagnosis>(laneUrl(target, '/clerk/custody-diagnosis')),
+      this.http.get<CustodyDiagnosis>(operationUrl('custody_diagnosis_read', target)),
     );
   }
 
@@ -342,7 +322,7 @@ export class BrokersService {
   ): Promise<SqliteClerkProjection> {
     return firstValueFrom(
       this.http.get<SqliteClerkProjection>(
-        accountUrl({ broker: 'alpaca', clerkId, accountId }, '/custody/snapshot'),
+        operationUrl('custody_account_snapshot', { broker: 'alpaca', clerkId, accountId }),
       ),
     );
   }
@@ -369,7 +349,7 @@ export class BrokersService {
     }
     return firstValueFrom(
       this.http.get<SqliteTimelinePage>(
-        accountUrl({ broker: 'alpaca', clerkId, accountId }, '/custody/timeline'),
+        operationUrl('custody_account_timeline', { broker: 'alpaca', clerkId, accountId }),
         { params },
       ),
     );
@@ -382,15 +362,17 @@ export class BrokersService {
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryAction> {
     // A diagnostic over durable state: read-idempotent, no envelope.
-    const actionPath: `/${string}` = strategyInstanceId === null
-      ? '/custody/recovery-actions/check'
-      : `/custody/bots/${encodeURIComponent(strategyInstanceId)}/recovery-actions/check`;
+    const url = strategyInstanceId === null
+      ? operationUrl('custody_recovery_check', { broker: 'alpaca', clerkId, accountId })
+      : operationUrl('custody_bot_recovery_check', {
+        broker: 'alpaca',
+        clerkId,
+        accountId,
+        sid: strategyInstanceId,
+      });
     const response = await firstValueFrom(
       this.http.post<SqliteRecoveryActionCheck>(
-        accountUrl(
-          { broker: 'alpaca', clerkId, accountId },
-          actionPath,
-        ),
+        url,
         {
           action_id: action.action_id,
           concurrency_token: action.concurrency_token,
@@ -406,7 +388,7 @@ export class BrokersService {
   ): Promise<SqliteRecoveryResult> {
     return firstValueFrom(
       this.http.post<SqliteRecoveryResult>(
-        accountUrl(target, '/custody/recovery-actions/execute'),
+        operationUrl('custody_recovery_execute', target),
         this.commandBody(
           target,
           'custody_command',
@@ -443,7 +425,7 @@ export class BrokersService {
     if (filters.toMs !== null && filters.toMs !== undefined) params['to_ms'] = filters.toMs;
     return firstValueFrom(
       this.http.get<ClerkTransactionHistoryResponse>(
-        accountUrl({ broker: 'alpaca', clerkId, accountId }, '/custody/transactions'),
+        operationUrl('custody_transactions', { broker: 'alpaca', clerkId, accountId }),
         { params },
       ),
     );
@@ -456,10 +438,7 @@ export class BrokersService {
   ): Promise<ClerkTransactionDetail> {
     return firstValueFrom(
       this.http.get<ClerkTransactionDetail>(
-        accountUrl(
-          { broker: 'alpaca', clerkId, accountId },
-          `/custody/transactions/${encodeURIComponent(transactionId)}`,
-        ),
+        operationUrl('custody_transaction_read', { broker: 'alpaca', clerkId, accountId, transactionId }),
       ),
     );
   }
@@ -471,10 +450,7 @@ export class BrokersService {
   ): Promise<ExternalOrderAcknowledgement> {
     return firstValueFrom(
       this.http.post<ExternalOrderAcknowledgement>(
-        accountUrl(
-          target,
-          `/custody/transactions/external-orders/${encodeURIComponent(externalOrderId)}/acknowledge`,
-        ),
+        operationUrl('custody_external_order_ack', { ...target, externalOrderId }),
         this.commandBody(target, 'custody_command', { operator }),
       ),
     );

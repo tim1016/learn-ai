@@ -11,7 +11,10 @@ function pathIdentity(value: string | null | undefined, name: string): string {
   return encodeURIComponent(value);
 }
 
-function clerkScope(target: Pick<ResourceTarget, 'broker' | 'clerkId'>): string {
+/** The `/api/brokers/{broker}/clerks/{clerkId}` prefix every clerk-scoped
+ * path shares — exported so `operation-url.ts` builds on it rather than
+ * duplicating it (CLAUDE.md guiding philosophy #5). */
+export function clerkScope(target: Pick<ResourceTarget, 'broker' | 'clerkId'>): string {
   return `/api/brokers/${pathIdentity(target.broker, 'broker')}/clerks/${pathIdentity(
     target.clerkId,
     'clerk ID',

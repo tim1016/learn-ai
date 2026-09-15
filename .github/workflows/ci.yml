@@ -304,6 +304,23 @@ jobs:
             echo "$status"
             exit 1
           fi
+      - name: Regenerate the fleet operation catalog snapshot and require it to match both committed copies
+        run: |
+          python -m scripts.regenerate_fleet_operation_catalog_snapshot
+          cd ..
+          git diff --exit-code -- \
+            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
+            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json
+          # Same untracked-file gap as above: a deleted-and-regenerated
+          # snapshot would pass `git diff` unnoticed without this check.
+          status=$(git status --porcelain -- \
+            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
+            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json)
+          if [ -n "$status" ]; then
+            echo "Regenerated fleet operation catalog snapshot is untracked or otherwise dirty:"
+            echo "$status"
+            exit 1
+          fi
 
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/12
