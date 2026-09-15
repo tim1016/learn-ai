@@ -1423,6 +1423,79 @@ async def test_a_refused_beat_re_registers_under_the_endpoint_reference_it_regis
         service.close()
 
 
+async def test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_point_of_death(
+    control_dir: Path,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2142: an exception that is not a ``FleetControlError`` must not die quietly.
+
+    ``_beat`` used to let anything other than ``FleetControlError`` escape the
+    loop with no raise and no log at the point of death — the task simply
+    ended, and nothing announced it until the coordinator eventually
+    projected the lane ``unreachable`` or ``stop_heartbeat`` noticed the
+    already-dead task at shutdown. The fix logs loudly the instant the beat
+    dies and still lets the task end (the same outcome as today otherwise),
+    closing the silent window rather than widening the beat's exception
+    handling.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def _raise_something_not_fleet_control(**_kwargs: object) -> None:
+            raise RuntimeError("a raw local-store error, not a FleetControlError")
+
+        monkeypatch.setattr(boot.presence, "observe", _raise_something_not_fleet_control)
+
+        with caplog.at_level(logging.ERROR):
+            start_heartbeat(boot, interval_s=0.05)
+            heartbeat = boot.heartbeat
+            assert heartbeat is not None
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while not heartbeat.done():
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("the beat never died on the injected exception")
+                await asyncio.sleep(0.01)
+
+        assert isinstance(heartbeat.exception(), RuntimeError)
+        death_logs = [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.ERROR
+            and getattr(record, "clerk_id", None) == boot.clerk_id
+        ]
+        assert death_logs, "the beat's death must be logged at the point it happened"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_confirm_binding_records_the_session_it_confirmed_even_if_the_lane_re_registers_mid_confirm(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

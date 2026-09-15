@@ -465,6 +465,22 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         register_exc.message,
                         extra={"clerk_id": boot.clerk_id},
                     )
+            except Exception:
+                # Anything other than a FleetControlError here is unexpected
+                # (a malformed coordinator response, a raw sqlite3 error from
+                # the local store) and ends the beat — but silently, unless
+                # announced right here: the task simply stops, and nothing
+                # notices until the coordinator eventually projects the lane
+                # `unreachable`, or `stop_heartbeat` logs the already-dead
+                # task at shutdown. Surface it the moment it happens instead
+                # of leaving that window silent, then let it end the task —
+                # the same outcome as today, just never silent.
+                logger.exception(
+                    "Fleet heartbeat ended on an unexpected exception; lane "
+                    "presence has stopped until this process restarts.",
+                    extra={"clerk_id": boot.clerk_id},
+                )
+                raise
 
     boot.heartbeat = asyncio.create_task(
         _beat(), name=f"fleet-heartbeat-{boot.clerk_id}"
@@ -482,12 +498,14 @@ async def stop_heartbeat(boot: FleetLaneBoot | None) -> None:
     calls it again on its way out. A boot with no beat (``None``, offline, or
     already stopped) is a no-op, not a refusal.
 
-    ``_beat`` only ever catches ``FleetControlError`` around its observation;
-    anything else (a malformed coordinator response, a raw ``sqlite3`` error
-    from the local store) ends the task with that exception stored on it.
-    ``cancel()`` is a no-op on a task that's already done, so awaiting it
-    would re-raise that stored exception here — the first statement of the
-    service teardown's ``finally`` block — aborting every step after it
+    ``_beat`` logs a ``FleetControlError`` around its observation and retries
+    (re-registering the session); anything else (a malformed coordinator
+    response, a raw ``sqlite3`` error from the local store) is logged at the
+    point of death — never silently — and still ends the task, with that
+    exception stored on it. ``cancel()`` is a no-op on a task that's already
+    done, so awaiting it would re-raise that stored exception here — the
+    first statement of the service teardown's ``finally`` block — aborting
+    every step after it
     (``bot_task_registry.stop_all()``, the consumer stop, the custody and
     repository closes). The beat's death must not mask the clerk's teardown,
     so a beat found already done is logged and swallowed instead of awaited.
