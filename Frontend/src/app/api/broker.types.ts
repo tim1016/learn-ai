@@ -5863,6 +5863,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/return-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Return Distribution
+         * @description Compute the daily-return distribution for one symbol and window.
+         */
+        post: operations["run_return_distribution_api_research_return_distribution_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/return-distribution/day-candles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Day Candles
+         * @description One captured trading day's minute candles on the study's price basis.
+         */
+        post: operations["run_day_candles_api_research_return_distribution_day_candles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/run-batch-options": {
         parameters: {
             query?: never;
@@ -9621,6 +9661,25 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * CaptureReceiptModel
+         * @description What the on-demand lake capture did for this request.
+         *
+         *     ``status`` is the closed contract of
+         *     ``app.services.return_distribution_service.CaptureStatus``; clients
+         *     must render every state (the generated union type enforces it).
+         */
+        CaptureReceiptModel: {
+            /** Detail */
+            detail?: string | null;
+            /** Fetched Artifact Count */
+            fetched_artifact_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_attempted" | "skipped" | "complete" | "partial" | "failed";
+        };
+        /**
          * ChannelHealth
          * @description One submission-affecting stream's health fact, with its age (P7).
          *
@@ -9706,6 +9765,43 @@ export interface components {
             volume: number;
         };
         /**
+         * ChartDataBar
+         * @description One resampled OHLCV bar of the /api/chart/data success payload.
+         */
+        ChartDataBar: {
+            /** C */
+            c?: number | null;
+            /** H */
+            h?: number | null;
+            /** L */
+            l?: number | null;
+            /**
+             * O
+             * @description Open; null when the source row was absent
+             */
+            o: number | null;
+            /**
+             * Session
+             * @description Present only on bars the resampler tagged
+             */
+            session?: string | null;
+            /**
+             * Synthetic
+             * @description True only on gap-filled synthetic bars
+             */
+            synthetic?: boolean | null;
+            /**
+             * T
+             * @description Bar timestamp as int64 ms UTC
+             */
+            t: number;
+            /**
+             * V
+             * @default 0
+             */
+            v?: number;
+        };
+        /**
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          *
@@ -9783,6 +9879,41 @@ export interface components {
             to_date: string;
         };
         /**
+         * ChartDataResponse
+         * @description Success payload of POST /api/chart/data.
+         *
+         *     The route's handler computes a plain dict; declaring it as the
+         *     ``response_model`` publishes the contract (ADR 0031 generated OpenAPI
+         *     types) and pins the bar keys (``t``/``o``/``h``/``l``/``c``/``v``) the
+         *     Data Lab charts already consume, so no client invents a transport
+         *     mirror. Error responses are typed ``detail`` payloads raised as
+         *     HTTPException and are therefore not part of this model.
+         */
+        ChartDataResponse: {
+            /** Allowed Timeframes */
+            allowed_timeframes: string[];
+            /**
+             * Bar Sources
+             * @description Per-source ingest receipts; present only when the lake is in the read path
+             */
+            bar_sources?: Record<string, never> | null;
+            /** Bars */
+            bars: components["schemas"]["ChartDataBar"][];
+            /** Estimated Bars Per Timeframe */
+            estimated_bars_per_timeframe: {
+                [key: string]: number;
+            };
+            /** Indicators */
+            indicators?: components["schemas"]["ChartIndicatorResult"][];
+            /** Meta */
+            meta: {
+                [key: string]: boolean;
+            };
+            quality: components["schemas"]["ChartQualityReport"];
+            /** Recommended Timeframe */
+            recommended_timeframe: string;
+        };
+        /**
          * ChartFillMarker
          * @description One fill marker for a chart pane (§8, §10).
          *
@@ -9805,6 +9936,17 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+        };
+        /** ChartGapDetail */
+        ChartGapDetail: {
+            /** After Ts */
+            after_ts: number;
+            /** Before Ts */
+            before_ts: number;
+            /** Classification */
+            classification: string;
+            /** Duration Minutes */
+            duration_minutes: number;
         };
         /**
          * ChartHistoryResponse
@@ -9978,6 +10120,38 @@ export interface components {
              * @constant
              */
             source: "polygon";
+        };
+        /**
+         * ChartQualityReport
+         * @description Resample-quality receipt mirroring chart_service.QualityReport.
+         */
+        ChartQualityReport: {
+            /** Duplicates Removed */
+            duplicates_removed: number;
+            /** Flat Bars Detected */
+            flat_bars_detected: number;
+            /** Gap Details */
+            gap_details?: components["schemas"]["ChartGapDetail"][];
+            /** Gaps Found */
+            gaps_found: number;
+            /** Largest Gap Minutes */
+            largest_gap_minutes: number;
+            /** Missing Session Dates */
+            missing_session_dates?: string[];
+            /** Missing Sessions */
+            missing_sessions: number;
+            /** Ohlc Violations Detected */
+            ohlc_violations_detected: number;
+            /** Out Of Order Fixed */
+            out_of_order_fixed: number;
+            /** Raw Bar Count */
+            raw_bar_count: number;
+            /** Resampled Bar Count */
+            resampled_bar_count: number;
+            /** Session Coverage Pct */
+            session_coverage_pct: number;
+            /** Synthetic Bars */
+            synthetic_bars: number;
         };
         /**
          * ChartRangePreset
@@ -10961,6 +11135,21 @@ export interface components {
             status: ("fetching" | "complete" | "stale" | "failed") | "missing";
             /** Trading Date Ms */
             trading_date_ms: number;
+        };
+        /** CoverageInfo */
+        CoverageInfo: {
+            /** Excluded Sessions */
+            excluded_sessions: number;
+            /** First Session Open Ms Utc */
+            first_session_open_ms_utc: number | null;
+            /** Last Session Open Ms Utc */
+            last_session_open_ms_utc: number | null;
+            /** Missing Sessions */
+            missing_sessions: number;
+            /** Requested Sessions */
+            requested_sessions: number;
+            /** Returned Sessions */
+            returned_sessions: number;
         };
         /** CoverageResponse */
         CoverageResponse: {
@@ -12157,6 +12346,109 @@ export interface components {
             /** Jobid */
             jobId: string;
         };
+        /** DayCandleBarModel */
+        DayCandleBarModel: {
+            /** C */
+            c: number;
+            /** H */
+            h: number;
+            /** L */
+            l: number;
+            /** O */
+            o: number;
+            /**
+             * T
+             * @description Bar start as int64 ms UTC
+             */
+            t: number;
+            /**
+             * V
+             * @default 0
+             */
+            v?: number;
+        };
+        /** DayCandlesNotCapturedResponse */
+        DayCandlesNotCapturedResponse: {
+            detail: components["schemas"]["DayNotCapturedDetail"];
+        };
+        /**
+         * DayCandlesRequest
+         * @description One drill-down day: extended-session minute candles for a session that
+         *     a study response already named (``session_open_ms_utc`` is the day's
+         *     session-open anchor, so no date string travels).
+         */
+        DayCandlesRequest: {
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * DayCandlesResponse
+         * @description Minute candles on the study's own price basis.
+         *
+         *     Read from the same raw lake root and scaled by the same LEAN
+         *     factor-file multiplier the study applied to that day's anchors, so the
+         *     candle pane cannot disagree with the return being inspected (the
+         *     provider-adjusted chart feed applies split-only adjustment).
+         */
+        DayCandlesResponse: {
+            /**
+             * Adjustment
+             * @enum {string}
+             */
+            adjustment: "split_and_dividend" | "raw";
+            /** Bars */
+            bars: components["schemas"]["DayCandleBarModel"][];
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /** DayNotCapturedDetail */
+        DayNotCapturedDetail: {
+            /**
+             * Error Code
+             * @enum {string}
+             */
+            error_code: "NOT_CAPTURED" | "DAY_NOT_CAPTURED";
+            /** Message */
+            message: string;
+            /** Trading Date */
+            trading_date?: string | null;
+        };
+        /**
+         * DayReturnsModel
+         * @description One day's returns plus ``bin_indices``: this day's histogram bin per
+         *     return kind (index into that kind's ``bins`` list, edge bins included),
+         *     stamped by the same membership function the counts were tallied with.
+         *     Consumers select a basket's days by identity — they never re-derive
+         *     membership. ``None`` when that kind's value is undefined for the day.
+         */
+        DayReturnsModel: {
+            /** After Hours Pct */
+            after_hours_pct: number | null;
+            /** Afternoon Pct */
+            afternoon_pct: number | null;
+            /** Bin Indices */
+            bin_indices: {
+                [key: string]: number | null;
+            };
+            /** Close To Close Pct */
+            close_to_close_pct: number | null;
+            /** Morning Pct */
+            morning_pct: number | null;
+            /** Overnight Pct */
+            overnight_pct: number | null;
+            /** Pre Market Pct */
+            pre_market_pct: number | null;
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Session Pct */
+            session_pct: number | null;
+            /** Volume */
+            volume: number;
+        };
         /**
          * DaySnapshot
          * @description Day OHLCV for an options contract snapshot
@@ -12429,6 +12721,31 @@ export interface components {
             kind: "DifferenceBps";
             left: components["schemas"]["IndicatorRef"];
             right: components["schemas"]["IndicatorRef"];
+        };
+        /**
+         * DistributionStatsModel
+         * @description ``None`` stats are undefined for the sample (n too small, or zero
+         *     variance for the standardized moments) — not zero.
+         */
+        DistributionStatsModel: {
+            /** Annualized Vol Pct */
+            annualized_vol_pct: number | null;
+            best_day: components["schemas"]["ExtremeDayModel"];
+            /** Cvar 95 Pct */
+            cvar_95_pct: number;
+            /** Excess Kurtosis */
+            excess_kurtosis: number | null;
+            /** Mean Pct */
+            mean_pct: number;
+            /** N Days */
+            n_days: number;
+            /** Skewness */
+            skewness: number | null;
+            /** Std Pct */
+            std_pct: number | null;
+            /** Var 95 Pct */
+            var_95_pct: number;
+            worst_day: components["schemas"]["ExtremeDayModel"];
         };
         /**
          * DivergenceCategory
@@ -13251,6 +13568,13 @@ export interface components {
             acknowledged_at_ms: number;
             /** External Order Id */
             external_order_id: string;
+        };
+        /** ExtremeDayModel */
+        ExtremeDayModel: {
+            /** Session Open Ms Utc */
+            session_open_ms_utc: number;
+            /** Value Pct */
+            value_pct: number;
         };
         /**
          * FeatureInfoResponse
@@ -14431,6 +14755,17 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HistogramBinModel */
+        HistogramBinModel: {
+            /** Count */
+            count: number;
+            /** Is Edge */
+            is_edge: boolean;
+            /** Lower Pct */
+            lower_pct: number | null;
+            /** Upper Pct */
+            upper_pct: number | null;
+        };
         /** HistoricalExecutionRecoveryConfirmRequest */
         HistoricalExecutionRecoveryConfirmRequest: {
             /** Confirmation Token */
@@ -15527,6 +15862,24 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
+        /**
+         * InsufficientCoverageDetail
+         * @description The typed 400 body's ``detail`` for a too-thin usable sample.
+         */
+        InsufficientCoverageDetail: {
+            /** Available Sessions */
+            available_sessions: number;
+            /**
+             * Error Code
+             * @default INSUFFICIENT_COVERAGE
+             * @constant
+             */
+            error_code?: "INSUFFICIENT_COVERAGE";
+            /** Message */
+            message: string;
+            /** Requested Sessions */
+            requested_sessions: number;
+        };
         /** Iv30LiveRequest */
         Iv30LiveRequest: {
             /**
@@ -15679,6 +16032,19 @@ export interface components {
             variance_contribution_synthetic: number;
         };
         JsonValue: unknown;
+        /** KindDistributionModel */
+        KindDistributionModel: {
+            /** Bins */
+            bins: components["schemas"]["HistogramBinModel"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "close_to_close" | "session" | "overnight";
+            /** Normal Expected Counts */
+            normal_expected_counts: number[];
+            stats: components["schemas"]["DistributionStatsModel"];
+        };
         /**
          * LastQuoteSnapshot
          * @description Last quote (bid/ask) for an options contract snapshot
@@ -17289,6 +17655,24 @@ export interface components {
              * Format: date
              */
             trading_date: string;
+        };
+        /**
+         * NotCapturedDetail
+         * @description The typed 404 body's ``detail`` (minus the extra_forbidden quirks).
+         */
+        NotCapturedDetail: {
+            /** Capture Note */
+            capture_note?: string | null;
+            /** Captured Symbols */
+            captured_symbols?: string[];
+            /**
+             * Error Code
+             * @default NOT_CAPTURED
+             * @constant
+             */
+            error_code?: "NOT_CAPTURED";
+            /** Message */
+            message: string;
         };
         /**
          * NullDistribution
@@ -19844,6 +20228,85 @@ export interface components {
              * @enum {string}
              */
             kind: "retire_replace";
+        };
+        /** ReturnDistributionInsufficientCoverageResponse */
+        ReturnDistributionInsufficientCoverageResponse: {
+            detail: components["schemas"]["InsufficientCoverageDetail"];
+        };
+        /** ReturnDistributionMeta */
+        ReturnDistributionMeta: {
+            /**
+             * Adjustment
+             * @enum {string}
+             */
+            adjustment: "split_and_dividend" | "raw";
+            /** Bin Width Pct */
+            bin_width_pct: number;
+            capture?: components["schemas"]["CaptureReceiptModel"] | null;
+            /** From Ms Utc */
+            from_ms_utc: number;
+            /**
+             * Resolution
+             * @default 1m
+             * @constant
+             */
+            resolution?: "1m";
+            /** Span Pct */
+            span_pct: number;
+            /** Symbol */
+            symbol: string;
+            /** To Ms Utc */
+            to_ms_utc: number;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /**
+         * ReturnDistributionNotCapturedResponse
+         * @description 404 body for a symbol the lake cannot address or capture could not fill.
+         */
+        ReturnDistributionNotCapturedResponse: {
+            detail: components["schemas"]["NotCapturedDetail"];
+        };
+        /**
+         * ReturnDistributionRequest
+         * @description One study request: minute bars for ``symbol`` over a numeric window.
+         *
+         *     Deliberately standalone rather than a ``TickerRequest`` subclass: the
+         *     study always reads 1-minute extended-session bars from the lake, so the
+         *     sampling block (``timespan``/``multiplier``/``session``) of the bar
+         *     family does not apply and accepting it would promise a knob that does
+         *     not exist. The window travels as int64 ms UTC instants and resolves to
+         *     inclusive UTC calendar dates inside Python (the Data Lab window
+         *     convention: start anchors the UTC midnight of the first trading date,
+         *     end the final instant of the last — ``resolve_request_dates`` is the
+         *     shared conversion authority).
+         */
+        ReturnDistributionRequest: {
+            /**
+             * Bin Width Pct
+             * @default 0.5
+             */
+            bin_width_pct?: number;
+            /** From Ms Utc */
+            from_ms_utc: number;
+            /**
+             * Span Pct
+             * @default 5
+             */
+            span_pct?: number;
+            /** Symbol */
+            symbol: string;
+            /** To Ms Utc */
+            to_ms_utc: number;
+        };
+        /** ReturnDistributionResponse */
+        ReturnDistributionResponse: {
+            coverage: components["schemas"]["CoverageInfo"];
+            /** Days */
+            days: components["schemas"]["DayReturnsModel"][];
+            /** Kinds */
+            kinds: components["schemas"]["KindDistributionModel"][];
+            meta: components["schemas"]["ReturnDistributionMeta"];
         };
         /** ReviewGoldenRunRequest */
         ReviewGoldenRunRequest: {
@@ -32262,7 +32725,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ChartDataResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35596,6 +36059,99 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecencyTradeResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_return_distribution_api_research_return_distribution_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnDistributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionResponse"];
+                };
+            };
+            /** @description The window holds fewer usable sessions than the statistics floor, or the study geometry is unusable. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionInsufficientCoverageResponse"];
+                };
+            };
+            /** @description The symbol is not lake-addressable, or the on-demand capture could not populate the lake for it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionNotCapturedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_day_candles_api_research_return_distribution_day_candles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DayCandlesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayCandlesResponse"];
+                };
+            };
+            /** @description The symbol is not lake-addressable, or the lake holds no bars for that trading date. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayCandlesNotCapturedResponse"];
                 };
             };
             /** @description Validation Error */

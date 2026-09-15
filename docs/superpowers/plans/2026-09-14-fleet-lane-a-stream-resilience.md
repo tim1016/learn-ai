@@ -16,7 +16,7 @@ Inherited verbatim from `2026-09-14-fleet-trust-register-fixes.md` § Global Con
 
 ## Corrections applied by the integrating session
 
-- None.
+- Decision 3 (dwell-time floor) is corrected below to match shipped code: review of PR #2084 reversed the "ship without it" recommendation and added a held-duration predicate (`_MIN_HELD_CONNECTION_MS`) to `TradeUpdatesConsumer.run`. Carried from #2113 (Codex P2, originally #2084).
 
 ---
 
@@ -68,7 +68,7 @@ Base: `origin/master` (e2fdb23f). `origin/fix/fleet-production-safety` (#2081) t
 
 1. **Which counter answers "is this a reconnect?" — a monotonic lifetime cycle count, or a connect count.** Recommend the **monotonic cycle count** (`cycles > 0`, exactly today's `attempt > 0`), because it changes reconciliation triggering by zero and keeps the diff's only behavioural change in the backoff input.
 2. **What resets the backoff — "a frame arrived" or "the cycle connected".** Recommend **connected** (`_counters.connects` increased), because `_gap_reconcile` runs between the first frame and the connection watermark, so a frame-keyed reset would let a permanently failing reconciler reset the backoff every cycle and hot-loop the socket at the 1 s floor.
-3. **Whether to add a dwell-time floor so a socket that authenticates then immediately dies cannot reconnect every second forever.** Recommend **no, ship without it**, because #2081 shipped the same exposure for market-status and a second mechanism should be justified by logs rather than by speculation.
+3. **Whether to add a dwell-time floor so a socket that authenticates then immediately dies cannot reconnect every second forever.** Recommended **no, ship without it** at planning time — reversed during review of the shipped PR (#2084, MAJOR finding): a connect-then-drop flap reaches the connection watermark every cycle, so resetting on bare connect pins the reconnect *and* the 500-order REST gap-reconcile at the 1 s floor against a live broker. Shipped **with** a dwell-time floor: the backoff resets only after a cycle that connected **and** held the socket for at least the backoff ceiling (`_MIN_HELD_CONNECTION_MS = _DEFAULT_MAX_BACKOFF_S * 1000`, `trade_updates.py`), measured from the connection watermark in `_mark_connection` so the gap-reconcile's own REST time is never counted as "held". `market_liveness.py`'s `AlpacaMarketLivenessConsumer` still resets on bare connect and does not carry this predicate — a known, accepted gap (see #2084's PR description), not part of this lane.
 4. **Where the #2082 retry lives — a `urllib3.util.Retry` on the adapter, or an explicit wrapper on `Session.request`.** Recommend the **explicit wrapper**, because `Retry` offers no hook for the structured log line the issue explicitly requires, and urllib3 is unpinned and undeclared in our requirements.
 5. **Retry budget for #2082 — 1 or 2.** Recommend **1**, because up to 8 connections can be pooled (`_MAX_IN_FLIGHT_SYNC_CALLS`, `client.py:64`) but the observed cadence is one stale socket per ~22 min; the new log line tells you if 1 is not enough.
 6. **One PR or two.** Recommend **two** (see §4).
@@ -76,6 +76,17 @@ Base: `origin/master` (e2fdb23f). `origin/fix/fleet-production-safety` (#2081) t
 ## 3. Task breakdown
 
 ### Task 1 — #2079: split the reconnect counters in `TradeUpdatesConsumer.run`
+
+**Shipped differs from the illustration below in one respect.** The pseudocode
+and regression test in this task predate the Decision 3 reversal: they reset
+`attempt` on bare connect (`self._counters.connects > connects_before`), with
+no dwell-time check. The shipped `trade_updates.py` additionally requires the
+connected cycle to have **held** the socket for at least
+`_MIN_HELD_CONNECTION_MS` before resetting (see Decision 3, corrected above,
+and `test_reconnect_backoff_resets_after_a_connected_cycle_and_still_gap_reconciles`
+/ `test_reconnect_backoff_keeps_escalating_when_the_socket_flaps` in the
+shipped test file for the authoritative behaviour). Treat what follows as the
+historical record of the pre-review design, not a spec to re-derive from.
 
 **Files**
 - modify `PythonDataService/app/broker/alpaca/trade_updates.py`

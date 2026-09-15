@@ -52,6 +52,23 @@ describe('AlpacaLaneDirectoryComponent', () => {
     expect(screen.queryByRole('link', { name: 'Configuration' })).toBeNull();
   });
 
+  it("renders the lane's authority state through receiptLabel (#2102)", async () => {
+    // `authority_state` (records.py) reaches the browser but rendered nowhere
+    // before #2102 — it is a raw backend identifier (like `endpoint_mode`
+    // above), so it belongs through the shared pipe, not as literal prose.
+    await render(AlpacaLaneDirectoryComponent, {
+      providers: [
+        provideRouter([]),
+        provideFleetDirectory({
+          observed_at_ms: 1,
+          clerks: [testLane({ provider_summary: { authority_state: 'real_live' } })],
+        }),
+      ],
+    });
+
+    expect(screen.getByText('Real Live')).toBeTruthy();
+  });
+
   it('makes a global Deploy intent an explicit lane-selection step', async () => {
     await render(AlpacaLaneDirectoryComponent, {
       inputs: { requestedSurface: 'deploy' },

@@ -550,6 +550,21 @@ class AutoReconnectMonitor:
         except Exception as exc:
             self._end_attempt(success=False)
             self._advance_recovery("reconnect_failed")
+            # Deliberately unconditional (#2113 review): a demotion keyed on
+            # CONNECT_LOG_BUDGET.suppressing was tried and reverted.
+            # ``suppressing`` means "some outage is being tracked", not
+            # "this failure was reported" — and four of client.connect()'s
+            # exception paths (IbkrClientIdInUseError, both managedAccounts()
+            # refusals, ConnectionRefusedDueToSentinelError) raise without
+            # ever calling CONNECT_LOG_BUDGET.note_failure(). Gating on the
+            # global flag meant an unrelated ConnectionRefusedError blackout
+            # silenced a wrong-account binding or a client-id collision at
+            # every level — the only channel that ever surfaced those four.
+            # The volume this was meant to curb is also much smaller than
+            # #2089's target: this loop backs off to a 60s cap and, once
+            # HARD_DOWN, probes only every OPEN_PROBE_INTERVAL_S (60s) —
+            # nothing like the tight per-attempt loop inside one connect()
+            # call. The budget's own periodic summary already covers that.
             logger.warning(
                 "Auto-reconnect attempt %d failed: %s",
                 attempt,

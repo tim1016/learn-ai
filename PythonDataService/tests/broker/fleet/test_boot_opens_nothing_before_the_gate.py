@@ -30,7 +30,7 @@ _PROBE = (
     "            return {'refused': None}\n"
     "    except BaseException as exc:\n"
     "        return {'refused': type(exc).__name__}\n"
-    "print(json.dumps(asyncio.run(_boot())))"
+    "sys.stdout.write(json.dumps(asyncio.run(_boot())) + '\\n')"
 )
 
 

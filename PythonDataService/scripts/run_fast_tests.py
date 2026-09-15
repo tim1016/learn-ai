@@ -33,6 +33,7 @@ FAST_TEST_PATHS = (
     # detection cannot reliably map its routers and shared custody modules to
     # their consumers.
     "tests/broker",
+    "tests/scripts",
 )
 DAILY_ONLY_PATHS = (
     "tests/unit/data_lake",

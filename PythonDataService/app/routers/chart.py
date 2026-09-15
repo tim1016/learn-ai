@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.chart import (
     AllowedTimeframesRequest,
     ChartDataRequest,
+    ChartDataResponse,
     ChartIndicatorBatchRequest,
     ChartIndicatorBatchResponse,
     ChartIndicatorSupportResponse,
@@ -60,8 +61,8 @@ async def supported_chart_indicators(
     return ChartIndicatorSupportResponse(names=service.supported_names())
 
 
-@router.post("/data")
-async def chart_data(request: ChartDataRequest):
+@router.post("/data", response_model=ChartDataResponse)
+async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
     """
     Fetch resampled OHLCV bars with computed indicators.
 
@@ -146,7 +147,7 @@ async def chart_data(request: ChartDataRequest):
                     detail=result,
                 )
 
-        return result
+        return ChartDataResponse.model_validate(result)
 
     except HTTPException:
         raise

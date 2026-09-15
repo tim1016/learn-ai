@@ -6747,6 +6747,43 @@
         "title": "CanaryRollbackDecision",
         "type": "object"
       },
+      "CaptureReceiptModel": {
+        "description": "What the on-demand lake capture did for this request.\n\n``status`` is the closed contract of\n``app.services.return_distribution_service.CaptureStatus``; clients\nmust render every state (the generated union type enforces it).",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "fetched_artifact_count": {
+            "title": "Fetched Artifact Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "not_attempted",
+              "skipped",
+              "complete",
+              "partial",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "fetched_artifact_count"
+        ],
+        "title": "CaptureReceiptModel",
+        "type": "object"
+      },
       "ChannelHealth": {
         "additionalProperties": false,
         "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.\n\n``connected`` and ``healthy`` are deliberately separate facts. A channel\ncan be connected but not yet usable \u2014 a market-data subscription that\nhas not produced its first closed bar is warming up, not down. Submission\ngates require ``healthy``; account-level surfaces that must not be\nrefused by one symbol's warm-up read ``connected`` (#1777, finding S6).\n``healthy`` implies ``connected``.",
@@ -6888,6 +6925,98 @@
         "title": "ChartBar",
         "type": "object"
       },
+      "ChartDataBar": {
+        "description": "One resampled OHLCV bar of the /api/chart/data success payload.",
+        "properties": {
+          "c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "l": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "L"
+          },
+          "o": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Open; null when the source row was absent",
+            "title": "O"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only on bars the resampler tagged",
+            "title": "Session"
+          },
+          "synthetic": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True only on gap-filled synthetic bars",
+            "title": "Synthetic"
+          },
+          "t": {
+            "description": "Bar timestamp as int64 ms UTC",
+            "minimum": 0.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "o"
+        ],
+        "title": "ChartDataBar",
+        "type": "object"
+      },
       "ChartDataRequest": {
         "description": "Request for chart data with resampled bars and indicators.\n\nTemporal authority (data-lab workspace redesign PRD \u00a712): the numeric\n``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and\neach field takes precedence over its date-string counterpart when\nsupplied. Each value resolves by flooring to its UTC calendar date \u2014\nthe exact inverse of the frontend's ``utcMsToIsoDate`` \u2014 so a numeric\nwindow and the date string the same request carries never disagree,\nwhatever instant inside the day the anchors name (the Data Lab commits\nUTC midnight for the start and the day's final UTC instant for the\nend). Both endpoints of the resolved window are inclusive trading\ndates, matching ``from_date``/``to_date``.",
         "properties": {
@@ -6983,6 +7112,75 @@
         "title": "ChartDataRequest",
         "type": "object"
       },
+      "ChartDataResponse": {
+        "description": "Success payload of POST /api/chart/data.\n\nThe route's handler computes a plain dict; declaring it as the\n``response_model`` publishes the contract (ADR 0031 generated OpenAPI\ntypes) and pins the bar keys (``t``/``o``/``h``/``l``/``c``/``v``) the\nData Lab charts already consume, so no client invents a transport\nmirror. Error responses are typed ``detail`` payloads raised as\nHTTPException and are therefore not part of this model.",
+        "properties": {
+          "allowed_timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Timeframes",
+            "type": "array"
+          },
+          "bar_sources": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-source ingest receipts; present only when the lake is in the read path",
+            "title": "Bar Sources"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartDataBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "estimated_bars_per_timeframe": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Estimated Bars Per Timeframe",
+            "type": "object"
+          },
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorResult"
+            },
+            "title": "Indicators",
+            "type": "array"
+          },
+          "meta": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Meta",
+            "type": "object"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/ChartQualityReport"
+          },
+          "recommended_timeframe": {
+            "title": "Recommended Timeframe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bars",
+          "quality",
+          "allowed_timeframes",
+          "estimated_bars_per_timeframe",
+          "recommended_timeframe",
+          "meta"
+        ],
+        "title": "ChartDataResponse",
+        "type": "object"
+      },
       "ChartFillMarker": {
         "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
@@ -7024,6 +7222,34 @@
           "event_key"
         ],
         "title": "ChartFillMarker",
+        "type": "object"
+      },
+      "ChartGapDetail": {
+        "properties": {
+          "after_ts": {
+            "title": "After Ts",
+            "type": "integer"
+          },
+          "before_ts": {
+            "title": "Before Ts",
+            "type": "integer"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "duration_minutes": {
+            "title": "Duration Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "before_ts",
+          "after_ts",
+          "duration_minutes",
+          "classification"
+        ],
+        "title": "ChartGapDetail",
         "type": "object"
       },
       "ChartHistoryResponse": {
@@ -7438,6 +7664,84 @@
           "source"
         ],
         "title": "ChartOverlayNoticeView",
+        "type": "object"
+      },
+      "ChartQualityReport": {
+        "description": "Resample-quality receipt mirroring chart_service.QualityReport.",
+        "properties": {
+          "duplicates_removed": {
+            "title": "Duplicates Removed",
+            "type": "integer"
+          },
+          "flat_bars_detected": {
+            "title": "Flat Bars Detected",
+            "type": "integer"
+          },
+          "gap_details": {
+            "items": {
+              "$ref": "#/components/schemas/ChartGapDetail"
+            },
+            "title": "Gap Details",
+            "type": "array"
+          },
+          "gaps_found": {
+            "title": "Gaps Found",
+            "type": "integer"
+          },
+          "largest_gap_minutes": {
+            "title": "Largest Gap Minutes",
+            "type": "integer"
+          },
+          "missing_session_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Session Dates",
+            "type": "array"
+          },
+          "missing_sessions": {
+            "title": "Missing Sessions",
+            "type": "integer"
+          },
+          "ohlc_violations_detected": {
+            "title": "Ohlc Violations Detected",
+            "type": "integer"
+          },
+          "out_of_order_fixed": {
+            "title": "Out Of Order Fixed",
+            "type": "integer"
+          },
+          "raw_bar_count": {
+            "title": "Raw Bar Count",
+            "type": "integer"
+          },
+          "resampled_bar_count": {
+            "title": "Resampled Bar Count",
+            "type": "integer"
+          },
+          "session_coverage_pct": {
+            "title": "Session Coverage Pct",
+            "type": "number"
+          },
+          "synthetic_bars": {
+            "title": "Synthetic Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "raw_bar_count",
+          "duplicates_removed",
+          "gaps_found",
+          "largest_gap_minutes",
+          "missing_sessions",
+          "session_coverage_pct",
+          "synthetic_bars",
+          "resampled_bar_count",
+          "flat_bars_detected",
+          "ohlc_violations_detected",
+          "out_of_order_fixed"
+        ],
+        "title": "ChartQualityReport",
         "type": "object"
       },
       "ChartRangePreset": {
@@ -10273,6 +10577,58 @@
         "title": "CoverageDay",
         "type": "object"
       },
+      "CoverageInfo": {
+        "properties": {
+          "excluded_sessions": {
+            "title": "Excluded Sessions",
+            "type": "integer"
+          },
+          "first_session_open_ms_utc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Session Open Ms Utc"
+          },
+          "last_session_open_ms_utc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Open Ms Utc"
+          },
+          "missing_sessions": {
+            "title": "Missing Sessions",
+            "type": "integer"
+          },
+          "requested_sessions": {
+            "title": "Requested Sessions",
+            "type": "integer"
+          },
+          "returned_sessions": {
+            "title": "Returned Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested_sessions",
+          "returned_sessions",
+          "missing_sessions",
+          "excluded_sessions",
+          "first_session_open_ms_utc",
+          "last_session_open_ms_utc"
+        ],
+        "title": "CoverageInfo",
+        "type": "object"
+      },
       "CoverageResponse": {
         "properties": {
           "data_root_id": {
@@ -12233,6 +12589,270 @@
         "title": "DatasetZipJobRequest",
         "type": "object"
       },
+      "DayCandleBarModel": {
+        "properties": {
+          "c": {
+            "title": "C",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "l": {
+            "title": "L",
+            "type": "number"
+          },
+          "o": {
+            "title": "O",
+            "type": "number"
+          },
+          "t": {
+            "description": "Bar start as int64 ms UTC",
+            "minimum": 0.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "o",
+          "h",
+          "l",
+          "c"
+        ],
+        "title": "DayCandleBarModel",
+        "type": "object"
+      },
+      "DayCandlesNotCapturedResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/DayNotCapturedDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "DayCandlesNotCapturedResponse",
+        "type": "object"
+      },
+      "DayCandlesRequest": {
+        "additionalProperties": false,
+        "description": "One drill-down day: extended-session minute candles for a session that\na study response already named (``session_open_ms_utc`` is the day's\nsession-open anchor, so no date string travels).",
+        "properties": {
+          "session_open_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "session_open_ms_utc"
+        ],
+        "title": "DayCandlesRequest",
+        "type": "object"
+      },
+      "DayCandlesResponse": {
+        "description": "Minute candles on the study's own price basis.\n\nRead from the same raw lake root and scaled by the same LEAN\nfactor-file multiplier the study applied to that day's anchors, so the\ncandle pane cannot disagree with the return being inspected (the\nprovider-adjusted chart feed applies split-only adjustment).",
+        "properties": {
+          "adjustment": {
+            "enum": [
+              "split_and_dividend",
+              "raw"
+            ],
+            "title": "Adjustment",
+            "type": "string"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/DayCandleBarModel"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "session_open_ms_utc",
+          "adjustment",
+          "bars"
+        ],
+        "title": "DayCandlesResponse",
+        "type": "object"
+      },
+      "DayNotCapturedDetail": {
+        "properties": {
+          "error_code": {
+            "enum": [
+              "NOT_CAPTURED",
+              "DAY_NOT_CAPTURED"
+            ],
+            "title": "Error Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "trading_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date"
+          }
+        },
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "title": "DayNotCapturedDetail",
+        "type": "object"
+      },
+      "DayReturnsModel": {
+        "description": "One day's returns plus ``bin_indices``: this day's histogram bin per\nreturn kind (index into that kind's ``bins`` list, edge bins included),\nstamped by the same membership function the counts were tallied with.\nConsumers select a basket's days by identity \u2014 they never re-derive\nmembership. ``None`` when that kind's value is undefined for the day.",
+        "properties": {
+          "after_hours_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Hours Pct"
+          },
+          "afternoon_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Afternoon Pct"
+          },
+          "bin_indices": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Bin Indices",
+            "type": "object"
+          },
+          "close_to_close_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close To Close Pct"
+          },
+          "morning_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Morning Pct"
+          },
+          "overnight_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overnight Pct"
+          },
+          "pre_market_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Market Pct"
+          },
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "session_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Pct"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms_utc",
+          "close_to_close_pct",
+          "session_pct",
+          "overnight_pct",
+          "pre_market_pct",
+          "morning_pct",
+          "afternoon_pct",
+          "after_hours_pct",
+          "volume",
+          "bin_indices"
+        ],
+        "title": "DayReturnsModel",
+        "type": "object"
+      },
       "DaySnapshot": {
         "description": "Day OHLCV for an options contract snapshot",
         "properties": {
@@ -12819,6 +13439,91 @@
           "right"
         ],
         "title": "DifferenceBps",
+        "type": "object"
+      },
+      "DistributionStatsModel": {
+        "description": "``None`` stats are undefined for the sample (n too small, or zero\nvariance for the standardized moments) \u2014 not zero.",
+        "properties": {
+          "annualized_vol_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualized Vol Pct"
+          },
+          "best_day": {
+            "$ref": "#/components/schemas/ExtremeDayModel"
+          },
+          "cvar_95_pct": {
+            "title": "Cvar 95 Pct",
+            "type": "number"
+          },
+          "excess_kurtosis": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excess Kurtosis"
+          },
+          "mean_pct": {
+            "title": "Mean Pct",
+            "type": "number"
+          },
+          "n_days": {
+            "title": "N Days",
+            "type": "integer"
+          },
+          "skewness": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skewness"
+          },
+          "std_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std Pct"
+          },
+          "var_95_pct": {
+            "title": "Var 95 Pct",
+            "type": "number"
+          },
+          "worst_day": {
+            "$ref": "#/components/schemas/ExtremeDayModel"
+          }
+        },
+        "required": [
+          "n_days",
+          "mean_pct",
+          "std_pct",
+          "annualized_vol_pct",
+          "skewness",
+          "excess_kurtosis",
+          "var_95_pct",
+          "cvar_95_pct",
+          "best_day",
+          "worst_day"
+        ],
+        "title": "DistributionStatsModel",
         "type": "object"
       },
       "DivergenceCategory": {
@@ -14843,6 +15548,24 @@
           "ack_operator"
         ],
         "title": "ExternalOrderAcknowledgementResponse",
+        "type": "object"
+      },
+      "ExtremeDayModel": {
+        "properties": {
+          "session_open_ms_utc": {
+            "title": "Session Open Ms Utc",
+            "type": "integer"
+          },
+          "value_pct": {
+            "title": "Value Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "session_open_ms_utc",
+          "value_pct"
+        ],
+        "title": "ExtremeDayModel",
         "type": "object"
       },
       "FeatureInfoResponse": {
@@ -17558,6 +18281,48 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HistogramBinModel": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "is_edge": {
+            "title": "Is Edge",
+            "type": "boolean"
+          },
+          "lower_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lower Pct"
+          },
+          "upper_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upper Pct"
+          }
+        },
+        "required": [
+          "lower_pct",
+          "upper_pct",
+          "count",
+          "is_edge"
+        ],
+        "title": "HistogramBinModel",
+        "type": "object"
+      },
       "HistoricalExecutionRecoveryConfirmRequest": {
         "additionalProperties": false,
         "properties": {
@@ -19820,6 +20585,35 @@
         "title": "IndicatorTableResponse",
         "type": "object"
       },
+      "InsufficientCoverageDetail": {
+        "description": "The typed 400 body's ``detail`` for a too-thin usable sample.",
+        "properties": {
+          "available_sessions": {
+            "title": "Available Sessions",
+            "type": "integer"
+          },
+          "error_code": {
+            "const": "INSUFFICIENT_COVERAGE",
+            "default": "INSUFFICIENT_COVERAGE",
+            "title": "Error Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requested_sessions": {
+            "title": "Requested Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "requested_sessions",
+          "available_sessions"
+        ],
+        "title": "InsufficientCoverageDetail",
+        "type": "object"
+      },
       "Iv30LiveRequest": {
         "properties": {
           "debug": {
@@ -20156,6 +20950,44 @@
         "type": "object"
       },
       "JsonValue": {},
+      "KindDistributionModel": {
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramBinModel"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "close_to_close",
+              "session",
+              "overnight"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "normal_expected_counts": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Normal Expected Counts",
+            "type": "array"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/DistributionStatsModel"
+          }
+        },
+        "required": [
+          "kind",
+          "bins",
+          "normal_expected_counts",
+          "stats"
+        ],
+        "title": "KindDistributionModel",
+        "type": "object"
+      },
       "LastQuoteSnapshot": {
         "description": "Last quote (bid/ask) for an options contract snapshot",
         "properties": {
@@ -23548,6 +24380,43 @@
           "reason"
         ],
         "title": "NonSessionRecord",
+        "type": "object"
+      },
+      "NotCapturedDetail": {
+        "description": "The typed 404 body's ``detail`` (minus the extra_forbidden quirks).",
+        "properties": {
+          "capture_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Note"
+          },
+          "captured_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Captured Symbols",
+            "type": "array"
+          },
+          "error_code": {
+            "const": "NOT_CAPTURED",
+            "default": "NOT_CAPTURED",
+            "title": "Error Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "NotCapturedDetail",
         "type": "object"
       },
       "NullDistribution": {
@@ -29784,6 +30653,172 @@
           "kind"
         ],
         "title": "RetireReplaceAction",
+        "type": "object"
+      },
+      "ReturnDistributionInsufficientCoverageResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/InsufficientCoverageDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ReturnDistributionInsufficientCoverageResponse",
+        "type": "object"
+      },
+      "ReturnDistributionMeta": {
+        "properties": {
+          "adjustment": {
+            "enum": [
+              "split_and_dividend",
+              "raw"
+            ],
+            "title": "Adjustment",
+            "type": "string"
+          },
+          "bin_width_pct": {
+            "title": "Bin Width Pct",
+            "type": "number"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureReceiptModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_ms_utc": {
+            "title": "From Ms Utc",
+            "type": "integer"
+          },
+          "resolution": {
+            "const": "1m",
+            "default": "1m",
+            "title": "Resolution"
+          },
+          "span_pct": {
+            "title": "Span Pct",
+            "type": "number"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_ms_utc": {
+            "title": "To Ms Utc",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "symbol",
+          "from_ms_utc",
+          "to_ms_utc",
+          "bin_width_pct",
+          "span_pct",
+          "adjustment"
+        ],
+        "title": "ReturnDistributionMeta",
+        "type": "object"
+      },
+      "ReturnDistributionNotCapturedResponse": {
+        "description": "404 body for a symbol the lake cannot address or capture could not fill.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/NotCapturedDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ReturnDistributionNotCapturedResponse",
+        "type": "object"
+      },
+      "ReturnDistributionRequest": {
+        "additionalProperties": false,
+        "description": "One study request: minute bars for ``symbol`` over a numeric window.\n\nDeliberately standalone rather than a ``TickerRequest`` subclass: the\nstudy always reads 1-minute extended-session bars from the lake, so the\nsampling block (``timespan``/``multiplier``/``session``) of the bar\nfamily does not apply and accepting it would promise a knob that does\nnot exist. The window travels as int64 ms UTC instants and resolves to\ninclusive UTC calendar dates inside Python (the Data Lab window\nconvention: start anchors the UTC midnight of the first trading date,\nend the final instant of the last \u2014 ``resolve_request_dates`` is the\nshared conversion authority).",
+        "properties": {
+          "bin_width_pct": {
+            "default": 0.5,
+            "exclusiveMinimum": 0.0,
+            "maximum": 2.0,
+            "title": "Bin Width Pct",
+            "type": "number"
+          },
+          "from_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms Utc",
+            "type": "integer"
+          },
+          "span_pct": {
+            "default": 5.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 20.0,
+            "title": "Span Pct",
+            "type": "number"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "To Ms Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "symbol",
+          "from_ms_utc",
+          "to_ms_utc"
+        ],
+        "title": "ReturnDistributionRequest",
+        "type": "object"
+      },
+      "ReturnDistributionResponse": {
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageInfo"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DayReturnsModel"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/KindDistributionModel"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ReturnDistributionMeta"
+          }
+        },
+        "required": [
+          "meta",
+          "coverage",
+          "kinds",
+          "days"
+        ],
+        "title": "ReturnDistributionResponse",
         "type": "object"
       },
       "ReviewGoldenRunRequest": {
@@ -57099,7 +58134,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ChartDataResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -62321,6 +63358,120 @@
         "summary": "List Recency Trades",
         "tags": [
           "research-recency"
+        ]
+      }
+    },
+    "/api/research/return-distribution": {
+      "post": {
+        "description": "Compute the daily-return distribution for one symbol and window.",
+        "operationId": "run_return_distribution_api_research_return_distribution_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReturnDistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionInsufficientCoverageResponse"
+                }
+              }
+            },
+            "description": "The window holds fewer usable sessions than the statistics floor, or the study geometry is unusable."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnDistributionNotCapturedResponse"
+                }
+              }
+            },
+            "description": "The symbol is not lake-addressable, or the on-demand capture could not populate the lake for it."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Return Distribution",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/research/return-distribution/day-candles": {
+      "post": {
+        "description": "One captured trading day's minute candles on the study's price basis.",
+        "operationId": "run_day_candles_api_research_return_distribution_day_candles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DayCandlesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DayCandlesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DayCandlesNotCapturedResponse"
+                }
+              }
+            },
+            "description": "The symbol is not lake-addressable, or the lake holds no bars for that trading date."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Day Candles",
+        "tags": [
+          "research"
         ]
       }
     },

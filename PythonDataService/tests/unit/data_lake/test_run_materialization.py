@@ -1626,3 +1626,155 @@ def test_init_pool_translates_connection_refused_to_catalog_unavailable(monkeypa
 
     with pytest.raises(CatalogUnavailableError, match="could not reach the catalog"):
         asyncio.run(_init())
+
+
+# ---------------------------------------------------------------------------
+# materialize_symbol_history — the async research-consumer seam
+# ---------------------------------------------------------------------------
+
+
+def _history_result(
+    status: str,
+    *,
+    failures: list[ArtifactFailure] | None = None,
+    fetched: int = 0,
+    reused: int = 0,
+) -> DataAvailabilityResult:
+    return DataAvailabilityResult(
+        request_id=uuid4(),
+        overall_status=status,
+        lean_data_root_path="/lake",
+        data_availability_hash="c" * 64,
+        artifacts=[],
+        failures=failures or [],
+        non_sessions=[],
+        fetched_artifact_count=fetched,
+        reused_artifact_count=reused,
+        started_at_ms=0,
+        completed_at_ms=1,
+        duration_ms=1,
+    )
+
+
+def _bar_lease_contention() -> ArtifactFailure:
+    return ArtifactFailure(
+        artifact_kind="time_series_bars",
+        symbol="SPY",
+        trading_date=TRADING_DAY,
+        data_type="trade",
+        reason="lease_timeout",
+        detail="another request holds this day's claim",
+        attempt_count=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_materialize_symbol_history_waits_out_sibling_contention(monkeypatch):
+    """The seam must wait for a concurrent fetch that owns the claim, not
+    return its lease_timeout as a final answer — the coalescing a bare
+    ensure_data call does not give a research consumer."""
+    contended = _history_result("partial", failures=[_bar_lease_contention()])
+    complete = _history_result("complete", fetched=42, reused=7)
+    results = iter([contended, complete])
+    calls: list[DataRunSpec] = []
+
+    async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
+        calls.append(spec)
+        return next(results)
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _ensure)
+    receipt = await run_materialization.materialize_symbol_history(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="study-test"
+    )
+
+    assert len(calls) == 2, "the seam must poll, not give up on the first lease_timeout"
+    assert receipt.status == "complete"
+    assert receipt.fetched_artifact_count == 42
+    assert receipt.reused_artifact_count == 7
+    assert receipt.detail is None
+
+
+@pytest.mark.asyncio
+async def test_materialize_symbol_history_spec_includes_factor_and_map_files(monkeypatch):
+    """The research seam asks for the factor and map artifacts the study's
+    corporate-action adjustment reads, stays off the daily rollup, and
+    carries the deadline into the spec (so the wait loop is bounded)."""
+    seen: list[DataRunSpec] = []
+
+    async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
+        seen.append(spec)
+        return _history_result("complete")
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _ensure)
+    receipt = await run_materialization.materialize_symbol_history(
+        symbol="spy",
+        start=TRADING_DAY,
+        end=TRADING_DAY,
+        fetch_timeout_seconds=123,
+    )
+
+    assert receipt.status == "complete"
+    (spec,) = seen
+    assert spec.symbols == ["SPY"]
+    assert spec.include_factor_files is True
+    assert spec.include_map_files is True
+    assert spec.include_daily_trade is False
+    assert spec.data_types == ["trade"]
+    assert spec.fetch_timeout_seconds == 123
+
+
+@pytest.mark.asyncio
+async def test_materialize_symbol_history_contains_data_failures_into_failed(monkeypatch):
+    """Timeout and catalog failures are receipt data, not exceptions — and
+    they must surface as ``failed`` so a consumer can render them as
+    failures rather than 'already up to date'."""
+    async def _timeout(spec: DataRunSpec) -> DataAvailabilityResult:
+        raise TimeoutError("fetch deadline exceeded")
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _timeout)
+    receipt = await run_materialization.materialize_symbol_history(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY
+    )
+    assert receipt.status == "failed"
+    assert "TimeoutError" in (receipt.detail or "")
+
+    async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
+        # A terminal provider failure (not a lease) — the wait loop must
+        # return it immediately rather than polling, and the receipt
+        # reports it as failed.
+        return _history_result(
+            "failed",
+            failures=[
+                ArtifactFailure(
+                    artifact_kind="time_series_bars",
+                    symbol="SPY",
+                    trading_date=TRADING_DAY,
+                    data_type="trade",
+                    reason="provider_api_error",
+                    detail="Polygon 503",
+                    attempt_count=3,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _ensure)
+    receipt = await run_materialization.materialize_symbol_history(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY
+    )
+    assert receipt.status == "failed"
+    assert receipt.detail is not None
+
+
+@pytest.mark.asyncio
+async def test_materialize_symbol_history_skips_inverted_and_unaddressable(monkeypatch):
+    async def _explode(spec: DataRunSpec) -> DataAvailabilityResult:
+        raise AssertionError("capture must not run")
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _explode)
+    from datetime import timedelta
+
+    inverted = await run_materialization.materialize_symbol_history(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY - timedelta(days=1)
+    )
+    assert inverted.status == "skipped"
+    assert "inverted" in (inverted.detail or "")

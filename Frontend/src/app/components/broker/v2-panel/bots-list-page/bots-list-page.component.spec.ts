@@ -514,8 +514,12 @@ describe('BotsListPageComponent', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
 
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    // `clerk_binding_generation_conflict` is a 409 in the fleet's closed
+    // refusal vocabulary (#2067), so it now reads as a conflict, not the
+    // generic "Unknown" `error` severity a pre-#2102 render gave every fleet
+    // refusal.
     expect(view.mockMessageService.add).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'error' }),
+      expect.objectContaining({ severity: 'warn' }),
     );
   });
 

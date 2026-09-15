@@ -41,6 +41,13 @@ export const DATA_LAB_ROUTES: Routes = [
         loadComponent: () =>
           import('./validate/validate.component').then((m) => m.ValidateComponent),
       },
+      {
+        path: 'returns',
+        loadComponent: () =>
+          import('./returns-distribution/returns-distribution.component').then(
+            (m) => m.ReturnsDistributionComponent,
+          ),
+      },
     ],
   },
 ];

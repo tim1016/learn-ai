@@ -22,6 +22,9 @@ class ExportStubComponent {}
 @Component({ selector: 'app-validate-stub', template: 'validate-stub' })
 class ValidateStubComponent {}
 
+@Component({ selector: 'app-returns-stub', template: 'returns-stub' })
+class ReturnsStubComponent {}
+
 /** Host with a router outlet so the shell really routes in tests. */
 @Component({ selector: 'app-shell-host', imports: [RouterOutlet], template: '<router-outlet />' })
 class ShellHostComponent {}
@@ -68,6 +71,7 @@ function shellRoutes(): Routes {
         { path: 'explore', component: ExploreStubComponent },
         { path: 'export', component: ExportStubComponent },
         { path: 'validate', component: ValidateStubComponent },
+        { path: 'returns', component: ReturnsStubComponent },
       ],
     },
   ];
@@ -157,12 +161,13 @@ async function renderDirectShell(url: string) {
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the three route tabs and redirects /data-lab to explore', async () => {
+  it('renders the four route tabs and redirects /data-lab to explore', async () => {
     const { router } = await renderRoutedShell();
     expect(router.url).toBe('/explore');
     expect(screen.getByRole('link', { name: 'Explore' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Build dataset' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Validate' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Returns study' })).toBeTruthy();
     expect(screen.getByText('explore-stub')).toBeTruthy();
   });
 
@@ -171,6 +176,10 @@ describe('DataLabComponent (shell)', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Validate' }));
     await waitFor(() => expect(router.url).toBe('/validate'));
     expect(screen.getByText('validate-stub')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('link', { name: 'Returns study' }));
+    await waitFor(() => expect(router.url).toBe('/returns'));
+    expect(screen.getByText('returns-stub')).toBeTruthy();
 
     await userEvent.click(screen.getByRole('link', { name: 'Build dataset' }));
     await waitFor(() => expect(router.url).toBe('/export'));

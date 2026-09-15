@@ -17,6 +17,7 @@ needed. Each test pins one observable contract:
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -24,8 +25,9 @@ from app.broker.ibkr.auto_reconnect_monitor import (
     AutoReconnectMonitor,
     jittered_backoff_delay,
 )
-from app.broker.ibkr.client import get_client_lifecycle_lock
-from tests.broker.ibkr._support import _FakeClient
+from app.broker.ibkr.client import ConnectionRefusedDueToSentinelError, get_client_lifecycle_lock
+from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
+from tests.broker.ibkr._support import _FakeClient, _wait_for
 
 
 @pytest.fixture(autouse=True)
@@ -818,3 +820,59 @@ async def test_monitor_publishes_attempt_state_to_observers() -> None:
     assert monitor.current_attempt == 0
     assert monitor.successful_reconnect_count == 1
     assert monitor.last_transition_ms >= initial_transition
+
+
+# ──────────────────────────── connect-log-budget interaction ──────────
+
+
+@pytest.fixture
+def _fresh_connect_log_budget():
+    """``CONNECT_LOG_BUDGET`` is a module singleton shared with
+    ``client.py``; scope it to the test so no state leaks either way."""
+    CONNECT_LOG_BUDGET.reset_for_testing()
+    yield
+    CONNECT_LOG_BUDGET.reset_for_testing()
+
+
+@pytest.mark.asyncio
+async def test_monitor_reconnect_failure_warns_even_during_an_unrelated_tracked_outage(
+    _fresh_connect_log_budget: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression for the #2113 review: a demotion of this WARNING keyed on
+    ``CONNECT_LOG_BUDGET.suppressing`` was tried and reverted, because
+    ``suppressing`` means "some outage is being tracked", not "this failure
+    was reported". Four of ``client.connect()``'s exception paths --
+    ``IbkrClientIdInUseError``, both ``managedAccounts()`` refusals, and
+    (used here) ``ConnectionRefusedDueToSentinelError`` -- raise without
+    ever calling ``CONNECT_LOG_BUDGET.note_failure()``. A demotion gated on
+    the global flag would silence a wrong-account binding or a client-id
+    collision whenever an *unrelated* outage happens to be tracked
+    elsewhere in the process -- the only channel that ever surfaces those
+    four. This must warn regardless."""
+    CONNECT_LOG_BUDGET.note_failure(ConnectionRefusedError(111, "unrelated outage"))
+    assert CONNECT_LOG_BUDGET.suppressing
+    caplog.set_level(logging.DEBUG, logger="app.broker.ibkr.auto_reconnect_monitor")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[
+            ConnectionRefusedDueToSentinelError(
+                "IBKR_MODE=paper but connected account 'U1234567' is NOT a "
+                "paper account (paper IDs begin with 'DU'). Disconnected. "
+                "Refusing to proceed."
+            )
+        ],
+    )
+    monitor = AutoReconnectMonitor(client, poll_interval_s=0.01, initial_backoff_s=0.01)
+
+    monitor.start()
+    await _wait_for(lambda: client.connect_calls >= 1)
+    await monitor.stop()
+
+    fails = [r for r in caplog.records if r.__dict__.get("action") == "auto_reconnect_fail"]
+    assert fails, "expected at least one auto_reconnect_fail log line"
+    assert any(r.levelno == logging.WARNING for r in fails), (
+        "a sentinel-mismatch failure (or anything else client.connect() "
+        "raises without routing through CONNECT_LOG_BUDGET.note_failure()) "
+        "must warn regardless of an unrelated tracked outage"
+    )
