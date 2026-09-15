@@ -13,6 +13,7 @@ import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
+const FENCE = { bindingGeneration: 1, routingEpoch: 1 };
 
 function clerkStatus(posture: AccountOperatorPosture = healthyAccountOperatorPostureFixture()): ClerkStatus {
   return {
@@ -120,7 +121,7 @@ function lensDataProvider(
       projectionRefreshVersion: signal(0),
       refreshProjection,
     },
-  }, { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET } }];
+  }, { provide: AlpacaDeskAccountDataService, useValue: { target: () => TARGET, fence: () => FENCE } }];
 }
 
 describe('AlpacaOperatorLensComponent', () => {

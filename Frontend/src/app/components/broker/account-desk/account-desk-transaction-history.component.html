@@ -20,6 +20,10 @@
     }
   </header>
 
+  @if (receiptBlockedMessage(); as blocked) {
+    <p class="state state--error" role="alert">{{ blocked }}</p>
+  }
+
   @if (selectedBrokerHistory.isLoading() && showScopeControl()) {
     <p class="state" role="status">Loading the selected account period…</p>
   } @else if (rangeUnavailable()) {

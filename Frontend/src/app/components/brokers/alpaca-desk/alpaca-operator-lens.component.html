@@ -21,6 +21,7 @@
     <div class="operator-workspace">
       <app-account-desk-transaction-history
         [target]="dataTarget()"
+        [fence]="dataFence()"
         [accountId]="clerkStatus.account_id"
         [refreshVersion]="refreshVersion()"
         [pageSize]="5"
@@ -38,6 +39,7 @@
           @if (custodyOpened()) {
             <app-alpaca-sqlite-custody
               [target]="dataTarget()!"
+              [fence]="dataFence()"
               [accountId]="clerkStatus.account_id"
               [projectionRefreshVersion]="projectionRefreshVersion()"
               [timelineQuery]="timelineQuery()"

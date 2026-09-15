@@ -30,6 +30,12 @@ import {
   withAccount,
   withCommand,
 } from '../../../fleet/resource-target';
+import {
+  fencedTarget,
+  laneFenceIsEnforceable,
+  LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  type LaneFence,
+} from '../../../fleet/lane-fence';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -126,6 +132,10 @@ export class AccountDeskTransactionHistoryComponent {
   readonly accountId = input<string | null>(null);
   /** Explicit desk target for broker-history reads. */
   readonly target = input<ResourceTarget | null>(null);
+  /** The binding-generation fence frozen at desk-render time (#2106) —
+   * combined with `target` only at the moment the acknowledgement command is
+   * minted (`openReceipt`), never used to re-derive `target` itself. */
+  readonly fence = input<LaneFence | null>(null);
   readonly refreshVersion = input(0);
   readonly fromMs = input<number | null>(null);
   readonly toMs = input<number | null>(null);
@@ -143,6 +153,10 @@ export class AccountDeskTransactionHistoryComponent {
   protected readonly acknowledgementOperator = signal('');
   protected readonly acknowledgingExternalOrderId = signal<string | null>(null);
   protected readonly acknowledgementError = signal<string | null>(null);
+  /** Set when `openReceipt` refuses to mint a command because the lane's
+   * fence had no known binding at desk-render time (#2106). Separate from
+   * `acknowledgementError`, which only renders once a receipt is open. */
+  protected readonly receiptBlockedMessage = signal<string | null>(null);
 
   protected readonly selectedBrokerHistory = resource<BrokerPortfolioHistory | null, {
     readonly enabled: boolean;
@@ -220,6 +234,7 @@ export class AccountDeskTransactionHistoryComponent {
       this.receiptOpener.set(null);
       this.acknowledgementOperator.set('');
       this.acknowledgementError.set(null);
+      this.receiptBlockedMessage.set(null);
       this.acknowledgingExternalOrderId.set(null);
     });
   }
@@ -240,12 +255,20 @@ export class AccountDeskTransactionHistoryComponent {
   protected openReceipt(row: TransactionTableRow, event: MouseEvent): void {
     const target = this.target();
     if (target === null) return;
+    // This target belongs to the receipt, not the live route. A later route
+    // or directory change must not move an acknowledgement to another clerk
+    // (#2106): the generation/epoch come from the fence frozen at desk-render
+    // time, not from `target` itself, which stays live for reads.
+    const fence = this.fence() ?? { bindingGeneration: null, routingEpoch: null };
+    if (!laneFenceIsEnforceable(fence)) {
+      this.receiptBlockedMessage.set(LANE_FENCE_UNENFORCEABLE_MESSAGE);
+      return;
+    }
+    this.receiptBlockedMessage.set(null);
     const opener = event.currentTarget;
     this.receiptOpener.set(opener instanceof HTMLElement ? opener : null);
-    // This target belongs to the receipt, not the live route. A later route
-    // or directory change must not move an acknowledgement to another clerk.
     this.selectedTarget.set(withCommand(
-      withAccount(target, this.accountId() ?? target.accountId),
+      withAccount(fencedTarget(target, fence), this.accountId() ?? target.accountId),
       'custody_command',
       this.newReceiptCommandId(),
     ));
@@ -306,18 +329,23 @@ export class AccountDeskTransactionHistoryComponent {
     }
   }
 
+  /** Keyed off the frozen fence, not `target()`'s live generation (#2106): a
+   * directory rebind alone must not read as "the desk changed" and reset an
+   * open receipt or discard an in-flight acknowledgement's result — only an
+   * actual desk change (clerk/account) or a fence recompute (route change)
+   * does. */
   private currentReceiptContext(): string | null {
     const target = this.target();
-    const accountId = this.accountId() ?? target?.accountId ?? null;
-    return target === null
-      ? null
-      : laneKey(
-          target.broker,
-          target.clerkId,
-          target.routingEpoch,
-          target.bindingGeneration,
-          accountId,
-        );
+    if (target === null) return null;
+    const fenced = fencedTarget(target, this.fence() ?? { bindingGeneration: null, routingEpoch: null });
+    const accountId = this.accountId() ?? fenced.accountId;
+    return laneKey(
+      fenced.broker,
+      fenced.clerkId,
+      fenced.routingEpoch,
+      fenced.bindingGeneration,
+      accountId,
+    );
   }
 
   private isCurrent(target: ResourceTarget, accountId: string): boolean {

@@ -78,3 +78,60 @@ describe('the lane fence is frozen, never read at command time', () => {
     expect(offenders.filter((p) => !ALLOWED.has(p))).toEqual([]);
   });
 });
+
+/**
+ * #2106: the check above requires `withCommand(` AND a live `.lane(` read in
+ * the SAME file. `alpaca-desk-account-data.service.ts` reads the directory
+ * and hands the result to four *other* files as an `input()`-typed
+ * `ResourceTarget` — each of those four mints `withCommand(` and contains
+ * zero `.lane(` reads of its own, so the check above cannot see them at all.
+ * The gap is invisible unless it is written down (this comment) and guarded
+ * (the check below).
+ *
+ * This second check is narrower in a different way: instead of requiring a
+ * live `.lane(` read in the same file, it requires an `input()`-typed
+ * `ResourceTarget` in a file that also mints `withCommand(`, and demands
+ * `fencedTarget(` or `freezeLaneFence(` also appear there — the two ways
+ * this tree combines a live-identity target with a frozen fence, or freezes
+ * one outright, before a command is minted. It is still a same-file textual
+ * co-occurrence check, not a data-flow one, with the same two blind spots as
+ * the check above (it cannot verify the fencing call actually gates the read
+ * that reaches `withCommand(`, and a second, genuinely-unfenced target built
+ * alongside a correctly-fenced one would still pass) plus a third of its
+ * own: it cannot see whether the *provider* on the other end of the `input()`
+ * already froze the whole target before handing it down. A provider that
+ * does — the deploy drawer freezes an entire `ResourceTarget` once when it
+ * opens and never re-derives it while open, the same "computed() frozen
+ * once at action-open" pattern as the cohort-archive drawer above — makes
+ * `fencedTarget(`/`freezeLaneFence(` in the *consumer* unnecessary. Those
+ * consumers are named in `INPUT_ALLOWED` with the one-line proof this spec
+ * demands; a future entry needs the same proof, not a bare addition.
+ */
+const INPUT_ALLOWED = new Set<string>([
+  // `AlpacaDeployWorkflowComponent.target` is frozen once by
+  // `AlpacaDeployDrawerComponent` when the drawer opens (`frozenTarget`,
+  // guarded by `wasVisible`) and never re-derived from a live directory read
+  // while the drawer stays open — proven by
+  // `alpaca-deploy-drawer.component.spec.ts`'s "freezes the target at open
+  // and does not re-derive it from a later input change".
+  join('components', 'broker', 'broker-deploy-page', 'alpaca-deploy-workflow.component.ts'),
+  // `DeployPaperAccessComponent.target` is the same already-frozen target,
+  // one hop further down (`alpaca-deploy-workflow.component.html` passes
+  // `deployTarget(view.account_id)`, a re-stamp of the frozen `target`, not a
+  // fresh directory read).
+  join('components', 'broker', 'broker-deploy-page', 'deploy-paper-access.component.ts'),
+]);
+
+describe('an input()-derived command target is fenced before it is minted', () => {
+  it('every file that mints withCommand( from an input()-typed ResourceTarget also fences it, or is a named, proven exception', () => {
+    const offenders: string[] = [];
+    for (const path of sources(APP_ROOT)) {
+      const text = readFileSync(path, 'utf8');
+      if (!text.includes('withCommand(')) continue;
+      if (!/\binput(?:\.required)?<ResourceTarget\b/.test(text)) continue;
+      if (text.includes('fencedTarget(') || text.includes('freezeLaneFence(')) continue;
+      offenders.push(path.slice(APP_ROOT.length + 1));
+    }
+    expect(offenders.filter((p) => !INPUT_ALLOWED.has(p))).toEqual([]);
+  });
+});

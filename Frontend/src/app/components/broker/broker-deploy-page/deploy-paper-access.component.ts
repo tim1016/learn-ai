@@ -18,6 +18,7 @@ import {
   type PaperAccessPlan,
 } from "../v2-panel/lib/broker-v2-panel.service";
 import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
+import { laneFenceIsEnforceable, LANE_FENCE_UNENFORCEABLE_MESSAGE } from '../../../fleet/lane-fence';
 
 const UI_ACTIVATION_REASON = "Enable Paper access from the Alpaca Deploy page.";
 
@@ -106,6 +107,24 @@ export class DeployPaperAccessComponent {
     if (strategy.paper_access_state !== "available") return;
     const identity = this.identity();
     const laneTarget = this.target();
+    // `target` arrives already frozen at drawer-open (#2106) — the drawer
+    // captures it once, before this component even exists, and never
+    // re-derives it from a live directory read while open. A cold directory
+    // at that moment still freezes a null generation, though, and
+    // `commandContextOf` sends no generation check at all for one — refuse
+    // rather than dispatch blind (see `lane-fence.ts`'s doc on why a null
+    // fence is not a safe default).
+    if (!laneFenceIsEnforceable({
+      bindingGeneration: laneTarget.bindingGeneration,
+      routingEpoch: laneTarget.routingEpoch,
+    })) {
+      this.flow.set({
+        kind: "error",
+        failure: { message: LANE_FENCE_UNENFORCEABLE_MESSAGE, explanation: null, nextAction: null },
+        retry: null,
+      });
+      return;
+    }
     // The review and its confirmation are one durable interaction. Capture
     // the lane and key before the first await so a later route reuse cannot
     // send the reviewed plan through a newly-bound Clerk.

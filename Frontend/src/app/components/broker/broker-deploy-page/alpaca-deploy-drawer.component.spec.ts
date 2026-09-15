@@ -90,4 +90,42 @@ describe('AlpacaDeployDrawerComponent', () => {
       await screen.findByText('Restore the Alpaca account connection, then reopen Deploy.'),
     ).toBeTruthy();
   });
+
+  /** #2106: the deploy chain's leaf command surfaces (`AlpacaDeployWorkflowComponent`,
+   * `DeployPaperAccessComponent`) trust that `target` is frozen once by this
+   * drawer at open and never re-derived from a live directory read while the
+   * drawer stays open — that trust is this test's subject, not an assumption.
+   * `resolvedTarget()` feeds the `account` resource's reactive `params`, so a
+   * second `getAccount` call after a live rebind would prove the freeze had
+   * failed; a single call proves it held. */
+  it('freezes the target at open and does not re-derive it from a later input change', async () => {
+    const getAccount = vi.fn().mockResolvedValue(fakeAccount());
+    const view = await render(AlpacaDeployDrawerComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: BrokersService, useValue: { getAccount } },
+        {
+          provide: BrokerV2PanelService,
+          useValue: {
+            getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
+            previewStartAdmission: vi.fn(),
+            deployBot: vi.fn(),
+          },
+        },
+      ],
+      inputs: { visible: true, target: TARGET },
+    });
+    await view.fixture.whenStable();
+    expect(getAccount).toHaveBeenCalledTimes(1);
+    expect(getAccount).toHaveBeenCalledWith(expect.objectContaining({ bindingGeneration: 3, routingEpoch: 7 }));
+
+    // The lane rebinds (a directory refresh) while the drawer stays open.
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_drawer', {
+      accountId: 'PA9', bindingGeneration: 99, routingEpoch: 55,
+    }));
+    view.fixture.detectChanges();
+    await view.fixture.whenStable();
+
+    expect(getAccount).toHaveBeenCalledTimes(1);
+  });
 });
