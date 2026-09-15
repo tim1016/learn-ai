@@ -55,6 +55,59 @@ jobs:
       - run: ruff check --config PythonDataService/ruff.toml scripts/dev/fleet/
       - run: timeout --signal=KILL 120s python scripts/dev/fleet/test_fleet_tooling.py -v
 
+  fleet-topology-render:
+    name: Fleet Topology Render
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # CI renders with `docker compose` (what this runner image ships); the
+    # dev host renders with `podman compose`. The two engines can disagree on
+    # `!override` merge order, `deploy.resources` vs top-level
+    # `cpus`/`mem_limit`, and `:z` relabel suffixes — this job only proves the
+    # docker-compose half. The host migration runbook re-runs the identical
+    # script with `--engine "podman compose" --check` before it touches
+    # anything, which is the other half of this gate (see
+    # docs/runbooks/fleet-dev-two-lane-posture.md).
+    env:
+      # `env_file: required: true` on the live/paper clerks means `compose
+      # config` fails outright if the real, gitignored deploy/fleet/env/*.env
+      # do not exist — true on every fresh checkout including this one. The
+      # tracked `.example` files declare the identical key set with blank
+      # values, so pointing here keeps the render secret-free and
+      # deterministic without any checkout-time ceremony.
+      FLEET_LIVE_ENV_FILE: ./deploy/fleet/env/live.env.example
+      FLEET_PAPER_ENV_FILE: ./deploy/fleet/env/paper.env.example
+      FLEET_COORDINATOR_ENV_FILE: ./deploy/fleet/env/coordinator.env.example
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install PyYAML==6.0.3
+      - name: Record the Compose implementation under test
+        run: docker compose version
+      - name: Render the topology and require the committed snapshot to match
+        run: |
+          python scripts/render_fleet_topology.py --engine "docker compose"
+          git diff --exit-code -- deploy/fleet/topology.snapshot.json
+          # `git diff` ignores untracked files, so a snapshot deleted and
+          # regenerated as a never-committed file would pass unnoticed.
+          status=$(git status --porcelain -- deploy/fleet/topology.snapshot.json)
+          if [ -n "$status" ]; then
+            echo "Rendered topology snapshot is untracked or otherwise dirty:"
+            echo "$status"
+            exit 1
+          fi
+      - name: Require the fleet service set to be exactly the reviewed one
+        run: |
+          docker compose --project-name learn-ai \
+            --env-file deploy/fleet/ci-render.placeholders \
+            -f compose.yaml -f compose.fleet.dev.yaml config --services | sort > /tmp/services.txt
+          printf '%s\n' alpaca-live-clerk alpaca-paper-clerk backend db frontend python-service redis \
+            | sort | diff -u - /tmp/services.txt
+
   frontend-lint:
     name: Frontend Lint
     runs-on: ubuntu-latest

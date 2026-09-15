@@ -1,0 +1,285 @@
+{
+  "compose_files": [
+    "compose.yaml",
+    "compose.fleet.dev.yaml"
+  ],
+  "fenced_empty_env_keys": {
+    "alpaca-live-clerk": {
+      "ALPACA_CLERK_DIR": false
+    },
+    "alpaca-paper-clerk": {
+      "ALPACA_CLERK_DIR": false
+    },
+    "python-service": {
+      "ALPACA_CLERK_DIR": true
+    }
+  },
+  "networks": [
+    "app-network"
+  ],
+  "service_detail": {
+    "alpaca-live-clerk": {
+      "container_name": "alpaca-live-clerk",
+      "containment": {},
+      "env_file": [
+        "${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}"
+      ],
+      "environment_keys": [
+        "ALPACA_API_KEY_ID",
+        "ALPACA_API_SECRET_KEY",
+        "ALPACA_CLERK_DIR",
+        "BROKER_CAPTURE_DIR",
+        "FLEET_AGENT_ENDPOINT_REF",
+        "FLEET_AGENT_SERVICE_TOKEN",
+        "FLEET_CLERK_ID",
+        "FLEET_COORDINATOR_SERVICE_TOKEN",
+        "FLEET_COORDINATOR_URL",
+        "FLEET_DEPLOYMENT_NAMESPACE",
+        "FLEET_MAX_INFLIGHT_REQUESTS",
+        "FLEET_MAX_INFLIGHT_STREAMS",
+        "FLEET_REQUEST_QUEUE_LIMIT",
+        "FLEET_REQUEST_QUEUE_TIMEOUT_MS",
+        "FLEET_ROLE",
+        "FLEET_WORKER_KEY",
+        "HOST",
+        "IBKR_BROKER_ENABLED",
+        "IBKR_CLIENT_ID",
+        "IBKR_HOST",
+        "IBKR_LIVE_BARS_ROOT",
+        "IBKR_LIVE_RUNS_ROOT",
+        "IBKR_PORT",
+        "IBKR_READONLY",
+        "POLYGON_API_KEY",
+        "PORT",
+        "TRUSTED_HOSTS"
+      ],
+      "image": null,
+      "networks": [
+        "app-network"
+      ],
+      "ports": [],
+      "volumes": [
+        "PythonDataService/app->/app/app:bind",
+        "alpaca-clerk-data->/app/artifacts/alpaca_clerk:volume"
+      ]
+    },
+    "alpaca-paper-clerk": {
+      "container_name": "alpaca-paper-clerk",
+      "containment": {},
+      "env_file": [
+        "${FLEET_PAPER_ENV_FILE:-./deploy/fleet/env/paper.env}"
+      ],
+      "environment_keys": [
+        "ALPACA_API_KEY_ID",
+        "ALPACA_API_SECRET_KEY",
+        "ALPACA_CLERK_DIR",
+        "BROKER_CAPTURE_DIR",
+        "FLEET_AGENT_ENDPOINT_REF",
+        "FLEET_AGENT_SERVICE_TOKEN",
+        "FLEET_CLERK_ID",
+        "FLEET_COORDINATOR_SERVICE_TOKEN",
+        "FLEET_COORDINATOR_URL",
+        "FLEET_DEPLOYMENT_NAMESPACE",
+        "FLEET_MAX_INFLIGHT_REQUESTS",
+        "FLEET_MAX_INFLIGHT_STREAMS",
+        "FLEET_REQUEST_QUEUE_LIMIT",
+        "FLEET_REQUEST_QUEUE_TIMEOUT_MS",
+        "FLEET_ROLE",
+        "FLEET_WORKER_KEY",
+        "HOST",
+        "IBKR_BROKER_ENABLED",
+        "IBKR_CLIENT_ID",
+        "IBKR_HOST",
+        "IBKR_LIVE_BARS_ROOT",
+        "IBKR_LIVE_RUNS_ROOT",
+        "IBKR_PORT",
+        "IBKR_READONLY",
+        "POLYGON_API_KEY",
+        "PORT",
+        "TRUSTED_HOSTS"
+      ],
+      "image": null,
+      "networks": [
+        "app-network"
+      ],
+      "ports": [],
+      "volumes": [
+        "PythonDataService/app->/app/app:bind",
+        "alpaca-paper-clerk-data->/app/artifacts/alpaca_clerk:volume"
+      ]
+    },
+    "backend": {
+      "container_name": "my-backend",
+      "containment": {},
+      "env_file": [],
+      "environment_keys": [
+        "ASPNETCORE_ENVIRONMENT",
+        "ASPNETCORE_URLS",
+        "ConnectionStrings__DefaultConnection",
+        "DOTNET_ReadyToRun",
+        "DOTNET_TieredCompilation",
+        "DOTNET_USE_POLLING_FILE_WATCHER",
+        "DataPlane__ControlSecret",
+        "PolygonService__BaseUrl",
+        "REDIS_URL"
+      ],
+      "image": "mcr.microsoft.com/dotnet/sdk:10.0",
+      "networks": [
+        "app-network"
+      ],
+      "ports": [
+        "127.0.0.1:5000->8080"
+      ],
+      "volumes": [
+        "Backend->/src:bind"
+      ]
+    },
+    "db": {
+      "container_name": "my-postgres",
+      "containment": {},
+      "env_file": [],
+      "environment_keys": [
+        "POSTGRES_PASSWORD"
+      ],
+      "image": "docker.io/library/postgres:16",
+      "networks": [
+        "app-network"
+      ],
+      "ports": [
+        "127.0.0.1:5432->5432"
+      ],
+      "volumes": [
+        "pgdata->/var/lib/postgresql/data:volume"
+      ]
+    },
+    "frontend": {
+      "container_name": "my-frontend",
+      "containment": {},
+      "env_file": [],
+      "environment_keys": [
+        "BACKEND_PROXY_TARGET",
+        "DATA_PLANE_CONTROL_SECRET",
+        "DATA_PLANE_PROXY_TARGET",
+        "NODE_OPTIONS"
+      ],
+      "image": null,
+      "networks": [
+        "app-network"
+      ],
+      "ports": [
+        "127.0.0.1:4200->4200"
+      ],
+      "volumes": [
+        "Frontend/proxy.conf.js->/app/proxy.conf.js:bind",
+        "Frontend/src->/app/src:bind",
+        "PythonDataService/tests/fixtures/action_plan->/app/src/testing/action_plan_fixtures:bind",
+        "contracts->/contracts:bind"
+      ]
+    },
+    "python-service": {
+      "container_name": "polygon-data-service",
+      "containment": {},
+      "env_file": [
+        "${FLEET_COORDINATOR_ENV_FILE:-./deploy/fleet/env/coordinator.env}",
+        "./PythonDataService/.env"
+      ],
+      "environment_keys": [
+        "ALLOWED_ORIGINS",
+        "ALPACA_CLERK_DIR",
+        "BACKEND_URL",
+        "DATA_PLANE_CONTROL_SECRET",
+        "FLEET_AGENT_SERVICE_TOKENS_JSON",
+        "FLEET_CONTROL_DIR",
+        "FLEET_COORDINATOR_SERVICE_TOKENS_JSON",
+        "FLEET_DEPLOYMENT_NAMESPACE",
+        "FLEET_ROLE",
+        "FRED_API_KEY",
+        "HOST",
+        "IBKR_BROKER_ENABLED",
+        "IBKR_CLIENT_ID",
+        "IBKR_HOST",
+        "IBKR_LIVE_RUNS_ROOT",
+        "IBKR_MODE",
+        "IBKR_PORT",
+        "IBKR_READONLY",
+        "IBKR_REALTIME_BAR_MAX_ACTIVE",
+        "LEAN_DATA_CACHE",
+        "LEAN_DATA_ROOT",
+        "LEAN_DATA_WRITE_ROOT",
+        "LEAN_LAUNCHER_URL",
+        "POLYGON_API_KEY",
+        "POLYGON_RATE_LIMIT_PER_MIN",
+        "PORT",
+        "POSTGRES_URL",
+        "REDIS_URL",
+        "TRUSTED_HOSTS",
+        "UVICORN_RELOAD",
+        "WATCHFILES_FORCE_POLLING"
+      ],
+      "image": null,
+      "networks": [
+        "app-network"
+      ],
+      "ports": [
+        "127.0.0.1:8000->8000"
+      ],
+      "volumes": [
+        "../Lean/Data->/lean-data:bind",
+        ".git->/app/.git:bind",
+        "PythonDataService/app->/app/app:bind",
+        "PythonDataService/artifacts->/app/artifacts:bind",
+        "PythonDataService/cache->/app/cache:bind",
+        "PythonDataService/lean-cache->/lean-cache:bind",
+        "PythonDataService/pytest.ini->/app/pytest.ini:bind",
+        "PythonDataService/ruff.toml->/app/ruff.toml:bind",
+        "PythonDataService/scripts->/app/scripts:bind",
+        "PythonDataService/tests/fixtures/golden/manifest.json->/app/tests/fixtures/golden/manifest.json:bind",
+        "alpaca-fleet-control->/app/artifacts/fleet:volume",
+        "data-lake-volume->/lean-data-writer:bind"
+      ]
+    },
+    "redis": {
+      "container_name": "my-redis",
+      "containment": {},
+      "env_file": [],
+      "environment_keys": [
+        "REDIS_PASSWORD"
+      ],
+      "image": "docker.io/library/redis:7-alpine",
+      "networks": [
+        "app-network"
+      ],
+      "ports": [
+        "127.0.0.1:6379->6379"
+      ],
+      "volumes": []
+    }
+  },
+  "services": [
+    "alpaca-live-clerk",
+    "alpaca-paper-clerk",
+    "backend",
+    "db",
+    "frontend",
+    "python-service",
+    "redis"
+  ],
+  "volumes": {
+    "alpaca-clerk-data": {
+      "external": true,
+      "name": "learn-ai-alpaca-clerk-data"
+    },
+    "alpaca-fleet-control": {
+      "external": false,
+      "name": "learn-ai_alpaca-fleet-control"
+    },
+    "alpaca-paper-clerk-data": {
+      "external": false,
+      "name": "learn-ai-alpaca-paper-clerk-data"
+    },
+    "pgdata": {
+      "external": false,
+      "name": "learn-ai_pgdata"
+    }
+  }
+}

@@ -11,6 +11,20 @@ set -euo pipefail
 # fires and Compose falls back to the classic builder. Disable bake to silence.
 export COMPOSE_BAKE=false
 
+# Compose auto-loads only compose.yaml and compose.override.yaml. The
+# committed fleet topology (compose.fleet.dev.yaml) is a third file, so it
+# must be named explicitly or the stack silently reverts to the unfenced
+# `combined` posture (fleet_boot.py:108-116) on every restart. Order matters:
+# later files win, so the dev-only override still applies last. An explicit
+# COMPOSE_FILE in the environment takes over entirely, as Compose intends.
+COMPOSE_ARGS=()
+if [[ -z "${COMPOSE_FILE:-}" ]]; then
+  COMPOSE_ARGS+=(--file compose.yaml)
+  [[ -f compose.fleet.dev.yaml ]] && COMPOSE_ARGS+=(--file compose.fleet.dev.yaml)
+  [[ -f compose.override.yaml ]] && COMPOSE_ARGS+=(--file compose.override.yaml)
+fi
+echo "==> Compose files: ${COMPOSE_ARGS[*]:-\$COMPOSE_FILE=$COMPOSE_FILE}"
+
 NO_CACHE=""
 if [[ "${1:-}" == "--no-cache" ]]; then
   NO_CACHE="--no-cache"
@@ -18,7 +32,7 @@ if [[ "${1:-}" == "--no-cache" ]]; then
 fi
 
 echo "==> Tearing down all containers..."
-podman compose down
+podman compose "${COMPOSE_ARGS[@]}" down
 
 # Compose ownership is decided by the label Compose itself stamps, never by a
 # hardcoded service list. A hardcoded list silently misclassifies every service
@@ -65,13 +79,13 @@ fi
 # authoritative verdict and will exit 1 if anything is genuinely unhealthy.
 if [[ -n "$NO_CACHE" ]]; then
   echo "==> Building images from scratch..."
-  podman compose build --no-cache --pull
+  podman compose "${COMPOSE_ARGS[@]}" build --no-cache --pull
 else
   echo "==> Building images..."
-  podman compose build
+  podman compose "${COMPOSE_ARGS[@]}" build
 fi
 echo "==> Starting all services..."
-podman compose up -d --force-recreate || true
+podman compose "${COMPOSE_ARGS[@]}" up -d --force-recreate || true
 
 # Recover services left in Created. When a `depends_on: service_healthy`
 # target takes longer than expected to flip healthy, compose abandons the
@@ -95,7 +109,7 @@ fi
 # script reports "All N services healthy!" while a live execution lane is
 # simply gone. Counting what should be there is what makes a missing clerk
 # visible.
-EXPECTED_SERVICES=$(podman compose config --services 2>/dev/null | sort || true)
+EXPECTED_SERVICES=$(podman compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/null | sort || true)
 
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
 # frontend at 120s; backend cold compile pushes 60–90s on top. Poll for

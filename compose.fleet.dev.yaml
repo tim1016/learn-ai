@@ -1,0 +1,152 @@
+# The deployed dev-stack fleet topology: ADR 0062's role split applied to the
+# `learn-ai` Compose project. Committed so the running posture is reproducible
+# from the repository alone; credentials live only in gitignored
+# deploy/fleet/env/*.env, referenced by env_file below.
+#
+# Load explicitly — Compose auto-loads compose.override.yaml, not this file:
+#   podman compose -f compose.yaml -f compose.fleet.dev.yaml <command>
+# restart.sh does this for you.
+#
+# No `name:` on purpose. This overlay stays in the `learn-ai` project so it
+# keeps the EXISTING external Live custody volume (learn-ai-alpaca-clerk-data)
+# and the existing coordinator control volume (learn-ai_alpaca-fleet-control).
+# Renaming the project renames every default-named volume and orphans Live
+# custody. compose.fleet.yaml is the separate, harder production topology.
+
+x-alpaca-clerk-agent: &alpaca-clerk-agent
+  build:
+    context: ./PythonDataService
+  restart: unless-stopped
+  # Deliberately no --reload: a clerk ships code by image rebuild, never by
+  # watching a host bind. The bind below is convenience for the next restart.
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 30s
+  volumes:
+    - ./PythonDataService/app:/app/app:z
+  environment: &alpaca-clerk-agent-env
+    HOST: 0.0.0.0
+    PORT: "8000"
+    # Lane market data is the retained read-only IBKR feed; a clerk is never a
+    # data-plane market-data owner. Settings construction requires the key.
+    POLYGON_API_KEY: ""
+    FLEET_ROLE: clerk_agent
+    FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai}
+    FLEET_COORDINATOR_URL: ${FLEET_COORDINATOR_URL:-http://python-service:8000}
+    FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-16}
+    FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-4}
+    FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-64}
+    FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
+    # Fleet writable-root fence: lane state lives inside the clerk volume.
+    ALPACA_CLERK_DIR: /app/artifacts/alpaca_clerk
+    IBKR_LIVE_RUNS_ROOT: /app/artifacts/alpaca_clerk/live_runs
+    IBKR_LIVE_BARS_ROOT: /app/artifacts/alpaca_clerk/live_bars
+    BROKER_CAPTURE_DIR: /app/artifacts/alpaca_clerk/broker_captures
+    IBKR_READONLY: "true"
+    IBKR_BROKER_ENABLED: "true"
+    IBKR_HOST: auto
+    IBKR_PORT: "4002"
+  depends_on:
+    python-service:
+      condition: service_healthy
+  networks:
+    - app-network
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 768m
+
+services:
+  python-service:
+    environment:
+      # Coordinator-only posture: this process keeps the whole data-plane core
+      # and serves fleet routing; the two lanes below own custody. FR-041.
+      FLEET_ROLE: fleet_coordinator
+      FLEET_CONTROL_DIR: /app/artifacts/fleet
+      FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai}
+      # No clerk volume is mounted on this role; neutralize the base path so a
+      # future clerk-surface mount cannot silently reappear.
+      ALPACA_CLERK_DIR: ""
+      TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,python-service,backend,host.containers.internal,host.docker.internal
+    # Per-clerk transport-token maps are secrets: env-file only, never inline.
+    # `required: false` because deploy/fleet/env/coordinator.env does not
+    # exist yet on a fresh clone — the coordinator has no committed default.
+    env_file:
+      - path: ${FLEET_COORDINATOR_ENV_FILE:-./deploy/fleet/env/coordinator.env}
+        required: false
+    volumes: !override
+      - ./PythonDataService/app:/app/app:z
+      - ./.git:/app/.git:ro,z
+      - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
+      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
+      - ./PythonDataService/tests/fixtures/golden/manifest.json:/app/tests/fixtures/golden/manifest.json:ro,z
+      - ../Lean/Data:/lean-data:ro,z
+      - ./PythonDataService/lean-cache:/lean-cache:z
+      - ./PythonDataService/cache:/app/cache:z
+      - ./PythonDataService/artifacts:/app/artifacts:z
+      - ./PythonDataService/scripts:/app/scripts:ro,z
+      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
+      - alpaca-fleet-control:/app/artifacts/fleet
+    command: !override
+      # The base command's alpaca-clerk volume guard no longer applies (no
+      # clerk volume on this role); keep the reload opt-in semantics.
+      - /bin/sh
+      - -c
+      - |
+        case "$$(printf '%s' "$${UVICORN_RELOAD:-false}" | tr '[:upper:]' '[:lower:]')" in
+          false|0|no|off)
+            exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
+            ;;
+        esac
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app --reload-exclude 'artifacts/*' --reload-exclude 'artifacts/**' --timeout-graceful-shutdown 10
+
+  alpaca-live-clerk:
+    <<: *alpaca-clerk-agent
+    container_name: alpaca-live-clerk
+    env_file:
+      - path: ${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}
+        required: true
+    volumes:
+      - ./PythonDataService/app:/app/app:z
+      - alpaca-clerk-data:/app/artifacts/alpaca_clerk
+    environment:
+      <<: *alpaca-clerk-agent-env
+      # FLEET_CLERK_ID, FLEET_WORKER_KEY, FLEET_AGENT_SERVICE_TOKEN and
+      # FLEET_COORDINATOR_SERVICE_TOKEN come from env_file only — this is the
+      # deletion this file exists to make. `environment:` outranks `env_file:`
+      # key-for-key, so a literal here would silently defeat the file above.
+      FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
+      # Distinct read-only market-data client ID per lane.
+      IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1}
+      TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-live-clerk
+
+  alpaca-paper-clerk:
+    <<: *alpaca-clerk-agent
+    container_name: alpaca-paper-clerk
+    env_file:
+      - path: ${FLEET_PAPER_ENV_FILE:-./deploy/fleet/env/paper.env}
+        required: true
+    volumes:
+      - ./PythonDataService/app:/app/app:z
+      - alpaca-paper-clerk-data:/app/artifacts/alpaca_clerk
+    environment:
+      <<: *alpaca-clerk-agent-env
+      # Same deletion as the live lane above — env_file only.
+      FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
+      IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-2}
+      TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk
+
+volumes:
+  # Default-named → learn-ai_alpaca-fleet-control. Holds fleet/registry.db.
+  alpaca-fleet-control:
+  # Explicit name, no prefix. Never change this string: it is the Paper lane's
+  # custody store and its marker attestation_id.
+  alpaca-paper-clerk-data:
+    name: learn-ai-alpaca-paper-clerk-data
+  # alpaca-clerk-data is declared external in compose.yaml as
+  # learn-ai-alpaca-clerk-data — the Live custody store. Not redeclared here.

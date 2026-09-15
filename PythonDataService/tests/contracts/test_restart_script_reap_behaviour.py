@@ -63,6 +63,8 @@ def flag(name):
 
 
 if args[:1] == ["compose"]:
+    calls.setdefault("compose", []).append(args[1:])
+    save()
     if "config" in args and "--services" in args:
         print("\n".join(sorted({c["service"] for c in containers if c["service"]})))
     sys.exit(0)
@@ -188,6 +190,24 @@ def test_a_wrong_project_name_can_never_destroy_compose_containers(tmp_path: Pat
     assert destroyed <= {"sleep-probe-9"}, (
         f"A wrong project name destroyed compose-managed containers: {destroyed}"
     )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
+def test_restart_passes_the_committed_fleet_overlay_to_every_compose_call(tmp_path: Path) -> None:
+    """A committed overlay that restart.sh does not pass is a topology that
+    does not run. Compose auto-loads compose.override.yaml only, so the
+    committed compose.fleet.dev.yaml (the fenced role split) must be named
+    explicitly on every single compose invocation, not just some of them —
+    a missed spot silently reverts that one operation to the unfenced
+    `combined` posture.
+    """
+    calls = _run(tmp_path, _PROJECT)
+
+    compose_calls = calls.get("compose", [])
+    assert compose_calls, "restart.sh made no compose call"
+    for call in compose_calls:
+        assert call.count("--file") >= 2, call
+        assert any(arg.endswith("compose.fleet.dev.yaml") for arg in call), call
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")

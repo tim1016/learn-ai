@@ -158,6 +158,170 @@ separate, still-open product decision. Until then that specific account's
 assignment stays reserved to wherever its custody lives — correctly fenced,
 not orphaned to another lane.
 
+## Migrating to the committed topology
+
+**Status:** written, not executed. This section is the operator sequence for
+moving this machine from the untracked `compose.override.yaml` (the sole
+durable copy of every fleet credential today) onto the committed
+`compose.fleet.dev.yaml` + gitignored `deploy/fleet/env/*.env` — Delivery
+F-1's code half (issue #2066). Running it is a separate, deliberate owner
+action in a no-bot window; nothing in this section executes on its own.
+
+**The trap this migration exists to fix:** `env_file: required: true` was
+already wired for the live and paper clerks before this migration, but the
+override *also* re-declares the same four keys (`FLEET_CLERK_ID`,
+`FLEET_WORKER_KEY`, `FLEET_AGENT_SERVICE_TOKEN`,
+`FLEET_COORDINATOR_SERVICE_TOKEN`) as literals under `environment:`, and
+Compose's `environment:` wins over `env_file:` key-for-key. M3–M4 below is a
+**deletion** of those literals, not an addition of env-file content — adding
+env-file content alone changes nothing observable.
+
+### Prerequisites
+
+- Outside market hours, no bot running. M6 restarts both clerks.
+- `podman machine` running; free disk for the registry backup below.
+- Read this whole section once before running anything in it.
+
+### M1–M9
+
+```bash
+set -euo pipefail
+cd /Users/inkant/learn-ai
+STAMP=$(date -u +%Y%m%dT%H%M%SZ); SAFE=~/.fleet-migration/$STAMP
+mkdir -p "$SAFE"; chmod 700 ~/.fleet-migration "$SAFE"
+
+# M1 — capture the running truth BEFORE anything changes. Outside the repo,
+# 0600. compose.override.yaml is still the only durable copy of every fleet
+# credential at this point — nothing may touch it before it is backed up.
+cp compose.override.yaml "$SAFE/compose.override.yaml.bak"; chmod 600 "$SAFE"/*
+for c in polygon-data-service alpaca-live-clerk alpaca-paper-clerk; do
+  podman inspect "$c" --format '{{json .Config.Env}}'  > "$SAFE/$c.env.json"
+  podman inspect "$c" --format '{{json .Mounts}}'      > "$SAFE/$c.mounts.json"
+done
+chmod 600 "$SAFE"/*.json
+podman volume ls --format '{{.Name}}' | sort > "$SAFE/volumes.before.txt"
+podman ps --format '{{.Names}}\t{{.Status}}' > "$SAFE/ps.before.txt"
+
+# M2 — registry insurance (the ceremony already documented above in this
+# runbook, § Ceremonies performed).
+podman run --rm -e POLYGON_API_KEY=standin \
+  -v learn-ai_alpaca-fleet-control:/app/artifacts/fleet:z -v "$SAFE":/backup:z \
+  learn-ai-python-service:latest python -m scripts.manage_broker_fleet backup-registry \
+    --control-dir /app/artifacts/fleet --backup-dir /backup/registry-$STAMP
+
+# M3 — move the four identity/token keys per lane out of the override and
+# into the env files that already exist (deploy/fleet/env/live.env,
+# deploy/fleet/env/paper.env). Read them from $SAFE/<clerk>.env.json, append
+# to the matching lane file, chmod 600. Create deploy/fleet/env/coordinator.env
+# from deploy/fleet/env/coordinator.env.example and move
+# FLEET_AGENT_SERVICE_TOKENS_JSON / FLEET_COORDINATOR_SERVICE_TOKENS_JSON and
+# DATA_PLANE_CONTROL_SECRET into it. Never echo a value; never use shell
+# history for a secret value.
+chmod 600 deploy/fleet/env/coordinator.env deploy/fleet/env/paper.env deploy/fleet/env/live.env
+
+# M4 — the deletion. Remove the fleet content from compose.override.yaml
+# entirely — it now lives in the committed compose.fleet.dev.yaml. Keep ONLY
+# the dev ergonomics that were never fleet-specific: the backend port 5050
+# remap, the frontend 6G memory bump, and the Frontend/angular.json bind.
+
+# M5 — render and diff BEFORE starting anything. This is the gate. Run it
+# with the SAME engine the host actually uses (podman compose), not docker
+# compose — CI's render gate only proves the docker-compose half; the two
+# engines can disagree on `!override` merge order, `deploy.resources` vs
+# top-level `cpus`/`mem_limit`, and `:z` relabel suffixes.
+podman compose --project-name learn-ai \
+  -f compose.yaml -f compose.fleet.dev.yaml -f compose.override.yaml \
+  config --services | sort > "$SAFE/services.after.txt"
+diff -u <(printf '%s\n' alpaca-live-clerk alpaca-paper-clerk backend db frontend python-service redis | sort) \
+        "$SAFE/services.after.txt"
+python scripts/render_fleet_topology.py --engine "podman compose" --check   # must exit 0
+```
+
+**Do not proceed past M5 if `--check` fails.** podman and docker rendered the
+same file differently, and that mismatch is itself the finding — stop and
+reconcile it before any container is touched, not after.
+
+```bash
+# M6 — the restart. THIS DROPS BOTH CLERKS. Confirm (again) outside market
+# hours, no bot running.
+./restart.sh
+
+# M7 — verify SAME volumes, SAME markers. A wrong volume name here orphans
+# Live custody.
+podman inspect alpaca-live-clerk  --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}'
+#   must contain: learn-ai-alpaca-clerk-data /app/artifacts/alpaca_clerk
+podman inspect alpaca-paper-clerk --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}'
+#   must contain: learn-ai-alpaca-paper-clerk-data /app/artifacts/alpaca_clerk
+podman inspect polygon-data-service --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}'
+#   must contain: learn-ai_alpaca-fleet-control /app/artifacts/fleet
+
+podman exec alpaca-live-clerk  cat /app/artifacts/alpaca_clerk/.learn-ai-clerk-volume.json
+#   clerk_id must be clrk_57f90423a8504d2d3dd4af77, volume_id vol_aea84c3d8bcfa734eed761ba,
+#   attestation_id alpaca-clerk-data   (the marker is documented non-secret; see
+#   § Topology on this machine above)
+podman exec alpaca-paper-clerk cat /app/artifacts/alpaca_clerk/.learn-ai-clerk-volume.json
+#   clerk_id clrk_ae24bafc273728d023ff0eac, attestation_id alpaca-paper-clerk-data
+
+podman volume ls --format '{{.Name}}' | sort | diff -u "$SAFE/volumes.before.txt" -
+#   MUST be empty. Any NEW volume means a rename happened — stop and roll back.
+
+# M8 — env-key parity (names only, never values)
+for c in polygon-data-service alpaca-live-clerk alpaca-paper-clerk; do
+  diff -u <(jq -r '.[]|split("=")[0]' "$SAFE/$c.env.json" | sort) \
+          <(podman inspect "$c" --format '{{json .Config.Env}}' | jq -r '.[]|split("=")[0]' | sort)
+done
+
+# M9 — the lanes are actually serving
+curl -sf localhost:8000/api/broker-clerks \
+  -H "X-Data-Plane-Control-Intent: learn-ai-browser-control" \
+  -H "X-Data-Plane-Control-Secret: $(grep ^DATA_PLANE_CONTROL_SECRET= .env | cut -d= -f2-)" \
+  | jq '.clerks[] | {clerk_id, lifecycle_state}'
+podman logs --since 5m alpaca-live-clerk | grep -Ei 'marker|refus' || true   # expect nothing
+```
+
+**A fail-closed property worth knowing before M6, not discovering at 16:30:**
+`alpaca-clerk-data` is declared `external: true` in `compose.yaml`. `down
+--volumes` will not remove it (good — Live custody survives a teardown), but
+`up` **fails fast** if that volume is missing rather than silently creating a
+fresh, empty one in its place. A missing-volume failure at M6 is the safe
+outcome, not a surprise to work around.
+
+**Rollback:** *not* `cp "$SAFE/compose.override.yaml.bak" compose.override.yaml`
+— M4 already deleted the fleet content from the live override, and restoring
+the backup verbatim would resurrect the four literal-credential lines this
+migration exists to remove. The actual rollback is simpler: the committed
+topology is additive, so removing the one file that adds it reverts Compose
+to what it auto-loads today.
+
+```bash
+mv compose.fleet.dev.yaml /tmp/ && ./restart.sh
+```
+
+Volumes were never renamed at any point in M1–M9, so nothing is lost either
+way.
+
+### Reclaiming a failed qualification run's isolation
+
+If `scripts/run_broker_fleet_compose_qualification.py` (issue #2070) has been
+run on this host, its own rule is that unreclaimed isolation invalidates a
+pass — reclaim before a new run and before any migration step above:
+
+```bash
+podman volume ls --format '{{.Name}}' | grep '^fleetqualification' | sort
+# Confirm each has NO container attached before removing anything:
+for v in $(podman volume ls --format '{{.Name}}' | grep '^fleetqualification'); do
+  printf '%s -> ' "$v"; podman ps -a --filter volume="$v" --format '{{.Names}}' | tr '\n' ' '; echo
+done
+# Every line must show no container. Only then:
+podman volume ls --format '{{.Name}}' | grep '^fleetqualification' | xargs -r podman volume rm
+```
+
+**Never widen this to `podman volume prune`.** While the stack is down,
+`learn-ai_alpaca-fleet-control` — the Live registry — has no attached
+container and is exactly the kind of volume a prune removes. That volume must
+never be a prune target; the explicit `grep '^fleetqualification' | xargs`
+form above is the only form used against this host.
+
 ## Operations quick reference
 
 ```bash
