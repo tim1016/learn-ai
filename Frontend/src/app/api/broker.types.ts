@@ -2003,11 +2003,7 @@ export interface paths {
          */
         get: operations["fleet_bots_deploy_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_get"];
         put?: never;
-        /**
-         * Fleet Bots Deploy Apply
-         * @description Fleet-routed POST /accounts/{account_id}/bots/deploy (deploy).
-         */
-        post: operations["fleet_bots_deploy_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -29360,45 +29356,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bots_deploy_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_deploy_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -108,7 +108,18 @@ async def list_broker_clerks(request: Request) -> Response:
 )
 async def list_broker_clerks_for_broker(broker: str, request: Request) -> Response:
     """The same projection filtered to one provider."""
-    directory = _fleet_service(request).directory()
+    service = _fleet_service(request)
+    if broker not in service.adapters():
+        from app.broker.fleet.errors import BrokerNotSupported
+
+        return _refuse(
+            BrokerNotSupported(
+                f"No production adapter serves {broker!r}.",
+                next_step="Use a provider this deployment supports; adding one "
+                "is a reviewed code change, not a request parameter.",
+            )
+        )
+    directory = service.directory()
     clerks = [
         clerk
         for clerk in directory["clerks"]

@@ -84,6 +84,41 @@ def test_the_alpaca_adapter_declares_a_valid_catalog_and_canonical_account_ids()
         )
 
 
+def test_provider_summary_carries_the_two_facts_that_disambiguate_starting_and_degraded() -> (
+    None
+):
+    """`starting` has two causes (never confirmed / superseded session), and
+    `degraded` has two (corrupt registry / agent-reported) — service.py's
+    ``_project_lifecycle`` and ``ClerkDescriptor.public_fields`` collapse both
+    pairs to one wire label each. ``confirmed_by_current_session`` and
+    ``multiple_effective_assignments`` are the only observation facts that
+    still separate them, so the provider-authored summary must carry both
+    through rather than dropping them at the adapter boundary."""
+    adapter = AlpacaProviderAdapter()
+
+    confirmed_by_stale_session = adapter.provider_summary(
+        {
+            "confirmed_account_id": "acct-1",
+            "confirmed_binding_generation": 3,
+            "confirmed_by_current_session": False,
+            "multiple_effective_assignments": False,
+        }
+    )
+    assert confirmed_by_stale_session["confirmed_by_current_session"] is False
+    assert confirmed_by_stale_session["multiple_effective_assignments"] is False
+
+    corrupt_registry = adapter.provider_summary(
+        {
+            "confirmed_account_id": "acct-1",
+            "confirmed_binding_generation": None,
+            "confirmed_by_current_session": False,
+            "multiple_effective_assignments": True,
+        }
+    )
+    assert corrupt_registry["multiple_effective_assignments"] is True
+    assert corrupt_registry["confirmed_by_current_session"] is False
+
+
 def _served_context(*, account_id: str | None, capability: str):
     from app.broker.fleet.provider import Capability, ServedContext
 
@@ -556,6 +591,36 @@ async def test_verify_identity_echo_refuses_a_wrong_or_missing_echo() -> None:
     verify_identity_echo(
         {"X-Fleet-Broker": "alpaca", "X-Fleet-Clerk-Id": unpinned.clerk_id}, unpinned
     )
+
+
+async def test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_type() -> None:
+    """A bare ``assert isinstance`` vanishes under ``python -O`` (precedent:
+    fleet_boot.py's writable-root fence); the combined posture's in-process
+    handler is untrusted the same as a real agent's HTTP response, so a
+    shape mismatch must raise DeliveryIdentityMismatch unconditionally."""
+    from app.broker.fleet.delivery import LocalLaneDelivery
+
+    request = DeliveryRequest(
+        broker="alpaca",
+        clerk_id="clrk_testagent00000000000000aa",
+        operation=_alpaca_operation("account_read"),
+        path_params={},
+    )
+
+    wrong_deliver = LocalLaneDelivery(lambda _request: "not-a-delivery-result")
+    with pytest.raises(DeliveryIdentityMismatch, match="DeliveryResult"):
+        await wrong_deliver.deliver(request)
+
+    stream_operation = _alpaca_operation("gallery_stream")
+    stream_request = DeliveryRequest(
+        broker="alpaca",
+        clerk_id="clrk_testagent00000000000000aa",
+        operation=stream_operation,
+        path_params={"account_id": "abcdef01-1234-abcd-5678-ef0123456789"},
+    )
+    wrong_stream = LocalLaneDelivery(lambda _request: "not-a-stream-result")
+    with pytest.raises(DeliveryIdentityMismatch, match="StreamDeliveryResult"):
+        await wrong_stream.stream(stream_request)
 
 
 async def test_a_command_travels_the_full_pinned_route_with_its_attempt(

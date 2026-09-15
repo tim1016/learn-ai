@@ -343,7 +343,11 @@ class LocalLaneDelivery:
         result = self._handler(request)
         if hasattr(result, "__await__"):
             result = await result
-        assert isinstance(result, DeliveryResult)
+        if not isinstance(result, DeliveryResult):
+            raise DeliveryIdentityMismatch(
+                "the in-process handler returned "
+                f"{type(result).__name__}, not a DeliveryResult"
+            )
         verify_identity_echo(result.headers, request)
         return result
 
@@ -352,7 +356,11 @@ class LocalLaneDelivery:
         result = self._handler(request)
         if hasattr(result, "__await__"):
             result = await result
-        assert isinstance(result, StreamDeliveryResult)
+        if not isinstance(result, StreamDeliveryResult):
+            raise DeliveryIdentityMismatch(
+                "the in-process handler returned "
+                f"{type(result).__name__}, not a StreamDeliveryResult"
+            )
         verify_identity_echo(result.headers, request)
         return StreamDeliveryResult(
             status_code=result.status_code,

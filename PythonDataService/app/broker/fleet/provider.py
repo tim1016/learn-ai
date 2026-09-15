@@ -294,8 +294,10 @@ class BrokerProviderAdapter(Protocol):
 
 # The production registry is code-owned (PRD FR-001): a provider enters by a
 # reviewed code change, never by configuration or request. It deliberately
-# declares no providers in this slice — the Alpaca adapter lands as the PRD's
-# Phase 2, and until then every production provider name fails closed.
+# stays empty in this broker-neutral package — the live registry is
+# app/broker/fleet_composition.py's production_provider_adapters(), which
+# composes the concrete adapters (Alpaca, as of Phase 2) the application
+# actually serves.
 PRODUCTION_PROVIDER_ADAPTERS: Mapping[str, BrokerProviderAdapter] = {}
 
 
@@ -347,11 +349,6 @@ def require_protocol_compatible(
         )
 
 
-def production_adapter(provider_id: str) -> BrokerProviderAdapter:
-    """Resolve a production adapter, failing closed on any other name."""
-    return require_adapter(PRODUCTION_PROVIDER_ADAPTERS, provider_id)
-
-
 __all__ = [
     "FLEET_PROTOCOL_VERSION",
     "PRODUCTION_PROVIDER_ADAPTERS",
@@ -362,7 +359,6 @@ __all__ = [
     "OperationStream",
     "ProviderOperation",
     "ServedContext",
-    "production_adapter",
     "require_adapter",
     "require_protocol_compatible",
     "validate_operation_catalog",

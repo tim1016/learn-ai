@@ -95,16 +95,14 @@ def test_importing_the_spine_loads_no_provider_execution_module() -> None:
 def test_the_fleet_packages_own_registry_is_not_the_production_composition() -> None:
     """The fleet package's own adapter mapping stays empty; the real
     production registry is owned by ``fleet_composition``, not the package
-    (PRD FR-001)."""
-    from app.broker.fleet.errors import BrokerNotSupported
-    from app.broker.fleet.provider import PRODUCTION_PROVIDER_ADAPTERS, production_adapter
+    (PRD FR-001). ``production_adapter()`` — which resolved only against this
+    deliberately-empty mapping, had no production caller, and always refused
+    "alpaca" — is deleted (#2076); this pins its absence rather than its
+    refusal, which a live "alpaca" registration would otherwise falsify."""
+    import app.broker.fleet.provider as provider_module
+    from app.broker.fleet.provider import PRODUCTION_PROVIDER_ADAPTERS
     from app.broker.fleet_composition import production_provider_adapters
 
     assert dict(PRODUCTION_PROVIDER_ADAPTERS) == {}
     assert set(production_provider_adapters()) == {"alpaca"}
-    try:
-        production_adapter("alpaca")
-    except BrokerNotSupported:
-        pass
-    else:
-        raise AssertionError("alpaca must fail closed until its Phase 2 adapter lands")
+    assert not hasattr(provider_module, "production_adapter")

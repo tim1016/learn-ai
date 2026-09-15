@@ -194,6 +194,10 @@ class FleetControlService:
                 "unsupported actions are unavailable, never emulated.",
             )
 
+    def approved_endpoint(self, clerk_id: str) -> ApprovedEndpointRecord | None:
+        """One lane's approved internal destination (routing reads it, never sets it)."""
+        return self._store.read_approved_endpoint(clerk_id)
+
     # ---- provisioning (host ceremony) ------------------------------------
 
     def provision_clerk(

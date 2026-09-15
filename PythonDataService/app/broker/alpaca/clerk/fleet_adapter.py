@@ -22,7 +22,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.4"
+_ADAPTER_VERSION = "alpaca-fleet.5"
 
 
 def _op(
@@ -334,14 +334,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/accounts/{account_id}/bots/deploy",
             capability=Capability.DEPLOY,
-            account=True,
-        ),
-        _op(
-            "bots_deploy_apply",
-            "POST",
-            "/accounts/{account_id}/bots/deploy",
-            capability=Capability.DEPLOY,
-            idempotency=_DURABLE,
             account=True,
         ),
         _op(
@@ -745,6 +737,8 @@ class AlpacaProviderAdapter:
             "adapter_version": _ADAPTER_VERSION,
             "confirmed_account_id": observation.get("confirmed_account_id"),
             "confirmed_binding_generation": observation.get("confirmed_binding_generation"),
+            "confirmed_by_current_session": observation.get("confirmed_by_current_session"),
+            "multiple_effective_assignments": observation.get("multiple_effective_assignments"),
         }
         if isinstance(reported, Mapping):
             summary["endpoint_mode"] = reported.get("endpoint_mode")
