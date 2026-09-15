@@ -178,10 +178,16 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
     assert confirmed.confirmed_binding_generation == 4
     assert confirmed.confirmed_agent_instance_id == session.agent_instance_id
     assert confirmed.confirmed_routing_epoch == session.routing_epoch
+    # #2145: the confirmation write (the assignment CAS update above) and the
+    # reported-fact write (the session's projection, via the separated
+    # ``_report_session_confirmed`` helper) are two distinct writes made in
+    # the same transaction — pin both sides so a regression that drops
+    # either one reddens here.
     refreshed = fleet_service._store.read_session(lane.clerk_id)
     assert refreshed is not None
     assert refreshed.reported_binding_generation == 4
     assert refreshed.reported_account_id == "ACCT-C"
+    assert refreshed.reported_state == "binding_confirmed"
 
 
 def test_confirm_refuses_a_rival_and_a_released_assignment(

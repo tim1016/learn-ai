@@ -870,6 +870,36 @@ class FleetControlService:
         )
         return outcome
 
+    def _report_session_confirmed(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        clerk_id: str,
+        agent_instance_id: str,
+        canonical_account_id: str,
+        binding_generation: int,
+        now: int,
+    ) -> None:
+        """Write the agent-reported session fields a confirmation implies.
+
+        Not a confirmation write itself — ``confirm_assignment`` is the only
+        caller, and it already holds the row's confirmed facts in
+        ``account_assignments`` by the time this runs. A clerk that just
+        confirmed a binding is, by the same act, reporting it, so this goes
+        through the same store primitive ``observe_session`` uses
+        (``touch_session``) rather than a second, drifting way to write the
+        reported vocabulary.
+        """
+        self._store.touch_session(
+            conn,
+            clerk_id=clerk_id,
+            agent_instance_id=agent_instance_id,
+            last_seen_at_ms=now,
+            reported_binding_generation=binding_generation,
+            reported_account_id=canonical_account_id,
+            reported_state="binding_confirmed",
+        )
+
     def confirm_assignment(
         self,
         *,
@@ -1012,16 +1042,19 @@ class FleetControlService:
                     f"Account {canonical} under broker {broker!r} changed while "
                     "confirming; re-read and retry.",
                 )
-            # The session's observed facts follow the confirmed observation,
-            # so the directory projects the acknowledged binding.
-            self._store.touch_session(
+            # The confirmation above is the write this method is named for
+            # (the coordinator's confirmed observation, in
+            # ``account_assignments``); the session's reported facts are a
+            # separate write this transaction also makes, so the directory
+            # projects the acknowledged binding immediately rather than wait
+            # for the next heartbeat to say the same thing.
+            self._report_session_confirmed(
                 conn,
                 clerk_id=clerk_id,
                 agent_instance_id=agent_instance_id,
-                last_seen_at_ms=now,
-                reported_binding_generation=binding_generation,
-                reported_account_id=canonical,
-                reported_state="binding_confirmed",
+                canonical_account_id=canonical,
+                binding_generation=binding_generation,
+                now=now,
             )
             outcome = confirmed
         assert outcome is not None
