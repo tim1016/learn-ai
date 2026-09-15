@@ -346,6 +346,78 @@ def test_capability_is_none_for_an_operation_kind_the_catalog_no_longer_declares
     ), "the unresolved capability is logged loudly, not silently swallowed"
 
 
+# ---- service: clerk scoping is an exclusion, and limit keeps the newest ----
+
+
+def test_service_clerk_id_excludes_another_lanes_receipts(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """A clerk-scoped read must not carry another lane's receipts.
+
+    Proving the requested lane's receipt is *present* proves nothing about
+    scoping -- an unscoped read contains it too. Only asserting the other
+    lane's receipt is *absent* discriminates, so this reddens if the
+    ``clerk_id`` argument were dropped on the way to the store and every
+    lane's correlation ids leaked to a caller who scoped their request.
+    """
+    mine = provision_lane(fleet_service, broker="fake_alpha", label="scope-mine", tmp_path=control_dir.parent)
+    bind_lane(fleet_service, mine, account="acct-scope-mine")
+    theirs = provision_lane(
+        fleet_service, broker="fake_alpha", label="scope-theirs", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, theirs, account="acct-scope-theirs")
+    assert mine.clerk_id != theirs.clerk_id  # the fixture's own premise
+
+    my_receipt = _open_and_settle(fleet_service, mine, key="scope-mine-1")
+    their_receipt = _open_and_settle(fleet_service, theirs, key="scope-theirs-1")
+
+    # Positive control: unscoped, the store really holds both receipts, so an
+    # empty or broken store cannot make the exclusion below pass vacuously.
+    unscoped = fleet_service.list_routing_receipts(since_ms=0)
+    assert {entry["correlation_id"] for entry in unscoped["receipts"]} == {
+        my_receipt.correlation_id,
+        their_receipt.correlation_id,
+    }
+
+    scoped = fleet_service.list_routing_receipts(since_ms=0, clerk_id=mine.clerk_id)
+    ids = {entry["correlation_id"] for entry in scoped["receipts"]}
+
+    assert my_receipt.correlation_id in ids
+    assert their_receipt.correlation_id not in ids
+    assert {entry["clerk_id"] for entry in scoped["receipts"]} == {mine.clerk_id}
+
+
+def test_service_limit_returns_the_newest_receipts_not_the_oldest(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """Under a truncating ``limit`` the audit returns the *newest* receipts.
+
+    The store, service and route docstrings all promise "newest first", but
+    a set-equality assertion over an untruncated read passes just as well
+    for ascending order. Only a ``limit`` below the available count can tell
+    the two apart, so this reddens if the ``ORDER BY`` were flipped -- the
+    oldest two would come back for a caller asking "what happened most
+    recently".
+    """
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="order", tmp_path=control_dir.parent)
+    bind_lane(fleet_service, lane, account="acct-order")
+
+    oldest = _open_and_settle(fleet_service, lane, key="order-1")
+    clock.advance(1_000)
+    middle = _open_and_settle(fleet_service, lane, key="order-2")
+    clock.advance(1_000)
+    newest = _open_and_settle(fleet_service, lane, key="order-3")
+    assert oldest.created_at_ms < middle.created_at_ms < newest.created_at_ms
+
+    truncated = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id, limit=2)
+    ids = [entry["correlation_id"] for entry in truncated["receipts"]]
+
+    assert ids == [newest.correlation_id, middle.correlation_id]
+    assert oldest.correlation_id not in ids
+    stamps = [entry["created_at_ms"] for entry in truncated["receipts"]]
+    assert stamps == sorted(stamps, reverse=True)
+
+
 # ---- HTTP: the secret gate, proved in both directions ---------------------
 
 
