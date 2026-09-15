@@ -29,7 +29,17 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILES = ("compose.yaml", "compose.fleet.dev.yaml")
 SNAPSHOT_PATH = REPOSITORY_ROOT / "deploy" / "fleet" / "topology.snapshot.json"
 PLACEHOLDERS = REPOSITORY_ROOT / "deploy" / "fleet" / "ci-render.placeholders"
-CONTAINMENT_FIELDS = ("read_only", "pids_limit", "tmpfs", "cpus", "mem_limit", "privileged", "cap_add")
+CONTAINMENT_FIELDS = ("read_only", "pids_limit", "tmpfs", "privileged", "cap_add")
+
+# cpus/memory limits arrive in one of two shapes depending on which form the
+# compose file uses and how the engine renders it: the short top-level
+# `cpus:`/`mem_limit:` syntax, or `deploy.resources.limits.{cpus,memory}` --
+# the form the clerk overlay actually uses. Reading only the top-level fields
+# (as CONTAINMENT_FIELDS did before) records `{}` for every service that uses
+# `deploy:`, which both fleet clerks do -- deleting `cpus: 1.0` or
+# `memory: 768m` then produces no diff despite the renderer claiming to pin
+# containment. (top-level rendered field, deploy.resources.limits field)
+_RESOURCE_LIMIT_SOURCES = (("cpus", "cpus"), ("mem_limit", "memory"))
 
 # compose.fleet.dev.yaml's live/paper env_file entries are `required: true`,
 # so `compose config` fails outright if the real, gitignored
@@ -95,6 +105,20 @@ def _raw_env_file_paths() -> dict[str, list[str]]:
     return {service: sorted(entries) for service, entries in paths.items()}
 
 
+def _resource_limits(spec: dict[str, object]) -> dict[str, str]:
+    """Normalise cpus/memory limits across both rendered shapes into one
+    stable, stringified form -- so a limit expressed either way is pinned,
+    and changing or deleting it (whichever form it's in) shows up as a diff.
+    """
+    deploy_limits = ((spec.get("deploy") or {}).get("resources") or {}).get("limits") or {}
+    limits: dict[str, str] = {}
+    for top_level_field, deploy_field in _RESOURCE_LIMIT_SOURCES:
+        value = spec.get(top_level_field, deploy_limits.get(deploy_field))
+        if value is not None:
+            limits[top_level_field] = str(value)
+    return limits
+
+
 def _relative_mount_source(mount: dict[str, object]) -> str:
     source = mount.get("source")
     if mount.get("type") != "bind" or not isinstance(source, str) or not source.startswith("/"):
@@ -140,7 +164,10 @@ def render(engine: list[str]) -> dict[str, object]:
                 f"{port.get('host_ip')}:{port.get('published')}->{port.get('target')}"
                 for port in (spec.get("ports") or [])
             ),
-            "containment": {field: spec[field] for field in CONTAINMENT_FIELDS if field in spec},
+            "containment": {
+                **{field: spec[field] for field in CONTAINMENT_FIELDS if field in spec},
+                **_resource_limits(spec),
+            },
         }
         # Derived boolean only — never the value itself, secret or not.
         fence[name] = {key: environment.get(key, None) == "" for key in _FENCE_KEYS if key in environment}

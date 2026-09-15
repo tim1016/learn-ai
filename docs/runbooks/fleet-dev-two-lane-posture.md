@@ -214,15 +214,49 @@ podman run --rm -e POLYGON_API_KEY=standin \
 # deploy/fleet/env/paper.env). Read them from $SAFE/<clerk>.env.json, append
 # to the matching lane file, chmod 600. Create deploy/fleet/env/coordinator.env
 # from deploy/fleet/env/coordinator.env.example and move
-# FLEET_AGENT_SERVICE_TOKENS_JSON / FLEET_COORDINATOR_SERVICE_TOKENS_JSON and
-# DATA_PLANE_CONTROL_SECRET into it. Never echo a value; never use shell
-# history for a secret value.
+# FLEET_AGENT_SERVICE_TOKENS_JSON / FLEET_COORDINATOR_SERVICE_TOKENS_JSON
+# into it. Never echo a value; never use shell history for a secret value.
+#
+# DATA_PLANE_CONTROL_SECRET is DIFFERENT — do NOT remove it from the root
+# .env, even though coordinator.env.example also lists it. compose.yaml's
+# OWN `environment:` entries on python-service, backend, and frontend all
+# interpolate `${DATA_PLANE_CONTROL_SECRET:?Set ... before starting the
+# stack}` directly from the root .env / process environment, and that
+# `environment:` entry always outranks whatever coordinator.env's `env_file:`
+# supplies for the same key — the identical rule that makes the four
+# identity/token keys above env_file-only in the first place, just cutting
+# the other way here because compose.yaml (not compose.fleet.dev.yaml) is
+# the one declaring the literal. Removing it from .env does not "move" it to
+# the coordinator file; it just breaks M5's render with a missing-variable
+# error, before the coordinator env file gets a chance to matter. Leave it in
+# .env; copying it into coordinator.env as well is harmless documentation,
+# not a functional relocation.
 chmod 600 deploy/fleet/env/coordinator.env deploy/fleet/env/paper.env deploy/fleet/env/live.env
 
 # M4 — the deletion. Remove the fleet content from compose.override.yaml
 # entirely — it now lives in the committed compose.fleet.dev.yaml. Keep ONLY
 # the dev ergonomics that were never fleet-specific: the backend port 5050
 # remap, the frontend 6G memory bump, and the Frontend/angular.json bind.
+
+# M4a — verify the deletion actually took. Skipping this is how the old
+# literal credentials keep silently overriding the new env files with
+# nothing detecting it: M5's `config --services` reports the same seven
+# service names whether or not the override still carries fleet content
+# (the override never added or removed a service, only environment/volumes
+# on ones compose.yaml already declares); render_fleet_topology.py is
+# hard-coded to compose.yaml + compose.fleet.dev.yaml and never reads
+# compose.override.yaml at all; and M8 below compares key NAMES only, which
+# match whether the override's copy is a literal or absent. Key names only,
+# never a value — `grep -q` never prints what it matches.
+if grep -qE '^\s*(alpaca-live-clerk|alpaca-paper-clerk):' compose.override.yaml; then
+  echo "compose.override.yaml still declares a clerk service — M4 is incomplete." >&2
+  exit 1
+fi
+if grep -qE '\b(FLEET_CLERK_ID|FLEET_WORKER_KEY|FLEET_AGENT_SERVICE_TOKEN|FLEET_COORDINATOR_SERVICE_TOKEN|FLEET_AGENT_SERVICE_TOKENS_JSON|FLEET_COORDINATOR_SERVICE_TOKENS_JSON):' compose.override.yaml; then
+  echo "compose.override.yaml still declares a fleet credential key — M4 is incomplete." >&2
+  exit 1
+fi
+echo "M4 verified: compose.override.yaml carries no fleet service or credential key."
 
 # M5 — render and diff BEFORE starting anything. This is the gate. Run it
 # with the SAME engine the host actually uses (podman compose), not docker
@@ -289,11 +323,20 @@ outcome, not a surprise to work around.
 **Rollback:** *not* `cp "$SAFE/compose.override.yaml.bak" compose.override.yaml`
 — M4 already deleted the fleet content from the live override, and restoring
 the backup verbatim would resurrect the four literal-credential lines this
-migration exists to remove. The actual rollback is simpler: the committed
-topology is additive, so removing the one file that adds it reverts Compose
-to what it auto-loads today.
+migration exists to remove.
+
+**Remove both clerk containers BEFORE dropping the overlay — never after.**
+Moving `compose.fleet.dev.yaml` away and running `./restart.sh` calls `podman
+compose down` against a model that no longer declares either clerk service.
+Compose does not remove orphaned services unless told to, so both clerks can
+keep running while `python-service` restarts in the default `combined` role
+— which mounts the SAME Live custody volume (`alpaca-clerk-data`) the still-running
+live clerk already holds. That is two processes with concurrent authority
+over one SQLite custody state, not a cosmetic ordering nit. Remove the
+clerks explicitly, first:
 
 ```bash
+podman rm -f alpaca-live-clerk alpaca-paper-clerk
 mv compose.fleet.dev.yaml /tmp/ && ./restart.sh
 ```
 
@@ -349,7 +392,11 @@ attaches the secret via `proxy.conf.js`).
    `FLEET_COORDINATOR_SERVICE_TOKEN`, the fenced roots and
    `TRUSTED_HOSTS=...,fleet-local`, the `alpaca-clerk-data` volume back on
    `python-service`, and no lane services.
-3. `podman compose -f compose.yaml -f compose.override.yaml up -d python-service`
-   then `podman rm -f alpaca-live-clerk alpaca-paper-clerk`.
+3. `podman rm -f alpaca-live-clerk alpaca-paper-clerk` **before** starting
+   `python-service` — not after. The combined role mounts the same Live
+   custody volume (`alpaca-clerk-data`) the live clerk still holds; starting
+   `python-service` first would give two processes concurrent authority over
+   one SQLite custody state for however long it takes to reach the `rm -f`.
+   Then `podman compose -f compose.yaml -f compose.override.yaml up -d python-service`.
 4. Optionally retire the paper clerk host-side (`manage_broker_fleet retire`)
    to drop it from the directory.

@@ -20,7 +20,10 @@
   "service_detail": {
     "alpaca-live-clerk": {
       "container_name": "alpaca-live-clerk",
-      "containment": {},
+      "containment": {
+        "cpus": "1",
+        "mem_limit": "805306368"
+      },
       "env_file": [
         "${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}"
       ],
@@ -65,7 +68,10 @@
     },
     "alpaca-paper-clerk": {
       "container_name": "alpaca-paper-clerk",
-      "containment": {},
+      "containment": {
+        "cpus": "1",
+        "mem_limit": "805306368"
+      },
       "env_file": [
         "${FLEET_PAPER_ENV_FILE:-./deploy/fleet/env/paper.env}"
       ],
@@ -110,7 +116,9 @@
     },
     "backend": {
       "container_name": "my-backend",
-      "containment": {},
+      "containment": {
+        "mem_limit": "3221225472"
+      },
       "env_file": [],
       "environment_keys": [
         "ASPNETCORE_ENVIRONMENT",
@@ -136,7 +144,9 @@
     },
     "db": {
       "container_name": "my-postgres",
-      "containment": {},
+      "containment": {
+        "mem_limit": "536870912"
+      },
       "env_file": [],
       "environment_keys": [
         "POSTGRES_PASSWORD"
@@ -154,7 +164,9 @@
     },
     "frontend": {
       "container_name": "my-frontend",
-      "containment": {},
+      "containment": {
+        "mem_limit": "4294967296"
+      },
       "env_file": [],
       "environment_keys": [
         "BACKEND_PROXY_TARGET",
@@ -178,7 +190,10 @@
     },
     "python-service": {
       "container_name": "polygon-data-service",
-      "containment": {},
+      "containment": {
+        "cpus": "2",
+        "mem_limit": "2147483648"
+      },
       "env_file": [
         "${FLEET_COORDINATOR_ENV_FILE:-./deploy/fleet/env/coordinator.env}",
         "./PythonDataService/.env"
@@ -240,7 +255,9 @@
     },
     "redis": {
       "container_name": "my-redis",
-      "containment": {},
+      "containment": {
+        "mem_limit": "268435456"
+      },
       "env_file": [],
       "environment_keys": [
         "REDIS_PASSWORD"

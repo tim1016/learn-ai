@@ -18,10 +18,27 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 RENDER_SCRIPT = ROOT / "scripts" / "render_fleet_topology.py"
+
+
+def _tracked_compose_files() -> list[str]:
+    """Every compose file this repo commits — discovered, not hand-listed.
+
+    A hardcoded tuple silently stops covering the next overlay someone adds
+    (`compose.fleet.qualification.yaml` was missed exactly this way, despite
+    this test's own docstring promising every committed compose file). This
+    is the same failure shape `restart.sh`'s comments warn about for its own
+    hardcoded container-name list.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "compose*.yaml", "compose*.yml"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    )
+    return sorted(result.stdout.split())
 
 
 def _render_module() -> object:
@@ -140,11 +157,22 @@ def test_hardcoded_literal_check_leaves_legitimate_interpolation_green() -> None
     assert _is_hardcoded_literal("redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0") is False
 
 
+def test_discovery_finds_every_committed_compose_overlay() -> None:
+    """The discovery mechanism itself must cover the file that was previously
+    missed — a hardcoded tuple silently omitted it despite this test's own
+    docstring promising every committed compose file."""
+    tracked = _tracked_compose_files()
+    assert {"compose.yaml", "compose.fleet.yaml", "compose.fleet.dev.yaml",
+            "compose.fleet.qualification.yaml"} <= set(tracked)
+
+
 def test_no_committed_compose_file_carries_a_fleet_secret_literal() -> None:
     """Every secret-bearing key is env_file-only or a `${VAR}` passthrough —
     never a hardcoded literal that would shadow `env_file:` for the same key."""
     render_module = _render_module()
-    for name in ("compose.yaml", "compose.fleet.yaml", "compose.fleet.dev.yaml"):
+    tracked = _tracked_compose_files()
+    assert tracked, "no tracked compose*.yaml files found — git ls-files may be misconfigured"
+    for name in tracked:
         document = render_module.load_compose_document(ROOT / name)
         for service, spec in (document.get("services") or {}).items():
             environment = _environment_as_key_value(spec.get("environment") or {})
