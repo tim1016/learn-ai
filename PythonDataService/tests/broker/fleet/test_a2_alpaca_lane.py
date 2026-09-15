@@ -17,6 +17,7 @@ import contextlib
 import dataclasses
 import functools
 import json
+import logging
 import socket
 import threading
 from pathlib import Path
@@ -1248,6 +1249,86 @@ async def test_stop_heartbeat_is_idempotent_and_ends_the_beat(
         assert after.last_seen_at_ms == beat.last_seen_at_ms
 
         # The lane still closes cleanly behind an already-stopped beat.
+        await close_fleet_lane(boot)
+        boot = None
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_stop_heartbeat_logs_a_dead_beat_instead_of_raising(
+    control_dir: Path,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A beat that died on an unexpected exception must not abort teardown.
+
+    ``_beat`` only catches ``FleetControlError`` around its observation call.
+    Anything else — a malformed coordinator response, a raw ``sqlite3`` error
+    surfacing from ``LocalPresence`` — ends the task with that exception
+    stored on it, done, uncancelled. ``stop_heartbeat`` is the first
+    statement of the service teardown's ``finally`` block, so if it awaited
+    that already-done task the stored exception would re-raise there and
+    skip every step after it. It must log and swallow instead.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+        stop_heartbeat,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def _observe_and_explode(**_kwargs: object) -> None:
+            raise RuntimeError("registry exploded")
+
+        monkeypatch.setattr(boot.presence, "observe", _observe_and_explode)
+
+        start_heartbeat(boot, interval_s=0.05)
+        heartbeat = boot.heartbeat
+        assert heartbeat is not None
+
+        loop = asyncio.get_running_loop()
+        give_up_at = loop.time() + 5.0
+        while not heartbeat.done():
+            if loop.time() >= give_up_at:
+                raise AssertionError("the beat never died on the injected RuntimeError")
+            await asyncio.sleep(0.01)
+
+        with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.clerk.fleet_boot"):
+            await stop_heartbeat(boot)
+
+        assert boot.heartbeat is None
+        dead_beat_records = [
+            record for record in caplog.records if "already ended with an error" in record.getMessage()
+        ]
+        assert len(dead_beat_records) == 1
+        record = dead_beat_records[0]
+        assert record.exc_info is not None
+        assert record.exc_info[0] is RuntimeError
+
         await close_fleet_lane(boot)
         boot = None
     finally:

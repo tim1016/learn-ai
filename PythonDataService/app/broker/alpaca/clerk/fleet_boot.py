@@ -481,14 +481,35 @@ async def stop_heartbeat(boot: FleetLaneBoot | None) -> None:
     coordinator a dismantling clerk was reachable — and ``close_fleet_lane``
     calls it again on its way out. A boot with no beat (``None``, offline, or
     already stopped) is a no-op, not a refusal.
+
+    ``_beat`` only ever catches ``FleetControlError`` around its observation;
+    anything else (a malformed coordinator response, a raw ``sqlite3`` error
+    from the local store) ends the task with that exception stored on it.
+    ``cancel()`` is a no-op on a task that's already done, so awaiting it
+    would re-raise that stored exception here — the first statement of the
+    service teardown's ``finally`` block — aborting every step after it
+    (``bot_task_registry.stop_all()``, the consumer stop, the custody and
+    repository closes). The beat's death must not mask the clerk's teardown,
+    so a beat found already done is logged and swallowed instead of awaited.
     """
     if boot is None or boot.heartbeat is None:
         return
     beat = boot.heartbeat
     boot.heartbeat = None
-    beat.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await beat
+    if not beat.done():
+        beat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await beat
+        return
+    if not beat.cancelled():
+        exc = beat.exception()
+        if exc is not None:
+            logger.warning(
+                "Fleet heartbeat had already ended with an error before shutdown: %s",
+                exc,
+                extra={"clerk_id": boot.clerk_id},
+                exc_info=exc,
+            )
 
 
 def binding_is_granted(
