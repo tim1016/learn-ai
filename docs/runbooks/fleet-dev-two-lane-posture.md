@@ -98,31 +98,32 @@ podman run --rm -e POLYGON_API_KEY=standin \
 One-time outputs went straight into `compose.override.yaml`; never into shell
 history, tickets, or logs.
 
-## Fresh-lane bootstrap (first binding) and its window caveat
+## Fresh-lane bootstrap (first binding)
 
-A lane registers its session early in startup but uvicorn only accepts
-connections after startup completes, and `start_heartbeat` begins only after a
-**confirmed binding** (`app/main.py`). Until the first binding is confirmed
-the session goes stale after 30 s and `resolve_route` refuses even
-`configuration_access` operations. The bootstrap sequence that worked for the
-paper lane:
+Every **online** lane heartbeats from the moment it opens — before the
+installation lock, before the profiles database, before any binding
+(`start_heartbeat`, `app/broker/alpaca/clerk/fleet_boot.py`, called from
+`lifespan`). Whether or not a profile exists, and whether or not a binding
+installs at all, the lane reports `binding_pending` and projects `starting`,
+so `configuration_access` reads route to it normally and there is no window to
+race. Its summary shows endpoint mode `unidentified` until the first binding
+installs; `confirm_and_report` then swaps the reported facts under the running
+beat and the directory shows `paper` or `live`. The beat stops when the lane
+closes. Execution routing still stays closed until a binding is confirmed. The
+bootstrap sequence for a fresh lane:
 
 1. `podman restart alpaca-paper-clerk`, then wait for its HTTP surface **from
    the coordinator's network**: `podman exec polygon-data-service python -c
    "import urllib.request; urllib.request.urlopen('http://alpaca-paper-clerk:8000/health',
    timeout=2).read()"`.
-2. Within the remaining session window, through the coordinator (control
-   headers), exactly the calls the configuration page makes: create profile
-   (`credential_slot` + `endpoint_mode`) → `verify-account` → `account-pin` →
-   stage selection → `selection/apply` (202). Mutating calls need a
+2. Bind it through the configuration page: create profile (`credential_slot`
+   + `endpoint_mode`) → `verify-account` → `account-pin` → stage selection →
+   `selection/apply` (202). Driving the same calls through the coordinator by
+   hand needs control headers, and each mutating call needs a
    `command_context` envelope with `capability: "configuration_manage"`.
 3. Restart the lane again: the applied selection binds, the account is
    reserved, and — if the clerk authority composes — the binding confirms and
-   the heartbeat starts.
-
-This window dance is a workaround for a product gap: a fresh lane should be
-able to keep its session observable (or expose a sanctioned first-binding
-path) without a confirmed binding. Flagged as follow-up; not fixed here.
+   the heartbeat switches to `binding_confirmed`.
 
 ## Paper activation boundary
 
