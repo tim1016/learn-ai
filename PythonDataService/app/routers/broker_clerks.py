@@ -19,7 +19,7 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.broker.fleet.delivery import SseEvent
@@ -38,6 +38,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api", tags=["broker-clerks"])
 
@@ -153,6 +154,34 @@ async def describe_broker_clerk(
             )
         )
     return JSONResponse(fields)
+
+
+# ---- Audit read surface (#2104) --------------------------------------------
+
+
+@router.get(
+    "/broker-clerks/audit/routing-receipts",
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+    summary="Routing-receipt audit trail, since a lower bound (#2104)",
+)
+async def list_routing_receipts_audit(
+    request: Request,
+    since_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
+    clerk_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+) -> Response:
+    """Routing receipts at or after ``since_ms``, newest first.
+
+    Read-only: no idempotency key, no command envelope, no ceremony. The
+    durable audit trail (routing receipts, assignment history, session
+    history) was otherwise reachable only by opening the coordinator's
+    SQLite file by hand.
+    """
+    return JSONResponse(
+        _fleet_service(request).list_routing_receipts(
+            since_ms=since_ms, clerk_id=clerk_id, limit=limit
+        )
+    )
 
 
 # ---- Catalog-generated operation routes (§10.2/§10.3) ----------------------

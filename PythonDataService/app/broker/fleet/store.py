@@ -850,16 +850,33 @@ class FleetRegistryStore:
         )
         return None if row is None else _receipt_from_row(row)
 
-    def list_routing_receipts(self, *, clerk_id: str | None = None, limit: int = 100) -> list[RoutingReceiptRecord]:
-        """List receipts, newest first, optionally for one clerk."""
+    def list_routing_receipts(
+        self,
+        *,
+        clerk_id: str | None = None,
+        since_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[RoutingReceiptRecord]:
+        """List receipts, newest first, optionally for one clerk and/or since a bound.
+
+        ``since_ms``, when given, is an *inclusive* lower bound on
+        ``created_at_ms`` (``created_at_ms >= since_ms``) — the audit read
+        surface's contract (#2104).
+        """
         sql = f"SELECT {self._RECEIPT_COLUMNS} FROM routing_receipts"
-        parameters: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        parameters: list[Any] = []
         if clerk_id is not None:
-            sql += " WHERE clerk_id = ?"
-            parameters = (clerk_id,)
+            clauses.append("clerk_id = ?")
+            parameters.append(clerk_id)
+        if since_ms is not None:
+            clauses.append("created_at_ms >= ?")
+            parameters.append(since_ms)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at_ms DESC, correlation_id DESC LIMIT ?"
-        parameters = (*parameters, limit)
-        return [_receipt_from_row(row) for row in self._query(sql, parameters)]
+        parameters.append(limit)
+        return [_receipt_from_row(row) for row in self._query(sql, tuple(parameters))]
 
     def insert_routing_receipt(
         self, conn: sqlite3.Connection, receipt: RoutingReceiptRecord

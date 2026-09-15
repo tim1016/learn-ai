@@ -1557,6 +1557,37 @@ class FleetControlService:
                 next_step="Mint a fresh idempotency key for the new attempt.",
             )
 
+    # ---- audit read surface (#2104) -----------------------------------------
+
+    def list_routing_receipts(
+        self, *, since_ms: int, clerk_id: str | None = None, limit: int = 100
+    ) -> dict[str, object]:
+        """The routing-receipt audit trail, at or after ``since_ms``.
+
+        Read-only: no idempotency key, no command envelope, nothing is
+        opened or settled. ``since_ms`` is an inclusive lower bound on
+        ``created_at_ms``; the store already orders newest first.
+        """
+        now = self._clock()
+        receipts = self._store.list_routing_receipts(
+            clerk_id=clerk_id, since_ms=since_ms, limit=limit
+        )
+        return {
+            "observed_at_ms": now,
+            "receipts": [
+                {
+                    "correlation_id": receipt.correlation_id,
+                    "clerk_id": receipt.clerk_id,
+                    "broker": receipt.broker,
+                    "operation_kind": receipt.operation_kind,
+                    "routing_state": receipt.state.value,
+                    "created_at_ms": receipt.created_at_ms,
+                    "dispatched_at_ms": receipt.dispatched_at_ms,
+                }
+                for receipt in receipts
+            ],
+        }
+
     # ---- directory ---------------------------------------------------------
 
     def directory(self, *, include_retired: bool = False) -> dict[str, object]:

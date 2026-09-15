@@ -44784,6 +44784,93 @@
         ]
       }
     },
+    "/api/broker-clerks/audit/routing-receipts": {
+      "get": {
+        "description": "Routing receipts at or after ``since_ms``, newest first.\n\nRead-only: no idempotency key, no command envelope, no ceremony. The\ndurable audit trail (routing receipts, assignment history, session\nhistory) was otherwise reachable only by opening the coordinator's\nSQLite file by hand.",
+        "operationId": "list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Since Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "clerk_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Clerk Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Routing-receipt audit trail, since a lower bound (#2104)",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/broker/bars-5s/snapshot": {
       "get": {
         "description": "Return the live raw 5-sec OHLCV buffer for ``symbol``.\n\nMirror of ``/bars/snapshot`` for the high-resolution chart. It owns an\nindependent 5-second buffer, but same-symbol 5-second and 1-minute\nconsumers multiplex onto one public-client ``reqRealTimeBars`` request.\nEach bar's ``end_ms - start_ms`` window is 5 000.",

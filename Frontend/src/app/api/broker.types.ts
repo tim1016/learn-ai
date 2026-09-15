@@ -415,6 +415,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/broker-clerks/audit/routing-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Routing-receipt audit trail, since a lower bound (#2104)
+         * @description Routing receipts at or after ``since_ms``, newest first.
+         *
+         *     Read-only: no idempotency key, no command envelope, no ceremony. The
+         *     durable audit trail (routing receipts, assignment history, session
+         *     history) was otherwise reachable only by opening the coordinator's
+         *     SQLite file by hand.
+         */
+        get: operations["list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker/bars-5s/snapshot": {
         parameters: {
             query?: never;
@@ -26477,6 +26502,41 @@ export interface operations {
     list_broker_clerks_api_broker_clerks_get: {
         parameters: {
             query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get: {
+        parameters: {
+            query: {
+                since_ms: number;
+                clerk_id?: string | null;
+                limit?: number;
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };
