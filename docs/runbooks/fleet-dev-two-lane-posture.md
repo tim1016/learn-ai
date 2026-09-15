@@ -1,14 +1,14 @@
 # Dev-stack two-lane fleet posture (coordinator + Live + Paper clerks)
 
-**Status:** Operational record for the dev machine, 2026-09-14. The Live desk
-is qualified through the browser path end-to-end. The Paper lane's activation
-boundary was partially resolved the same day (owner decision widened ADR
-0059's R3 to admit an empty legacy inventory for paper, not just live) — a
-**fresh** paper account can now activate on this lane via the fresh-lane
-bootstrap dance below. Recovering the lane's pre-existing *legacy* paper
-account is still blocked — a real product gap, not a deployment error (see
-[Paper activation boundary](#paper-activation-boundary)). Do not paper over
-that remaining gap by copying custody data across lanes.
+**Status:** Operational record for the dev machine, updated 2026-09-15. The
+Live desk is qualified through the browser path end-to-end. The Paper lane
+**activated 2026-09-15** — the fresh-account cutover ceremony was executed
+(generation 1; both lanes `ready` side by side; see
+[Paper activation boundary](#paper-activation-boundary)). Two gaps remain,
+both product decisions, not deployment errors: the desk cannot discover or
+drive the activation ceremony (#2139), and recovering the lane's
+pre-existing *legacy* paper account is still fenced. Do not paper over
+either by copying custody data across lanes.
 
 **Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md),
 the [two-Clerk rollout runbook](fleet-d-two-clerk-rollout.md) (this posture is
@@ -37,7 +37,7 @@ flags multiple effective assignments as corruption (PRD §9.6).
 |---|---|---|---|
 | `python-service` (`polygon-data-service`) | `fleet_coordinator` | `learn-ai_alpaca-fleet-control` at `/app/artifacts/fleet` | ready; owns data-plane core + fleet routing; **no** clerk volume, no broker credential |
 | `alpaca-live-clerk` | `clerk_agent` | `learn-ai-alpaca-clerk-data` (the migrated lane volume) | ready; account `318420190` confirmed, shadow authority, heartbeating |
-| `alpaca-paper-clerk` | `clerk_agent` | `learn-ai-alpaca-paper-clerk-data` (fresh) | provisioned; paper profile applied; `ACTIVATION_REQUIRED` |
+| `alpaca-paper-clerk` | `clerk_agent` | `learn-ai-alpaca-paper-clerk-data` (fresh) | ready; fresh `PA*` account activated 2026-09-15 (cutover ceremony, generation 1), real_paper authority, heartbeating |
 
 Clerk IDs: Live `clrk_57f90423a8504d2d3dd4af77`, Paper
 `clrk_ae24bafc273728d023ff0eac`. Approved endpoints: `alpaca-live-agent` →
@@ -137,9 +137,46 @@ evidence stood in).
 exception is gone. A never-legacy account of either mode now completes
 `initialize`/`plan`/`apply` with an empty legacy artifact set and an empty
 runner roster — the flat-and-order-free check, unconditional for both modes,
-is what makes this safe. A genuinely fresh paper account (no prior Alpaca
-paper trading history at all) can activate on this lane today via the
-fresh-lane bootstrap dance above. See ADR 0059's 2026-09-14 amendment.
+is what makes this safe. See ADR 0059's 2026-09-14 amendment.
+
+**Executed 2026-09-15.** The fresh-account ceremony ran against this lane
+(owner decision on record: the pinned `PA*` account's prior trading history
+is ignored; the flat-and-order-free gate — verified against the live paper
+API — is the guard that matters):
+
+1. Create the empty `live_state/` directory the fresh volume lacked
+   (`read_quiescent_alpaca_roster` refuses on a missing root *before* the
+   empty-roster allowance can apply).
+2. Run `cutover-initialize → backup → cutover-plan → cutover-apply` inside
+   `alpaca-paper-clerk` (`/opt/venv/bin/python -m
+   scripts.manage_alpaca_sqlite_clerk`, flags per the [provider recovery
+   procedure](alpaca-sqlite-clerk-recovery-and-cutover.md)), each
+   evidence-gated step using a broker-evidence JSON captured seconds earlier
+   from the paper API; retain the API responses on the volume (e.g. under
+   `broker_captures/cutover-<date>/`) as the `proof_reference` targets.
+3. Restart the lane: authority opens, `effective_binding_generation` moves
+   0→1, and the directory shows both lanes `ready` (paper summary
+   `paper real_paper`). Receipts live on the paper volume under
+   `accounts/alpaca/<account>/cutover-evidence/` and `verified-backups/`.
+
+Two operational facts this execution pinned:
+
+- **A WAL/SHM sidecar refuses planning, and the fix is a checkpoint, never
+  file deletion.** A lane whose clerk stays up can accumulate a stale
+  0-byte `clerk.db-wal` + `clerk.db-shm` pair from a connection that exited
+  without a clean close (the refusal text itself says "remove no files
+  manually"). With no process holding the database, open it once —
+  `PRAGMA wal_checkpoint(TRUNCATE)` — and close cleanly; SQLite removes the
+  sidecars itself.
+- **`cutover-apply` must reuse the plan's exact evidence file.** Apply
+  refuses broker evidence whose normalized form differs from the plan's
+  (`normalized_broker != plan.broker_evidence`) and separately re-checks
+  the `--max-evidence-age-ms` window — so capture evidence **once**, run
+  `cutover-plan`, then `cutover-apply` with the same file, all inside that
+  one capture's window.
+
+The ceremony itself remains CLI-only by design; no desk or fleet-CLI path
+can discover or drive it (#2139).
 
 **Still open — recovering the *existing* legacy paper account onto this
 lane.** That account's legacy artifacts and activation records live on
