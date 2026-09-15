@@ -2,7 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 
 import { commandBodyOf, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
-import { laneUrl } from '../../../../fleet/clerk-scoped-url';
+import { operationUrl } from '../../../../fleet/operation-url';
 import { firstValueFrom } from 'rxjs';
 
 import type { components } from '../../../../api/broker.types';
@@ -45,17 +45,18 @@ export interface RevisionContent {
  *
  * Nothing here sends or receives key material: a profile names an opaque
  * credential *slot*, and only slot labels and availability cross the API.
+ *
+ * Every route is addressed through `operationUrl` against the committed
+ * fleet operation catalog snapshot (#2109) — the same catalog-derived
+ * builder `operation-url.ts` gives `BrokersService`, `BrokerV2PanelService`,
+ * and `GalleryLiveStore` (#2132) — rather than concatenating onto a
+ * free-form `laneUrl` prefix, so a call site naming a route the catalog does
+ * not declare fails loudly instead of reaching the coordinator as a silent
+ * 404.
  */
 @Injectable({ providedIn: 'root' })
 export class BrokerConfigurationService {
   private readonly http = inject(HttpClient);
-
-  /** The clerk-scoped configuration base (FR-092): every read and command
-   * names the lane it addresses; repair stays reachable for an unbound lane
-   * because the surface is configuration-access readiness. */
-  private base(clerkId: string): string {
-    return laneUrl({ broker: 'alpaca', clerkId }, '/configuration');
-  }
 
   /** Wrap one configuration command with the §10.3 envelope. Configuration
    * commands are one-shot: provider-side selection state fences them, so
@@ -67,22 +68,20 @@ export class BrokerConfigurationService {
     );
   }
 
-  private profileBase(clerkId: string, profileId: string): string {
-    return `${this.base(clerkId)}/profiles/${encodeURIComponent(profileId)}`;
-  }
-
-  private revisionBase(clerkId: string, profileId: string, revision: number): string {
-    return `${this.profileBase(clerkId, profileId)}/revisions/${encodeURIComponent(String(revision))}`;
-  }
-
   /** Backend-authored activation guidance; reads durable configuration only. */
   readDeskState(clerkId: string): Promise<AlpacaDeskState> {
-    return firstValueFrom(this.http.get<AlpacaDeskState>(`${this.base(clerkId)}/desk-state`));
+    return firstValueFrom(
+      this.http.get<AlpacaDeskState>(
+        operationUrl('configuration_desk_state', { broker: 'alpaca', clerkId }),
+      ),
+    );
   }
 
   listCredentialSlots(clerkId: string): Promise<readonly BrokerCredentialSlot[]> {
     return firstValueFrom(
-      this.http.get<components['schemas']['CredentialSlotsResponse']>(`${this.base(clerkId)}/credential-slots`),
+      this.http.get<components['schemas']['CredentialSlotsResponse']>(
+        operationUrl('configuration_credential_slots', { broker: 'alpaca', clerkId }),
+      ),
     ).then((response) => response.slots);
   }
 
@@ -92,20 +91,30 @@ export class BrokerConfigurationService {
   ): Promise<readonly BrokerProfile[]> {
     const params = new HttpParams().set('include_archived', options.includeArchived === true);
     return firstValueFrom(
-      this.http.get<components['schemas']['ProfileListResponse']>(`${this.base(clerkId)}/profiles`, { params }),
+      this.http.get<components['schemas']['ProfileListResponse']>(
+        operationUrl('configuration_profiles_list', { broker: 'alpaca', clerkId }),
+        { params },
+      ),
     ).then((response) => response.profiles);
   }
 
   readProfile(clerkId: string, profileId: string): Promise<BrokerProfileDetail> {
-    return firstValueFrom(this.http.get<BrokerProfileDetail>(this.profileBase(clerkId, profileId)));
+    return firstValueFrom(
+      this.http.get<BrokerProfileDetail>(
+        operationUrl('configuration_profile_read', { broker: 'alpaca', clerkId, profileId }),
+      ),
+    );
   }
 
   createProfile(target: ResourceTarget, displayName: string, content: RevisionContent): Promise<BrokerProfileDetail> {
     return firstValueFrom(
-      this.http.post<BrokerProfileDetail>(`${this.base(target.clerkId)}/profiles`, this.commandBody(target, {
-        display_name: displayName,
-        ...content,
-      })),
+      this.http.post<BrokerProfileDetail>(
+        operationUrl('configuration_profile_create', target),
+        this.commandBody(target, {
+          display_name: displayName,
+          ...content,
+        }),
+      ),
     );
   }
 
@@ -117,7 +126,7 @@ export class BrokerConfigurationService {
   ): Promise<BrokerProfile> {
     return firstValueFrom(
       this.http.patch<BrokerProfile>(
-        this.profileBase(target.clerkId, profileId),
+        operationUrl('configuration_profile_update', { ...target, profileId }),
         this.commandBody(target, {
           ...(patch.displayName === undefined ? {} : { display_name: patch.displayName }),
           ...(patch.archived === undefined ? {} : { archived: patch.archived }),
@@ -129,16 +138,19 @@ export class BrokerConfigurationService {
   /** New profile, copied content, no account pin carried over (contract §4). */
   cloneProfile(target: ResourceTarget, profileId: string, displayName: string): Promise<BrokerProfileDetail> {
     return firstValueFrom(
-      this.http.post<BrokerProfileDetail>(`${this.profileBase(target.clerkId, profileId)}/clone`, this.commandBody(target, {
-        display_name: displayName,
-      })),
+      this.http.post<BrokerProfileDetail>(
+        operationUrl('configuration_profile_clone', { ...target, profileId }),
+        this.commandBody(target, {
+          display_name: displayName,
+        }),
+      ),
     );
   }
 
   listRevisions(clerkId: string, profileId: string): Promise<readonly BrokerProfileRevision[]> {
     return firstValueFrom(
       this.http.get<components['schemas']['RevisionListResponse']>(
-        `${this.profileBase(clerkId, profileId)}/revisions`,
+        operationUrl('configuration_revisions_list', { broker: 'alpaca', clerkId, profileId }),
       ),
     ).then((response) => response.revisions);
   }
@@ -155,7 +167,7 @@ export class BrokerConfigurationService {
   ): Promise<BrokerProfileRevision> {
     return firstValueFrom(
       this.http.post<BrokerProfileRevision>(
-        `${this.profileBase(target.clerkId, profileId)}/revisions`,
+        operationUrl('configuration_revision_create', { ...target, profileId }),
         this.commandBody(target, {
           expected_revision: expectedRevision,
           ...content,
@@ -171,7 +183,14 @@ export class BrokerConfigurationService {
    */
   readRevision(clerkId: string, profileId: string, revision: number): Promise<BrokerProfileRevision> {
     return firstValueFrom(
-      this.http.get<BrokerProfileRevision>(this.revisionBase(clerkId, profileId, revision)),
+      this.http.get<BrokerProfileRevision>(
+        operationUrl('configuration_revision_read', {
+          broker: 'alpaca',
+          clerkId,
+          profileId,
+          revision: String(revision),
+        }),
+      ),
     );
   }
 
@@ -183,7 +202,7 @@ export class BrokerConfigurationService {
   ): Promise<readonly BrokerObservedAccount[]> {
     return firstValueFrom(
       this.http.post<components['schemas']['AccountVerificationResponse']>(
-        `${this.revisionBase(target.clerkId, profileId, revision)}/verify-account`,
+        operationUrl('configuration_verify_account', { ...target, profileId, revision: String(revision) }),
         this.commandBody(target, {}),
       ),
     ).then((response) => response.observed_accounts);
@@ -198,7 +217,7 @@ export class BrokerConfigurationService {
   ): Promise<BrokerProfileRevision> {
     return firstValueFrom(
       this.http.post<BrokerProfileRevision>(
-        `${this.revisionBase(target.clerkId, profileId, revision)}/account-pin`,
+        operationUrl('configuration_account_pin', { ...target, profileId, revision: String(revision) }),
         this.commandBody(target, { account_id: accountId }),
       ),
     );
@@ -206,7 +225,9 @@ export class BrokerConfigurationService {
 
   listNicknames(clerkId: string): Promise<readonly BrokerAccountNickname[]> {
     return firstValueFrom(
-      this.http.get<components['schemas']['NicknameListResponse']>(`${this.base(clerkId)}/account-nicknames`),
+      this.http.get<components['schemas']['NicknameListResponse']>(
+        operationUrl('configuration_nicknames_read', { broker: 'alpaca', clerkId }),
+      ),
     ).then((response) => response.nicknames);
   }
 
@@ -214,14 +235,18 @@ export class BrokerConfigurationService {
   putNickname(target: ResourceTarget, accountId: string, nickname: string): Promise<BrokerAccountNickname> {
     return firstValueFrom(
       this.http.put<BrokerAccountNickname>(
-        `${this.base(target.clerkId)}/account-nicknames/${encodeURIComponent(accountId)}`,
+        operationUrl('configuration_nicknames_set', { ...target, accountId }),
         this.commandBody(target, { nickname }),
       ),
     );
   }
 
   readSelection(clerkId: string): Promise<BrokerInstallationSelection> {
-    return firstValueFrom(this.http.get<BrokerInstallationSelection>(`${this.base(clerkId)}/selection`));
+    return firstValueFrom(
+      this.http.get<BrokerInstallationSelection>(
+        operationUrl('configuration_selection_read', { broker: 'alpaca', clerkId }),
+      ),
+    );
   }
 
   /** Staging, not switching: it governs nothing until an Apply and a restart. */
@@ -232,11 +257,14 @@ export class BrokerConfigurationService {
     expectedSelectionGeneration: number,
   ): Promise<BrokerInstallationSelection> {
     return firstValueFrom(
-      this.http.put<BrokerInstallationSelection>(`${this.base(target.clerkId)}/selection`, this.commandBody(target, {
-        profile_id: profileId,
-        revision,
-        expected_selection_generation: expectedSelectionGeneration,
-      })),
+      this.http.put<BrokerInstallationSelection>(
+        operationUrl('configuration_selection_write', target),
+        this.commandBody(target, {
+          profile_id: profileId,
+          revision,
+          expected_selection_generation: expectedSelectionGeneration,
+        }),
+      ),
     );
   }
 
@@ -247,9 +275,12 @@ export class BrokerConfigurationService {
    */
   applySelection(target: ResourceTarget, expectedSelectionGeneration: number): Promise<BrokerInstallationSelection> {
     return firstValueFrom(
-      this.http.post<BrokerInstallationSelection>(`${this.base(target.clerkId)}/selection/apply`, this.commandBody(target, {
-        expected_selection_generation: expectedSelectionGeneration,
-      })),
+      this.http.post<BrokerInstallationSelection>(
+        operationUrl('configuration_selection_apply', target),
+        this.commandBody(target, {
+          expected_selection_generation: expectedSelectionGeneration,
+        }),
+      ),
     );
   }
 }
