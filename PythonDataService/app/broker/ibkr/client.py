@@ -465,6 +465,11 @@ class IbkrClient:
                         extra={
                             "action": "ibkr_connect_failed",
                             "unreachable_since_ms": CONNECT_LOG_BUDGET.unreachable_since_ms,
+                            # Nonzero only on a shape change mid-outage: the
+                            # count of attempts suppressed since the last
+                            # report, discarded by the new shape's reset
+                            # instead of silently vanishing (#2113).
+                            "suppressed_attempts": CONNECT_LOG_BUDGET.suppressed_attempts,
                         },
                     )
                 elif verdict == "report_summary":

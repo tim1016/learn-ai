@@ -18,6 +18,7 @@ Inherited verbatim from `2026-09-14-fleet-trust-register-fixes.md` § Global Con
 
 - Item 19 defers to Lane D Task 5(c): production_adapter() is deleted there, so the strengthened test asserts absence of the function, not BrokerNotSupported.
 - PR 3 and Lane D PR C both edit test_b_scoped_contracts.py; land one, rebase the other.
+- Task 1's `canonical_rule` default is corrected below to match shipped code: review of PR #2085 removed the alpha-shaped class default entirely (a bare `FakeProviderAdapter("fake_beta")` was silently inheriting alpha's rule), making `canonical_rule` a required field and `fake_alpha()`/`fake_beta()` the only constructors. Carried from #2113 (Codex P2, originally #2085).
 
 ---
 
@@ -164,7 +165,18 @@ def _beta_canonical_account_id(raw: str) -> str:
     return raw.strip().lower().replace("-", "_")
 ```
 
-In `FakeProviderAdapter` (`:119-155`): `canonical_rule: Callable[[str], str] = _alpha_canonical_account_id`.
+**Shipped differs from this plan.** The plan's instruction below was to give
+`FakeProviderAdapter.canonical_rule` a default of `_alpha_canonical_account_id`
+(keeping the class constructible bare, alpha-shaped, with `fake_beta()`
+overriding it). Review of the shipped PR (#2085) reversed this: a bare
+`FakeProviderAdapter("fake_beta")` in `test_provider_conformance.py` was
+silently inheriting alpha's rule, defeating the whole point of divergent
+canonicalization. Shipped, `canonical_rule: Callable[[str], str]` is a
+**required** field with no default — `FakeProviderAdapter` no longer has
+alpha-shaped defaults, so `fake_alpha()` / `fake_beta()` are the only
+constructors and that bug class cannot recur. Do not re-add a default.
+
+In `FakeProviderAdapter` (`:119-155`): `canonical_rule: Callable[[str], str]` (required, no default).
 In `fake_beta()` (`:167-173`): add `canonical_rule=_beta_canonical_account_id`.
 Export both names in `__all__` (`:272-282`).
 

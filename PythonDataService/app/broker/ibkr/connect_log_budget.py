@@ -85,6 +85,12 @@ class ConnectLogBudget:
         self._last_shape = shape
 
         if is_new_outage or shape_changed:
+            # A shape change discards whatever accumulated in ``_suppressed``
+            # since the last report. Copy it onto the public field (as the
+            # window-elapsed branch below does) before zeroing it, so the
+            # discard is a visible fact on the verdict rather than a silent
+            # reset — the caller can report it (#2113).
+            self.suppressed_attempts = self._suppressed
             self._last_reported_ms = now
             self._suppressed = 0
             return "report_first"

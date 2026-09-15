@@ -127,16 +127,28 @@ def test_fault_matrix_is_machine_readable_and_excludes_coordinator_outage() -> N
 
 
 def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -> None:
-    """The tuple is a manifest; this asserts the ceremony honours it.
+    """The tuple is a manifest; this asserts both that it hasn't shrunk and that
+    the ceremony honours it.
 
-    Comparing FAULT_SCENARIOS to a literal copy of itself cannot catch the one
-    drift that matters — a scenario declared in the vocabulary and never
-    assigned in run_host_qualification, which _assert_all_faults_passed would
-    then fail at runtime on the host, hours into a maintenance window. If a
-    scenario is ever extracted into a helper, keep its `faults[...] =`
-    assignment at the call site in run_host_qualification, or this check
-    goes red on an otherwise-correct refactor.
+    Belt and braces, on purpose, because the two checks fail differently. The
+    literal set below catches the vocabulary itself silently shrinking (a
+    scenario deleted from FAULT_SCENARIOS, which the AST walk below would
+    happily call fully "populated" since there is nothing left to check). The
+    AST walk catches the complementary drift a literal copy of FAULT_SCENARIOS
+    cannot: a scenario declared in the vocabulary and never assigned in
+    run_host_qualification, which _assert_all_faults_passed would then fail at
+    runtime on the host, hours into a maintenance window. If a scenario is
+    ever extracted into a helper, keep its `faults[...] =` assignment at the
+    call site in run_host_qualification, or this check goes red on an
+    otherwise-correct refactor.
     """
+    assert set(qualification.FAULT_SCENARIOS) == {
+        "provider_outage",
+        "credential_refusal_restart",
+        "volume_marker_poison_mismount_refusal",
+        "request_queue_saturation",
+        "stream_saturation",
+    }
     source = Path(qualification.__file__).read_text(encoding="utf-8")
     function = next(
         (

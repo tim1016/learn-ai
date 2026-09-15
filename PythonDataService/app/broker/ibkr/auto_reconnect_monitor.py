@@ -32,6 +32,7 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal
 
+from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
 from app.broker.ibkr.recovery_state_machine import (
     RecoverySignal,
     RecoveryState,
@@ -550,7 +551,18 @@ class AutoReconnectMonitor:
         except Exception as exc:
             self._end_attempt(success=False)
             self._advance_recovery("reconnect_failed")
-            logger.warning(
+            # ``client.connect()`` has already reported this failure through
+            # CONNECT_LOG_BUDGET (a WARNING on the first attempt of the
+            # outage, then suppressed) by the time control returns here.
+            # Logging our own WARNING on top of that, once per attempt,
+            # partly re-creates the log-budget problem #2089 fixed —
+            # sustained HARD_DOWN probes every ``_open_probe_interval_s``
+            # would otherwise re-emit this line forever (#2113). Demote to
+            # DEBUG for the duration of a budget-tracked outage; the budget's
+            # own first-report and periodic-summary WARNINGs remain the
+            # operator-visible signal.
+            log = logger.debug if CONNECT_LOG_BUDGET.suppressing else logger.warning
+            log(
                 "Auto-reconnect attempt %d failed: %s",
                 attempt,
                 exc,

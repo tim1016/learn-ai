@@ -17,6 +17,7 @@ needed. Each test pins one observable contract:
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -25,7 +26,8 @@ from app.broker.ibkr.auto_reconnect_monitor import (
     jittered_backoff_delay,
 )
 from app.broker.ibkr.client import get_client_lifecycle_lock
-from tests.broker.ibkr._support import _FakeClient
+from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
+from tests.broker.ibkr._support import _FakeClient, _wait_for
 
 
 @pytest.fixture(autouse=True)
@@ -818,3 +820,67 @@ async def test_monitor_publishes_attempt_state_to_observers() -> None:
     assert monitor.current_attempt == 0
     assert monitor.successful_reconnect_count == 1
     assert monitor.last_transition_ms >= initial_transition
+
+
+# ──────────────────────────── connect-log-budget interaction ──────────
+
+
+@pytest.fixture
+def _fresh_connect_log_budget():
+    """``CONNECT_LOG_BUDGET`` is a module singleton shared with
+    ``client.py``; scope it to the test so no state leaks either way."""
+    CONNECT_LOG_BUDGET.reset_for_testing()
+    yield
+    CONNECT_LOG_BUDGET.reset_for_testing()
+
+
+@pytest.mark.asyncio
+async def test_monitor_reconnect_failure_warns_outside_a_tracked_outage(
+    _fresh_connect_log_budget: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Baseline, unchanged from before #2113: with no outage tracked by
+    CONNECT_LOG_BUDGET, a failed reconnect attempt still logs at WARNING.
+    Pairs with the demotion test below so the mutation is proven in both
+    directions rather than the monitor simply going quiet forever."""
+    assert not CONNECT_LOG_BUDGET.suppressing
+    caplog.set_level(logging.DEBUG, logger="app.broker.ibkr.auto_reconnect_monitor")
+    client = _FakeClient(is_connected=False, reachable=False)
+    monitor = AutoReconnectMonitor(client, poll_interval_s=0.01, initial_backoff_s=0.01)
+
+    monitor.start()
+    await _wait_for(lambda: client.connect_calls >= 2)
+    await monitor.stop()
+
+    fails = [r for r in caplog.records if r.__dict__.get("action") == "auto_reconnect_fail"]
+    assert fails, "expected at least one auto_reconnect_fail log line"
+    assert any(r.levelno == logging.WARNING for r in fails)
+
+
+@pytest.mark.asyncio
+async def test_monitor_reconnect_failure_is_silenced_once_per_probe_during_a_tracked_outage(
+    _fresh_connect_log_budget: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression for the #2113 P2 finding on #2089: once CONNECT_LOG_BUDGET
+    is already tracking an outage -- as it is in production the instant
+    ``client.connect()`` reports the first failure -- the monitor's own
+    ``auto_reconnect_fail`` WARNING must not re-fire on every subsequent
+    probe. Unbudgeted, a sustained HARD_DOWN outage probing every
+    ``open_probe_interval_s`` would re-emit this line forever, partly
+    re-creating the log-spam problem #2089 fixed for ``client.py``'s own
+    per-attempt logging. The budget's first-report/summary WARNINGs remain
+    the operator-visible signal; the monitor's is demoted to DEBUG."""
+    CONNECT_LOG_BUDGET.note_failure(OSError("gateway down"))
+    assert CONNECT_LOG_BUDGET.suppressing
+    caplog.set_level(logging.DEBUG, logger="app.broker.ibkr.auto_reconnect_monitor")
+    client = _FakeClient(is_connected=False, reachable=False)
+    monitor = AutoReconnectMonitor(client, poll_interval_s=0.01, initial_backoff_s=0.01)
+
+    monitor.start()
+    await _wait_for(lambda: client.connect_calls >= 2)
+    await monitor.stop()
+
+    fails = [r for r in caplog.records if r.__dict__.get("action") == "auto_reconnect_fail"]
+    assert fails, "expected at least one auto_reconnect_fail log line"
+    assert all(r.levelno == logging.DEBUG for r in fails)
