@@ -13,19 +13,34 @@ from __future__ import annotations
 
 import re
 
-from starlette.routing import Match
+import pytest
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Match, Route
 
 from app.broker.fleet_composition import production_provider_adapters
 from app.main import app
 
-#: Path parameters may carry Starlette converters; `{order_ref:path}` must be
-#: filled with something multi-segment or the route under-matches.
+#: Path parameters may carry Starlette converters; each converter only
+#: matches values shaped like its own type (`{order_ref:path}` needs
+#: something multi-segment, `{id:int}` needs digits, ...), or the route
+#: under-matches and a correctly-mounted operation is reported as missing
+#: (#2120). Values below are taken straight from each converter's `regex` in
+#: `starlette.convertors.CONVERTOR_TYPES`. `str` and untyped params (`None`)
+#: fall through to the default.
 _PATH_PARAM = re.compile(r"\{([a-z_][a-z0-9_]*)(?::([a-z]+))?\}")
+
+_PROBE_VALUES_BY_CONVERTER: dict[str | None, str] = {
+    "path": "seg/one",
+    "int": "1",
+    "float": "1.5",
+    "uuid": "00000000-0000-0000-0000-000000000000",
+}
 
 
 def _concrete(template: str) -> str:
     return _PATH_PARAM.sub(
-        lambda match: "seg/one" if match.group(2) == "path" else "probe-value",
+        lambda match: _PROBE_VALUES_BY_CONVERTER.get(match.group(2), "probe-value"),
         template,
     )
 
@@ -81,3 +96,80 @@ def test_the_probe_detects_a_method_that_is_not_mounted() -> None:
     """The check would be vacuous if PARTIAL matches counted."""
     assert _resolves("GET", "/api/brokers/alpaca/accounts/x/bots/deploy")
     assert not _resolves("DELETE", "/api/brokers/alpaca/accounts/x/bots/deploy")
+
+
+async def _typed_converter_probe_endpoint(request: Request) -> PlainTextResponse:
+    return PlainTextResponse("ok")
+
+
+def _route_matches(template: str, path: str) -> bool:
+    route = Route(template, _typed_converter_probe_endpoint, methods=["GET"])
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "root_path": "",
+        "headers": [],
+        "query_string": b"",
+    }
+    return route.matches(scope)[0] is Match.FULL
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "/probe/{item_id:int}",
+        "/probe/{item_id:float}",
+        "/probe/{item_id:uuid}",
+    ],
+)
+def test_concrete_fills_typed_converters_with_a_matching_value(template: str) -> None:
+    """#2120: today's catalog has only one typed converter (`:path`), so
+    `_concrete()` filling every other parameter with the literal
+    `"probe-value"` has never been exercised against `{x:int}` / `{x:uuid}` /
+    `{x:float}`. Reproduces the independent reviewer's synthetic-route
+    finding directly: mount a route with each converter and prove
+    `_concrete()`'s fill both resolves it (the fix, asserted here) and that
+    the old one-size-fits-all literal would NOT (asserted in
+    `test_the_pre_fix_literal_does_not_satisfy_a_typed_converter` below) — two
+    assertions that fail for different reasons, not one checked twice.
+    """
+    assert _route_matches(template, _concrete(template)), (
+        f"_concrete({template!r}) produced a value its own converter rejects"
+    )
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "/probe/{item_id:int}",
+        "/probe/{item_id:float}",
+        "/probe/{item_id:uuid}",
+    ],
+)
+def test_the_pre_fix_literal_does_not_satisfy_a_typed_converter(template: str) -> None:
+    """The other half of the #2120 proof: `"probe-value"` (the pre-fix fill
+    for every non-`:path` parameter) must fail these typed converters, or the
+    positive assertion above would pass even with the naive fill restored —
+    i.e. this is the case that makes a regression back to the untyped fill
+    actually redden a test instead of silently under-matching in production.
+    """
+    naive_path = _PATH_PARAM.sub("probe-value", template)
+    assert not _route_matches(template, naive_path), (
+        "'probe-value' unexpectedly satisfies this converter, so this "
+        f"template ({template!r}) cannot distinguish a converter-aware fill "
+        "from the pre-#2120 one-size-fits-all fill"
+    )
+
+
+def test_concrete_still_fills_the_path_converter_with_a_multi_segment_value() -> None:
+    """Regression guard for the pre-existing `:path` special case (the
+    catalog's real `manual-orders/{order_ref:path}/cancel`): refactoring
+    `_concrete()` into a converter map must not lose it. Unlike the other
+    converters, `PathConvertor`'s regex (`.*`) also accepts the single-segment
+    literal `"probe-value"`, so this one is a regression guard on the
+    multi-segment fill itself, not a match/no-match pair.
+    """
+    template = "/probe/{item_id:path}"
+    assert _concrete(template) == "/probe/seg/one"
+    assert _route_matches(template, _concrete(template))

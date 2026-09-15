@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -227,6 +228,20 @@ async def _open_verified_fleet_lane() -> FleetLaneBoot | None:
             extra={"action": "fleet_boot_refused", "reason_code": exc.reason},
         )
         raise
+
+
+def _install_fleet_served_identity(
+    app: FastAPI, provider: Callable[[], dict[str, object] | None]
+) -> None:
+    """Wire the identity-echo provider through the one shared state key
+    (#2121). ``agent_identity.SERVED_IDENTITY_STATE_KEY`` is the only name
+    ``FleetIdentityMiddleware`` reads through (``app/broker/fleet/
+    agent_identity.py``); a hardcoded attribute name here would only
+    coincidentally match it today, and a future rename of the constant would
+    silently stop identity-echo verification — announced by nothing louder
+    than a per-request WARNING — instead of breaking this import.
+    """
+    setattr(app.state, SERVED_IDENTITY_STATE_KEY, provider)
 
 
 @asynccontextmanager
@@ -583,7 +598,7 @@ async def _service_lifespan(
                         "binding_generation": _effective_binding_generation_now(),
                     }
 
-                app.state.fleet_served_identity = _fleet_served_identity
+                _install_fleet_served_identity(app, _fleet_served_identity)
 
                 selection_row = get_broker_configuration_service().selection()
                 if (
@@ -1004,7 +1019,10 @@ if _ROLE_RUNS_CLERK:
 # Only a separately deployed lane agent fences unpinned mutations. The
 # combined posture IS the browser's data plane and must stay byte-for-byte
 # the historical single process (#2075).
-from app.broker.fleet.agent_identity import FleetIdentityMiddleware  # noqa: E402
+from app.broker.fleet.agent_identity import (  # noqa: E402
+    SERVED_IDENTITY_STATE_KEY,
+    FleetIdentityMiddleware,
+)
 
 if _ROLE_RUNS_CLERK:
     app.add_middleware(

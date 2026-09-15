@@ -1182,7 +1182,7 @@ def test_existing_wildcards_do_not_shadow_the_clerk_surface() -> None:
             "matches = [getattr(route, 'name', '') for route in app.routes "
             "if isinstance(route, sr.Route) and "
             "route.matches(scope)[0] == sr.Match.FULL]; "
-            "print(json.dumps(matches[:3]))"
+            "sys.stdout.write(json.dumps(matches[:3]) + '\\n')"
         )
         completed = subprocess.run(
             [sys.executable, "-c", probe],
