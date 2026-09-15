@@ -169,6 +169,8 @@ async def list_routing_receipts_audit(
     since_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
     clerk_id: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    before_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
+    before_correlation_id: str | None = Query(None, min_length=1, max_length=64),
 ) -> Response:
     """Routing receipts at or after ``since_ms``, newest first.
 
@@ -176,12 +178,28 @@ async def list_routing_receipts_audit(
     durable audit trail (routing receipts, assignment history, session
     history) was otherwise reachable only by opening the coordinator's
     SQLite file by hand.
+
+    ``before_ms``/``before_correlation_id`` continue a previous page's keyset
+    (#2133) -- pass back a truncated page's ``next_before_ms``/
+    ``next_before_correlation_id`` verbatim to walk the full window past
+    ``limit`` instead of only ever reaching the newest page.
     """
-    return JSONResponse(
-        _fleet_service(request).list_routing_receipts(
-            since_ms=since_ms, clerk_id=clerk_id, limit=limit
+    try:
+        result = _fleet_service(request).list_routing_receipts(
+            since_ms=since_ms,
+            clerk_id=clerk_id,
+            limit=limit,
+            before_ms=before_ms,
+            before_correlation_id=before_correlation_id,
         )
-    )
+    except FleetControlError as error:
+        return _refuse(error)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"reason": "audit_query_invalid", "message": str(exc)},
+        )
+    return JSONResponse(result)
 
 
 # ---- Catalog-generated operation routes (§10.2/§10.3) ----------------------

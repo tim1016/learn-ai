@@ -226,8 +226,17 @@ def test_service_list_routing_receipts_envelope_shape(
 
     result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
 
-    assert set(result) == {"observed_at_ms", "receipts"}
+    assert set(result) == {
+        "observed_at_ms",
+        "receipts",
+        "has_more",
+        "next_before_ms",
+        "next_before_correlation_id",
+    }
     assert isinstance(result["observed_at_ms"], int)
+    assert result["has_more"] is False
+    assert result["next_before_ms"] is None
+    assert result["next_before_correlation_id"] is None
     assert len(result["receipts"]) == 1
     entry = result["receipts"][0]
     assert set(entry) == {
@@ -424,6 +433,114 @@ def test_service_limit_returns_the_newest_receipts_not_the_oldest(
     assert stamps == sorted(stamps, reverse=True)
 
 
+# ---- store/service: keyset pagination reaches the full window past limit --
+
+
+def test_store_before_ms_and_before_correlation_id_seek_past_a_shared_timestamp(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """Two receipts share one ``created_at_ms`` (the clock is not advanced
+    between them). Seeking before the pair's higher ``correlation_id``
+    returns exactly the lower one -- never both, never neither.
+
+    Reddens if the ``correlation_id`` tiebreak were dropped from the
+    predicate (comparing on ``created_at_ms`` alone): an exclusive bound on
+    the shared timestamp would then return neither receipt, not just the
+    lower one.
+    """
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="tiebreak", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-tiebreak")
+
+    first = _open_and_settle(fleet_service, lane, key="tie-1")
+    second = _open_and_settle(fleet_service, lane, key="tie-2")
+    assert first.created_at_ms == second.created_at_ms  # the fixture's own premise
+    assert first.correlation_id != second.correlation_id
+
+    higher, lower = sorted([first, second], key=lambda r: r.correlation_id, reverse=True)
+
+    receipts = fleet_service._store.list_routing_receipts(
+        clerk_id=lane.clerk_id,
+        before_ms=higher.created_at_ms,
+        before_correlation_id=higher.correlation_id,
+    )
+
+    assert {r.correlation_id for r in receipts} == {lower.correlation_id}
+
+
+def test_store_before_ms_requires_before_correlation_id(
+    control_dir: Path, fleet_service: FleetControlService
+) -> None:
+    """The two seek parameters are a pair; one without the other is a bug at
+    the call site, not a silently-ignored bound."""
+    with pytest.raises(ValueError, match="before_ms and before_correlation_id"):
+        fleet_service._store.list_routing_receipts(before_ms=1_000)
+    with pytest.raises(ValueError, match="before_ms and before_correlation_id"):
+        fleet_service._store.list_routing_receipts(before_correlation_id="corr_x")
+
+
+def test_service_pagination_walks_the_full_window_with_duplicate_timestamps(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """Seed more receipts than ``limit`` -- including two that share one
+    ``created_at_ms`` -- then page with the returned continuation values
+    until ``has_more`` is false. The union of every page must be exactly the
+    seeded set: every receipt once, none twice, none missing.
+
+    This is the audit-window-reachability deliverable (#2133 P1-a): before
+    this pagination existed, a caller asking for more than ``limit`` receipts
+    had no way to reach the rest, and lowering ``since_ms`` alone only
+    re-selected the same newest rows. It also reddens if the
+    ``correlation_id`` tiebreak were dropped from the store predicate -- the
+    duplicate-timestamp pair is seeded first so it is the oldest pair and is
+    guaranteed to straddle a page boundary at the ``limit`` values exercised
+    below, which a timestamp-only bound would skip or repeat.
+    """
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="walk", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-walk")
+
+    seeded = [
+        _open_and_settle(fleet_service, lane, key="walk-dup-1"),
+        _open_and_settle(fleet_service, lane, key="walk-dup-2"),
+    ]
+    assert seeded[0].created_at_ms == seeded[1].created_at_ms  # the fixture's own premise
+    for i in range(5):
+        clock.advance(1_000)
+        seeded.append(_open_and_settle(fleet_service, lane, key=f"walk-{i}"))
+    assert len(seeded) == 7
+    seeded_ids = {receipt.correlation_id for receipt in seeded}
+
+    for limit in (2, 3):
+        collected: list[str] = []
+        before_ms: int | None = None
+        before_correlation_id: str | None = None
+        pages = 0
+        while True:
+            pages += 1
+            assert pages <= 20, f"limit={limit}: pagination did not terminate"
+            result = fleet_service.list_routing_receipts(
+                since_ms=0,
+                clerk_id=lane.clerk_id,
+                limit=limit,
+                before_ms=before_ms,
+                before_correlation_id=before_correlation_id,
+            )
+            collected.extend(entry["correlation_id"] for entry in result["receipts"])
+            if not result["has_more"]:
+                assert result["next_before_ms"] is None
+                assert result["next_before_correlation_id"] is None
+                break
+            before_ms = result["next_before_ms"]
+            before_correlation_id = result["next_before_correlation_id"]
+
+        assert len(collected) == len(seeded_ids), f"limit={limit}: wrong total count"
+        assert len(collected) == len(set(collected)), f"limit={limit}: a receipt repeated"
+        assert set(collected) == seeded_ids, f"limit={limit}: union missed the seeded set"
+
+
 # ---- HTTP: the secret gate, proved in both directions ---------------------
 
 
@@ -611,3 +728,73 @@ async def test_http_limit_is_bounded_one_to_five_hundred(
     assert zero.status_code == 422
     assert too_many.status_code == 422
     assert max_ok.status_code == 200
+
+
+# ---- HTTP: keyset pagination round-trips over the wire ---------------------
+
+
+@pytest.mark.asyncio
+async def test_http_before_ms_and_before_correlation_id_round_trip_a_second_page(
+    control_dir: Path,
+    fleet_service: FleetControlService,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated page's ``next_before_ms``/``next_before_correlation_id``,
+    fed back as ``before_ms``/``before_correlation_id``, reaches the receipt
+    the first page could not."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="http-page", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-http-page")
+    older = _open_and_settle(fleet_service, lane, key="http-page-older")
+    clock.advance(1_000)
+    newer = _open_and_settle(fleet_service, lane, key="http-page-newer")
+    app = _coordinator_app(fleet_service)
+    headers = {CONTROL_SECRET_HEADER: _TEST_SECRET}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.get(
+            ROUTE, params={"since_ms": 0, "clerk_id": lane.clerk_id, "limit": 1}, headers=headers
+        )
+        assert first.status_code == 200
+        first_body = first.json()
+        assert [r["correlation_id"] for r in first_body["receipts"]] == [newer.correlation_id]
+        assert first_body["has_more"] is True
+
+        second = await client.get(
+            ROUTE,
+            params={
+                "since_ms": 0,
+                "clerk_id": lane.clerk_id,
+                "limit": 1,
+                "before_ms": first_body["next_before_ms"],
+                "before_correlation_id": first_body["next_before_correlation_id"],
+            },
+            headers=headers,
+        )
+
+    assert second.status_code == 200
+    second_body = second.json()
+    assert [r["correlation_id"] for r in second_body["receipts"]] == [older.correlation_id]
+    assert second_body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_http_before_ms_without_before_correlation_id_is_refused(
+    control_dir: Path, fleet_service: FleetControlService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seek pair cannot be given half-supplied over the wire either."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = _coordinator_app(fleet_service)
+    headers = {CONTROL_SECRET_HEADER: _TEST_SECRET}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            ROUTE, params={"since_ms": 0, "before_ms": 1_000}, headers=headers
+        )
+
+    assert response.status_code == 422

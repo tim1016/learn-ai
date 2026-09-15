@@ -430,6 +430,11 @@ export interface paths {
          *     durable audit trail (routing receipts, assignment history, session
          *     history) was otherwise reachable only by opening the coordinator's
          *     SQLite file by hand.
+         *
+         *     ``before_ms``/``before_correlation_id`` continue a previous page's keyset
+         *     (#2133) -- pass back a truncated page's ``next_before_ms``/
+         *     ``next_before_correlation_id`` verbatim to walk the full window past
+         *     ``limit`` instead of only ever reaching the newest page.
          */
         get: operations["list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get"];
         put?: never;
@@ -26536,6 +26541,8 @@ export interface operations {
                 since_ms: number;
                 clerk_id?: string | null;
                 limit?: number;
+                before_ms?: number | null;
+                before_correlation_id?: string | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

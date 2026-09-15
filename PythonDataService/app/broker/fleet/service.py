@@ -1590,18 +1590,41 @@ class FleetControlService:
         return None
 
     def list_routing_receipts(
-        self, *, since_ms: int, clerk_id: str | None = None, limit: int = 100
+        self,
+        *,
+        since_ms: int,
+        clerk_id: str | None = None,
+        limit: int = 100,
+        before_ms: int | None = None,
+        before_correlation_id: str | None = None,
     ) -> dict[str, object]:
         """The routing-receipt audit trail, at or after ``since_ms``.
 
         Read-only: no idempotency key, no command envelope, nothing is
         opened or settled. ``since_ms`` is an inclusive lower bound on
         ``created_at_ms``; the store already orders newest first.
+
+        ``before_ms``/``before_correlation_id`` continue a previous page's
+        keyset (#2133): a truncated page's oldest entry names them back to
+        the caller as ``next_before_ms``/``next_before_correlation_id``, and
+        passing them back here resumes exactly where that page ended — with
+        the correlation-id tiebreak, so a page boundary landing mid-timestamp
+        neither skips nor repeats a row. Without them the newest ``limit``
+        receipts are unreachable-past truncation: lowering ``since_ms`` alone
+        only re-selects the same newest rows.
         """
         now = self._clock()
-        receipts = self._store.list_routing_receipts(
-            clerk_id=clerk_id, since_ms=since_ms, limit=limit
+        fetched = self._store.list_routing_receipts(
+            clerk_id=clerk_id,
+            since_ms=since_ms,
+            before_ms=before_ms,
+            before_correlation_id=before_correlation_id,
+            limit=limit + 1,
         )
+        has_more = len(fetched) > limit
+        page = fetched[:limit]
+        next_before_ms = page[-1].created_at_ms if has_more else None
+        next_before_correlation_id = page[-1].correlation_id if has_more else None
         return {
             "observed_at_ms": now,
             "receipts": [
@@ -1617,8 +1640,11 @@ class FleetControlService:
                     "created_at_ms": receipt.created_at_ms,
                     "dispatched_at_ms": receipt.dispatched_at_ms,
                 }
-                for receipt in receipts
+                for receipt in page
             ],
+            "has_more": has_more,
+            "next_before_ms": next_before_ms,
+            "next_before_correlation_id": next_before_correlation_id,
         }
 
     # ---- directory ---------------------------------------------------------
