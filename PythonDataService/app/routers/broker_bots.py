@@ -24,8 +24,6 @@ from app.schemas.broker_bots import (
     BotRunReadRunnerErrorResponse,
     BotRunView,
     BotStatusView,
-    DeployBotRequest,
-    StopBotRequest,
 )
 from app.services.bot_runner import (
     BotRunnerError,
@@ -86,28 +84,6 @@ def _require_account_binding(
             f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",
             detail="Use the account recorded by the bot's sealed binding.",
         )
-
-
-@router.post(
-    "/{broker}/bots",
-    response_model=BotStatusView,
-    status_code=201,
-    summary="Deploy and start a log-only bot bound to this broker",
-)
-async def deploy_bot(broker: str, request: DeployBotRequest) -> BotStatusView:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return await registry.deploy(
-            broker=broker,
-            strategy_instance_id=request.strategy_instance_id,
-            symbol=request.symbol,
-            use_rth=request.use_rth,
-            mode=request.mode,
-            quantity=request.quantity,
-        )
-    except BotRunnerError as error:
-        _raise_runner_error(error)
 
 
 @router.get(
@@ -240,22 +216,3 @@ async def get_run_history_scoped(
     except BotRunnerError as error:
         _raise_runner_error(error)
 
-
-@router.post(
-    "/{broker}/bots/{strategy_instance_id}/stop",
-    response_model=BotStatusView,
-    summary="Stop a running bot (durable STOPPED intent first, then reap)",
-)
-async def stop_bot(
-    broker: str, strategy_instance_id: str, request: StopBotRequest | None = None
-) -> BotStatusView:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return await registry.stop(
-            broker,
-            strategy_instance_id,
-            reason=request.reason if request is not None else None,
-        )
-    except BotRunnerError as error:
-        _raise_runner_error(error)

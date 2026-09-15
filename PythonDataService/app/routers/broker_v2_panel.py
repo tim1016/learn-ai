@@ -584,17 +584,6 @@ async def run_action_scoped(broker: str, account_id: str, sid: str, request: Pan
     return await _run_action(broker, account_id, sid, request)
 
 
-@router.post(
-    "/{broker}/bots/{sid}/actions",
-    response_model=PanelActionResult,
-    summary="Execute one presented action (single-account alias) (§11)",
-    responses=_ACTION_ERROR_RESPONSES,
-)
-async def run_action_unscoped(broker: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
-    account_id = await _resolve_default_account(broker)
-    return await _run_action(broker, account_id, sid, request)
-
-
 # ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
 
 
