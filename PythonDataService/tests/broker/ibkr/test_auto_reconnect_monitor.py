@@ -25,7 +25,7 @@ from app.broker.ibkr.auto_reconnect_monitor import (
     AutoReconnectMonitor,
     jittered_backoff_delay,
 )
-from app.broker.ibkr.client import get_client_lifecycle_lock
+from app.broker.ibkr.client import ConnectionRefusedDueToSentinelError, get_client_lifecycle_lock
 from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
 from tests.broker.ibkr._support import _FakeClient, _wait_for
 
@@ -835,52 +835,44 @@ def _fresh_connect_log_budget():
 
 
 @pytest.mark.asyncio
-async def test_monitor_reconnect_failure_warns_outside_a_tracked_outage(
+async def test_monitor_reconnect_failure_warns_even_during_an_unrelated_tracked_outage(
     _fresh_connect_log_budget: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Baseline, unchanged from before #2113: with no outage tracked by
-    CONNECT_LOG_BUDGET, a failed reconnect attempt still logs at WARNING.
-    Pairs with the demotion test below so the mutation is proven in both
-    directions rather than the monitor simply going quiet forever."""
-    assert not CONNECT_LOG_BUDGET.suppressing
-    caplog.set_level(logging.DEBUG, logger="app.broker.ibkr.auto_reconnect_monitor")
-    client = _FakeClient(is_connected=False, reachable=False)
-    monitor = AutoReconnectMonitor(client, poll_interval_s=0.01, initial_backoff_s=0.01)
-
-    monitor.start()
-    await _wait_for(lambda: client.connect_calls >= 2)
-    await monitor.stop()
-
-    fails = [r for r in caplog.records if r.__dict__.get("action") == "auto_reconnect_fail"]
-    assert fails, "expected at least one auto_reconnect_fail log line"
-    assert any(r.levelno == logging.WARNING for r in fails)
-
-
-@pytest.mark.asyncio
-async def test_monitor_reconnect_failure_is_silenced_once_per_probe_during_a_tracked_outage(
-    _fresh_connect_log_budget: None,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Regression for the #2113 P2 finding on #2089: once CONNECT_LOG_BUDGET
-    is already tracking an outage -- as it is in production the instant
-    ``client.connect()`` reports the first failure -- the monitor's own
-    ``auto_reconnect_fail`` WARNING must not re-fire on every subsequent
-    probe. Unbudgeted, a sustained HARD_DOWN outage probing every
-    ``open_probe_interval_s`` would re-emit this line forever, partly
-    re-creating the log-spam problem #2089 fixed for ``client.py``'s own
-    per-attempt logging. The budget's first-report/summary WARNINGs remain
-    the operator-visible signal; the monitor's is demoted to DEBUG."""
-    CONNECT_LOG_BUDGET.note_failure(OSError("gateway down"))
+    """Regression for the #2113 review: a demotion of this WARNING keyed on
+    ``CONNECT_LOG_BUDGET.suppressing`` was tried and reverted, because
+    ``suppressing`` means "some outage is being tracked", not "this failure
+    was reported". Four of ``client.connect()``'s exception paths --
+    ``IbkrClientIdInUseError``, both ``managedAccounts()`` refusals, and
+    (used here) ``ConnectionRefusedDueToSentinelError`` -- raise without
+    ever calling ``CONNECT_LOG_BUDGET.note_failure()``. A demotion gated on
+    the global flag would silence a wrong-account binding or a client-id
+    collision whenever an *unrelated* outage happens to be tracked
+    elsewhere in the process -- the only channel that ever surfaces those
+    four. This must warn regardless."""
+    CONNECT_LOG_BUDGET.note_failure(ConnectionRefusedError(111, "unrelated outage"))
     assert CONNECT_LOG_BUDGET.suppressing
     caplog.set_level(logging.DEBUG, logger="app.broker.ibkr.auto_reconnect_monitor")
-    client = _FakeClient(is_connected=False, reachable=False)
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[
+            ConnectionRefusedDueToSentinelError(
+                "IBKR_MODE=paper but connected account 'U1234567' is NOT a "
+                "paper account (paper IDs begin with 'DU'). Disconnected. "
+                "Refusing to proceed."
+            )
+        ],
+    )
     monitor = AutoReconnectMonitor(client, poll_interval_s=0.01, initial_backoff_s=0.01)
 
     monitor.start()
-    await _wait_for(lambda: client.connect_calls >= 2)
+    await _wait_for(lambda: client.connect_calls >= 1)
     await monitor.stop()
 
     fails = [r for r in caplog.records if r.__dict__.get("action") == "auto_reconnect_fail"]
     assert fails, "expected at least one auto_reconnect_fail log line"
-    assert all(r.levelno == logging.DEBUG for r in fails)
+    assert any(r.levelno == logging.WARNING for r in fails), (
+        "a sentinel-mismatch failure (or anything else client.connect() "
+        "raises without routing through CONNECT_LOG_BUDGET.note_failure()) "
+        "must warn regardless of an unrelated tracked outage"
+    )

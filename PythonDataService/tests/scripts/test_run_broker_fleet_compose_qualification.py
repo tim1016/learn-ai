@@ -69,8 +69,12 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     assert "FLEET_LIVE_IBKR_CLIENT_ID" not in compose
     paper_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/paper.env.example").read_text(encoding="utf-8")
     live_env = (qualification.REPOSITORY_ROOT / "deploy/fleet/env/live.env.example").read_text(encoding="utf-8")
-    assert "IBKR_CLIENT_ID=1201" in paper_env
-    assert "IBKR_CLIENT_ID=1202" in live_env
+    # 1201/1202 was the originally planned pair; 583e330c deliberately
+    # changed the running override to 2/1 (round-2 Codex review on #2116)
+    # without updating this assertion. The env files transcribe what
+    # actually runs, not the original plan — assert the running values.
+    assert "IBKR_CLIENT_ID=2" in paper_env
+    assert "IBKR_CLIENT_ID=1" in live_env
     assert "ALPACA_MARKET_STATUS_UPSTREAM_URL" not in compose
     assert "${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z" in compose
     assert "./PythonDataService/cache:/app/cache:z" in compose

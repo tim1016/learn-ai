@@ -32,7 +32,6 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.ibkr.connect_log_budget import CONNECT_LOG_BUDGET
 from app.broker.ibkr.recovery_state_machine import (
     RecoverySignal,
     RecoveryState,
@@ -551,18 +550,22 @@ class AutoReconnectMonitor:
         except Exception as exc:
             self._end_attempt(success=False)
             self._advance_recovery("reconnect_failed")
-            # ``client.connect()`` has already reported this failure through
-            # CONNECT_LOG_BUDGET (a WARNING on the first attempt of the
-            # outage, then suppressed) by the time control returns here.
-            # Logging our own WARNING on top of that, once per attempt,
-            # partly re-creates the log-budget problem #2089 fixed —
-            # sustained HARD_DOWN probes every ``_open_probe_interval_s``
-            # would otherwise re-emit this line forever (#2113). Demote to
-            # DEBUG for the duration of a budget-tracked outage; the budget's
-            # own first-report and periodic-summary WARNINGs remain the
-            # operator-visible signal.
-            log = logger.debug if CONNECT_LOG_BUDGET.suppressing else logger.warning
-            log(
+            # Deliberately unconditional (#2113 review): a demotion keyed on
+            # CONNECT_LOG_BUDGET.suppressing was tried and reverted.
+            # ``suppressing`` means "some outage is being tracked", not
+            # "this failure was reported" — and four of client.connect()'s
+            # exception paths (IbkrClientIdInUseError, both managedAccounts()
+            # refusals, ConnectionRefusedDueToSentinelError) raise without
+            # ever calling CONNECT_LOG_BUDGET.note_failure(). Gating on the
+            # global flag meant an unrelated ConnectionRefusedError blackout
+            # silenced a wrong-account binding or a client-id collision at
+            # every level — the only channel that ever surfaced those four.
+            # The volume this was meant to curb is also much smaller than
+            # #2089's target: this loop backs off to a 60s cap and, once
+            # HARD_DOWN, probes only every OPEN_PROBE_INTERVAL_S (60s) —
+            # nothing like the tight per-attempt loop inside one connect()
+            # call. The budget's own periodic summary already covers that.
+            logger.warning(
                 "Auto-reconnect attempt %d failed: %s",
                 attempt,
                 exc,

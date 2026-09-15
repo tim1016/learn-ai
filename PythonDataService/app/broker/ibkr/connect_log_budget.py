@@ -86,23 +86,29 @@ class ConnectLogBudget:
 
         if is_new_outage or shape_changed:
             # A shape change discards whatever accumulated in ``_suppressed``
-            # since the last report. Copy it onto the public field (as the
-            # window-elapsed branch below does) before zeroing it, so the
-            # discard is a visible fact on the verdict rather than a silent
-            # reset — the caller can report it (#2113).
-            self.suppressed_attempts = self._suppressed
-            self._last_reported_ms = now
-            self._suppressed = 0
+            # since the last report. ``_report`` copies it onto the public
+            # field before zeroing it, so the discard is a visible fact on
+            # the verdict rather than a silent reset — the caller can
+            # report it (#2113).
+            self._report(now)
             return "report_first"
 
         if window_elapsed:
-            self.suppressed_attempts = self._suppressed
-            self._last_reported_ms = now
-            self._suppressed = 0
+            self._report(now)
             return "report_summary"
 
         self._suppressed += 1
         return "suppress"
+
+    def _report(self, now: int) -> None:
+        """Snapshot ``_suppressed`` onto the public field and reset the
+        window. Shared by the ``report_first`` and ``report_summary``
+        verdicts above — both discard whatever was suppressed since the
+        last report, and both must leave that count somewhere the caller
+        can log it, not just zero it."""
+        self.suppressed_attempts = self._suppressed
+        self._last_reported_ms = now
+        self._suppressed = 0
 
     def note_success(self) -> int | None:
         """Clear the tracked outage. Returns its duration in ms for one
