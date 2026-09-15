@@ -143,13 +143,78 @@ describe('fleet refusals (flat body, no `detail` envelope)', () => {
     expect(rejection.why).toBe('Reload the lane and re-issue the command.');
   });
 
-  it('still falls back to the reason code when the refusal carries no prose', () => {
+  it('falls back to the vocabulary next-step for a known code with no prose', () => {
     const terse = new HttpErrorResponse({
       status: 409,
       error: { reason: 'clerk_unreachable', message: 'The clerk did not answer.' },
     });
 
-    expect(deriveActionRejection(terse, 'fallback').why).toBe('Clerk Unreachable');
+    // `clerk_unreachable` is in the closed vocabulary (#2067), so this reads
+    // real remediation prose, not a formatted reason code.
+    expect(deriveActionRejection(terse, 'fallback').why).toBe("Retry once the clerk's agent reconnects.");
+  });
+
+  it('still falls back to a formatted reason code for one outside the closed vocabulary', () => {
+    const terse = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'made_up_reason_never_declared', message: 'boom' },
+    });
+
+    expect(deriveActionRejection(terse, 'fallback').why).toBe('Made Up Reason Never Declared');
+  });
+});
+
+describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
+  // The fleet's flat body never carries an `outcome` field, so before this
+  // fallback every fleet refusal — a fence's own #2068 rejection included —
+  // rendered as the literal word "Unknown". A known code must now read
+  // `conflict` for a 409 and `failure` for anything else; an unrecognized
+  // code must still fall back to `unknown` rather than a plausible-looking
+  // wrong guess.
+  it('derives conflict for a known 409 fleet reason with no outcome field', () => {
+    const error = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+    });
+
+    const rejection = deriveActionRejection(error, 'fallback');
+
+    expect(rejection.outcome).toBe('conflict');
+    expect(rejection.why).toBe("Refresh the lane's current binding generation, then re-prepare the command.");
+  });
+
+  it('derives failure for a known non-409 fleet reason with no outcome field', () => {
+    const error = new HttpErrorResponse({
+      status: 503,
+      error: { reason: 'fleet_registry_unavailable', message: 'The registry could not be opened.' },
+    });
+
+    expect(deriveActionRejection(error, 'fallback').outcome).toBe('failure');
+  });
+
+  it('leaves outcome as unknown for a reason code outside the closed vocabulary', () => {
+    const error = new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'made_up_reason_never_declared', message: 'boom' },
+    });
+
+    expect(deriveActionRejection(error, 'fallback').outcome).toBe('unknown');
+  });
+
+  it('never lets a known reason override an outcome the backend did supply', () => {
+    // The `/actions` route's typed contract does carry `outcome`; a fleet
+    // reason code colliding with that field would be a bug in the reverse
+    // direction — the backend's explicit outcome must still win.
+    const error = new HttpErrorResponse({
+      status: 409,
+      error: {
+        outcome: 'failure',
+        reason: 'clerk_binding_generation_conflict',
+        message: 'Expected 3 is not 4.',
+      },
+    });
+
+    expect(deriveActionRejection(error, 'fallback').outcome).toBe('failure');
   });
 });
 

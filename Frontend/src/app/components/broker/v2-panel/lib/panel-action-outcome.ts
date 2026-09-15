@@ -1,4 +1,5 @@
 import type { PanelActionErrorResponse } from '../../../../api/broker-models';
+import { fleetRefusalCopyFor } from '../../../../fleet/fleet-refusal-copy';
 import { refusalBody } from '../../../../shared/errors/refusal-body';
 import { formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
 
@@ -39,31 +40,46 @@ export function deriveActionRejection(error: unknown, fallbackMessage: string): 
   const detail = extractActionErrorDetail(error);
   const outcome = detail?.['outcome'];
   const reason = detail?.['reason'];
-  const reasonCode = (detail as PanelActionErrorResponse | null)?.reason_code;
+  const typedReasonCode = (detail as PanelActionErrorResponse | null)?.reason_code;
+  const reasonCode =
+    typeof reason === 'string' ? reason : typeof typedReasonCode === 'string' ? typedReasonCode : null;
+  // The fleet's flat `{reason, message, next_step}` body carries no `outcome`
+  // field at all — only the `/actions` route's typed contract does. Without
+  // this branch every fleet refusal (including the #2068 fence's own) fell
+  // through to 'unknown' and rendered as the literal word "Unknown" (#2067,
+  // #2102). `fleetRefusalCopyFor` knows each closed-vocabulary code's pinned
+  // wire status and derives 'conflict' for a 409 (a state conflict the
+  // caller must re-read and re-prepare) or 'failure' for anything else.
+  const knownRefusal = fleetRefusalCopyFor(reasonCode);
   return {
     outcome:
-      outcome === 'conflict' || outcome === 'failure' || outcome === 'unknown' ? outcome : 'unknown',
+      outcome === 'conflict' || outcome === 'failure' || outcome === 'unknown'
+        ? outcome
+        : (knownRefusal?.outcome ?? 'unknown'),
     message:
       typeof detail?.['message'] === 'string'
         ? detail['message']
-        : error instanceof Error
-          ? error.message
-          : fallbackMessage,
+        : knownRefusal !== null
+          ? knownRefusal.message
+          : error instanceof Error
+            ? error.message
+            : fallbackMessage,
     // `why` and the fleet's `next_step` are both backend-authored prose,
-    // rendered as-is. Only when the backend sent no prose at all does a raw
-    // code (`reason`, then the newer `reason_code`) become the remediation
-    // text, and only then does it need receiptLabel.
+    // rendered as-is. Only when the backend sent no prose at all does the
+    // client-authored fallback copy apply, and only when even that is
+    // unavailable does a raw code become the remediation text via
+    // receiptLabel, so nothing ever renders blank.
     why:
       typeof detail?.['why'] === 'string'
         ? detail['why']
         : typeof detail?.['next_step'] === 'string'
           ? detail['next_step']
-          : typeof reason === 'string'
-            ? formatReceiptLabel(reason)
-            : typeof reasonCode === 'string'
+          : knownRefusal !== null
+            ? knownRefusal.nextStep
+            : reasonCode !== null
               ? formatReceiptLabel(reasonCode)
               : null,
-    reasonCode: typeof reason === 'string' ? reason : typeof reasonCode === 'string' ? reasonCode : null,
+    reasonCode,
   };
 }
 

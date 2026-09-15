@@ -5,7 +5,6 @@ import {
   extractServerMessage,
   readOutcomeUnknownBody,
   readPreconditionBody,
-  toOperationError,
 } from './operation-error';
 
 describe('extractServerMessage', () => {
@@ -19,6 +18,38 @@ describe('extractServerMessage', () => {
   it('uses the caller-owned fallback for unrecognised error shapes', () => {
     expect(extractServerMessage({ error: { detail: { reason: 'opaque' } } }, 'Retry later.'))
       .toBe('Retry later.');
+  });
+
+  // ── #2067 / #2102 — the third parser learns the fleet's flat body ────────
+  // `refusalBody` requires a real `HttpErrorResponse` (it checks `instanceof`),
+  // unlike the plain object literals above, so these use one — matching what
+  // Angular's `HttpClient` actually throws in production.
+  it('reads the fleet clerk fleet\'s flat {reason, message, next_step} body', () => {
+    const fleetRefusal = new HttpErrorResponse({
+      status: 503,
+      error: {
+        reason: 'clerk_unreachable',
+        message: 'The clerk did not answer.',
+        next_step: 'Retry once the lane recovers.',
+      },
+    });
+
+    expect(extractServerMessage(fleetRefusal, 'Fallback.')).toBe('The clerk did not answer.');
+  });
+
+  it('still prefers the nested FastAPI envelope over a flat top-level message', () => {
+    const nested = new HttpErrorResponse({
+      status: 409,
+      error: { detail: { message: 'Nested wins.' }, message: 'flat, should be ignored' },
+    });
+
+    expect(extractServerMessage(nested, 'Fallback.')).toBe('Nested wins.');
+  });
+
+  it('still reads a plain string detail on a real HttpErrorResponse', () => {
+    const legacy = new HttpErrorResponse({ status: 404, error: { detail: 'Account evidence expired.' } });
+
+    expect(extractServerMessage(legacy, 'Fallback.')).toBe('Account evidence expired.');
   });
 });
 
@@ -63,110 +94,11 @@ describe('describeOperationError', () => {
   });
 });
 
-describe('toOperationError', () => {
-  it('extracts status and FastAPI {detail} from an HttpErrorResponse', () => {
-    const err = new HttpErrorResponse({ status: 409, error: { detail: 'dirty tree' } });
-    const e = toOperationError('deploy', err);
-    expect(e.status).toBe(409);
-    expect(e.detail).toBe('dirty tree');
-    expect(e.category).toBe('precondition');
-  });
-
-  it('treats status 0 (connection refused) as a transport failure (null status, infra)', () => {
-    const err = new HttpErrorResponse({ status: 0, error: null });
-    const e = toOperationError('start', err);
-    expect(e.status).toBeNull();
-    expect(e.category).toBe('infra');
-  });
-
-  it('handles a plain string error body', () => {
-    const err = new HttpErrorResponse({ status: 400, error: 'bad input' });
-    const e = toOperationError('deploy', err);
-    expect(e.detail).toBe('bad input');
-  });
-
-  it('handles a non-HTTP Error', () => {
-    const e = toOperationError('stop', new Error('boom'));
-    expect(e.detail).toBe('boom');
-    expect(e.status).toBeNull();
-  });
-
-  // ── PRD #619-C5 — ambiguous-outcome 409 ─────────────────────────────────
-
-  it('surfaces the structured OUTCOME_UNKNOWN body as the outcome-unknown category', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          outcome: 'UNKNOWN',
-          reason_code: 'OUTCOME_UNKNOWN',
-          error_category: 'read_timeout',
-          detail: 'response lost',
-          endpoint: 'start_run',
-          occurred_at_ms: 1_700_000_000_000,
-          runbook_hint: 'Refresh the cockpit to read live state before retrying.',
-          mutation_attempt_id: 'mutation-1',
-          mutation_dispatch_state: 'OUTCOME_UNKNOWN',
-        },
-      },
-    });
-
-    const e = toOperationError('start', err);
-
-    expect(e.status).toBe(409);
-    expect(e.category).toBe('outcome-unknown');
-    expect(e.title).toContain('outcome unknown');
-    expect(e.detail).toBe('response lost');
-    expect(e.remediation).toBe('Refresh the cockpit to read live state before retrying.');
-    expect(e.mutation_attempt_id).toBe('mutation-1');
-    expect(e.mutation_dispatch_state).toBe('OUTCOME_UNKNOWN');
-  });
-
-  it('falls back to a synthesised detail when the OUTCOME_UNKNOWN body omits detail', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          outcome: 'UNKNOWN',
-          reason_code: 'OUTCOME_UNKNOWN',
-          error_category: 'write_timeout',
-          detail: null,
-          endpoint: 'deploy',
-          occurred_at_ms: 1_700_000_000_000,
-          runbook_hint: 'Refresh before retrying.',
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.detail).toContain('write_timeout');
-    expect(e.remediation).toBe('Refresh before retrying.');
-  });
-
-  it('accepts renew-daemon-lease outcome unknown responses', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          outcome: 'UNKNOWN',
-          reason_code: 'OUTCOME_UNKNOWN',
-          error_category: 'read_timeout',
-          detail: 'lease response lost',
-          endpoint: 'renew_daemon_lease',
-          occurred_at_ms: 1_700_000_000_000,
-          runbook_hint: 'Refresh Bot Control before retrying.',
-        },
-      },
-    });
-
-    const e = toOperationError('renew-lease', err);
-
-    expect(e.category).toBe('outcome-unknown');
-    expect(e.detail).toBe('lease response lost');
-    expect(e.remediation).toBe('Refresh Bot Control before retrying.');
-  });
-
+// `toOperationError` was deleted (#2102): zero production callers remained
+// once every caller migrated to `extractServerMessage` /
+// `extractServerReasonCode`, and its coverage collapsed to these two parser
+// functions it wrapped — both still exported and exercised directly below.
+describe('readOutcomeUnknownBody', () => {
   it('rejects outcome-unknown bodies with endpoints outside the closed contract', () => {
     const parsed = readOutcomeUnknownBody({
       detail: {
@@ -183,6 +115,24 @@ describe('toOperationError', () => {
     expect(parsed).toBeNull();
   });
 
+  it('accepts renew-daemon-lease as one of the closed-contract endpoints', () => {
+    const parsed = readOutcomeUnknownBody({
+      detail: {
+        outcome: 'UNKNOWN',
+        reason_code: 'OUTCOME_UNKNOWN',
+        error_category: 'read_timeout',
+        detail: 'lease response lost',
+        endpoint: 'renew_daemon_lease',
+        occurred_at_ms: 1_700_000_000_000,
+        runbook_hint: 'Refresh Bot Control before retrying.',
+      },
+    });
+
+    expect(parsed?.endpoint).toBe('renew_daemon_lease');
+  });
+});
+
+describe('readPreconditionBody', () => {
   it('parses structured deterministic precondition bodies', () => {
     const parsed = readPreconditionBody({
       detail: {
@@ -201,162 +151,8 @@ describe('toOperationError', () => {
     });
   });
 
-  it('uses server-authored remediation for structured precondition bodies', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          reason_code: 'STOPPED_REQUIRES_RESUME',
-          message: 'DIagVal6 is durably STOPPED. Resume the bot to clear the stop latch.',
-          remediation: 'Use Resume to set desired_state=RUNNING, then start the bot.',
-          gate_id: 'desired_state.start',
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.category).toBe('precondition');
-    expect(e.detail).toBe('DIagVal6 is durably STOPPED. Resume the bot to clear the stop latch.');
-    expect(e.remediation).toBe('Use Resume to set desired_state=RUNNING, then start the bot.');
-    expect(e.remediation).not.toContain('working tree is dirty');
-    expect(e.reason_code).toBe('STOPPED_REQUIRES_RESUME');
-    expect(e.gate_id).toBe('desired_state.start');
-  });
-
-  it('does not replace a typed precondition without remediation with legacy deploy advice', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
-          message: 'A server launch check has not passed.',
-          gate_id: 'broker.connection',
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.remediation).toBe('A precondition is not met. Resolve the conflict and retry.');
-    expect(e.remediation).not.toContain('working tree is dirty');
-    expect(e.reason_code).toBe('DEPLOY_PREFLIGHT_BLOCKED');
-    expect(e.gate_id).toBe('broker.connection');
-  });
-
-  it('preserves typed deployment blockers and their recovery moves from a 409 launch race', () => {
-    const err = new HttpErrorResponse({
-      status: 409,
-      error: {
-        detail: {
-          reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
-          message: 'A launch gate changed after the ticket check.',
-          gate_id: 'broker.connection',
-          blockers: [
-            {
-              condition: {
-                id: 'broker_disconnected',
-                severity: 'blocking',
-                scope: 'broker',
-                evidence: { observed: false },
-              },
-              host: 'deploy_preflight',
-              anchor: { kind: 'surface', subject_key: null },
-              audience: 'operator',
-              disposition: 'fix_elsewhere',
-              headline: 'Broker session needs reconnecting',
-              detail: 'Reconnect through Account Clerk, then retry the launch.',
-              primary_move: {
-                label: 'Open broker account',
-                action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
-                target: null,
-              },
-              secondary_moves: [],
-              applies_to: 'deploy',
-            },
-          ],
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.blockers).toHaveLength(1);
-    expect(e.blockers?.[0]).toMatchObject({
-      headline: 'Broker session needs reconnecting',
-      primary_move: { label: 'Open broker account' },
-    });
-  });
-
-  it('keeps typed 503 reason, gate, and server remediation instead of applying deploy-specific advice', () => {
-    const err = new HttpErrorResponse({
-      status: 503,
-      error: {
-        detail: {
-          reason_code: 'FLEET_CONTAMINATION_UNAVAILABLE',
-          message: 'Fleet contamination status cannot be verified.',
-          remediation: 'Restore fleet inspection, then retry launch.',
-          gate_id: 'fleet.contamination',
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.category).toBe('infra');
-    expect(e.reason_code).toBe('FLEET_CONTAMINATION_UNAVAILABLE');
-    expect(e.gate_id).toBe('fleet.contamination');
-    expect(e.remediation).toBe('Restore fleet inspection, then retry launch.');
-    expect(e.remediation).not.toContain('Start the live engine');
-  });
-
-  it('uses recovery-specific guidance when a typed 404 omits remediation', () => {
-    const err = new HttpErrorResponse({
-      status: 404,
-      error: {
-        detail: {
-          reason_code: 'INSTANCE_RUN_NOT_FOUND',
-          message: 'No deployed run exists for this bot.',
-          gate_id: 'recovery_override.run',
-        },
-      },
-    });
-
-    const e = toOperationError('recovery-override', err);
-
-    expect(e.category).toBe('not-found');
-    expect(e.remediation).toBe('Deploy a run for this bot before recording recovery evidence.');
-    expect(e.reason_code).toBe('INSTANCE_RUN_NOT_FOUND');
-    expect(e.gate_id).toBe('recovery_override.run');
-  });
-
-  it('keeps generic infrastructure guidance for a typed 503 without server remediation', () => {
-    const err = new HttpErrorResponse({
-      status: 503,
-      error: {
-        detail: {
-          reason_code: 'FLEET_CONTAMINATION_UNAVAILABLE',
-          message: 'Fleet contamination status cannot be verified.',
-          gate_id: 'fleet.contamination',
-        },
-      },
-    });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.remediation).toBe('A required service is unavailable. Check connectivity and retry.');
-    expect(e.remediation).not.toContain('Start the live engine');
-  });
-
-  it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
-    // A regular precondition 409 (e.g. dirty tree) still uses the canned
-    // remediation, NOT the new outcome-unknown branch.
-    const err = new HttpErrorResponse({ status: 409, error: { detail: 'dirty tree' } });
-
-    const e = toOperationError('deploy', err);
-
-    expect(e.category).toBe('precondition');
-    expect(e.detail).toBe('dirty tree');
-    expect(e.remediation).not.toContain('Refresh the cockpit');
+  it('returns null when reason_code or message is missing', () => {
+    expect(readPreconditionBody({ detail: { message: 'no reason code' } })).toBeNull();
+    expect(readPreconditionBody({ detail: { reason_code: 'X' } })).toBeNull();
   });
 });

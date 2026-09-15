@@ -8,8 +8,8 @@
 // Status-code semantics the backend uses (ADR 0004/0006):
 //   400 validation · 404 not-found · 409 domain/precondition · 503 infra.
 
-import { HttpErrorResponse } from '@angular/common/http';
 import { accountDeskAnchorOrVerdictFallback, isRecord } from '../../api/operator-blocker.types';
+import { refusalBody } from '../../shared/errors/refusal-body';
 import type {
   OperatorAction,
   OperatorBlocker,
@@ -105,8 +105,19 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
  * Reads the literal FastAPI error detail without deriving any operator copy.
  * Both legacy string details and structured server-message contracts are
  * supported so desk surfaces do not hide actionable server responses.
+ *
+ * Reads `refusalBody` first — the same shape-aware parser
+ * `deriveActionRejection` uses — so the fleet's flat `{reason, message,
+ * next_step}` body (which `refusalBody` handles alongside FastAPI's nested
+ * `{detail: {...}}` envelope) is read here too. This is the third of three
+ * parsers that read a rejected control-plane call's body (#2081 fixed the
+ * other two); without it, a fleet refusal reaching this surface fell through
+ * to `fallback` because `error.error.detail` is never an object for a flat
+ * body.
  */
 export function extractServerMessage(error: unknown, fallback: string): string {
+  const refusal = refusalBody(error);
+  if (refusal !== null && typeof refusal['message'] === 'string') return refusal['message'];
   if (!isRecord(error) || !isRecord(error['error'])) return fallback;
   const detail = error['error']['detail'];
   if (typeof detail === 'string') return detail;
@@ -332,16 +343,6 @@ function categoryOf(status: number | null): ErrorCategory {
   return CATEGORY_BY_STATUS[status] ?? 'unknown';
 }
 
-function typedBodyRemediationFallback(operation: OperationKind, status: number | null): string {
-  const category = categoryOf(status);
-  // A typed 409 describes a server-specific gate, so legacy operation advice
-  // can be misleading. A typed 503 can likewise describe an unavailable
-  // dependency other than the live engine. Prefer the server remediation when
-  // present and otherwise retain a truthful category-level fallback.
-  if (status === 409 || status === 503) return GENERIC_REMEDIATION[category];
-  return (status !== null ? REMEDIATION[operation]?.[status] : undefined) ?? GENERIC_REMEDIATION[category];
-}
-
 function isOutcomeUnknownEndpoint(value: unknown): value is OutcomeUnknownEndpoint {
   return typeof value === 'string' && OUTCOME_UNKNOWN_ENDPOINT_SET.has(value);
 }
@@ -462,75 +463,4 @@ export function readPreconditionBody(body: unknown): PreconditionBody | null {
     gate_id: typeof gateId === 'string' ? gateId : undefined,
     ...(blockers !== undefined ? { blockers } : {}),
   };
-}
-
-/**
- * Normalise an unknown thrown value (typically an Angular `HttpErrorResponse`)
- * into an OperationError. Reads the status and the FastAPI `{detail}` body; the
- * detail is the only thing taken from the wire, and only as the literal line.
- *
- * Special-cases PRD #619-C5's structured 409 body — the canned 409 remediation
- * is replaced by the server-authored `runbook_hint` and the category is
- * promoted to ``outcome-unknown`` so the cockpit can flag the ambiguous state
- * distinctly from "a precondition isn't met".
- */
-export function toOperationError(operation: OperationKind, err: unknown): OperationError {
-  let status: number | null = null;
-  let detail: string;
-  let outcomeUnknown: OutcomeUnknownBody | null = null;
-  let precondition: PreconditionBody | null = null;
-  if (err instanceof HttpErrorResponse) {
-    // status 0 means the request never reached the server (connection refused,
-    // CORS, offline) — treat as a transport/infra failure, not a real 0.
-    status = err.status === 0 ? null : err.status;
-    const body = err.error;
-    outcomeUnknown = readOutcomeUnknownBody(body);
-    if (outcomeUnknown !== null) {
-      detail =
-        outcomeUnknown.detail ?? `Daemon transport failed: ${outcomeUnknown.error_category}.`;
-    } else if (typeof body === 'string') {
-      detail = body;
-    } else if (body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string') {
-      detail = (body as { detail: string }).detail;
-    } else if (body && typeof body === 'object') {
-      precondition = readPreconditionBody(body);
-      if (precondition !== null) {
-        detail = precondition.message;
-      } else {
-        const nested = (body as { detail?: unknown }).detail;
-        detail = nested && typeof nested === 'object' && typeof (nested as { message?: unknown }).message === 'string'
-          ? (nested as { message: string }).message
-          : err.message;
-      }
-    } else {
-      detail = err.message;
-    }
-  } else if (err instanceof Error) {
-    detail = err.message;
-  } else {
-    detail = String(err);
-  }
-  if (outcomeUnknown !== null) {
-    return describeOperationError(operation, status, detail, {
-      category: 'outcome-unknown',
-      remediationOverride: outcomeUnknown.runbook_hint,
-      reasonCode: outcomeUnknown.reason_code,
-      mutationAttemptId: outcomeUnknown.mutation_attempt_id,
-      mutationDispatchState: outcomeUnknown.mutation_dispatch_state,
-    });
-  }
-  if (precondition !== null) {
-    return describeOperationError(operation, status, detail, {
-      // A typed precondition is a server contract, but not every endpoint
-      // supplies an explicit remediation. Do not substitute the legacy
-      // deploy-409 advice (which mentions working trees) for a different
-      // gate such as a broker or validation blocker. Typed 404/400 contracts
-      // still use their precise operation guidance when the server omits it.
-      remediationOverride: precondition.remediation ?? typedBodyRemediationFallback(operation, status),
-      reasonCode: precondition.reason_code,
-      gateId: precondition.gate_id,
-      blockers: precondition.blockers,
-    });
-  }
-  return describeOperationError(operation, status, detail);
 }
