@@ -3,6 +3,7 @@
 # Usage:
 #   ./restart.sh              # Rebuild only changed layers (fast)
 #   ./restart.sh --no-cache   # Full rebuild from scratch (slow, ~5min)
+#   ./restart.sh --help       # Show usage and exit. Touches no container.
 
 set -euo pipefail
 
@@ -11,14 +12,64 @@ set -euo pipefail
 # fires and Compose falls back to the classic builder. Disable bake to silence.
 export COMPOSE_BAKE=false
 
+usage() {
+  cat <<'USAGE'
+Usage: ./restart.sh [--no-cache] [--help]
+
+  --no-cache    Rebuild every image from scratch (no layer cache), slow (~5 min).
+  --help, -h    Show this help and exit. Touches no container.
+
+No other argument is recognised. This script's very first destructive action
+is `podman compose down`, which tears down every service including both
+broker clerks -- an unrecognised argument must be refused before that ever
+runs, not fall through to it.
+USAGE
+}
+
+# Argument parsing happens before anything else in this script, deliberately
+# ahead of the COMPOSE_ARGS setup and the teardown below. An unrecognised
+# flag (a typo, `--help` before this existed) must never reach
+# `podman compose down` -- it did once, and only an unrelated SIGPIPE from a
+# piped consumer aborted the script before the teardown executed.
 NO_CACHE=""
-if [[ "${1:-}" == "--no-cache" ]]; then
-  NO_CACHE="--no-cache"
-  echo "==> Full rebuild (no cache) requested"
+case "${1:-}" in
+  "") ;;
+  --no-cache)
+    NO_CACHE="--no-cache"
+    echo "==> Full rebuild (no cache) requested"
+    ;;
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unrecognised argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+if [[ $# -gt 1 ]]; then
+  echo "Unrecognised extra argument(s): ${*:2}" >&2
+  usage >&2
+  exit 1
 fi
 
+# Compose auto-loads only compose.yaml and compose.override.yaml. The
+# committed fleet topology (compose.fleet.dev.yaml) is a third file, so it
+# must be named explicitly or the stack silently reverts to the unfenced
+# `combined` posture (fleet_boot.py:108-116) on every restart. Order matters:
+# later files win, so the dev-only override still applies last. An explicit
+# COMPOSE_FILE in the environment takes over entirely, as Compose intends.
+COMPOSE_ARGS=()
+if [[ -z "${COMPOSE_FILE:-}" ]]; then
+  COMPOSE_ARGS+=(--file compose.yaml)
+  [[ -f compose.fleet.dev.yaml ]] && COMPOSE_ARGS+=(--file compose.fleet.dev.yaml)
+  [[ -f compose.override.yaml ]] && COMPOSE_ARGS+=(--file compose.override.yaml)
+fi
+echo "==> Compose files: ${COMPOSE_ARGS[*]:-\$COMPOSE_FILE=$COMPOSE_FILE}"
+
 echo "==> Tearing down all containers..."
-podman compose down
+podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} down
 
 # Compose ownership is decided by the label Compose itself stamps, never by a
 # hardcoded service list. A hardcoded list silently misclassifies every service
@@ -65,13 +116,13 @@ fi
 # authoritative verdict and will exit 1 if anything is genuinely unhealthy.
 if [[ -n "$NO_CACHE" ]]; then
   echo "==> Building images from scratch..."
-  podman compose build --no-cache --pull
+  podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} build --no-cache --pull
 else
   echo "==> Building images..."
-  podman compose build
+  podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} build
 fi
 echo "==> Starting all services..."
-podman compose up -d --force-recreate || true
+podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} up -d --force-recreate || true
 
 # Recover services left in Created. When a `depends_on: service_healthy`
 # target takes longer than expected to flip healthy, compose abandons the
@@ -95,7 +146,7 @@ fi
 # script reports "All N services healthy!" while a live execution lane is
 # simply gone. Counting what should be there is what makes a missing clerk
 # visible.
-EXPECTED_SERVICES=$(podman compose config --services 2>/dev/null | sort || true)
+EXPECTED_SERVICES=$(podman compose ${COMPOSE_ARGS[@]+"${COMPOSE_ARGS[@]}"} config --services 2>/dev/null | sort || true)
 
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
 # frontend at 120s; backend cold compile pushes 60–90s on top. Poll for

@@ -14,9 +14,9 @@ compose.override.yml
 
 # Environment variables (contains API keys)
 .env
-deploy/fleet/env/coordinator.env
-deploy/fleet/env/paper.env
-deploy/fleet/env/live.env
+# A fourth lane creates a fourth credential file; name the whole shape, not
+# each filename, or `git add -A` will happily stage the next one.
+deploy/fleet/env/*.env
 !deploy/fleet/
 !deploy/fleet/env/
 !deploy/fleet/env/*.env.example

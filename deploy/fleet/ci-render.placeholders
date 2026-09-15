@@ -1,0 +1,14 @@
+# Placeholder interpolation values so `compose config` can render without
+# secrets. NOT credentials. The render gate discards every value it reads —
+# see scripts/render_fleet_topology.py, which projects the rendered document
+# down to service/env-KEY-NAME/mount/network shape and never persists a value.
+POLYGON_API_KEY=render-placeholder
+DATA_PLANE_CONTROL_SECRET=render-placeholder
+POSTGRES_PASSWORD=render-placeholder
+REDIS_PASSWORD=render-placeholder
+FRED_API_KEY=render-placeholder
+ALPACA_QUALIFICATION_API_KEY_ID=render-placeholder
+ALPACA_QUALIFICATION_API_SECRET_KEY=render-placeholder
+ALPACA_CLERK_PRODUCTION_ACCOUNT_ID=render-placeholder
+ALPACA_MODE=paper
+GIT_SHA=render-placeholder
