@@ -33,6 +33,15 @@ from the moment it opens, and ``confirm_and_report`` — steps 3 and the facts
 half of 4 — confirms the grant if there is one and swaps
 ``FleetLaneBoot.reported_facts`` under the already-running beat.
 
+Three things belong to the open lane rather than to its binding, for the one
+reason: an unbound lane is routable for ``configuration_access``, so it must
+behave like a served lane before anything binds it. The beat
+(``start_heartbeat``/``stop_heartbeat``) is one; the FR-076 identity echo is
+the second, installed beside the beat by ``main.serve_lane_presence``; the
+approved endpoint reference (``FleetLaneBoot.endpoint_ref``) is the third,
+re-presented on every re-registration so a replacement session still names a
+destination the coordinator will deliver to.
+
 With the coordinator unreachable mid-boot, the offline rule is FR-066: only
 a recovered binding that exactly matches the confirmation evidence boots
 (last-effective recovery); a first assignment or a changed binding waits for
@@ -101,6 +110,14 @@ class FleetLaneBoot:
     volume_id: str
     broker: str = "alpaca"
     session: SessionInfo | None = None
+    #: The deployment-approved endpoint reference this lane registered with,
+    #: re-presented on every re-registration. The coordinator keeps a
+    #: session's current reference only while its row survives; a session it
+    #: lost is re-created citing whatever the registration named, and a
+    #: replacement citing none is refused delivery while the lane goes on
+    #: heartbeating as reachable. Offline boots register nothing and keep
+    #: ``None``.
+    endpoint_ref: str | None = None
     offline_reason: str | None = None
     owned_service: FleetControlService | None = field(default=None, repr=False)
     #: What every beat reports, re-read on each pass. The default is the
@@ -261,6 +278,9 @@ async def open_fleet_lane(
             adapter_version=_ADAPTER.adapter_version,
             fleet_protocol_version=FLEET_PROTOCOL_VERSION,
         )
+        # Kept on the boot so a re-registration presents the same reference:
+        # it is the lane's for its whole lifetime, not this one call's.
+        boot.endpoint_ref = settings.AGENT_ENDPOINT_REF
     except FleetPresenceError as exc:
         # Offline rule (FR-066): the evidence must name THIS volume's
         # enrolled identity — a foreign or hand-copied evidence file does
@@ -318,8 +338,16 @@ async def confirm_binding(
     effective_revision: int | None,
     assignment_observed: Mapping[str, object] | None = None,
 ) -> AccountAssignmentRecord:
-    """Confirm the binding observation and persist the clerk's evidence."""
-    if boot.session is None:
+    """Confirm the binding observation and persist the clerk's evidence.
+
+    The session is read once, before the await: a beat refused while the
+    coordinator is confirming re-registers the lane and replaces
+    ``boot.session`` underneath, so a second read would write evidence naming
+    a session that confirmed nothing — and the next boot's FR-066 recovery
+    reads that evidence as fact.
+    """
+    session = boot.session
+    if session is None:
         raise FleetBootRefused(
             "A binding confirmation requires the coordinator; an offline boot "
             "confirms nothing and stays unrouted.",
@@ -329,8 +357,8 @@ async def confirm_binding(
         clerk_id=boot.clerk_id,
         external_account_id=external_account_id,
         binding_generation=binding_generation,
-        agent_instance_id=boot.session.agent_instance_id,
-        routing_epoch=boot.session.routing_epoch,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
         effective_profile_id=effective_profile_id,
         effective_revision=effective_revision,
     )
@@ -346,8 +374,8 @@ async def confirm_binding(
             effective_profile_id=effective_profile_id,
             effective_revision=effective_revision,
             confirmed_at_ms=now_ms_utc(),
-            agent_instance_id=boot.session.agent_instance_id,
-            routing_epoch=boot.session.routing_epoch,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
         ),
     )
     del assignment_observed  # reserved for the delivery-B forwarding facts
@@ -417,7 +445,13 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         clerk_id=boot.clerk_id,
                         worker_key=boot.worker_key,
                         agent_instance_id=new_agent_instance_id(),
-                        endpoint_ref=None,
+                        # The reference this lane registered with, which the
+                        # re-registration always should have carried: a
+                        # coordinator that lost the session re-creates it
+                        # citing whatever arrives here, and a session naming
+                        # no approved endpoint is refused every delivery
+                        # while the lane keeps beating as reachable.
+                        endpoint_ref=boot.endpoint_ref,
                         adapter_version=_ADAPTER.adapter_version,
                         fleet_protocol_version=FLEET_PROTOCOL_VERSION,
                     )
@@ -436,6 +470,25 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
         _beat(), name=f"fleet-heartbeat-{boot.clerk_id}"
     )
     return boot.heartbeat
+
+
+async def stop_heartbeat(boot: FleetLaneBoot | None) -> None:
+    """End the lane's beat, idempotently.
+
+    Called twice by design: the service teardown stops the beat *first* — the
+    bots, consumers, custody handles and repositories come down after it, and
+    a lane that kept beating through that stretch would be telling the
+    coordinator a dismantling clerk was reachable — and ``close_fleet_lane``
+    calls it again on its way out. A boot with no beat (``None``, offline, or
+    already stopped) is a no-op, not a refusal.
+    """
+    if boot is None or boot.heartbeat is None:
+        return
+    beat = boot.heartbeat
+    boot.heartbeat = None
+    beat.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await beat
 
 
 def binding_is_granted(
@@ -549,12 +602,10 @@ async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
     """Release the boot's heartbeat, transport and any owned service."""
     if boot is None:
         return
-    if boot.heartbeat is not None:
-        # The beat observes through the very presence this closes next, so it
-        # ends first: the lane's lifetime is the beat's at both ends.
-        boot.heartbeat.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await boot.heartbeat
+    # The beat observes through the very presence this closes next, so it
+    # ends first: the lane's lifetime is the beat's at both ends. The service
+    # teardown has usually stopped it already; stopping it is idempotent.
+    await stop_heartbeat(boot)
     try:
         await boot.presence.close()
     except Exception as exc:
@@ -626,4 +677,5 @@ __all__ = [
     "open_fleet_lane",
     "reserve_account",
     "start_heartbeat",
+    "stop_heartbeat",
 ]

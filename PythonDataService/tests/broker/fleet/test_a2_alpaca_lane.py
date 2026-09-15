@@ -1116,6 +1116,312 @@ async def test_close_fleet_lane_stops_the_heartbeat(
         service.close()
 
 
+async def test_serve_lane_presence_installs_the_identity_echo_and_starts_the_beat_without_a_binding(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The echo belongs to the lane, exactly as the beat does (FR-076).
+
+    The identity echo used to be installed inside the binding branch, so the
+    four paths that install no binding left an open, heartbeating lane
+    answering forwarded ``configuration_access`` calls with no echo at all —
+    and ``verify_identity_echo`` rejects every one of those responses *after*
+    the clerk has already executed the call. The wiring is asserted on the
+    real ``app.main`` application object, because a copy of the wiring in a
+    throwaway ``FastAPI()`` would pin nothing about what production installs.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane, open_fleet_lane
+    from app.broker.fleet.agent_identity import SERVED_IDENTITY_STATE_KEY
+    from app.main import app, serve_lane_presence
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        # The one state key the middleware reads through; monkeypatch restores
+        # whatever the real app carried (normally nothing) afterwards.
+        monkeypatch.setattr(app.state, SERVED_IDENTITY_STATE_KEY, None, raising=False)
+
+        # No reservation, no confirmation, no binding — the unbound lane.
+        serve_lane_presence(app, boot, interval_s=0.05)
+
+        provider = getattr(app.state, SERVED_IDENTITY_STATE_KEY)
+        served = provider()
+        assert served is not None
+        assert served["broker"] == "alpaca"
+        assert served["clerk_id"] == boot.clerk_id
+        assert served["routing_epoch"] == boot.session.routing_epoch
+        # The generation is whatever the selection reads *now* — none at all
+        # on an unbound lane, an int once one is applied. The key's presence
+        # is the contract; its value is live state.
+        assert "binding_generation" in served
+        assert served["binding_generation"] is None or isinstance(
+            served["binding_generation"], int
+        )
+
+        assert boot.heartbeat is not None
+        assert not boot.heartbeat.done()
+        beat = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_pending"
+        )
+        assert beat.reported_binding_generation is None
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_stop_heartbeat_is_idempotent_and_ends_the_beat(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Teardown starts by ending the beat, and may say so twice.
+
+    The service teardown (bots, consumers, custody, repositories) runs before
+    the lane closes, so a beat that only stops at ``close_fleet_lane`` keeps
+    telling the coordinator a dismantling clerk is reachable. The inner
+    teardown calls this first, and the lane close calls it again — so calling
+    it twice must be as quiet as calling it once.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+        stop_heartbeat,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        clerk_id = boot.clerk_id
+        heartbeat = start_heartbeat(boot, interval_s=0.05)
+        clock.advance(1)
+        beat = await _await_beat_at(
+            service, clerk_id, clock, reported_state="binding_pending"
+        )
+
+        await stop_heartbeat(boot)
+        assert heartbeat.done()
+        assert boot.heartbeat is None
+        await stop_heartbeat(boot)
+        assert boot.heartbeat is None
+
+        # Several intervals of real time at a moved clock: a live beat would
+        # stamp the new instant, so an unchanged stamp is the beat's silence.
+        clock.advance(1)
+        for _ in range(4):
+            await asyncio.sleep(0.05)
+        after = service._store.read_session(clerk_id)
+        assert after is not None
+        assert after.last_seen_at_ms == beat.last_seen_at_ms
+
+        # The lane still closes cleanly behind an already-stopped beat.
+        await close_fleet_lane(boot)
+        boot = None
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_refused_beat_re_registers_under_the_endpoint_reference_it_registered_with(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replacement session cites the same approved endpoint, or routes nowhere.
+
+    ``register_agent_session`` keeps the current reference only while the
+    session row survives; a session the coordinator lost is re-created with
+    whatever the registration cites. Re-registering with ``endpoint_ref=None``
+    therefore leaves a lane that heartbeats as reachable while
+    ``coordinator_delivery_for`` refuses every delivery to it, because the
+    session names no approved endpoint.
+
+    The refusal itself is injected at the presence seam (one observation,
+    once) — the transport is exactly where a coordinator's refusal arrives
+    from. Everything after it is the real thing: the real approval check, the
+    real epoch bump, and the assertion reads the registry's own row.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+    from app.broker.fleet.errors import ClerkIdentityMismatch
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        service.approve_endpoint(
+            clerk_id=provisioned.clerk.clerk_id,
+            endpoint_ref="agent:paper-1",
+            base_url="http://alpaca-paper-clerk:8000",
+        )
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            AGENT_ENDPOINT_REF="agent:paper-1",
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        assert boot.endpoint_ref == "agent:paper-1"
+        registered = service._store.read_session(boot.clerk_id)
+        assert registered is not None
+        assert registered.endpoint_ref == "agent:paper-1"
+        epoch_at_registration = boot.session.routing_epoch
+
+        refused: list[object] = []
+        real_observe = boot.presence.observe
+
+        async def _refuse_the_first_observation(**kwargs: object) -> None:
+            """Refuse once, the way a coordinator that lost the session does."""
+            if not refused:
+                refused.append(kwargs)
+                raise ClerkIdentityMismatch(
+                    "The coordinator refuses this lane's observation.",
+                )
+            await real_observe(**kwargs)
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_the_first_observation)
+
+        start_heartbeat(boot, interval_s=0.05)
+        # The first beat is refused and re-registers; the next one lands, so a
+        # `binding_pending` beat is the proof the replacement session exists.
+        beat = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_pending"
+        )
+
+        assert refused, "the beat was never refused, so nothing re-registered"
+        assert beat.routing_epoch > epoch_at_registration
+        assert beat.agent_instance_id == boot.session.agent_instance_id
+        assert beat.endpoint_ref == "agent:paper-1"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_confirm_binding_records_the_session_it_confirmed_even_if_the_lane_re_registers_mid_confirm(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The evidence names the session the coordinator actually confirmed.
+
+    ``confirm_binding`` awaits the coordinator, and a refused beat during that
+    await re-registers the lane — replacing ``boot.session`` under it. Reading
+    the session a second time for the evidence would write an instance id and
+    epoch the coordinator never saw, and the next boot's FR-066 recovery reads
+    that evidence as fact.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_binding,
+        open_fleet_lane,
+        reserve_account,
+    )
+    from app.broker.fleet.identity import new_agent_instance_id
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        await reserve_account(
+            boot, external_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+        confirmed_session = boot.session
+        replacement = dataclasses.replace(
+            confirmed_session,
+            agent_instance_id=new_agent_instance_id(),
+            routing_epoch=confirmed_session.routing_epoch + 1,
+        )
+        real_confirm = boot.presence.confirm
+
+        async def _re_register_then_confirm(**kwargs: object):
+            """A refused beat's re-registration, landing mid-confirmation."""
+            boot.session = replacement
+            return await real_confirm(**kwargs)
+
+        monkeypatch.setattr(boot.presence, "confirm", _re_register_then_confirm)
+
+        await confirm_binding(
+            boot,
+            external_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
+
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None
+        assert evidence.agent_instance_id == confirmed_session.agent_instance_id
+        assert evidence.routing_epoch == confirmed_session.routing_epoch
+        stored = service._store.read_assignment(
+            broker="alpaca", canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+        assert stored is not None
+        assert stored.confirmed_agent_instance_id == confirmed_session.agent_instance_id
+        assert stored.confirmed_routing_epoch == confirmed_session.routing_epoch
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

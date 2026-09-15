@@ -245,6 +245,46 @@ def _install_fleet_served_identity(
     setattr(app.state, SERVED_IDENTITY_STATE_KEY, provider)
 
 
+def serve_lane_presence(
+    app: FastAPI, boot: FleetLaneBoot, *, interval_s: float
+) -> None:
+    """Install what an *open* lane owes the coordinator: the echo and the beat.
+
+    Both belong to the lane, not to its binding. ``_install_alpaca_binding``
+    returns ``None`` on four reachable paths (the installation lock refused
+    this process, the profiles database is unavailable, a profile was staged
+    and never applied, an unconfigured installation has no usable environment
+    settings), and the lane stays routable for ``configuration_access`` on
+    every one of them — that is the whole point of beating while unbound. A
+    lane that answered those forwarded reads without the FR-076 identity echo
+    would have ``verify_identity_echo`` reject each response *after* the clerk
+    executed it, so the echo installs here, with the beat, at lane level.
+
+    The echo is honest without a binding: ``_effective_binding_generation_now``
+    already reads ``None`` when there is no selection to read.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import start_heartbeat
+
+    def _fleet_served_identity() -> dict[str, object] | None:
+        """What this runtime actually serves, read at response time.
+
+        The identity echo (FR-076) derives from live state — the epoch
+        follows re-registrations, the generation follows the selection
+        transaction — never from what a caller pinned.
+        """
+        if boot.session is None:
+            return None
+        return {
+            "broker": "alpaca",
+            "clerk_id": boot.clerk_id,
+            "routing_epoch": boot.session.routing_epoch,
+            "binding_generation": _effective_binding_generation_now(),
+        }
+
+    _install_fleet_served_identity(app, _fleet_served_identity)
+    start_heartbeat(boot, interval_s=interval_s)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Retain the installation writer lock until every custody handle closes.
@@ -259,7 +299,7 @@ async def lifespan(app: FastAPI):
             yield
         return
 
-    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane, start_heartbeat
+    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane
     from app.broker_configuration.worker_lifecycle import installation_worker
 
     # ADR 0062 Decision 2: the volume identity gate runs before ANY writer
@@ -274,8 +314,12 @@ async def lifespan(app: FastAPI):
         # environment settings — and a lane that beats only once bound goes
         # silent on every one of them: the coordinator then projects it
         # `unreachable` and refuses the configuration reads that were the only
-        # way to bind it. The `finally` below ends the beat with the lane.
-        start_heartbeat(fleet_lane, interval_s=fleet_settings.HEARTBEAT_INTERVAL_S)
+        # way to bind it. The identity echo those reads are answered with is
+        # installed here for the same reason. The `finally` below ends the
+        # beat with the lane.
+        serve_lane_presence(
+            app, fleet_lane, interval_s=fleet_settings.HEARTBEAT_INTERVAL_S
+        )
     try:
         with installation_worker() as refusal:
             started = False
@@ -589,24 +633,6 @@ async def _service_lifespan(
                     get_broker_configuration_service,
                 )
 
-                def _fleet_served_identity() -> dict[str, object] | None:
-                    """What this runtime actually serves, read at response time.
-
-                    The identity echo (FR-076) derives from live state — the
-                    epoch follows re-registrations, the generation follows the
-                    selection transaction — never from what a caller pinned.
-                    """
-                    if fleet_lane is None or fleet_lane.session is None:
-                        return None
-                    return {
-                        "broker": "alpaca",
-                        "clerk_id": fleet_lane.clerk_id,
-                        "routing_epoch": fleet_lane.session.routing_epoch,
-                        "binding_generation": _effective_binding_generation_now(),
-                    }
-
-                _install_fleet_served_identity(app, _fleet_served_identity)
-
                 selection_row = get_broker_configuration_service().selection()
                 await confirm_and_report(
                     fleet_lane,
@@ -863,6 +889,14 @@ async def _service_lifespan(
     try:
         yield
     finally:
+        # The beat stops before anything else comes down. Everything below —
+        # bots, consumers, custody, repositories — is this clerk being taken
+        # apart, and a lane still beating through it is telling the
+        # coordinator to keep routing work to a process that can no longer
+        # serve it. `close_fleet_lane` stops it again; stopping is idempotent.
+        from app.broker.alpaca.clerk.fleet_boot import stop_heartbeat
+
+        await stop_heartbeat(fleet_lane)
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
