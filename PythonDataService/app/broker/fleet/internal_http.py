@@ -27,6 +27,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.utils.throttle import TtlCache
+
 DEFAULT_INTERNAL_TIMEOUT_S = 10.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
 
@@ -49,11 +51,45 @@ class FleetTransportRefused(Exception):
     """
 
 
-#: Hosts proven to resolve entirely to private addresses. The boundary check
-#: runs where a destination is bound (presence and delivery construction), and
-#: the lookup is blocking — proven verdicts are cached so repeated
-#: construction never repeats it.
-_PRIVATE_HOST_CACHE: dict[str, None] = {}
+#: Hosts proven to resolve entirely to private addresses, cached through the
+#: canonical ``TtlCache`` (``app/utils/throttle.py``) instead of a
+#: hand-rolled cache: insertion-ordered ``OrderedDict``, per-entry TTL, and
+#: bounded FIFO eviction, at the same 300s/512-entry magnitudes the
+#: option-contracts cache already uses (``app/routers/broker.py``). The
+#: boundary check runs where a destination is bound (presence and delivery
+#: construction), and the lookup is blocking — proven verdicts are cached so
+#: repeated construction against the same approved-endpoint host does not
+#: repeat a DNS round trip. Only *private* verdicts are cached; a refusal
+#: always re-resolves on the next call (see ``enforce_private_http_target``)
+#: — cache keys come from approved-endpoint rows and compose config, never
+#: from request data.
+#:
+#: The TTL bounds how long a host that later starts resolving to a public
+#: address can keep riding a stale private verdict (DNS-rebinding-adjacent;
+#: issue #2112); the size bound caps memory growth if hosts churn faster
+#: than entries expire.
+#:
+#: Value type is ``bool`` (``True``), not ``None``: ``TtlCache.get`` returns
+#: ``V | None`` to signal a cache miss, so ``V = None`` would make a hit and
+#: a miss indistinguishable.
+#:
+#: ``TtlCache`` defaults its clock to ``time.monotonic``, which is the right
+#: tool for this: the expiry deadline is local, in-process arithmetic that
+#: is never stored, put on the wire, or serialized, so it sits outside this
+#: repo's temporal authority (``.claude/rules/temporal-rigor.md`` governs
+#: representation and scheduled session structure, neither of which this
+#: is) — and a wall clock could step backwards under NTP correction or a
+#: DST transition, which would let a TTL stall (never expire) or fire
+#: early. ``TtlCache``'s ``now=`` constructor parameter is also the test
+#: seam: tests substitute a fake clock by constructing a fresh instance and
+#: assigning it over this module global, never by patching
+#: ``time.monotonic`` itself.
+_PRIVATE_HOST_CACHE_TTL_S = 300.0
+_PRIVATE_HOST_CACHE_MAX_ENTRIES = 512
+_PRIVATE_HOST_CACHE: TtlCache[str, bool] = TtlCache(
+    ttl_seconds=_PRIVATE_HOST_CACHE_TTL_S,
+    max_size=_PRIVATE_HOST_CACHE_MAX_ENTRIES,
+)
 
 
 def address_is_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -79,7 +115,9 @@ def enforce_private_http_target(url: str) -> None:
     (audit 2026-09-13, finding 4). ``https://`` is accepted anywhere. A host
     name is resolved and every address it returns must be private; an
     unresolvable host cannot be verified, so it is refused rather than
-    trusted. Verdicts are cached per host.
+    trusted. Private verdicts are cached per host for
+    ``_PRIVATE_HOST_CACHE_TTL_S`` seconds; a refusal is never cached and
+    always re-resolves.
     """
     parsed = urlparse(url)
     if parsed.scheme == "https":
@@ -89,7 +127,7 @@ def enforce_private_http_target(url: str) -> None:
             f"the internal fleet destination {url!r} must be an http(s) URL"
         )
     host = parsed.hostname
-    if host in _PRIVATE_HOST_CACHE:
+    if _PRIVATE_HOST_CACHE.get(host):
         return
     literal = _parse_ip_literal(host)
     if literal is not None:
@@ -113,7 +151,7 @@ def enforce_private_http_target(url: str) -> None:
                 f"address {address}; cleartext fleet traffic never leaves the "
                 "private network — use https or a private address"
             )
-    _PRIVATE_HOST_CACHE[host] = None
+    _PRIVATE_HOST_CACHE.set(host, True)
 
 
 @dataclass(frozen=True, slots=True)
