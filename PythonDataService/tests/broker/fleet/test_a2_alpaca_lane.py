@@ -614,6 +614,49 @@ def test_heartbeat_facts_map_an_unknown_authority_kind_to_unavailable() -> None:
     }
 
 
+def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kind() -> None:
+    """#2146: the heartbeat's own authority-state vocabulary must not drift
+    from ``AccountAuthorityKind`` — the wire vocabulary ``heartbeat_facts``
+    hand-rolls (``real_paper``/``real_live``/``shadow``/``synthetic``,
+    preserved byte-for-byte through #2137) is meant to name exactly that
+    closed set. Nothing enforces it structurally, so this reddens the moment
+    a value is added to ``AccountAuthorityKind`` with no heartbeat
+    counterpart, rather than letting the two silently drift apart.
+    """
+    from typing import get_args
+
+    from app.broker.alpaca.clerk.account_authority import AccountAuthorityKind
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    # "sqlite" is the only facade kind whose wire state depends on the
+    # endpoint mode (real_paper vs. real_live); every other facade kind's
+    # wire state is fixed regardless of mode.
+    reachable_wire_states = {
+        heartbeat_facts(
+            account_pin=None,
+            effective_binding_generation=0,
+            authority_kind="sqlite",
+            endpoint_mode=mode,
+        )["reported_summary"]["authority_state"]
+        for mode in ("paper", "live")
+    } | {
+        heartbeat_facts(
+            account_pin=None,
+            effective_binding_generation=0,
+            authority_kind=authority_kind,
+            endpoint_mode="unidentified",
+        )["reported_summary"]["authority_state"]
+        for authority_kind in ("shadow", "synthetic")
+    }
+
+    missing = set(get_args(AccountAuthorityKind)) - reachable_wire_states
+    assert not missing, (
+        f"AccountAuthorityKind value(s) {sorted(missing)} have no heartbeat "
+        "wire counterpart — add a case to heartbeat_facts' authority-state "
+        "map (fleet_boot.py)."
+    )
+
+
 @pytest.mark.parametrize(
     ("account_pin", "effective_binding_generation", "granted"),
     [
