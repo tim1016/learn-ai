@@ -360,6 +360,60 @@ async def test_a_typed_provider_refusal_from_served_context_passes_through_uncha
         )
 
 
+async def test_a_delivery_contract_violation_on_a_read_is_not_misdiagnosed_as_identity(
+    control_dir: Path, clock: FrozenClock, fleet_service, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2119: a handler-shape defect on ``deliver_read`` must not be reported
+    to the operator as a lane-identity mismatch with "refresh and retry"
+    advice that cannot fix a deterministic bug -- and it must be logged,
+    which the pre-fix branch never did despite claiming a log line exists.
+
+    This is the routing-seam half of the #2119 fix; ``test_a2_alpaca_lane.py``'s
+    ``test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_type``
+    proves the delivery layer raises the distinct ``DeliveryContractViolation``
+    in the first place.
+    """
+    import logging
+
+    from app.broker.fleet.delivery import DeliveryContractViolation
+    from app.broker.fleet.errors import ClerkIdentityMismatch, ClerkUnreachable
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import bind_lane, fake_alpha, fake_beta, provision_lane
+
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": fake_alpha(), "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label="contract-violation", tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account="acct-contract-violation")
+
+    class _ContractViolatingDelivery:
+        async def deliver(self, request: object) -> None:
+            del request
+            raise DeliveryContractViolation("the in-process handler returned str, not a DeliveryResult")
+
+    router = LaneRouter(service=service, delivery_for=lambda broker, session: _ContractViolatingDelivery())
+    operation = next(
+        op for op in fake_alpha().operations() if op.operation_id == "account_read"
+    )
+
+    caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
+    with pytest.raises(ClerkUnreachable) as excinfo:
+        await router.deliver_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )
+    assert not issubclass(excinfo.type, ClerkIdentityMismatch)
+    assert "refresh and retry" not in (excinfo.value.next_step or "")
+    assert "violated the delivery adapter's own response-shape contract" in caplog.text
+
+
 def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
     """The extension boundary is only provable when the fakes disagree.
 

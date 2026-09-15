@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.broker.fleet.delivery import (
+    DeliveryContractViolation,
     DeliveryIdentityMismatch,
     DeliveryRequest,
     DeliveryResult,
@@ -195,11 +196,36 @@ class LaneRouter:
         try:
             result = await delivery.deliver(request)
         except DeliveryIdentityMismatch as exc:
+            logger.warning(
+                "Lane delivery failed identity verification for %s on %s: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise ClerkIdentityMismatch(
                 "The lane's response failed identity verification; the "
                 "transport-level detail is in the coordinator log.",
                 next_step="The wrong lane answered; refresh and retry against "
                 "the lane's current resource.",
+            ) from exc
+        except DeliveryContractViolation as exc:
+            # Not an identity mismatch: the handler returned the wrong Python
+            # type before any identity echo was even inspected. That is an
+            # internal dispatch defect, not a lane that answered wrong, so it
+            # must not carry "refresh and retry" advice that cannot fix a
+            # deterministic bug (#2119).
+            logger.warning(
+                "Lane delivery for %s on %s violated the delivery adapter's "
+                "own response-shape contract: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
+            raise ClerkUnreachable(
+                f"Clerk {clerk_id} could not serve {operation.operation_id}; "
+                "the transport detail is in the coordinator log.",
+                next_step="Retry the same identity once the lane is confirmed "
+                "reachable; the transport detail is in the coordinator log.",
             ) from exc
         except FleetControlError:
             raise
@@ -261,7 +287,12 @@ class LaneRouter:
         delivery = self._delivery_for(broker, session)
         try:
             result = await delivery.stream(request)
-        except DeliveryIdentityMismatch as exc:
+        except (DeliveryIdentityMismatch, DeliveryContractViolation) as exc:
+            # A DeliveryContractViolation here is also a handler-shape defect
+            # rather than a lane-identity mismatch (#2119), but this branch
+            # never carries "refresh and retry" advice -- unlike deliver_read
+            # -- so folding both into the same logged ClerkIdentityMismatch
+            # stays acceptable rather than misdiagnosing with a false remedy.
             logger.warning(
                 "Lane stream failed identity verification for %s on %s: %r",
                 operation.operation_id,

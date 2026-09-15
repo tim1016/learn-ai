@@ -71,6 +71,19 @@ class DeliveryIdentityMismatch(Exception):
     """
 
 
+class DeliveryContractViolation(Exception):
+    """A local handler returned a value outside the adapter's own contract.
+
+    Distinct from :class:`DeliveryIdentityMismatch` (#2119): this fires when
+    an in-process handler hands back the wrong Python type entirely -- a
+    programming defect in the handler wiring, not the serving runtime naming
+    the wrong broker, clerk, epoch or generation. It is raised before the
+    identity echo is even inspected, so it carries no information about
+    which lane answered and a caller must not describe it as a lane-identity
+    problem.
+    """
+
+
 #: Path parameters may carry Starlette-style converters (``{order_ref:path}``);
 #: binding substitutes the value and drops the converter, which is routing
 #: syntax the receiving agent's own router applies to its side of the path.
@@ -344,7 +357,7 @@ class LocalLaneDelivery:
         if hasattr(result, "__await__"):
             result = await result
         if not isinstance(result, DeliveryResult):
-            raise DeliveryIdentityMismatch(
+            raise DeliveryContractViolation(
                 "the in-process handler returned "
                 f"{type(result).__name__}, not a DeliveryResult"
             )
@@ -357,7 +370,7 @@ class LocalLaneDelivery:
         if hasattr(result, "__await__"):
             result = await result
         if not isinstance(result, StreamDeliveryResult):
-            raise DeliveryIdentityMismatch(
+            raise DeliveryContractViolation(
                 "the in-process handler returned "
                 f"{type(result).__name__}, not a StreamDeliveryResult"
             )
@@ -371,6 +384,7 @@ class LocalLaneDelivery:
 
 __all__ = [
     "COORDINATOR_TOKEN_HEADER",
+    "DeliveryContractViolation",
     "DeliveryIdentityMismatch",
     "DeliveryRequest",
     "DeliveryResult",

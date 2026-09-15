@@ -37,6 +37,7 @@ from app.broker.fleet.confirmation import (
     write_confirmation_evidence,
 )
 from app.broker.fleet.delivery import (
+    DeliveryContractViolation,
     DeliveryIdentityMismatch,
     DeliveryRequest,
     DeliveryResult,
@@ -683,7 +684,12 @@ async def test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_ty
     """A bare ``assert isinstance`` vanishes under ``python -O`` (precedent:
     fleet_boot.py's writable-root fence); the combined posture's in-process
     handler is untrusted the same as a real agent's HTTP response, so a
-    shape mismatch must raise DeliveryIdentityMismatch unconditionally."""
+    shape mismatch must raise unconditionally.
+
+    Raises ``DeliveryContractViolation``, not ``DeliveryIdentityMismatch``
+    (#2119): the handler returned the wrong Python type before any identity
+    echo was even inspected, which is a dispatch defect in the handler
+    wiring, not the serving runtime naming the wrong lane."""
     from app.broker.fleet.delivery import LocalLaneDelivery
 
     request = DeliveryRequest(
@@ -694,7 +700,7 @@ async def test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_ty
     )
 
     wrong_deliver = LocalLaneDelivery(lambda _request: "not-a-delivery-result")
-    with pytest.raises(DeliveryIdentityMismatch, match="DeliveryResult"):
+    with pytest.raises(DeliveryContractViolation, match="DeliveryResult"):
         await wrong_deliver.deliver(request)
 
     stream_operation = _alpaca_operation("gallery_stream")
@@ -705,7 +711,7 @@ async def test_local_delivery_refuses_a_handler_that_returns_the_wrong_result_ty
         path_params={"account_id": "abcdef01-1234-abcd-5678-ef0123456789"},
     )
     wrong_stream = LocalLaneDelivery(lambda _request: "not-a-stream-result")
-    with pytest.raises(DeliveryIdentityMismatch, match="StreamDeliveryResult"):
+    with pytest.raises(DeliveryContractViolation, match="StreamDeliveryResult"):
         await wrong_stream.stream(stream_request)
 
 

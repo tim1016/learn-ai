@@ -25,6 +25,7 @@ from starlette.datastructures import Headers
 
 from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 from app.broker.fleet.delivery import lane_forward_is_authorized
+from app.broker.fleet.errors import flat_refusal_body
 from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
@@ -541,10 +542,10 @@ class FleetLaneRuntimeMiddleware:
                     extra={"evidence_kind": "compatibility_route_state"},
                 )
                 body = json.dumps(
-                    {
-                        "reason": "compatibility_retirement_state_invalid",
-                        "message": "Compatibility retirement state is invalid; host operator action is required.",
-                    },
+                    flat_refusal_body(
+                        "compatibility_retirement_state_invalid",
+                        "Compatibility retirement state is invalid; host operator action is required.",
+                    ),
                     separators=(",", ":"),
                 ).encode("utf-8")
                 await send(
@@ -569,10 +570,10 @@ class FleetLaneRuntimeMiddleware:
                     },
                 )
             body = json.dumps(
-                {
-                    "reason": "compatibility_read_retired",
-                    "message": "This compatibility read has retired; use its canonical broker and clerk route.",
-                },
+                flat_refusal_body(
+                    "compatibility_read_retired",
+                    "This compatibility read has retired; use its canonical broker and clerk route.",
+                ),
                 separators=(",", ":"),
             ).encode("utf-8")
             await send(
@@ -604,11 +605,11 @@ class FleetLaneRuntimeMiddleware:
 
         async def refuse(pool: str) -> None:
             body = json.dumps(
-                {
-                    "reason": FleetLaneCapacityExhausted.reason,
-                    "message": f"The fleet lane {pool} budget is exhausted.",
-                    "next_step": "Retry after the lane has available capacity.",
-                },
+                flat_refusal_body(
+                    FleetLaneCapacityExhausted.reason,
+                    f"The fleet lane {pool} budget is exhausted.",
+                    next_step="Retry after the lane has available capacity.",
+                ),
                 separators=(",", ":"),
             ).encode("utf-8")
             await send(

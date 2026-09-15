@@ -1,4 +1,4 @@
-"""Wire-shape parity for the fleet control plane's refusal bodies (#2067).
+"""Wire-shape parity for the fleet control plane's refusal bodies (#2067, #2107).
 
 Nine bare-detail 403/503 sites across ``data_plane_control.py``,
 ``broker_clerks.py`` and ``internal_fleet.py`` answered with FastAPI's bare
@@ -16,12 +16,28 @@ important, that the *accept* path for the exact same guards still works: a
 guard rewritten to always refuse would pass every test that only checks
 refusals (this is the file that guards the guard every browser call to the
 data plane passes through).
+
+#2107 found a second gap the nine sites above don't cover: four raw-ASGI
+middleware writers (three in ``lane_runtime.py``, one in ``agent_identity.py``
+-- the latter by string concatenation of JSON) build their refusal body by
+hand instead of through ``FleetControlError.detail()`` / ``flat_refusal_body``,
+because they sit on ASGI paths with no ``Response`` object and, for three of
+the four, no ``FleetControlError`` instance at all (their reason codes are
+declared in ``refusal_vocabulary.py``'s ``_MINTED_OUTSIDE_THE_CLOSURE``).
+The vocabulary snapshot pinned their *reason code* and *status*, never their
+*body shape* -- so a hand-rolled body with a declared code but the wrong
+shape stayed invisible to it. The "raw-ASGI middleware writers" section below
+closes that: it asserts the same flat shape on all four, now that every one
+of them is routed through ``flat_refusal_body``/``detail()`` rather than a
+literal dict or a string concat.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -37,6 +53,9 @@ from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
 from app.utils.error_handlers import install_fleet_control_error_handler
+from tests.broker.fleet.test_lane_runtime import AsgiMessage
+from tests.broker.fleet.test_lane_runtime import _invoke as _invoke_raw_asgi
+from tests.broker.fleet.test_lane_runtime import _status as _raw_status
 
 
 def _assert_flat_refusal(body: object, *, expected_reason: str) -> None:
@@ -357,3 +376,144 @@ async def test_internal_fleet_accepts_a_correctly_mapped_agent_token(
         assert response.json()["clerk_id"] == lane.clerk_id
     finally:
         service.close()
+
+
+# ---- raw-ASGI middleware writers (#2107) -----------------------------------
+#
+# ``lane_runtime.py`` and ``agent_identity.py`` write refusals directly as
+# ASGI messages -- no ``Response`` object, and for three of the four sites no
+# ``FleetControlError`` instance either -- so they cannot go through the
+# dependency-based ``install_fleet_control_error_handler`` path the tests
+# above exercise. Drive the raw ASGI callables directly instead, the same way
+# ``tests/broker/fleet/test_lane_runtime.py`` does -- reusing its ``_invoke``
+# and ``_status`` (imported above) rather than re-implementing the same
+# raw-ASGI driver here.
+
+
+def _raw_body(messages: list[AsgiMessage]) -> object:
+    return json.loads(messages[-1]["body"])
+
+
+async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    del scope, receive
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+
+@pytest.mark.asyncio
+async def test_corrupt_compatibility_route_state_refuses_in_the_contract_shape(
+    tmp_path: Path,
+) -> None:
+    """``lane_runtime.py``'s ``compatibility_retirement_state_invalid`` 503."""
+    from app.broker.fleet.lane_runtime import CompatibilityReadEvidence, FleetLaneRuntimeMiddleware
+
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    evidence.route_state_path.parent.mkdir(parents=True)
+    evidence.route_state_path.write_text("{not-json", encoding="utf-8")
+
+    runtime = FleetLaneRuntimeMiddleware(_ok_app, config=None, evidence=evidence)
+    messages = await _invoke_raw_asgi(runtime, path="/api/brokers/alpaca/bots")
+    assert _raw_status(messages) == 503
+    _assert_flat_refusal(_raw_body(messages), expected_reason="compatibility_retirement_state_invalid")
+
+
+@pytest.mark.asyncio
+async def test_a_retired_compatibility_route_refuses_in_the_contract_shape(tmp_path: Path) -> None:
+    """``lane_runtime.py``'s ``compatibility_read_retired`` 410."""
+    from app.broker.fleet.compatibility_retirement import CompatibilityRouteState, write_route_state
+    from app.broker.fleet.lane_runtime import CompatibilityReadEvidence, FleetLaneRuntimeMiddleware
+    from tests.broker.fleet.test_lane_runtime import _eligible_receipt
+
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+    write_route_state(
+        state_path=evidence.route_state_path,
+        state=CompatibilityRouteState.RETIRED,
+        retirement_receipt=_eligible_receipt(),
+    )
+
+    runtime = FleetLaneRuntimeMiddleware(_ok_app, config=None, evidence=evidence)
+    messages = await _invoke_raw_asgi(runtime, path="/api/brokers/alpaca/bots")
+    assert _raw_status(messages) == 410
+    _assert_flat_refusal(_raw_body(messages), expected_reason="compatibility_read_retired")
+
+
+@pytest.mark.asyncio
+async def test_exhausted_lane_capacity_refuses_in_the_contract_shape(tmp_path: Path) -> None:
+    """``lane_runtime.py``'s ``fleet_lane_capacity_exhausted`` 503 (the only
+    one of the four that already carried a ``next_step``)."""
+    import asyncio
+
+    from app.broker.fleet.lane_runtime import (
+        CompatibilityReadEvidence,
+        FleetLaneRuntimeMiddleware,
+        LaneRuntimeConfig,
+    )
+
+    config = LaneRuntimeConfig(
+        max_inflight_requests=1, max_inflight_streams=1, request_queue_limit=0, request_queue_timeout_ms=0
+    )
+    evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        del scope, receive
+        entered.set()
+        await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    blocking_runtime = FleetLaneRuntimeMiddleware(blocking_app, config=config, evidence=evidence)
+    first = asyncio.create_task(_invoke_raw_asgi(blocking_runtime, method="POST"))
+    await entered.wait()
+    try:
+        refused = await _invoke_raw_asgi(blocking_runtime, method="POST")
+    finally:
+        release.set()
+        await first
+
+    assert _raw_status(refused) == 503
+    _assert_flat_refusal(_raw_body(refused), expected_reason="fleet_lane_capacity_exhausted")
+    assert _raw_body(refused)["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_identity_pin_refuses_in_the_contract_shape() -> None:
+    """``agent_identity.py``'s ``clerk_identity_mismatch`` 409 -- the site
+    that built its body by string concatenation of JSON before #2107."""
+    from app.broker.fleet.agent_identity import SERVED_IDENTITY_STATE_KEY, FleetIdentityMiddleware
+
+    identity = {
+        "broker": "alpaca",
+        "clerk_id": "clrk_serving",
+        "routing_epoch": 4,
+        "binding_generation": 9,
+    }
+    app_state = SimpleNamespace(state=SimpleNamespace())
+    setattr(app_state.state, SERVED_IDENTITY_STATE_KEY, lambda: identity)
+
+    middleware = FleetIdentityMiddleware(_ok_app)
+    messages = await _invoke_raw_asgi(
+        middleware,
+        path="/api/brokers/alpaca/account",
+        headers=[
+            (b"x-fleet-clerk-id", b"clrk_serving"),
+            (b"x-fleet-broker", b"not-alpaca"),
+        ],
+        app_state=app_state,
+    )
+    assert _raw_status(messages) == 409
+    _assert_flat_refusal(_raw_body(messages), expected_reason="clerk_identity_mismatch")
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_raw_asgi_body_makes_the_shape_assertion_fail() -> None:
+    """Anti-vacuous proof (per the numerical-rigor "prove the check can fail"
+    standard): ``_assert_flat_refusal`` must actually redden on a body that
+    declares a real reason code but wraps it the pre-#2107 nested way. This
+    is the exact shape ``internal_fleet.py``'s old ``_refuse`` produced and
+    the exact shape a regressed hand-rolled writer would reintroduce."""
+    malformed = {"detail": {"reason": "clerk_identity_mismatch", "message": "wrong lane"}}
+    with pytest.raises(AssertionError):
+        _assert_flat_refusal(malformed, expected_reason="clerk_identity_mismatch")

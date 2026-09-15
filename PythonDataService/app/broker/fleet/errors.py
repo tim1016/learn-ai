@@ -21,6 +21,24 @@ from __future__ import annotations
 from typing import ClassVar
 
 
+def flat_refusal_body(reason: str, message: str, *, next_step: str | None = None) -> dict[str, str]:
+    """The one wire shape every fleet refusal carries (#2067, #2107).
+
+    Backs :meth:`FleetControlError.detail` and is also the shape a handful of
+    raw-ASGI middleware writers build directly, before any ``FleetControlError``
+    instance exists (``lane_runtime.py``'s capacity and compatibility-retirement
+    refusals, ``agent_identity.py``'s identity-mismatch refusal) -- #2107 found
+    one of those hand-rolling the same dict as a string concatenation of JSON,
+    invisible to the vocabulary snapshot's reason/status pin because that pin
+    never inspected body shape. Routing every writer through this one function
+    means a body can no longer drift from ``detail()``'s shape at any site.
+    """
+    body = {"reason": reason, "message": message}
+    if next_step is not None:
+        body["next_step"] = next_step
+    return body
+
+
 class FleetControlError(Exception):
     """A refusal the operator surface can render without inventing copy."""
 
@@ -35,10 +53,7 @@ class FleetControlError(Exception):
 
     def detail(self) -> dict[str, str]:
         """The wire body: reason, message, and next_step when present."""
-        body = {"reason": self.reason, "message": self.message}
-        if self.next_step is not None:
-            body["next_step"] = self.next_step
-        return body
+        return flat_refusal_body(self.reason, self.message, next_step=self.next_step)
 
 
 class BrokerAndClerkRequired(FleetControlError):
@@ -284,4 +299,5 @@ __all__ = [
     "FleetProtocolIncompatible",
     "FleetRegistryRecoveryPending",
     "FleetRegistryUnavailable",
+    "flat_refusal_body",
 ]
