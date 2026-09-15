@@ -842,6 +842,116 @@ async def test_a_clerk_agent_refuses_an_unpinned_mutation_in_code() -> None:
         server.stop()
 
 
+async def test_a_spoofed_clerk_id_pin_does_not_bypass_the_mutation_fence() -> None:
+    """P1-B (Codex review, PR #2115): a bare clerk-id pin must not defeat it.
+
+    A caller who merely echoes a known clerk id — not the coordinator's own
+    proven forward — used to reach ``_pin_mismatch``, which treats an absent
+    broker/epoch/generation pin as unconstrained rather than as missing
+    proof; the route's own secret guard (``require_data_plane_control_secret``,
+    unaware of any pin) then let it through on the browser secret alone. The
+    fence must authenticate every mutation via ``lane_forward_is_authorized``,
+    not merely require *some* clerk-id header to be present.
+    """
+    from app.broker.fleet.errors import BrokerAndClerkRequired
+    from app.config import fleet_settings, settings
+    from app.security.data_plane_control import require_data_plane_control_secret
+
+    agent = _build_agent_app(
+        {"broker": "alpaca", "clerk_id": CLERK_ID,
+         "routing_epoch": EPOCH, "binding_generation": 3},
+        refuse_unpinned_mutations=True,
+    )
+
+    @agent.post(
+        "/guarded-mutation",
+        dependencies=[Depends(require_data_plane_control_secret)],
+    )
+    async def guarded_mutation() -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    server = _RealServer(agent)
+    server.start()
+    original_secret = settings.DATA_PLANE_CONTROL_SECRET
+    original_token = fleet_settings.COORDINATOR_SERVICE_TOKEN
+    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
+    fleet_settings.COORDINATOR_SERVICE_TOKEN = COORDINATOR_TOKEN
+    try:
+        async with httpx.AsyncClient(base_url=server.base_url, timeout=5.0) as client:
+            # Knows the clerk id and the browser secret; has neither the
+            # coordinator token nor the broker/epoch/generation pins a real
+            # coordinator dispatch always attaches.
+            spoofed = await client.post(
+                "/guarded-mutation",
+                headers={
+                    "X-Data-Plane-Control-Secret": "test-plane-secret",
+                    "X-Fleet-Clerk-Id": CLERK_ID,
+                },
+            )
+            assert spoofed.status_code == BrokerAndClerkRequired.status_code
+            assert spoofed.json()["reason"] == BrokerAndClerkRequired.reason
+    finally:
+        settings.DATA_PLANE_CONTROL_SECRET = original_secret
+        fleet_settings.COORDINATOR_SERVICE_TOKEN = original_token
+        server.stop()
+
+
+async def test_a_clerk_agent_still_answers_the_stranded_operator_mutations_unpinned() -> None:
+    """P1-A (Codex review, PR #2115): the fence must not sever operator recovery.
+
+    #2069/#2114 retain ``POST .../live-envelope/loss-hold/clear`` and
+    ``POST .../runs/{run_id}/replay-receipt`` with no coordinator successor
+    — an operator's only way to clear a live loss hold or regenerate a
+    missing receipt is to call the clerk agent directly, unpinned. The
+    mutation fence must exempt exactly these two, not sever them.
+    """
+    from app.config import settings
+    from app.security.data_plane_control import require_data_plane_control_secret
+
+    agent = _build_agent_app(
+        {"broker": "alpaca", "clerk_id": CLERK_ID,
+         "routing_epoch": EPOCH, "binding_generation": 3},
+        refuse_unpinned_mutations=True,
+    )
+
+    @agent.post(
+        "/api/brokers/{broker}/live-envelope/loss-hold/clear",
+        dependencies=[Depends(require_data_plane_control_secret)],
+    )
+    async def _loss_hold_clear(broker: str) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    @agent.post(
+        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt",
+        dependencies=[Depends(require_data_plane_control_secret)],
+    )
+    async def _replay_receipt(
+        broker: str, strategy_instance_id: str, run_id: str
+    ) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    server = _RealServer(agent)
+    server.start()
+    original_secret = settings.DATA_PLANE_CONTROL_SECRET
+    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
+    try:
+        async with httpx.AsyncClient(base_url=server.base_url, timeout=5.0) as client:
+            loss_hold = await client.post(
+                "/api/brokers/alpaca/live-envelope/loss-hold/clear",
+                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
+            )
+            assert loss_hold.status_code == 200
+
+            replay_receipt = await client.post(
+                "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt",
+                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
+            )
+            assert replay_receipt.status_code == 200
+    finally:
+        settings.DATA_PLANE_CONTROL_SECRET = original_secret
+        server.stop()
+
+
 def test_combined_role_still_serves_an_unpinned_mutation_at_200() -> None:
     """`combined` IS the browser's data plane; #2075's fence must not reach it.
 
@@ -884,15 +994,15 @@ from app.main import app
 
 
 @app.post('/__unpinned_mutation_probe__')
-async def _probe():
+async def _probe() -> dict[str, bool]:
     return {'ok': True}
 
 
-async def _run():
+async def _run() -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         response = await client.post('/__unpinned_mutation_probe__')
-        print(json.dumps({'status_code': response.status_code}))
+        sys.stdout.write(json.dumps({'status_code': response.status_code}) + '\\n')
 
 
 asyncio.run(_run())

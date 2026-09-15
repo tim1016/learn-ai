@@ -207,6 +207,15 @@ consumers until the route-hit telemetry and consumer inventory say otherwise:
 
 None of these gain new behavior in B; none is developed further.
 
+Two of these are POST mutations, not reads, and have no coordinator
+successor: `run_replay`'s POST regenerate, and `brokers`' `POST
+.../live-envelope/loss-hold/clear`. #2069/#2114 retain both as stranded
+operator-recovery routes. The `clerk_agent` unpinned-mutation fence (#2075,
+`app/broker/fleet/agent_identity.py`, `_STRANDED_OPERATOR_MUTATIONS`)
+exempts exactly these two by name — an operator reaching the agent directly
+is the only way to clear a live loss hold or regenerate a missing receipt,
+so the fence must not sever them.
+
 ## Coordinator-owned (not fleet families)
 
 - `broker_capability` — `/api/broker/capability(/probe)`: control-plane
