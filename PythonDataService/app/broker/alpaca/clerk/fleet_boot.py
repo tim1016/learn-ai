@@ -17,12 +17,21 @@ of the authority's own semantics:
    durable confirmation evidence.
 4. ``start_heartbeat`` — observations only; they never confirm anything.
 
-``confirm_and_heartbeat`` is steps 3 and 4 as one decision, because they are
-not the same decision: *confirming* belongs to a bound lane, but *beating*
-belongs to every online lane. Gating both on the binding (as main.py once
-did) deadlocked an unbound lane — it registered, reserved, then went silent,
-so the coordinator projected it ``unreachable`` and refused the
-``configuration_access`` reads that were the only way to bind it.
+Step 4 is not sequenced with steps 2 and 3 at all: the beat starts when the
+lane *opens*, before the installation lock, before the profiles database and
+before any binding, and stops when the lane closes. Presence belongs to the
+lane, not to its binding. Gating the beat on a binding (as main.py once did)
+deadlocked an unbound lane — it registered, then went silent, so the
+coordinator projected it ``unreachable`` and refused the
+``configuration_access`` reads that were the only way to bind it. An
+installation that never produces a binding is a reachable outcome, not an
+edge case: the lock can refuse this process, the profiles database can be
+unavailable, a profile can be staged and never applied.
+
+So a lane reports ``binding_pending`` with an ``unidentified`` endpoint mode
+from the moment it opens, and ``confirm_and_report`` — steps 3 and the facts
+half of 4 — confirms the grant if there is one and swaps
+``FleetLaneBoot.reported_facts`` under the already-running beat.
 
 With the coordinator unreachable mid-boot, the offline rule is FR-066: only
 a recovered binding that exactly matches the confirmation evidence boots
@@ -33,8 +42,9 @@ the coordinator, failing closed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,18 +77,6 @@ logger = logging.getLogger(__name__)
 
 _ADAPTER = AlpacaProviderAdapter()
 
-# The authority kinds that map to a lane summary's ``authority_state``
-# regardless of endpoint mode. ``sqlite`` is the one kind whose state the
-# mode decides (real_paper vs. real_live), so it is resolved separately in
-# ``heartbeat_facts``. ``unavailable`` is listed even though it equals the
-# fallback: the desk shows "the authority failed to open" as a stated fact,
-# not as the residue of an unrecognised kind.
-_AUTHORITY_STATE_BY_KIND: Mapping[str, str] = {
-    "shadow": "shadow",
-    "synthetic": "synthetic",
-    "unavailable": "unavailable",
-}
-
 
 class FleetBootRefused(FleetControlError):
     """The lane may not open authority under the fleet's admission rules.
@@ -105,6 +103,19 @@ class FleetLaneBoot:
     session: SessionInfo | None = None
     offline_reason: str | None = None
     owned_service: FleetControlService | None = field(default=None, repr=False)
+    #: What every beat reports, re-read on each pass. The default is the
+    #: unbound lane — present, not bound, and honest about knowing neither
+    #: its endpoint mode nor its authority. ``confirm_and_report`` replaces
+    #: it if and when a binding installs.
+    reported_facts: Mapping[str, object] = field(
+        default_factory=lambda: heartbeat_facts(
+            account_pin=None,
+            effective_binding_generation=0,
+            authority_kind="unavailable",
+            endpoint_mode="unidentified",
+        )
+    )
+    heartbeat: asyncio.Task | None = field(default=None, repr=False)
 
     @property
     def online(self) -> bool:
@@ -365,20 +376,22 @@ def offline_boot_matches(
     )
 
 
-def start_heartbeat(
-    boot: FleetLaneBoot,
-    *,
-    interval_s: float,
-    facts: Callable[[], Mapping[str, object]],
-) -> asyncio.Task:
-    """Observe on a cadence; observations never confirm anything."""
+def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
+    """Observe on a cadence; observations never confirm anything.
+
+    Called when the lane opens, so an unbound lane is present too. Each beat
+    re-reads ``boot.reported_facts`` rather than closing over them: a binding
+    that installs later changes what the lane says without restarting the
+    task that says it. The task is stored on ``boot.heartbeat`` so
+    ``close_fleet_lane`` ends the beat with the lane.
+    """
 
     async def _beat() -> None:
         from app.broker.fleet.identity import new_agent_instance_id
 
         while True:
             await asyncio.sleep(interval_s)
-            reported = facts()
+            reported = boot.reported_facts
             summary = reported.get("reported_summary")
             if boot.session is None:
                 continue
@@ -419,10 +432,13 @@ def start_heartbeat(
                         extra={"clerk_id": boot.clerk_id},
                     )
 
-    return asyncio.create_task(_beat(), name=f"fleet-heartbeat-{boot.clerk_id}")
+    boot.heartbeat = asyncio.create_task(
+        _beat(), name=f"fleet-heartbeat-{boot.clerk_id}"
+    )
+    return boot.heartbeat
 
 
-def binding_is_confirmed(
+def binding_is_granted(
     *, account_pin: str | None, effective_binding_generation: int
 ) -> bool:
     """Whether this boot has a binding worth confirming to the coordinator.
@@ -441,9 +457,15 @@ def heartbeat_facts(
     account_pin: str | None,
     effective_binding_generation: int,
     authority_kind: str,
-    is_paper: bool,
+    endpoint_mode: str,
 ) -> Mapping[str, object]:
     """What this lane reports on every beat, given its binding state.
+
+    ``endpoint_mode`` is ``paper``/``live`` once a binding installs (the
+    settings' own mode) and ``unidentified`` before one does — a lane with no
+    binding has no endpoint to name. ``sqlite`` with ``unidentified`` cannot
+    occur: a sqlite authority implies an installed binding, and that path
+    always passes the settings mode.
 
     Both shapes carry the same bounded typed summary
     (``ProviderSummaryObservation``): endpoint mode and authority state, and
@@ -459,13 +481,14 @@ def heartbeat_facts(
     still reports its pin and authority state — that is how the desk shows
     *why* the lane is unbound rather than merely that it is.
     """
-    mode = "paper" if is_paper else "live"
-    if authority_kind == "sqlite":
-        authority_state = "real_paper" if is_paper else "real_live"
-    else:
-        authority_state = _AUTHORITY_STATE_BY_KIND.get(authority_kind, "unavailable")
-    summary = {"endpoint_mode": mode, "authority_state": authority_state}
-    if binding_is_confirmed(
+    authority_state = {
+        "sqlite": f"real_{endpoint_mode}",
+        "shadow": "shadow",
+        "synthetic": "synthetic",
+        "unavailable": "unavailable",
+    }.get(authority_kind, "unavailable")
+    summary = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
+    if binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
     ):
         return {
@@ -482,7 +505,7 @@ def heartbeat_facts(
     }
 
 
-async def confirm_and_heartbeat(
+async def confirm_and_report(
     boot: FleetLaneBoot,
     *,
     account_pin: str | None,
@@ -490,24 +513,23 @@ async def confirm_and_heartbeat(
     effective_profile_id: str | None,
     effective_revision: int | None,
     authority_kind: str,
-    is_paper: bool,
-    interval_s: float,
-) -> asyncio.Task:
-    """Confirm the binding if there is one, then beat either way.
+    endpoint_mode: str,
+) -> None:
+    """Confirm the grant if there is one; report what installed either way.
 
-    The heartbeat is unconditional because presence is not a privilege of
-    being bound: an online lane that stops observing is an unreachable lane,
-    and an unreachable lane cannot be reached to *become* bound. Only the
-    reported facts differ by binding state.
+    The confirmation is conditional — only a granted binding is worth
+    confirming to the coordinator. What the lane *reports* is updated
+    unconditionally: an installation that produced no grant still changed what
+    this lane is, and the desk reads that from the beat.
 
-    The facts are read once, at boot, and closed over: this process's binding
-    cannot change without a restart, and re-deriving them per beat would only
-    add a way for them to drift from what was actually confirmed.
+    No task is created here. The beat has been running since the lane opened
+    and re-reads ``boot.reported_facts`` on every pass, so the binding lands
+    under it rather than replacing it.
     """
-    if binding_is_confirmed(
+    if binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
     ):
-        # `binding_is_confirmed` has already established the pin is present.
+        # `binding_is_granted` has already established the pin is present.
         await confirm_binding(
             boot,
             external_account_id=account_pin,
@@ -515,19 +537,24 @@ async def confirm_and_heartbeat(
             effective_profile_id=effective_profile_id,
             effective_revision=effective_revision,
         )
-    facts = heartbeat_facts(
+    boot.reported_facts = heartbeat_facts(
         account_pin=account_pin,
         effective_binding_generation=effective_binding_generation,
         authority_kind=authority_kind,
-        is_paper=is_paper,
+        endpoint_mode=endpoint_mode,
     )
-    return start_heartbeat(boot, interval_s=interval_s, facts=lambda: facts)
 
 
 async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
-    """Release the boot's transport and any owned service."""
+    """Release the boot's heartbeat, transport and any owned service."""
     if boot is None:
         return
+    if boot.heartbeat is not None:
+        # The beat observes through the very presence this closes next, so it
+        # ends first: the lane's lifetime is the beat's at both ends.
+        boot.heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await boot.heartbeat
     try:
         await boot.presence.close()
     except Exception as exc:
@@ -589,9 +616,9 @@ def _verify_root_against_expectation(
 __all__ = [
     "FleetBootRefused",
     "FleetLaneBoot",
-    "binding_is_confirmed",
+    "binding_is_granted",
     "close_fleet_lane",
-    "confirm_and_heartbeat",
+    "confirm_and_report",
     "confirm_binding",
     "confirmation_evidence_path",
     "heartbeat_facts",

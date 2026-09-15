@@ -100,11 +100,16 @@ history, tickets, or logs.
 
 ## Fresh-lane bootstrap (first binding)
 
-Every **online** lane heartbeats from boot — bound or not
-(`confirm_and_heartbeat`, `app/broker/alpaca/clerk/fleet_boot.py`). An
-unbound lane reports `binding_pending` and projects `starting`, so
-`configuration_access` reads route to it normally and there is no window to
-race. Execution routing still stays closed until a binding is confirmed. The
+Every **online** lane heartbeats from the moment it opens — before the
+installation lock, before the profiles database, before any binding
+(`start_heartbeat`, `app/broker/alpaca/clerk/fleet_boot.py`, called from
+`lifespan`). Whether or not a profile exists, and whether or not a binding
+installs at all, the lane reports `binding_pending` and projects `starting`,
+so `configuration_access` reads route to it normally and there is no window to
+race. Its summary shows endpoint mode `unidentified` until the first binding
+installs; `confirm_and_report` then swaps the reported facts under the running
+beat and the directory shows `paper` or `live`. The beat stops when the lane
+closes. Execution routing still stays closed until a binding is confirmed. The
 bootstrap sequence for a fresh lane:
 
 1. `podman restart alpaca-paper-clerk`, then wait for its HTTP surface **from

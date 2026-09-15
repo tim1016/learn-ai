@@ -259,13 +259,23 @@ async def lifespan(app: FastAPI):
             yield
         return
 
-    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane
+    from app.broker.alpaca.clerk.fleet_boot import close_fleet_lane, start_heartbeat
     from app.broker_configuration.worker_lifecycle import installation_worker
 
     # ADR 0062 Decision 2: the volume identity gate runs before ANY writer
     # opens on the clerk volume — before the installation lock file, before
     # the profiles database, before the broker client.
     fleet_lane = await _open_verified_fleet_lane()
+    if fleet_lane is not None and fleet_lane.online:
+        # Presence belongs to the lane, not to its binding. The installation
+        # below installs no binding on four reachable paths — the lock refused
+        # this process, the profiles database is unavailable, a profile was
+        # staged and never applied, an unconfigured installation has no usable
+        # environment settings — and a lane that beats only once bound goes
+        # silent on every one of them: the coordinator then projects it
+        # `unreachable` and refuses the configuration reads that were the only
+        # way to bind it. The `finally` below ends the beat with the lane.
+        start_heartbeat(fleet_lane, interval_s=fleet_settings.HEARTBEAT_INTERVAL_S)
     try:
         with installation_worker() as refusal:
             started = False
@@ -424,7 +434,6 @@ async def _service_lifespan(
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
-    fleet_heartbeat_task = None
     # The selection cannot move between preflight, lease acquisition and the
     # effective acknowledgement, including writes by another process.
     handover = (
@@ -575,7 +584,7 @@ async def _service_lifespan(
                 bound=alpaca_binding, runtime=alpaca_clerk_runtime,
             )
             if fleet_lane is not None and fleet_lane.online:
-                from app.broker.alpaca.clerk.fleet_boot import confirm_and_heartbeat
+                from app.broker.alpaca.clerk.fleet_boot import confirm_and_report
                 from app.broker_configuration.runtime import (
                     get_broker_configuration_service,
                 )
@@ -599,15 +608,14 @@ async def _service_lifespan(
                 _install_fleet_served_identity(app, _fleet_served_identity)
 
                 selection_row = get_broker_configuration_service().selection()
-                fleet_heartbeat_task = await confirm_and_heartbeat(
+                await confirm_and_report(
                     fleet_lane,
                     account_pin=alpaca_binding.context.account_pin,
                     effective_binding_generation=selection_row.effective_binding_generation,
                     effective_profile_id=selection_row.effective_profile_id,
                     effective_revision=selection_row.effective_revision,
                     authority_kind=alpaca_clerk_runtime.authority_kind,
-                    is_paper=alpaca_settings.is_paper,
-                    interval_s=fleet_settings.HEARTBEAT_INTERVAL_S,
+                    endpoint_mode=alpaca_settings.mode,
                 )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()
@@ -858,10 +866,6 @@ async def _service_lifespan(
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
-        if fleet_heartbeat_task is not None:
-            fleet_heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await fleet_heartbeat_task
         if sovereign_equity_snapshot_scheduler is not None:
             await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
