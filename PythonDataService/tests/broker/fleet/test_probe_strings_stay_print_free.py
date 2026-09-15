@@ -1,11 +1,22 @@
 """#2117: `print()` inside a subprocess-exec'd probe string is invisible to
 ruff — the probe body is only string data to the outer parser until a child
 interpreter compiles it, so no lint configuration on this file can see
-inside it. Two occurrences of exactly that survived undetected until found
+inside it. Six occurrences of exactly that survived undetected until found
 by hand; this narrowly reproduces the one incident this repo actually
-had — a `print(` call surviving inside a probe string — rather than
+had — `print` reachable inside a probe string, directly or via an alias
+(`__p = print; __p(...)`, caught by flagging any `Name`/`Attribute`
+reference to `print`, not just a direct `Call`) — rather than
 re-implementing a linter for probe bodies (no ruff plugin, no general
 type-hint or style check, nothing outside this directory).
+
+Known, disclosed gap: discovery only recognizes a probe assigned to a
+variable literally named ``probe`` or ``_PROBE`` (see
+``_PROBE_VARIABLE_NAMES``) — the naming convention every probe in this
+directory already follows. A probe under a different name, or reached only
+through deeper indirection than a bare ``print``/``builtins.print``
+reference (e.g. ``getattr(builtins, 'print')``), is still invisible to
+this check. Chasing those is general-purpose static analysis, which this
+test deliberately does not attempt.
 """
 
 from __future__ import annotations
@@ -68,11 +79,30 @@ def _probe_string_literals() -> list[tuple[Path, int, str]]:
     return literals
 
 
+def _references_print(tree: ast.AST) -> bool:
+    """True if `print` is reachable anywhere in this probe's own AST — as a
+    direct call (`print(...)`), an alias binding that a later call could use
+    (`__p = print` — the `Name` node is caught the same way regardless of
+    whether it sits in `Load`, `Store`, or any other context), or an
+    attribute access naming it explicitly (`builtins.print`,
+    `__builtins__.print`). Does not chase indirection through a computed
+    lookup like `getattr(builtins, 'print')` — see the module docstring for
+    exactly where this check's coverage ends.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "print":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "print":
+            return True
+    return False
+
+
 def test_no_print_survives_inside_a_fleet_probe_string() -> None:
     """Parses each probe string as its own standalone program (exactly what
-    the subprocess it's handed to will do) and looks for a `print` call in
+    the subprocess it's handed to will do) and looks for `print` anywhere in
     *that* program — not a text search of the outer file, which is precisely
-    the blind spot this guards.
+    the blind spot this guards, and not only a direct `print(...)` call,
+    which an alias binding would slip past.
     """
     probes = _probe_string_literals()
     assert len(probes) >= _MINIMUM_PROBES_EXAMINED, (
@@ -85,14 +115,11 @@ def test_no_print_survives_inside_a_fleet_probe_string() -> None:
     offenders = [
         f"{path.name}:{lineno}"
         for path, lineno, source in probes
-        for probe_node in ast.walk(ast.parse(source))
-        if isinstance(probe_node, ast.Call)
-        and isinstance(probe_node.func, ast.Name)
-        and probe_node.func.id == "print"
+        if _references_print(ast.parse(source))
     ]
 
     assert offenders == [], (
-        "print() survives inside an exec'd probe string, invisible to "
+        "print is reachable inside an exec'd probe string, invisible to "
         f"ruff, at: {offenders}. Use sys.stdout.write(...) + '\\n' instead "
         "(the parent process reads the child's stdout as its result)."
     )

@@ -45,8 +45,8 @@ def _concrete(template: str) -> str:
     )
 
 
-def _resolves(method: str, path: str) -> bool:
-    scope = {
+def _scope_for(method: str, path: str) -> dict[str, object]:
+    return {
         "type": "http",
         "method": method,
         "path": path,
@@ -54,7 +54,12 @@ def _resolves(method: str, path: str) -> bool:
         "headers": [],
         "query_string": b"",
     }
-    return any(route.matches(scope)[0] is Match.FULL for route in app.routes)
+
+
+def _resolves(method: str, path: str) -> bool:
+    return any(
+        route.matches(_scope_for(method, path))[0] is Match.FULL for route in app.routes
+    )
 
 
 #: A floor, not a pin: the exact catalog size moves as operations are added
@@ -104,15 +109,7 @@ async def _typed_converter_probe_endpoint(request: Request) -> PlainTextResponse
 
 def _route_matches(template: str, path: str) -> bool:
     route = Route(template, _typed_converter_probe_endpoint, methods=["GET"])
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": path,
-        "root_path": "",
-        "headers": [],
-        "query_string": b"",
-    }
-    return route.matches(scope)[0] is Match.FULL
+    return route.matches(_scope_for("GET", path))[0] is Match.FULL
 
 
 @pytest.mark.parametrize(
