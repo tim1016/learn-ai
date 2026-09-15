@@ -92,6 +92,12 @@ const DAYS: DayReturns[] = [
 const STUDY: ReturnDistributionStudy = {
   adjustment: 'split_and_dividend',
   warnings: [],
+  capture: {
+    attempted: true,
+    status: 'complete',
+    fetchedArtifactCount: 480,
+    detail: null,
+  },
   coverage: {
     requestedSessions: 2,
     returnedSessions: 2,
@@ -153,6 +159,9 @@ describe('ReturnsDistributionComponent', () => {
     expect(screen.getByText('Days studied')).toBeTruthy();
     expect(screen.getAllByText('2').length).toBeGreaterThan(0);
     expect(screen.getByText('VaR 95% (1 day)')).toBeTruthy();
+    expect(
+      screen.getByText('This request populated the data lake with 480 artifact(s) first.'),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Close → close' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Session only' })).toBeTruthy();
     expect(document.querySelector('canvas')).toBeTruthy();

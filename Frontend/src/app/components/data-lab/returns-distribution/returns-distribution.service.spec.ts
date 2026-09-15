@@ -20,6 +20,12 @@ const RESPONSE_DTO = {
     bin_width_pct: 0.5,
     span_pct: 5,
     adjustment: 'split_and_dividend',
+    capture: {
+      attempted: true,
+      status: 'complete',
+      fetched_artifact_count: 42,
+      detail: null,
+    },
     warnings: ['2 scheduled session(s) in the window are not captured in the lake; the study covers what is captured'],
   },
   coverage: {
@@ -104,6 +110,12 @@ describe('ReturnsDistributionService', () => {
     const study = await pending;
     expect(study.adjustment).toBe('split_and_dividend');
     expect(study.warnings).toHaveLength(1);
+    expect(study.capture).toEqual({
+      attempted: true,
+      status: 'complete',
+      fetchedArtifactCount: 42,
+      detail: null,
+    });
     expect(study.coverage.missingSessions).toBe(2);
     expect(study.coverage.firstSessionOpenMsUtc).toBe(1719821400000);
 

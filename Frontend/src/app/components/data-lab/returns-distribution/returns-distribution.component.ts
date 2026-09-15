@@ -98,6 +98,17 @@ export class ReturnsDistributionComponent {
 
   readonly binWidthValue = computed(() => String(this.binWidthPct()));
 
+  /** One-line receipt of the on-demand lake capture, when one ran. */
+  readonly captureLine = computed<string | null>(() => {
+    const capture = this.study.value()?.capture;
+    if (!capture?.attempted) return null;
+    const count =
+      capture.fetchedArtifactCount > 0
+        ? `populated the data lake with ${capture.fetchedArtifactCount} artifact(s) first`
+        : 'found the data lake already up to date';
+    return `This request ${count}.`;
+  });
+
   readonly selectedBin = computed(() => {
     const dist = this.activeKindDistribution();
     const index = this.selectedBinIndex();
@@ -144,7 +155,7 @@ export class ReturnsDistributionComponent {
       : [];
     const title =
       code === 'NOT_CAPTURED'
-        ? 'Symbol not captured in the data lake'
+        ? 'Could not capture this symbol into the data lake'
         : code === 'INSUFFICIENT_COVERAGE'
           ? 'Not enough captured history'
           : 'The study could not run';

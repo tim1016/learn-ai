@@ -5,7 +5,10 @@
       the study follows the committed scope.
     </p>
   } @else if (study.isLoading()) {
-    <p class="rd__empty">Crunching {{ ticker() }} minute bars for {{ fromDate() }} → {{ toDate() }}…</p>
+    <p class="rd__empty">
+      Fetching {{ ticker() }} minute bars into the data lake and crunching
+      {{ fromDate() }} → {{ toDate() }}… (a first-time capture can take a minute)
+    </p>
   } @else if (errorInfo(); as error) {
     <div class="rd__error" role="alert">
       <p class="rd__error-title">{{ error.title }}</p>
@@ -37,6 +40,10 @@
         </select>
       </label>
     </header>
+
+    @if (captureLine(); as capture) {
+      <p class="rd__capture" role="status">{{ capture }}</p>
+    }
 
     @if (warnings().length) {
       <ul class="rd__warnings" role="status">

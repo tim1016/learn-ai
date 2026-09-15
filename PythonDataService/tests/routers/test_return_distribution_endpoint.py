@@ -94,11 +94,23 @@ def seeded_lake(tmp_path: Path) -> Path:
     return root
 
 
+def _complete_capture_receipt() -> return_distribution_service.CaptureReceipt:
+    return return_distribution_service.CaptureReceipt(
+        attempted=True, status="complete", fetched_artifact_count=0
+    )
+
+
 @pytest.fixture
 async def api(seeded_lake: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setattr(
         return_distribution_service, "resolve_lake_root", lambda _mode: seeded_lake
     )
+    # The real capture boundary needs the catalog + provider; the seeded lake
+    # covers the window, so the stub just records a completed capture.
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _stub_capture)
     app = FastAPI()
     app.include_router(return_distribution_router.router, prefix="/api/research")
     return app
@@ -163,6 +175,8 @@ async def test_return_distribution_happy_path(api: FastAPI, seeded_lake: Path) -
 
     assert body["coverage"]["returned_sessions"] == N_SESSIONS
     assert body["coverage"]["first_session_open_ms_utc"] == days[0]["session_open_ms_utc"]
+    assert body["meta"]["capture"]["attempted"] is True
+    assert body["meta"]["capture"]["status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -215,6 +229,11 @@ async def test_return_distribution_missing_factor_file_warns_unadjusted(
     monkeypatch.setattr(
         return_distribution_service, "resolve_lake_root", lambda _mode: seeded_lake
     )
+
+    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _stub_capture)
     app = FastAPI()
     app.include_router(return_distribution_router.router, prefix="/api/research")
     response = await _post(app, _request_body())
@@ -222,3 +241,78 @@ async def test_return_distribution_missing_factor_file_warns_unadjusted(
     body = response.json()
     assert body["meta"]["adjustment"] == "raw"
     assert any("unadjusted" in w for w in body["meta"]["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_captures_missing_symbol_into_lake_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symbol the lake does not hold is populated first, then studied:
+    the capture stub seeds the lake, and the endpoint's 200 over the seeded
+    bytes proves the read happened after the capture."""
+    root = tmp_path / "lake"
+    root.mkdir()
+    capture_calls: list[tuple[str, date, date]] = []
+
+    async def _seeding_capture(
+        *, symbol: str, start: date, end: date
+    ) -> return_distribution_service.CaptureReceipt:
+        capture_calls.append((symbol, start, end))
+        _seed_lake(root)
+        return return_distribution_service.CaptureReceipt(
+            attempted=True, status="complete", fetched_artifact_count=N_SESSIONS
+        )
+
+    monkeypatch.setattr(return_distribution_service, "resolve_lake_root", lambda _mode: root)
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _seeding_capture)
+    app = FastAPI()
+    app.include_router(return_distribution_router.router, prefix="/api/research")
+
+    response = await _post(app, _request_body())
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert len(capture_calls) == 1
+    captured_symbol, captured_start, captured_end = capture_calls[0]
+    assert captured_symbol == SYMBOL
+    # The capture span covers the window (lead-in included, never past it).
+    assert captured_start <= date(2024, 7, 1)
+    assert date(2024, 7, 1) <= captured_end <= date(2025, 6, 30)
+    # The study read what the capture wrote.
+    assert len(body["days"]) == N_SESSIONS
+    assert body["meta"]["capture"] == {
+        "attempted": True,
+        "status": "complete",
+        "fetched_artifact_count": N_SESSIONS,
+        "detail": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_capture_failure_is_typed_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capture that still leaves the lake empty is a typed 404 carrying
+    why the capture could not populate the symbol."""
+    root = tmp_path / "lake"
+    root.mkdir()
+
+    async def _failing_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return return_distribution_service.CaptureReceipt(
+            attempted=True,
+            status="failed",
+            fetched_artifact_count=0,
+            detail="CatalogUnavailableError: pool not initialized",
+        )
+
+    monkeypatch.setattr(return_distribution_service, "resolve_lake_root", lambda _mode: root)
+    monkeypatch.setattr(return_distribution_service, "_capture_missing_sessions", _failing_capture)
+    app = FastAPI()
+    app.include_router(return_distribution_router.router, prefix="/api/research")
+
+    response = await _post(app, _request_body())
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "NOT_CAPTURED"
+    assert "could not populate" in detail["message"]
+    assert "CatalogUnavailableError" in detail["capture_note"]

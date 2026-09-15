@@ -73,9 +73,17 @@ export interface StudyCoverage {
   lastSessionOpenMsUtc: number | null;
 }
 
+export interface CaptureReceipt {
+  attempted: boolean;
+  status: string;
+  fetchedArtifactCount: number;
+  detail: string | null;
+}
+
 export interface ReturnDistributionStudy {
   adjustment: 'split_and_dividend' | 'raw';
   warnings: readonly string[];
+  capture: CaptureReceipt | null;
   coverage: StudyCoverage;
   kinds: readonly KindDistribution[];
   days: readonly DayReturns[];
@@ -96,6 +104,14 @@ function toStudy(dto: ReturnDistributionResponseDto): ReturnDistributionStudy {
   return {
     adjustment: dto.meta.adjustment,
     warnings: dto.meta.warnings ?? [],
+    capture: dto.meta.capture
+      ? {
+          attempted: dto.meta.capture.attempted,
+          status: dto.meta.capture.status,
+          fetchedArtifactCount: dto.meta.capture.fetched_artifact_count,
+          detail: dto.meta.capture.detail ?? null,
+        }
+      : null,
     coverage: {
       requestedSessions: dto.coverage.requested_sessions,
       returnedSessions: dto.coverage.returned_sessions,

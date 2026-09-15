@@ -15,6 +15,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.return_distribution_models import (
+    CaptureReceiptModel,
     CoverageInfo,
     ReturnDistributionMeta,
     ReturnDistributionRequest,
@@ -49,9 +50,12 @@ async def run_return_distribution(
             detail={
                 "error_code": "NOT_CAPTURED",
                 "message": (
-                    "the data lake holds no minute bars for this symbol in the "
-                    "requested window — capture it via the Data Lab first"
+                    "the on-demand capture could not populate the data lake for this "
+                    "symbol and window"
+                    if e.capture_note
+                    else "this symbol can never be held by the data lake (not lake-addressable)"
                 ),
+                "capture_note": e.capture_note,
                 "captured_symbols": e.captured_symbols,
             },
         ) from e
@@ -86,6 +90,12 @@ async def run_return_distribution(
         bin_width_pct=request.bin_width_pct,
         span_pct=request.span_pct,
         adjustment=outcome.result.adjustment,
+        capture=CaptureReceiptModel(
+            attempted=outcome.capture.attempted,
+            status=outcome.capture.status,
+            fetched_artifact_count=outcome.capture.fetched_artifact_count,
+            detail=outcome.capture.detail,
+        ),
         warnings=outcome.warnings,
     )
     return ReturnDistributionResponse.from_engine_result(

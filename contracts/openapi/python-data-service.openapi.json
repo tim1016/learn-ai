@@ -6747,6 +6747,41 @@
         "title": "CanaryRollbackDecision",
         "type": "object"
       },
+      "CaptureReceiptModel": {
+        "description": "What the on-demand lake capture did for this request.",
+        "properties": {
+          "attempted": {
+            "title": "Attempted",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "fetched_artifact_count": {
+            "title": "Fetched Artifact Count",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempted",
+          "status",
+          "fetched_artifact_count"
+        ],
+        "title": "CaptureReceiptModel",
+        "type": "object"
+      },
       "ChannelHealth": {
         "additionalProperties": false,
         "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.\n\n``connected`` and ``healthy`` are deliberately separate facts. A channel\ncan be connected but not yet usable \u2014 a market-data subscription that\nhas not produced its first closed bar is warming up, not down. Submission\ngates require ``healthy``; account-level surfaces that must not be\nrefused by one symbol's warm-up read ``connected`` (#1777, finding S6).\n``healthy`` implies ``connected``.",
@@ -30107,6 +30142,16 @@
           "bin_width_pct": {
             "title": "Bin Width Pct",
             "type": "number"
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureReceiptModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "from_date": {
             "title": "From Date",

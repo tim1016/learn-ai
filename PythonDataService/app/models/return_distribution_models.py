@@ -100,6 +100,15 @@ class DayReturnsModel(BaseModel):
     volume: int
 
 
+class CaptureReceiptModel(BaseModel):
+    """What the on-demand lake capture did for this request."""
+
+    attempted: bool
+    status: str
+    fetched_artifact_count: int
+    detail: str | None = None
+
+
 class ReturnDistributionMeta(BaseModel):
     symbol: str
     from_date: str
@@ -108,6 +117,7 @@ class ReturnDistributionMeta(BaseModel):
     bin_width_pct: float
     span_pct: float
     adjustment: Literal["split_and_dividend", "raw"]
+    capture: CaptureReceiptModel | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

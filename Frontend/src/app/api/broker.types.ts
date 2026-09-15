@@ -9641,6 +9641,20 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * CaptureReceiptModel
+         * @description What the on-demand lake capture did for this request.
+         */
+        CaptureReceiptModel: {
+            /** Attempted */
+            attempted: boolean;
+            /** Detail */
+            detail?: string | null;
+            /** Fetched Artifact Count */
+            fetched_artifact_count: number;
+            /** Status */
+            status: string;
+        };
+        /**
          * ChannelHealth
          * @description One submission-affecting stream's health fact, with its age (P7).
          *
@@ -19962,6 +19976,7 @@ export interface components {
             adjustment: "split_and_dividend" | "raw";
             /** Bin Width Pct */
             bin_width_pct: number;
+            capture?: components["schemas"]["CaptureReceiptModel"] | null;
             /** From Date */
             from_date: string;
             /**
