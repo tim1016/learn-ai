@@ -1632,7 +1632,15 @@ class FleetControlService:
         idempotency and target identity, and the provider's own receipt
         reference. Every field here is nonsecret by ``records.py``'s
         contract; ``worker_key`` never appears.
+
+        A supplied ``clerk_id`` is validated against the registry and raises
+        :class:`ClerkNotFound` when unknown (#2133 P2-c): an unscoped-looking
+        empty result for a mistyped or stale id is indistinguishable from a
+        real clerk with no routing history. Omitting ``clerk_id`` entirely
+        keeps the unscoped, every-lane read working exactly as before.
         """
+        if clerk_id is not None:
+            self._require_clerk(clerk_id)
         now = self._clock()
         fetched = self._store.list_routing_receipts(
             clerk_id=clerk_id,

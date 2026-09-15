@@ -38,7 +38,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
+from app.broker.fleet.errors import (
+    ClerkNotFound,
+    DataPlaneControlSecretRefused,
+    FleetControlPlaneNotInstalled,
+)
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
@@ -494,6 +498,57 @@ def test_service_clerk_id_excludes_another_lanes_receipts(
     assert {entry["clerk_id"] for entry in scoped["receipts"]} == {mine.clerk_id}
 
 
+# ---- service: an unknown clerk_id refuses; an omitted one still reads all --
+
+
+def test_service_unknown_clerk_id_raises_clerk_not_found(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """A ``clerk_id`` naming no clerk refuses loudly instead of returning an
+    empty 200 that reads identically to "this real clerk has no history".
+
+    Well-formed but never provisioned, so this exercises the registry lookup
+    itself rather than the identity-format guard.
+    """
+    with pytest.raises(ClerkNotFound):
+        fleet_service.list_routing_receipts(
+            since_ms=0, clerk_id="clrk_ffffffffffffffffffffffff"
+        )
+
+
+def test_service_known_clerk_id_still_returns_its_receipts(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """The twin of the refusal above: a real, provisioned clerk_id must keep
+    working, or a service that refuses every clerk_id would pass the refusal
+    test above vacuously."""
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="known", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-known")
+    settled = _open_and_settle(fleet_service, lane, key="known-1")
+
+    result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+
+    assert [entry["correlation_id"] for entry in result["receipts"]] == [settled.correlation_id]
+
+
+def test_service_omitted_clerk_id_still_reads_every_lane(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
+) -> None:
+    """Unscoped reads (``clerk_id`` omitted entirely) must keep working: the
+    new validation must never fire on ``None``."""
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="unscoped-ok", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-unscoped-ok")
+    settled = _open_and_settle(fleet_service, lane, key="unscoped-ok-1")
+
+    result = fleet_service.list_routing_receipts(since_ms=0)
+
+    assert settled.correlation_id in {entry["correlation_id"] for entry in result["receipts"]}
+
+
 def test_service_limit_returns_the_newest_receipts_not_the_oldest(
     control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
 ) -> None:
@@ -891,3 +946,52 @@ async def test_http_before_ms_without_before_correlation_id_is_refused(
         )
 
     assert response.status_code == 422
+
+
+# ---- HTTP: an unknown clerk_id refuses 404; a known one still works --------
+
+
+@pytest.mark.asyncio
+async def test_http_unknown_clerk_id_refuses_404_not_an_empty_200(
+    control_dir: Path, fleet_service: FleetControlService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            ROUTE,
+            params={"since_ms": 0, "clerk_id": "clrk_ffffffffffffffffffffffff"},
+            headers={CONTROL_SECRET_HEADER: _TEST_SECRET},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["reason"] == ClerkNotFound.reason
+
+
+@pytest.mark.asyncio
+async def test_http_known_clerk_id_still_returns_200_with_its_receipts(
+    control_dir: Path, fleet_service: FleetControlService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The twin of the 404 above, over HTTP: a real clerk_id must keep
+    reaching 200, or a route that refuses every clerk_id would pass the
+    refusal test above vacuously."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="http-known", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-http-known")
+    settled = _open_and_settle(fleet_service, lane, key="http-known-1")
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            ROUTE,
+            params={"since_ms": 0, "clerk_id": lane.clerk_id},
+            headers={CONTROL_SECRET_HEADER: _TEST_SECRET},
+        )
+
+    assert response.status_code == 200
+    assert [r["correlation_id"] for r in response.json()["receipts"]] == [settled.correlation_id]
