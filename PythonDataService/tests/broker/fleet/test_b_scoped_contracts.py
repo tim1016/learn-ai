@@ -783,10 +783,14 @@ async def test_the_composed_auth_policy_honors_both_caller_families(
 async def test_a_clerk_agent_refuses_an_unpinned_mutation_in_code() -> None:
     """Topology is the second layer, not the only one (#2075).
 
-    ``combined`` is proven byte-for-byte unchanged by
-    ``test_the_composed_auth_policy_honors_both_caller_families`` above,
-    which builds its agent with the default ``refuse_unpinned_mutations=False``
-    and is untouched by this change. This test is the ``clerk_agent`` half.
+    This is the ``clerk_agent`` half. The ``combined`` half — that the real
+    ``app.main.app`` wiring still serves an unpinned mutation at 200 — is
+    proven by ``test_combined_role_still_serves_an_unpinned_mutation_at_200``
+    below, which drives a request through the real app built under
+    ``FLEET_ROLE=combined``. (``test_the_composed_auth_policy_honors_both_
+    caller_families`` above only builds this file's isolated
+    ``_build_agent_app()`` fixture and never touches ``app.main.app``, so it
+    cannot see a regression in the ``main.py`` wiring line.)
     """
     from app.broker.fleet.errors import BrokerAndClerkRequired
     from app.config import fleet_settings, settings
@@ -836,6 +840,73 @@ async def test_a_clerk_agent_refuses_an_unpinned_mutation_in_code() -> None:
         settings.DATA_PLANE_CONTROL_SECRET = original_secret
         fleet_settings.COORDINATOR_SERVICE_TOKEN = original_token
         server.stop()
+
+
+def test_combined_role_still_serves_an_unpinned_mutation_at_200() -> None:
+    """`combined` IS the browser's data plane; #2075's fence must not reach it.
+
+    Unlike the tests above, which build an isolated ``FastAPI()`` through
+    this file's own ``_build_agent_app()``, this drives an actual unpinned
+    POST through the real ``app.main.app`` — built fresh in a subprocess
+    under ``FLEET_ROLE=combined``, the same shape as
+    ``test_identity_middleware_role_scope.py`` (which imports the same
+    module but only inspects installed middleware *class names* and so
+    cannot see a regression in the ``refuse_unpinned_mutations=`` wiring at
+    ``main.py``'s ``if _ROLE_RUNS_CLERK:`` block: a mutation-proof of that
+    wiring going blanket-refuse left all of ``tests/broker/fleet`` green and
+    only reddened unrelated router suites).
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+
+    service_root = Path(__file__).resolve().parents[3]
+    inherited = [
+        entry
+        for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if entry and Path(entry).resolve() != service_root / "tests"
+    ]
+    environment = {
+        **os.environ,
+        "FLEET_ROLE": "combined",
+        "PYTHONPATH": os.pathsep.join([str(service_root), *inherited]),
+    }
+    probe = """
+import asyncio
+import json
+import sys
+
+sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]
+
+import httpx
+from app.main import app
+
+
+@app.post('/__unpinned_mutation_probe__')
+async def _probe():
+    return {'ok': True}
+
+
+async def _run():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.post('/__unpinned_mutation_probe__')
+        print(json.dumps({'status_code': response.status_code}))
+
+
+asyncio.run(_run())
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=environment,
+        cwd=service_root,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    result = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert result["status_code"] == 200
 
 
 async def test_combined_local_delivery_routes_in_process() -> None:

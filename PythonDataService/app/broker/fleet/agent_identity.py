@@ -24,9 +24,6 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from starlette.datastructures import Headers
-
-from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import BrokerAndClerkRequired, FleetControlError
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 
@@ -256,17 +253,14 @@ class FleetIdentityMiddleware:
             # Browser-direct traffic carries no pinned identity; the echo is
             # the forwarded lane's contract, not the public API's. On a lane
             # agent, though, an unpinned *mutation* has no legitimate caller:
-            # the coordinator always pins both x-fleet-clerk-id and
-            # x-fleet-broker on its own forwards (lane_forward_is_authorized
-            # requires the pair), so a request reaching this branch is never
-            # a proven coordinator dispatch. Refusing here makes the
-            # composed-auth claim code, not a property of a gitignored
-            # compose overlay (#2075).
-            if (
-                self._refuse_unpinned_mutations
-                and str(scope.get("method", "GET")).upper() in _MUTATING_METHODS
-                and not lane_forward_is_authorized(Headers(scope=scope))
-            ):
+            # the coordinator's own forwards always pin x-fleet-clerk-id (see
+            # lane_forward_is_authorized in delivery.py, which requires it),
+            # so no exemption check is needed here — every request reaching
+            # this branch is, by construction, not a coordinator dispatch.
+            # Refusing unconditionally makes the composed-auth claim code,
+            # not a property of a gitignored compose overlay (#2075).
+            method = str(scope.get("method", "GET")).upper()
+            if self._refuse_unpinned_mutations and method in _MUTATING_METHODS:
                 await _send_refusal(send, _unpinned_mutation_refusal())
                 return
             await self.app(scope, receive, send)
