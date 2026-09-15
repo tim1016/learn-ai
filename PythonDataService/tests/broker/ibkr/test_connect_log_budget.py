@@ -62,7 +62,16 @@ async def test_a_shape_change_reports_its_discarded_suppressed_count_on_the_wire
     """The client's ``ibkr_connect_failed`` WARNING for a shape-change
     report carries ``suppressed_attempts`` so the count CONNECT_LOG_BUDGET
     discards on the reset (#2113) actually reaches the log, not just the
-    budget's own field."""
+    budget's own field.
+
+    Asserts on the *formatted* record, not the in-memory LogRecord's
+    ``extra`` attributes: production logging (``logging.basicConfig(...,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")`` in
+    ``app/main.py``) drops ``extra`` — only ``%(message)s`` reaches
+    ``live.log``. An assertion against ``record.__dict__["suppressed_attempts"]``
+    would stay green even if the count were absent from the message string,
+    which is exactly the gap this test exists to close.
+    """
     settings = IbkrSettings(mode="paper", port=4002, connect_attempts=1, _env_file=None)
     fake_ib = MagicMock()
     fake_ib.connectAsync = AsyncMock(
@@ -86,8 +95,14 @@ async def test_a_shape_change_reports_its_discarded_suppressed_count_on_the_wire
 
     failures = [r for r in caplog.records if r.__dict__.get("action") == "ibkr_connect_failed"]
     assert len(failures) == 2
-    assert failures[0].__dict__["suppressed_attempts"] == 0
-    assert failures[1].__dict__["suppressed_attempts"] == 2
+
+    # Production format string, verbatim (app/main.py:111). ``extra`` keys
+    # like ``suppressed_attempts`` are not named in it, so this only passes
+    # if the count is folded into the message itself.
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    formatted = [formatter.format(record) for record in failures]
+    assert "0 suppressed attempts discarded" in formatted[0]
+    assert "2 suppressed attempts discarded" in formatted[1]
 
 
 def test_the_suppressed_count_is_reported_when_the_window_elapses() -> None:

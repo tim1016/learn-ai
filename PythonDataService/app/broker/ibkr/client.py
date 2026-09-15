@@ -52,6 +52,17 @@ logger = logging.getLogger(__name__)
 # different log levels depending on CONNECT_LOG_BUDGET's verdict (#2080).
 _CONNECT_ATTEMPT_FAILED_MSG = "IBKR connect attempt %d failed: %s"
 
+# report_first's WARNING only, folding CONNECT_LOG_BUDGET.suppressed_attempts
+# into the message string in addition to ``extra`` — ``extra`` is dropped by
+# the production formatter (``logging.basicConfig(..., format="%(asctime)s -
+# %(name)s - %(levelname)s - %(message)s")`` in app/main.py), so without this
+# an operator reading raw live.log never sees how many attempts a shape
+# change discarded (#2113 follow-up). Mirrors the TWS-code precedent in
+# ``_on_ib_error`` above: fold into the message, don't rely on ``extra``.
+_CONNECT_ATTEMPT_FAILED_WITH_SUPPRESSED_MSG = (
+    "IBKR connect attempt %d failed (%d suppressed attempts discarded): %s"
+)
+
 # Conservative headroom below IBKR's default 50 requests/second connection
 # pace. Pin the ib_async transport explicitly so a dependency-default change
 # cannot silently turn startup fan-out into broker error 100/disconnect risk.
@@ -459,8 +470,9 @@ class IbkrClient:
                 verdict = CONNECT_LOG_BUDGET.note_failure(exc)
                 if verdict == "report_first":
                     logger.warning(
-                        _CONNECT_ATTEMPT_FAILED_MSG,
+                        _CONNECT_ATTEMPT_FAILED_WITH_SUPPRESSED_MSG,
                         attempt,
+                        CONNECT_LOG_BUDGET.suppressed_attempts,
                         exc,
                         extra={
                             "action": "ibkr_connect_failed",

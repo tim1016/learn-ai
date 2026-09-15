@@ -73,8 +73,12 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     # changed the running override to 2/1 (round-2 Codex review on #2116)
     # without updating this assertion. The env files transcribe what
     # actually runs, not the original plan — assert the running values.
-    assert "IBKR_CLIENT_ID=2" in paper_env
-    assert "IBKR_CLIENT_ID=1" in live_env
+    # Exact whole-line match, not a substring: "IBKR_CLIENT_ID=2" also
+    # matches "IBKR_CLIENT_ID=20", so a later drift to a two-digit client
+    # id would satisfy a substring check while silently changing the
+    # running value this test claims to pin.
+    assert "IBKR_CLIENT_ID=2" in paper_env.splitlines()
+    assert "IBKR_CLIENT_ID=1" in live_env.splitlines()
     assert "ALPACA_MARKET_STATUS_UPSTREAM_URL" not in compose
     assert "${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z" in compose
     assert "./PythonDataService/cache:/app/cache:z" in compose
