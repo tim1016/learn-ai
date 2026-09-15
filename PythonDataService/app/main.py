@@ -575,10 +575,7 @@ async def _service_lifespan(
                 bound=alpaca_binding, runtime=alpaca_clerk_runtime,
             )
             if fleet_lane is not None and fleet_lane.online:
-                from app.broker.alpaca.clerk.fleet_boot import (
-                    confirm_binding,
-                    start_heartbeat,
-                )
+                from app.broker.alpaca.clerk.fleet_boot import confirm_and_heartbeat
                 from app.broker_configuration.runtime import (
                     get_broker_configuration_service,
                 )
@@ -602,46 +599,16 @@ async def _service_lifespan(
                 _install_fleet_served_identity(app, _fleet_served_identity)
 
                 selection_row = get_broker_configuration_service().selection()
-                if (
-                    alpaca_binding.context.account_pin
-                    and selection_row.effective_binding_generation >= 1
-                ):
-                    await confirm_binding(
-                        fleet_lane,
-                        external_account_id=alpaca_binding.context.account_pin,
-                        binding_generation=selection_row.effective_binding_generation,
-                        effective_profile_id=selection_row.effective_profile_id,
-                        effective_revision=selection_row.effective_revision,
-                    )
-                    runtime_for_facts = alpaca_clerk_runtime
-
-                    def _fleet_heartbeat_facts() -> dict[str, object]:
-                        mode = (
-                            "paper"
-                            if alpaca_settings.is_paper
-                            else "live"
-                        )
-                        authority_state = {
-                            "sqlite": "real_paper" if alpaca_settings.is_paper else "real_live",
-                            "shadow": "shadow",
-                            "synthetic": "synthetic",
-                            "unavailable": "unavailable",
-                        }.get(runtime_for_facts.authority_kind, "unavailable")
-                        return {
-                            "reported_binding_generation": selection_row.effective_binding_generation,
-                            "reported_account_id": alpaca_binding.context.account_pin,
-                            "reported_state": "binding_confirmed",
-                            "reported_summary": {
-                                "endpoint_mode": mode,
-                                "authority_state": authority_state,
-                            },
-                        }
-
-                    fleet_heartbeat_task = start_heartbeat(
-                        fleet_lane,
-                        interval_s=fleet_settings.HEARTBEAT_INTERVAL_S,
-                        facts=_fleet_heartbeat_facts,
-                    )
+                fleet_heartbeat_task = await confirm_and_heartbeat(
+                    fleet_lane,
+                    account_pin=alpaca_binding.context.account_pin,
+                    effective_binding_generation=selection_row.effective_binding_generation,
+                    effective_profile_id=selection_row.effective_profile_id,
+                    effective_revision=selection_row.effective_revision,
+                    authority_kind=alpaca_clerk_runtime.authority_kind,
+                    is_paper=alpaca_settings.is_paper,
+                    interval_s=fleet_settings.HEARTBEAT_INTERVAL_S,
+                )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()
                 set_market_liveness_consumer(alpaca_market_liveness)

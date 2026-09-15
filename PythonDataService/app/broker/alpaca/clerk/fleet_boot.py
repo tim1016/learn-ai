@@ -17,6 +17,13 @@ of the authority's own semantics:
    durable confirmation evidence.
 4. ``start_heartbeat`` — observations only; they never confirm anything.
 
+``confirm_and_heartbeat`` is steps 3 and 4 as one decision, because they are
+not the same decision: *confirming* belongs to a bound lane, but *beating*
+belongs to every online lane. Gating both on the binding (as main.py once
+did) deadlocked an unbound lane — it registered, reserved, then went silent,
+so the coordinator projected it ``unreachable`` and refused the
+``configuration_access`` reads that were the only way to bind it.
+
 With the coordinator unreachable mid-boot, the offline rule is FR-066: only
 a recovered binding that exactly matches the confirmation evidence boots
 (last-effective recovery); a first assignment or a changed binding waits for
@@ -59,6 +66,18 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 _ADAPTER = AlpacaProviderAdapter()
+
+# The authority kinds that map to a lane summary's ``authority_state``
+# regardless of endpoint mode. ``sqlite`` is the one kind whose state the
+# mode decides (real_paper vs. real_live), so it is resolved separately in
+# ``heartbeat_facts``. ``unavailable`` is listed even though it equals the
+# fallback: the desk shows "the authority failed to open" as a stated fact,
+# not as the residue of an unrecognised kind.
+_AUTHORITY_STATE_BY_KIND: Mapping[str, str] = {
+    "shadow": "shadow",
+    "synthetic": "synthetic",
+    "unavailable": "unavailable",
+}
 
 
 class FleetBootRefused(FleetControlError):
@@ -403,6 +422,108 @@ def start_heartbeat(
     return asyncio.create_task(_beat(), name=f"fleet-heartbeat-{boot.clerk_id}")
 
 
+def binding_is_confirmed(
+    *, account_pin: str | None, effective_binding_generation: int
+) -> bool:
+    """Whether this boot has a binding worth confirming to the coordinator.
+
+    Generation 0 is "no grant has been applied yet", not "generation zero" —
+    a lane whose selection never reached ``selection/apply`` carries a pin
+    the operator typed and nothing the registry ever granted. The one place
+    this question is answered: callers ask here rather than restating the
+    two halves and drifting apart.
+    """
+    return bool(account_pin) and effective_binding_generation >= 1
+
+
+def heartbeat_facts(
+    *,
+    account_pin: str | None,
+    effective_binding_generation: int,
+    authority_kind: str,
+    is_paper: bool,
+) -> Mapping[str, object]:
+    """What this lane reports on every beat, given its binding state.
+
+    Both shapes carry the same bounded typed summary
+    (``ProviderSummaryObservation``): endpoint mode and authority state, and
+    nothing else. That is not a style choice — a summary the coordinator
+    cannot parse is refused as an identity mismatch, and ``start_heartbeat``
+    answers a refusal by registering a fresh session, so one free-form key
+    here would climb the routing epoch on every beat instead of failing once
+    and visibly.
+
+    An unbound lane reports ``binding_pending`` with no generation: it is
+    saying "I am here, I am not bound", which projects ``starting`` rather
+    than ``unreachable``, and keeps the configuration surface reachable. It
+    still reports its pin and authority state — that is how the desk shows
+    *why* the lane is unbound rather than merely that it is.
+    """
+    mode = "paper" if is_paper else "live"
+    if authority_kind == "sqlite":
+        authority_state = "real_paper" if is_paper else "real_live"
+    else:
+        authority_state = _AUTHORITY_STATE_BY_KIND.get(authority_kind, "unavailable")
+    summary = {"endpoint_mode": mode, "authority_state": authority_state}
+    if binding_is_confirmed(
+        account_pin=account_pin, effective_binding_generation=effective_binding_generation
+    ):
+        return {
+            "reported_binding_generation": effective_binding_generation,
+            "reported_account_id": account_pin,
+            "reported_state": "binding_confirmed",
+            "reported_summary": summary,
+        }
+    return {
+        "reported_binding_generation": None,
+        "reported_account_id": account_pin,
+        "reported_state": "binding_pending",
+        "reported_summary": summary,
+    }
+
+
+async def confirm_and_heartbeat(
+    boot: FleetLaneBoot,
+    *,
+    account_pin: str | None,
+    effective_binding_generation: int,
+    effective_profile_id: str | None,
+    effective_revision: int | None,
+    authority_kind: str,
+    is_paper: bool,
+    interval_s: float,
+) -> asyncio.Task:
+    """Confirm the binding if there is one, then beat either way.
+
+    The heartbeat is unconditional because presence is not a privilege of
+    being bound: an online lane that stops observing is an unreachable lane,
+    and an unreachable lane cannot be reached to *become* bound. Only the
+    reported facts differ by binding state.
+
+    The facts are read once, at boot, and closed over: this process's binding
+    cannot change without a restart, and re-deriving them per beat would only
+    add a way for them to drift from what was actually confirmed.
+    """
+    if binding_is_confirmed(
+        account_pin=account_pin, effective_binding_generation=effective_binding_generation
+    ):
+        # `binding_is_confirmed` has already established the pin is present.
+        await confirm_binding(
+            boot,
+            external_account_id=account_pin,
+            binding_generation=effective_binding_generation,
+            effective_profile_id=effective_profile_id,
+            effective_revision=effective_revision,
+        )
+    facts = heartbeat_facts(
+        account_pin=account_pin,
+        effective_binding_generation=effective_binding_generation,
+        authority_kind=authority_kind,
+        is_paper=is_paper,
+    )
+    return start_heartbeat(boot, interval_s=interval_s, facts=lambda: facts)
+
+
 async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
     """Release the boot's transport and any owned service."""
     if boot is None:
@@ -468,9 +589,12 @@ def _verify_root_against_expectation(
 __all__ = [
     "FleetBootRefused",
     "FleetLaneBoot",
+    "binding_is_confirmed",
     "close_fleet_lane",
+    "confirm_and_heartbeat",
     "confirm_binding",
     "confirmation_evidence_path",
+    "heartbeat_facts",
     "offline_boot_matches",
     "open_fleet_lane",
     "reserve_account",

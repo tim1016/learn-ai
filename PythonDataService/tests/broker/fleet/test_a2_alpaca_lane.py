@@ -13,7 +13,9 @@ real subprocesses.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import functools
 import json
 import socket
 import threading
@@ -44,12 +46,22 @@ from app.broker.fleet.delivery import (
     HttpLaneDelivery,
     verify_identity_echo,
 )
+from app.broker.fleet.errors import ClerkUnreachable
 from app.broker.fleet.provider import (
     FLEET_PROTOCOL_VERSION,
+    OperationReadiness,
     validate_operation_catalog,
 )
-from app.broker.fleet.records import AssignmentState
-from app.broker.fleet.service import FleetControlService
+from app.broker.fleet.records import (
+    AssignmentState,
+    ClerkSessionRecord,
+    ProviderSummaryObservation,
+    SummaryEndpointMode,
+)
+from app.broker.fleet.service import (
+    DEFAULT_SESSION_STALE_AFTER_MS,
+    FleetControlService,
+)
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
 from app.config import FleetSettings
@@ -341,6 +353,60 @@ def _fence_satisfying_roots(monkeypatch: pytest.MonkeyPatch, volume_root: Path) 
     )
 
 
+def _boot_service_on_the_test_clock(monkeypatch: pytest.MonkeyPatch, clock: FrozenClock) -> None:
+    """Give the lane's own ``LocalPresence`` service the test's frozen clock.
+
+    ``open_fleet_lane`` builds its *own* ``FleetControlService`` over the same
+    control directory, and that one defaults to wall time — so a lane booted
+    here stamps ``last_seen_at_ms`` from a different clock than the one the
+    assertions read staleness against, and no amount of ``clock.advance``
+    could ever make its session look stale (or its heartbeat look landed).
+    Only a test that shares one clock across both handles can tell "the beat
+    arrived" from "the session was never stale to begin with".
+    """
+    from app.broker.alpaca.clerk import fleet_boot
+
+    monkeypatch.setattr(
+        fleet_boot, "FleetControlService", functools.partial(FleetControlService, clock=clock)
+    )
+
+
+def _directory_entry(service: FleetControlService, clerk_id: str) -> dict[str, object]:
+    """The one public directory row this clerk projects."""
+    return next(
+        entry for entry in service.directory()["clerks"] if entry["clerk_id"] == clerk_id
+    )
+
+
+async def _await_beat_at(
+    service: FleetControlService,
+    clerk_id: str,
+    clock: FrozenClock,
+    *,
+    deadline_s: float = 5.0,
+) -> ClerkSessionRecord:
+    """Wait for an observation stamped at the current frozen instant.
+
+    The deadline is 50x the 0.05 s interval these tests run the heartbeat at:
+    a test that asserts on real asyncio scheduling flakes under a loaded box,
+    so the poll is generous and the failure says what was actually seen
+    rather than timing out somewhere further along.
+    """
+    loop = asyncio.get_running_loop()
+    give_up_at = loop.time() + deadline_s
+    while True:
+        session = service._store.read_session(clerk_id)
+        if session is not None and session.last_seen_at_ms == clock():
+            return session
+        if loop.time() >= give_up_at:
+            raise AssertionError(
+                f"no heartbeat landed for {clerk_id} within {deadline_s}s: "
+                f"last_seen_at_ms={None if session is None else session.last_seen_at_ms}, "
+                f"clock={clock()}"
+            )
+        await asyncio.sleep(0.01)
+
+
 def _enrolled_lane(service: FleetControlService, tmp_path: Path, clock: FrozenClock):
     """Provision one enrolled alpaca lane; returns (record, marker, root)."""
     volume_root = tmp_path / "volumes" / "paper"
@@ -407,6 +473,336 @@ async def test_the_agent_boot_sequence_reserves_before_confirming(
         assert evidence.binding_generation == 1
         assert evidence.agent_instance_id == boot.session.agent_instance_id
     finally:
+        service.close()
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat facts, and the boot sequencing that starts them
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_facts_for_a_confirmed_paper_lane_are_byte_identical_to_the_pre_fix_closure() -> (
+    None
+):
+    """A confirmed lane's observation did not change shape when it moved.
+
+    The desk reads these four keys and the summary's two, so lifting the
+    facts out of main.py's closure is only safe if the confirmed case comes
+    out identical — this is the byte-for-byte pin on that.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    assert heartbeat_facts(
+        account_pin="ABC",
+        effective_binding_generation=3,
+        authority_kind="sqlite",
+        is_paper=True,
+    ) == {
+        "reported_binding_generation": 3,
+        "reported_account_id": "ABC",
+        "reported_state": "binding_confirmed",
+        "reported_summary": {"endpoint_mode": "paper", "authority_state": "real_paper"},
+    }
+
+
+def test_heartbeat_facts_for_a_confirmed_live_shadow_lane_report_live_and_shadow() -> None:
+    """The two axes are independent: the mode is the endpoint, not the authority."""
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    assert heartbeat_facts(
+        account_pin="U1234567",
+        effective_binding_generation=2,
+        authority_kind="shadow",
+        is_paper=False,
+    ) == {
+        "reported_binding_generation": 2,
+        "reported_account_id": "U1234567",
+        "reported_state": "binding_confirmed",
+        "reported_summary": {"endpoint_mode": "live", "authority_state": "shadow"},
+    }
+
+
+def test_heartbeat_facts_for_an_unconfirmed_lane_report_pending_with_a_summary_that_parses() -> (
+    None
+):
+    """The epoch-churn pin: an unbound lane's summary must survive the parser.
+
+    ``observe_session`` raises ``ClerkIdentityMismatch`` on anything that is
+    not the bounded typed observation, and ``start_heartbeat``'s loop answers
+    every refusal by registering a *fresh* session — so a free-form summary
+    here would not merely fail, it would climb the routing epoch on every
+    beat, forever. Parsing the reported summary back is the assertion; "it
+    did not raise" would pass on a summary the coordinator never sees.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    facts = heartbeat_facts(
+        account_pin="ABC",
+        effective_binding_generation=0,
+        authority_kind="unavailable",
+        is_paper=True,
+    )
+
+    assert facts == {
+        "reported_binding_generation": None,
+        "reported_account_id": "ABC",
+        "reported_state": "binding_pending",
+        "reported_summary": {"endpoint_mode": "paper", "authority_state": "unavailable"},
+    }
+    observation = ProviderSummaryObservation.parse(facts["reported_summary"])
+    assert observation is not None
+    assert observation.endpoint_mode == SummaryEndpointMode.PAPER
+    assert observation.authority_state == "unavailable"
+
+
+def test_heartbeat_facts_without_an_account_pin_still_carry_a_parsable_summary() -> None:
+    """A lane that never reached a pin reports none — not a placeholder."""
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    facts = heartbeat_facts(
+        account_pin=None,
+        effective_binding_generation=0,
+        authority_kind="synthetic",
+        is_paper=True,
+    )
+
+    assert facts == {
+        "reported_binding_generation": None,
+        "reported_account_id": None,
+        "reported_state": "binding_pending",
+        "reported_summary": {"endpoint_mode": "paper", "authority_state": "synthetic"},
+    }
+    observation = ProviderSummaryObservation.parse(facts["reported_summary"])
+    assert observation is not None
+    assert observation.authority_state == "synthetic"
+
+
+def test_heartbeat_facts_map_an_unknown_authority_kind_to_unavailable() -> None:
+    """An authority vocabulary this lane does not know reads as unavailable."""
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    facts = heartbeat_facts(
+        account_pin="ABC",
+        effective_binding_generation=1,
+        authority_kind="weird",
+        is_paper=False,
+    )
+
+    assert facts["reported_summary"] == {
+        "endpoint_mode": "live",
+        "authority_state": "unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    ("account_pin", "effective_binding_generation", "confirmed"),
+    [
+        (None, 1, False),
+        ("", 1, False),
+        ("pin", 0, False),
+        ("pin", 1, True),
+        ("pin", 7, True),
+    ],
+)
+def test_binding_is_confirmed_needs_both_a_pin_and_a_grant(
+    account_pin: str | None, effective_binding_generation: int, confirmed: bool
+) -> None:
+    """The one predicate: generation 0 is "no grant yet", not "generation zero"."""
+    from app.broker.alpaca.clerk.fleet_boot import binding_is_confirmed
+
+    assert (
+        binding_is_confirmed(
+            account_pin=account_pin,
+            effective_binding_generation=effective_binding_generation,
+        )
+        is confirmed
+    )
+
+
+async def test_a_reserved_only_lane_heartbeats_and_stays_configuration_routable(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The paper-lane deadlock, closed at its clerk-side cause.
+
+    An unbound lane used to register, reserve, and then go quiet: the
+    coordinator projected it ``unreachable`` and refused even
+    ``configuration_access`` — the one surface that could have bound it. The
+    lane now beats from boot with ``binding_pending`` facts, so the operator
+    can reach the configuration read, while execution routing stays closed
+    because a heartbeat still confirms nothing (admission probe 1).
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_heartbeat,
+        open_fleet_lane,
+        reserve_account,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    heartbeat = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        epoch_at_registration = boot.session.routing_epoch
+        await reserve_account(
+            boot, external_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+
+        # The pre-fix shape, reproduced: no beat since registration, so the
+        # session is stale and the configuration surface the lane needs is
+        # exactly the one it cannot reach.
+        clock.advance(DEFAULT_SESSION_STALE_AFTER_MS + 1)
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "unreachable"
+        with pytest.raises(ClerkUnreachable, match="older than"):
+            service.resolve_route(
+                broker="alpaca",
+                clerk_id=boot.clerk_id,
+                readiness=OperationReadiness.CONFIGURATION_ACCESS,
+            )
+
+        heartbeat = await confirm_and_heartbeat(
+            boot,
+            account_pin="abcdef01-1234-abcd-5678-ef0123456789",
+            effective_binding_generation=0,
+            effective_profile_id=None,
+            effective_revision=None,
+            authority_kind="unavailable",
+            is_paper=True,
+            interval_s=0.05,
+        )
+        session = await _await_beat_at(service, boot.clerk_id, clock)
+
+        assert session.reported_state == "binding_pending"
+        assert session.reported_binding_generation is None
+        entry = _directory_entry(service, boot.clerk_id)
+        assert entry["lifecycle_state"] == "starting"
+        assert entry["effective_binding_generation"] is None
+        _clerk, routed, assignment = service.resolve_route(
+            broker="alpaca",
+            clerk_id=boot.clerk_id,
+            readiness=OperationReadiness.CONFIGURATION_ACCESS,
+        )
+        assert assignment is None
+        assert routed.routing_epoch == epoch_at_registration
+        with pytest.raises(ClerkUnreachable, match="no effective account assignment"):
+            service.resolve_route(broker="alpaca", clerk_id=boot.clerk_id)
+        assert read_confirmation_evidence(root) is None
+
+        # Three further beats land on the SAME session: a summary the
+        # coordinator refused would have re-registered the lane once per
+        # beat and climbed the routing epoch with it.
+        for _ in range(3):
+            clock.advance(1)
+            await _await_beat_at(service, boot.clerk_id, clock)
+        settled = service._store.read_session(boot.clerk_id)
+        assert settled.routing_epoch == epoch_at_registration
+        assert boot.session.routing_epoch == epoch_at_registration
+        assert settled.reported_state == "binding_pending"
+    finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_confirmed_lane_still_confirms_at_boot_and_heartbeats_binding_confirmed(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound lane's boot is unchanged: confirm first, then observe.
+
+    Same entry point as the unbound lane — the binding state, not the caller,
+    decides whether a confirmation happens before the first beat.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_heartbeat,
+        open_fleet_lane,
+        reserve_account,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    heartbeat = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        epoch_at_registration = boot.session.routing_epoch
+        await reserve_account(
+            boot, external_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+        # Move off the registration instant so a landed beat is distinguishable
+        # from the stamp `register` already wrote.
+        clock.advance(1)
+
+        heartbeat = await confirm_and_heartbeat(
+            boot,
+            account_pin="abcdef01-1234-abcd-5678-ef0123456789",
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            is_paper=True,
+            interval_s=0.05,
+        )
+
+        stored = service._store.read_assignment(
+            broker="alpaca", canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789"
+        )
+        assert stored is not None
+        assert stored.state == AssignmentState.EFFECTIVE
+        assert stored.confirmed_binding_generation == 1
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None
+        assert evidence.binding_generation == 1
+
+        session = await _await_beat_at(service, boot.clerk_id, clock)
+        assert session.reported_state == "binding_confirmed"
+        assert session.reported_binding_generation == 1
+        assert session.routing_epoch == epoch_at_registration
+        entry = _directory_entry(service, boot.clerk_id)
+        assert entry["lifecycle_state"] == "ready"
+        assert entry["effective_binding_generation"] == 1
+    finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+        await close_fleet_lane(boot)
         service.close()
 
 
