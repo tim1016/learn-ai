@@ -53,7 +53,13 @@ from app.routers import broker_clerks
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.error_handlers import install_fleet_control_error_handler
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from tests.broker.fleet.conftest import FakeProviderAdapter, FrozenClock, bind_lane, provision_lane
+from tests.broker.fleet.conftest import (
+    FakeProviderAdapter,
+    FrozenClock,
+    Lane,
+    bind_lane,
+    provision_lane,
+)
 
 ROUTE = "/api/broker-clerks/audit/routing-receipts"
 _TEST_SECRET = "test-audit-secret"
@@ -76,7 +82,7 @@ def _coordinator_app(fleet_service: FleetControlService | None) -> FastAPI:
 
 def _open_and_settle(
     fleet_service: FleetControlService,
-    lane,
+    lane: Lane,
     *,
     key: str,
     target: str = "strategy/sid-audit",
