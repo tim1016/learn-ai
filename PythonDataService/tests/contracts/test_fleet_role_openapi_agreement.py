@@ -58,6 +58,19 @@ from typing import Any
 
 import pytest
 
+#: Each role's document costs a real ``app.main`` import in its own
+#: subprocess, which is the whole point (see the probe below) and also makes
+#: this module too expensive for the pull-request gate. CI's Python shards
+#: already measure 95-120s against a hard 120-second budget
+#: (``.github/workflows/ci.yml``), so the two imports here are enough to
+#: push a shard over it -- they did, on the first push of #2108. A local
+#: measurement does not settle this: the developer machine ran the whole
+#: fast gate in 63s where CI needs most of its 120s for the same work.
+#: ``run_fast_tests`` selects ``-m "not slow"``, and the scheduled
+#: ``daily-tests.yml`` run applies no marker filter, so the coverage is kept
+#: rather than dropped (``.claude/rules/testing.md``).
+pytestmark = pytest.mark.slow
+
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = SERVICE_ROOT.parent
 COMMITTED_CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "openapi" / "python-data-service.openapi.json"
