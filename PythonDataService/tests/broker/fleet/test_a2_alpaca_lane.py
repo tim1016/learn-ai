@@ -780,7 +780,7 @@ def _route_paths_for_role(role: str) -> set[str]:
     probe = (
         "import sys; sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]; "
         "import json; from app.main import app; "
-        "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
+        "sys.stdout.write(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})) + '\\n')"
     )
     # The child's cwd must be the service root: `python -c` puts the cwd at
     # sys.path[0], and a tests/ cwd would shadow the stdlib `operator` module
@@ -867,7 +867,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         probe = (
             "import sys; sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]; "
             "import json; from app.main import app; "
-            "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
+            "sys.stdout.write(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})) + '\\n')"
         )
         completed = subprocess.run(
             [sys.executable, "-c", probe],
