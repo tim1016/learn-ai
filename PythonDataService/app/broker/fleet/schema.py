@@ -27,6 +27,14 @@ Schema v3 (#2073b) puts DDL behind the one structural-isolation invariant that
 had none: a partial UNIQUE index on ``(deployment_namespace, volume_root)`` and
 a BEFORE INSERT trigger doing exact prefix comparison, so "one clerk, one
 physical volume" survives a race the service's pre-check cannot see.
+
+Schema v4 (#2133 P2-a) adds the two indexes the routing-receipt audit read
+surface needs and never had: ``routing_receipts`` had no secondary index
+serving either its global or clerk-scoped newest-first read, so every audit
+request scanned and sorted the whole append-only table while holding the
+store's shared connection lock through ``fetchall()``. Both new indexes are
+purely additive (``CREATE INDEX``, no table rewrite), so the upgrade is
+non-destructive and safe to run against a live registry.
 """
 
 from __future__ import annotations
@@ -35,7 +43,7 @@ import sqlite3
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Every ``*_ms`` column carries this bound in the schema, so a corrupt or
 #: hostile write cannot persist a negative or out-of-range instant as fleet
@@ -234,6 +242,16 @@ CREATE TABLE routing_receipts (
 -- updates the same receipt instead of appending a sibling.
 CREATE UNIQUE INDEX ux_routing_receipts_idempotency
     ON routing_receipts(broker, clerk_id, idempotency_key);
+
+-- The audit read surface's two newest-first access paths (#2133 P2-a): global
+-- and clerk-scoped. Both match the audit query's ORDER BY exactly, tiebreak
+-- column included, so SQLite can walk the index backwards for the query's
+-- descending order instead of scanning the whole append-only table and
+-- sorting it under the store's shared connection lock.
+CREATE INDEX ix_routing_receipts_created_at
+    ON routing_receipts(created_at_ms, correlation_id);
+CREATE INDEX ix_routing_receipts_clerk_created_at
+    ON routing_receipts(clerk_id, created_at_ms, correlation_id);
 
 -- ============================================================
 -- The invariants that are the schema's job, not a caller's
@@ -761,12 +779,25 @@ BEGIN
 END""",
 )
 
+# The v3→v4 upgrade (#2133 P2-a): the audit read surface's two newest-first
+# indexes. Byte-identical to the fresh v4 DDL above, so a migrated registry
+# and a fresh one carry the same ``sqlite_master`` entries. Both statements
+# are additive ``CREATE INDEX``, never a table rewrite, so the upgrade cannot
+# lose or reshape a row.
+_MIGRATION_V3_TO_V4: tuple[str, ...] = (
+    """CREATE INDEX ix_routing_receipts_created_at
+    ON routing_receipts(created_at_ms, correlation_id)""",
+    """CREATE INDEX ix_routing_receipts_clerk_created_at
+    ON routing_receipts(clerk_id, created_at_ms, correlation_id)""",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: tuple(
         statement.replace("MAX_TIMESTAMP_MS", str(MAX_TIMESTAMP_MS))
         for statement in _MIGRATION_V1_TO_V2_TEMPLATE
     ),
     2: _MIGRATION_V2_TO_V3,
+    3: _MIGRATION_V3_TO_V4,
 }
 
 

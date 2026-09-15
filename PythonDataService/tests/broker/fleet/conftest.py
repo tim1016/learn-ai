@@ -316,15 +316,20 @@ def bind_lane(
 def downgrade_backup_to_v2(backup_dir: Path) -> None:
     """Rewrite a fresh backup into the v2 shape it carried before the upgrade.
 
-    Schema v3 adds exactly the nested-root index and trigger, so dropping the
-    pair and restamping the meta row produces genuine pre-upgrade evidence —
-    what a D-compatible rollback is for — without reconstructing the v2 DDL.
+    A fresh backup carries every object the *current* ``schema.SCHEMA_VERSION``
+    adds, not just v3's — so producing genuine pre-upgrade evidence means
+    dropping v3's nested-root index and trigger *and* v4's audit indexes
+    (#2133 P2-a), whatever the current version has grown to. Restamping the
+    meta row is what a D-compatible rollback is for, without reconstructing
+    the v2 DDL by hand.
     """
     database = backup_dir / BACKUP_DATABASE_FILENAME
     connection = sqlite3.connect(database)
     try:
         connection.execute("DROP TRIGGER trg_clerks_volume_root_not_nested")
         connection.execute("DROP INDEX ux_clerks_volume_root")
+        connection.execute("DROP INDEX ix_routing_receipts_created_at")
+        connection.execute("DROP INDEX ix_routing_receipts_clerk_created_at")
         connection.execute(
             "UPDATE fleet_meta SET schema_version = ? WHERE id = 1",
             (D_COMPATIBLE_SCHEMA_VERSION,),
