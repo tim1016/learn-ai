@@ -84,6 +84,7 @@ function state(overrides: Partial<AlpacaDeskState> = {}): AlpacaDeskState {
     choices: [effective],
     profiles_requiring_setup: 0,
     setup_required_message: null,
+    restart_command: null,
     ...overrides,
   };
 }

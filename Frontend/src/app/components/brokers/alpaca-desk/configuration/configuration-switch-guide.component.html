@@ -25,15 +25,19 @@
       <div>
         <strong>Restart the worker</strong>
         <p>Refreshing or reopening the browser does not apply the change.</p>
-        <div class="switch-guide__command">
-          <code>{{ restartCommand }}</code>
-          <app-copy-button
-            variant="button"
-            [text]="restartCommand"
-            label="Copy command"
-            copiedLabel="Command copied"
-            ariaLabel="Copy worker restart command" />
-        </div>
+        @if (restartCommand(); as command) {
+          <div class="switch-guide__command">
+            <code>{{ command }}</code>
+            <app-copy-button
+              variant="button"
+              [text]="command"
+              label="Copy command"
+              copiedLabel="Command copied"
+              ariaLabel="Copy worker restart command" />
+          </div>
+        } @else if (restartCommand() === null) {
+          <p class="switch-guide__command-unknown">{{ noWorkerServiceDeclared }}</p>
+        }
       </div>
     </li>
     <li>

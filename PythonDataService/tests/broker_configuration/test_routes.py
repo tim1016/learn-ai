@@ -30,6 +30,7 @@ from tests.broker_configuration.conftest import (
     TEST_CREDENTIAL_SLOTS,
     FakeAccountVerifier,
     FrozenClock,
+    restart_target,
     slot_directory_for_tests,
 )
 
@@ -37,12 +38,18 @@ PAPER_BODY = {"credential_slot": "alpaca_paper_primary", "endpoint_mode": "paper
 
 
 @pytest.fixture
-async def client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[AsyncClient]:
+async def client(
+    clerk_dir: Path, clock: FrozenClock, request: pytest.FixtureRequest
+) -> AsyncIterator[AsyncClient]:
+    """A client over a service whose deployment declares no worker service. A
+    test that cares parametrises this fixture indirectly with the
+    ``restart_target`` its deployment declares."""
     from app.main import app
 
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=getattr(request, "param", None),
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(
@@ -139,7 +146,52 @@ async def test_desk_state_reports_no_active_account_through_one_read_model(
         "empty_choices_message": "No account configurations are saved yet. Set one up to continue.",
         "profiles_requiring_setup": 0,
         "setup_required_message": None,
+        "restart_command": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("client", "expected"),
+    [
+        (
+            restart_target("alpaca-paper-clerk"),
+            "podman compose restart alpaca-paper-clerk",
+        ),
+        (
+            restart_target(
+                "alpaca-paper-clerk",
+                compose_project="learn-ai-fleet",
+                compose_files=("compose.yaml", "compose.fleet.yaml"),
+                compose_profile="fleet",
+            ),
+            "podman compose --project-name learn-ai-fleet -f compose.yaml "
+            "-f compose.fleet.yaml --profile fleet restart alpaca-paper-clerk",
+        ),
+    ],
+    ids=["compose-defaults-resolve-the-lane", "the-lane-has-its-own-compose-context"],
+    indirect=["client"],
+)
+async def test_desk_state_authors_the_restart_command_from_the_declared_worker_service(
+    client: AsyncClient, expected: str
+) -> None:
+    """The lane's own compose context, not the fleet coordinator's and not the
+    host's defaults. Nothing the desk holds maps a lane to a service, so the
+    deployment declares it once, into the service, and the route carries the
+    authored command out unchanged — however much of that context was
+    declared."""
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["restart_command"] == expected
+
+
+async def test_desk_state_reports_no_restart_command_when_no_worker_service_is_declared(
+    client: AsyncClient,
+) -> None:
+    response = await client.get(f"{PREFIX}/desk-state")
+
+    assert response.status_code == 200
+    assert response.json()["restart_command"] is None
 
 
 async def test_desk_state_returns_verified_choices_without_configuration_secrets(
@@ -338,6 +390,7 @@ async def refusing_client(clerk_dir: Path, clock: FrozenClock) -> AsyncIterator[
     built = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
         credential_slots=slot_directory_for_tests(),
         account_verifier=_RefusingVerifier(),

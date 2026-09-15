@@ -153,6 +153,12 @@ services:
       - LEAN_LAUNCHER_URL=${LEAN_LAUNCHER_URL:-http://host.containers.internal:8090}
       - HOST=0.0.0.0
       - PORT=8000
+      # This file's combined posture: one process is both coordinator and
+      # clerk worker, so the worker service the desk tells an operator to
+      # restart after Apply is this very service. The fleet overlay splits the
+      # roles and each lane names itself instead (compose.fleet.yaml), with
+      # this value fenced back off on the coordinator-only role.
+      - FLEET_WORKER_SERVICE=python-service
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
       - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
       - BACKEND_URL=http://backend:8080

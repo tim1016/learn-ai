@@ -251,6 +251,10 @@ class AlpacaDeskState:
     empty_choices_message: str | None
     profiles_requiring_setup: int
     setup_required_message: str | None
+    # The command that restarts *this* worker, authored from the compose
+    # service name the deployment declares about itself. ``None`` when nothing
+    # was declared — the desk then says so rather than guessing a service.
+    restart_command: str | None
 
 
 __all__ = [

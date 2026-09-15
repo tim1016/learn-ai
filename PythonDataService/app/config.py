@@ -1,10 +1,35 @@
 """Application configuration loaded from environment variables"""
 
+import re
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Compose's own service-name shape: lowercase alphanumerics plus `_`, `.` and
+# `-`, starting with an alphanumeric. Anything else is a deployment mistake,
+# not a service this repo could restart.
+_COMPOSE_SERVICE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+# Compose's project- and profile-name shape — the service shape without `.`,
+# which Compose does not accept in either.
+_COMPOSE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# A compose file this repo commits at its own root: a bare lowercase file name
+# ending `.yaml`/`.yml`. No separators and no `..`, so a declaration can name
+# nothing outside the repo root and can smuggle no second word into the command
+# the operator runs.
+_COMPOSE_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.ya?ml$")
+
+
+def _split_compose_files(value: str) -> tuple[str, ...]:
+    """One comma-separated compose-file declaration as the list it names.
+
+    The single split rule: the validator below checks these entries and
+    ``FleetSettings.get_compose_files`` returns them, so "what did the
+    deployment name" has one answer.
+    """
+    return tuple(entry.strip() for entry in value.split(",") if entry.strip())
 
 
 class FleetSettings(BaseSettings):
@@ -71,6 +96,84 @@ class FleetSettings(BaseSettings):
     # queue and deadline. A zero queue limit refuses immediately.
     REQUEST_QUEUE_LIMIT: int = 0
     REQUEST_QUEUE_TIMEOUT_MS: int = 0
+    # The compose service name of THIS worker process, declared by the
+    # deployment beside the service it names. Its only use is authoring the
+    # operator's restart command on the Alpaca desk: nothing the desk holds
+    # maps a lane to a compose service, and the coordinator's service name
+    # restarts the wrong process. Never an endpoint, never a credential, and
+    # never projected into the public fleet directory (ADR 0062 §3).
+    WORKER_SERVICE: str | None = None
+    # The rest of the compose context that same deployment runs the worker in,
+    # so the authored command resolves where the worker actually lives: the
+    # project (`--project-name`), the ordered compose files (`-f`, comma
+    # separated, each a bare file name at the repo root) and the profile
+    # (`--profile`). Undeclared means "the host's compose defaults already
+    # resolve this" — the combined posture in compose.yaml declares none of
+    # them and keeps the bare `podman compose restart <service>`. Each value is
+    # pasted verbatim into a command an operator runs, which is the whole
+    # reason each is bounded to a shape below. Never a directory path, never an
+    # endpoint, never a credential.
+    COMPOSE_PROJECT: str | None = None
+    # Raw as declared; `get_compose_files()` is the split. Comma-separated text
+    # is not JSON, and pydantic-settings decodes a complex-typed field from the
+    # environment before any validator runs — so a `tuple[str, ...]` field here
+    # could not read `FLEET_COMPOSE_FILES` at all. Same shape as the
+    # comma-separated settings below (ALLOWED_ORIGINS, TRUSTED_HOSTS).
+    COMPOSE_FILES: str = ""
+    COMPOSE_PROFILE: str | None = None
+
+    @field_validator("WORKER_SERVICE")
+    @classmethod
+    def _validate_worker_service(cls, value: str | None) -> str | None:
+        """Fail at boot on a declaration no compose service could answer to.
+
+        The value is pasted verbatim into a command an operator runs, so a
+        malformed declaration must stop the process rather than reach a copy
+        button. An empty value is Compose writing an unset ``${VAR}`` through
+        — that is "undeclared", not a service named "".
+        """
+        if value is None or value == "":
+            return None
+        if not _COMPOSE_SERVICE_NAME.fullmatch(value):
+            raise ValueError(
+                f"FLEET_WORKER_SERVICE={value!r} is not a compose service name "
+                "(lowercase alphanumerics, '_', '.' and '-', starting alphanumeric)."
+            )
+        return value
+
+    @field_validator("COMPOSE_PROJECT", "COMPOSE_PROFILE")
+    @classmethod
+    def _validate_compose_token(cls, value: str | None, info: ValidationInfo) -> str | None:
+        """Same boot-time refusal as the worker service, for the same reason.
+
+        An empty value collapses to "undeclared" identically: Compose writes an
+        unset ``${VAR}`` through as ``""``, and a ``--project-name ''`` in the
+        copied command is worse than no flag at all.
+        """
+        if value is None or value == "":
+            return None
+        if not _COMPOSE_TOKEN.fullmatch(value):
+            raise ValueError(
+                f"FLEET_{info.field_name}={value!r} is not a compose project or profile name "
+                "(lowercase alphanumerics, '_' and '-', starting alphanumeric)."
+            )
+        return value
+
+    @field_validator("COMPOSE_FILES")
+    @classmethod
+    def _validate_compose_files(cls, value: str) -> str:
+        """Refuse at boot any entry that is not a repo-root compose file."""
+        for entry in _split_compose_files(value):
+            if not _COMPOSE_FILE_NAME.fullmatch(entry):
+                raise ValueError(
+                    f"FLEET_COMPOSE_FILES names {entry!r}, which is not a compose file at the "
+                    "repository root (lowercase '*.yaml'/'*.yml', no directory separators)."
+                )
+        return value
+
+    def get_compose_files(self) -> tuple[str, ...]:
+        """The declared `-f` files, in the order Compose must resolve them."""
+        return _split_compose_files(self.COMPOSE_FILES)
 
 
 class Settings(BaseSettings):

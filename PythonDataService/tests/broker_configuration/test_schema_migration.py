@@ -25,6 +25,7 @@ def _service_on(clerk_dir: Path, clock: FrozenClock) -> BrokerConfigurationServi
     return BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
     )
 

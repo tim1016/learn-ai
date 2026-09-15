@@ -92,6 +92,11 @@
   font-size: var(--fs-xs);
 }
 
+.switch-guide__command-unknown {
+  border-left: 3px solid var(--warn);
+  padding-left: var(--space-2);
+}
+
 .switch-guide__directions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));

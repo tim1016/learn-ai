@@ -265,6 +265,7 @@ class AlpacaDeskStateResponse(_Response):
     empty_choices_message: str | None
     profiles_requiring_setup: int = Field(ge=0)
     setup_required_message: str | None
+    restart_command: str | None
 
     @classmethod
     def from_record(cls, state: AlpacaDeskState) -> AlpacaDeskStateResponse:
@@ -295,6 +296,7 @@ class AlpacaDeskStateResponse(_Response):
             empty_choices_message=state.empty_choices_message,
             profiles_requiring_setup=state.profiles_requiring_setup,
             setup_required_message=state.setup_required_message,
+            restart_command=state.restart_command,
         )
 
 

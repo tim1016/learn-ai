@@ -16,42 +16,14 @@ the running coordinator actually needs so a fresh clone can populate them.
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import subprocess
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-RENDER_SCRIPT = ROOT / "scripts" / "render_fleet_topology.py"
-
-
-def _tracked_compose_files() -> list[str]:
-    """Every compose file this repo commits — discovered, not hand-listed.
-
-    A hardcoded tuple silently stops covering the next overlay someone adds
-    (`compose.fleet.qualification.yaml` was missed exactly this way, despite
-    this test's own docstring promising every committed compose file). This
-    is the same failure shape `restart.sh`'s comments warn about for its own
-    hardcoded container-name list.
-    """
-    result = subprocess.run(
-        ["git", "ls-files", "compose*.yaml", "compose*.yml"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    )
-    return sorted(result.stdout.split())
-
-
-def _render_module() -> object:
-    """Load scripts/render_fleet_topology.py directly (same dynamic-import
-    pattern as test_documentation_contract.py's `_checker_module()`), so its
-    Compose-tag-tolerant YAML loader has exactly one implementation."""
-    spec = importlib.util.spec_from_file_location("render_fleet_topology", RENDER_SCRIPT)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("render_fleet_topology could not be loaded")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
+from tests.contracts.compose_files import (
+    ROOT,
+    environment_as_key_value,
+    render_module,
+    tracked_compose_files,
+)
 
 SECRET_KEYS = frozenset(
     {
@@ -113,13 +85,6 @@ def _is_hardcoded_literal(value: str) -> bool:
     return "${" not in value
 
 
-def _environment_as_key_value(environment: object) -> dict[str, str]:
-    if isinstance(environment, list):
-        pairs = (entry.split("=", 1) for entry in environment)
-        return {key: (value[0] if value else "") for key, *value in pairs}
-    return {str(key): "" if value is None else str(value) for key, value in (environment or {}).items()}
-
-
 def _example_keys(name: str) -> set[str]:
     text = (ROOT / "deploy/fleet/env" / name).read_text(encoding="utf-8")
     return {
@@ -161,7 +126,7 @@ def test_discovery_finds_every_committed_compose_overlay() -> None:
     """The discovery mechanism itself must cover the file that was previously
     missed — a hardcoded tuple silently omitted it despite this test's own
     docstring promising every committed compose file."""
-    tracked = _tracked_compose_files()
+    tracked = tracked_compose_files()
     assert {"compose.yaml", "compose.fleet.yaml", "compose.fleet.dev.yaml",
             "compose.fleet.qualification.yaml"} <= set(tracked)
 
@@ -169,13 +134,13 @@ def test_discovery_finds_every_committed_compose_overlay() -> None:
 def test_no_committed_compose_file_carries_a_fleet_secret_literal() -> None:
     """Every secret-bearing key is env_file-only or a `${VAR}` passthrough —
     never a hardcoded literal that would shadow `env_file:` for the same key."""
-    render_module = _render_module()
-    tracked = _tracked_compose_files()
+    renderer = render_module()
+    tracked = tracked_compose_files()
     assert tracked, "no tracked compose*.yaml files found — git ls-files may be misconfigured"
     for name in tracked:
-        document = render_module.load_compose_document(ROOT / name)
+        document = renderer.load_compose_document(ROOT / name)
         for service, spec in (document.get("services") or {}).items():
-            environment = _environment_as_key_value(spec.get("environment") or {})
+            environment = environment_as_key_value(spec.get("environment") or {})
             leaked = [
                 key for key in SECRET_KEYS & set(environment) if _is_hardcoded_literal(environment[key])
             ]

@@ -2011,6 +2011,7 @@ def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0)
     service = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=root),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=lambda: 1_757_000_000_000,
         credential_slots=slot_directory_for_tests(),
         account_verifier=FakeAccountVerifier(),

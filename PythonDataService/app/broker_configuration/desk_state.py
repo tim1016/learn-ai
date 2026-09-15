@@ -13,6 +13,7 @@ and can consume a pending Apply.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from app.broker_configuration.records import (
     AccountNickname,
@@ -41,6 +42,51 @@ _RESTART_CONSEQUENCE = (
     "Restarting applies this exact profile revision. It does not arm live trading or "
     "retarget any existing strategy."
 )
+
+
+@dataclass(frozen=True)
+class WorkerRestartTarget:
+    """The compose context a deployment declares for the worker it runs.
+
+    ``service`` is the indispensable fact; the other three are what the host's
+    Compose defaults do *not* already resolve. A production fleet runs its own
+    project behind a profile from an explicit file set, and the dev overlay has
+    to be named with ``-f`` because Compose auto-loads the override file and
+    not it — so the desk cannot author one bare form and be right everywhere.
+    Undeclared parts stay out of the command entirely.
+    """
+
+    service: str
+    compose_project: str | None
+    compose_files: tuple[str, ...]
+    compose_profile: str | None
+
+
+def worker_restart_command(target: WorkerRestartTarget | None) -> str | None:
+    """The restart command for the worker this process is, or ``None``.
+
+    The deployment declares its own compose context; the desk never infers
+    one. In the fleet posture each lane is its own service, so the
+    coordinator's name would restart a process that applies no lane's staged
+    profile — and in the deployed compose files ``container_name`` equals the
+    service key, so this is also the form the runbook's ``podman restart
+    <lane>`` resolves to.
+
+    Compose reads its global options before the subcommand, and resolves ``-f``
+    files in the order given, so the order below is the command's order and not
+    a style choice.
+    """
+    if target is None:
+        return None
+    words = ["podman", "compose"]
+    if target.compose_project is not None:
+        words += ["--project-name", target.compose_project]
+    for compose_file in target.compose_files:
+        words += ["-f", compose_file]
+    if target.compose_profile is not None:
+        words += ["--profile", target.compose_profile]
+    words += ["restart", target.service]
+    return " ".join(words)
 
 
 def _same_selection(
@@ -214,6 +260,7 @@ def project_desk_state(
     effective_revision: ProfileRevision | None,
     nicknames: Sequence[AccountNickname],
     has_archived_profiles: bool,
+    worker_restart: WorkerRestartTarget | None,
 ) -> AlpacaDeskState:
     """Build the desk read model without probing credentials or Alpaca."""
     profile_by_id = {profile.profile_id: profile for profile in profiles}
@@ -371,7 +418,8 @@ def project_desk_state(
         ),
         profiles_requiring_setup=profiles_requiring_setup,
         setup_required_message=_setup_message(profiles_requiring_setup),
+        restart_command=worker_restart_command(worker_restart),
     )
 
 
-__all__ = ["project_desk_state"]
+__all__ = ["WorkerRestartTarget", "project_desk_state", "worker_restart_command"]

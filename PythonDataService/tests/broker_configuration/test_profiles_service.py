@@ -205,11 +205,13 @@ def test_a_second_connection_holding_a_stale_revision_conflicts(
     first_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
     )
     second_tab = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
     )
     try:
@@ -338,6 +340,7 @@ async def test_pinning_an_account_of_the_wrong_mode_is_refused(
     mismatched = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
         account_verifier=FakeAccountVerifier(
             ObservedAccount(account_id="9LIVE0001", account_mode="live")
@@ -382,6 +385,7 @@ async def test_verification_refuses_when_no_verifier_is_installed(
     unwired = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,
+        worker_restart=None,
         clock=clock,
         account_verifier=UnconfiguredAccountVerifier(),
     )

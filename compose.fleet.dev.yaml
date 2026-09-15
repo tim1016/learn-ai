@@ -72,6 +72,10 @@ services:
       # No clerk volume is mounted on this role; neutralize the base path so a
       # future clerk-surface mount cannot silently reappear.
       ALPACA_CLERK_DIR: ""
+      # Same neutralization for the base file's combined-posture worker name:
+      # this role applies no lane's staged profile, so it must author no
+      # restart command. Each lane below declares its own service instead.
+      FLEET_WORKER_SERVICE: ""
       TRUSTED_HOSTS: localhost,127.0.0.1,test,testserver,python-service,backend,host.containers.internal,host.docker.internal
     # Per-clerk transport-token maps are secrets: env-file only, never inline.
     # `required: false` because deploy/fleet/env/coordinator.env does not
@@ -121,6 +125,15 @@ services:
       # deletion this file exists to make. `environment:` outranks `env_file:`
       # key-for-key, so a literal here would silently defeat the file above.
       FLEET_AGENT_ENDPOINT_REF: alpaca-live-agent
+      # This service's own key — never the shared anchor's, since each lane
+      # must name itself. The desk pastes it into the restart command.
+      FLEET_WORKER_SERVICE: alpaca-live-clerk
+      # Compose auto-loads compose.override.yaml, not this file (see the header
+      # above), so the restart command must name the same `-f` pair the header
+      # does or it resolves compose.yaml alone, where this lane does not exist.
+      # No project and no profile: this overlay deliberately stays in the
+      # default `learn-ai` project and puts its services behind no profile.
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
       # Distinct read-only market-data client ID per lane.
       IBKR_CLIENT_ID: ${FLEET_LIVE_IBKR_CLIENT_ID:-1}
       TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-live-clerk
@@ -138,6 +151,9 @@ services:
       <<: *alpaca-clerk-agent-env
       # Same deletion as the live lane above — env_file only.
       FLEET_AGENT_ENDPOINT_REF: alpaca-paper-agent
+      # Same per-lane self-naming and same `-f` pair as the live lane above.
+      FLEET_WORKER_SERVICE: alpaca-paper-clerk
+      FLEET_COMPOSE_FILES: compose.yaml,compose.fleet.dev.yaml
       IBKR_CLIENT_ID: ${FLEET_PAPER_IBKR_CLIENT_ID:-2}
       TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk
 
