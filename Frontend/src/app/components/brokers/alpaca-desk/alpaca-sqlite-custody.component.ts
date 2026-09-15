@@ -20,6 +20,12 @@ import {
   type SqliteTimelineQuery,
 } from '../../../services/brokers.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
+import {
+  fencedTarget,
+  laneFenceIsEnforceable,
+  LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  type LaneFence,
+} from '../../../fleet/lane-fence';
 import type {
   SqliteRecoveryAction,
   SqliteSafeFlattenPlan,
@@ -92,6 +98,10 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
 export class AlpacaSqliteCustodyComponent {
   readonly accountId = input.required<string>();
   readonly target = input.required<ResourceTarget>();
+  /** The binding-generation fence frozen at desk-render time (#2106) —
+   * combined with `target` only at the moment a command is minted
+   * (`newCommandTarget`), never used to re-derive `target` itself. */
+  readonly fence = input.required<LaneFence>();
   protected readonly operatorLensQuery = { lens: 'operator' } as const;
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
@@ -192,6 +202,7 @@ export class AlpacaSqliteCustodyComponent {
       this.actionNotice.set(action.next_step);
       return;
     }
+    if (this.refuseIfLaneUnenforceable()) return;
     if (action.confirmation !== null) {
       this.confirmationAction.set(action);
       this.confirmationTarget.set(this.newCommandTarget());
@@ -349,8 +360,19 @@ export class AlpacaSqliteCustodyComponent {
     this.projectionInvalidated.emit();
   }
 
+  /** See `LANE_FENCE_UNENFORCEABLE_MESSAGE`'s doc for why this check exists. */
+  private refuseIfLaneUnenforceable(): boolean {
+    if (laneFenceIsEnforceable(this.fence())) return false;
+    this.actionProblem.set({
+      reason: null,
+      message: LANE_FENCE_UNENFORCEABLE_MESSAGE,
+      remediation: null,
+    });
+    return true;
+  }
+
   private newCommandTarget(): ResourceTarget {
-    const target = this.target();
+    const target = fencedTarget(this.target(), this.fence());
     if (typeof globalThis.crypto?.randomUUID !== 'function') {
       throw new Error('This browser cannot create a durable request identity.');
     }

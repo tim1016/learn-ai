@@ -92,6 +92,9 @@ export class AlpacaDeskComponent {
 
   /** Null at `/brokers/alpaca`: that root is the directory only. */
   protected readonly contextTarget = this.accountData.target;
+  /** The frozen command fence order entry must mint against — never the live
+   * directory (#2106). See `AlpacaDeskAccountDataService.fence`. */
+  protected readonly contextFence = this.accountData.fence;
 
   private readonly configurationState = resource({
     params: () => this.contextTarget(),

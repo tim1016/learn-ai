@@ -15,6 +15,7 @@ import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 1, routingEpoch: 1 });
+const FENCE = { bindingGeneration: 1, routingEpoch: 1 };
 
 vi.mock('lightweight-charts', () => {
   const chart = {
@@ -215,7 +216,11 @@ async function renderLens(
       provideFleetDirectory(),
       {
         provide: AlpacaDeskAccountDataService,
-        useValue: { target: () => TARGET, account: { hasValue: () => true, value: () => account() } },
+        useValue: {
+          target: () => TARGET,
+          fence: () => FENCE,
+          account: { hasValue: () => true, value: () => account() },
+        },
       },
       { provide: BrokersService, useValue: { ...broker, ...clerk } },
     ],

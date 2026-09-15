@@ -305,4 +305,27 @@ describe('DeployPaperAccessComponent', () => {
     // The one word that must not survive onto a real-money account's form.
     expect(document.body.textContent).not.toMatch(/paper/i);
   });
+
+  /** #2106: `target` arrives frozen at drawer-open (`AlpacaDeployDrawerComponent`
+   * never re-derives it from a live directory read while the drawer stays
+   * open), but a cold directory AT open freezes a null generation, and
+   * `commandContextOf` sends no generation check at all for one. Refuse
+   * rather than dispatch blind. */
+  it('refuses to prepare a review when the lane had no known binding when the drawer opened', async () => {
+    const service = panelServiceMock();
+    const coldTarget = resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'paper-account-1', bindingGeneration: null, routingEpoch: null,
+    });
+    await render(DeployPaperAccessComponent, {
+      inputs: {
+        target: coldTarget, accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY, modeLabel: 'Paper',
+      },
+      providers: [provideFleetDirectory(), { provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+
+    expect(service.preparePaperAccess).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
 });

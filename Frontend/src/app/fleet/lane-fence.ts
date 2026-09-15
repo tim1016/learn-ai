@@ -54,7 +54,12 @@ export type LaneFenceVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
 
-/** The one sentence a surface shows when the lane was never fenceable. */
+/** The one sentence a surface shows when the lane was never fenceable.
+ *
+ * Every command-minting surface must check `laneFenceIsEnforceable` before
+ * minting (#2106): a cold directory at render/open time freezes a fence with
+ * a null generation, and `commandContextOf` sends no generation check at all
+ * for one — silently dispatching would be worse than refusing. */
 export const LANE_FENCE_UNENFORCEABLE_MESSAGE =
   'This clerk lane had no known binding when the action was opened, so the command ' +
   'was not sent — it would have dispatched with no binding check at all. Reopen the ' +

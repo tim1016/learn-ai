@@ -47,6 +47,10 @@ export class AlpacaOperatorLensComponent {
   protected readonly projectionRefreshVersion = this.data.projectionRefreshVersion;
   protected readonly custodyOpened = signal(false);
   protected readonly dataTarget = this.deskAccount.target;
+  /** The frozen command fence custody actions and the acknowledgement
+   * command must mint against — never the live directory (#2106). See
+   * `AlpacaDeskAccountDataService.fence`. */
+  protected readonly dataFence = this.deskAccount.fence;
 
   constructor() {
     effect(() => {

@@ -19,9 +19,11 @@ import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confir
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
+import type { LaneFence } from '../../../fleet/lane-fence';
 
 const NOW = 1_700_000_000_000;
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA1', bindingGeneration: 4, routingEpoch: 1 });
+const FENCE: LaneFence = { bindingGeneration: 4, routingEpoch: 1 };
 
 const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
   version_token: 'plan-token-17',
@@ -152,10 +154,10 @@ function deferred<T>() {
 
 async function renderCustody(
   service: Partial<BrokersService>,
-  inputs: { readonly timelineQuery?: SqliteTimelineQuery | null } = {},
+  inputs: { readonly timelineQuery?: SqliteTimelineQuery | null; readonly fence?: LaneFence } = {},
 ) {
   return render(AlpacaSqliteCustodyComponent, {
-    inputs: { accountId: 'PA1', target: TARGET, ...inputs },
+    inputs: { accountId: 'PA1', target: TARGET, fence: FENCE, ...inputs },
     providers: [
       provideFleetDirectory(),
       provideRouter([]),
@@ -492,6 +494,92 @@ describe('AlpacaSqliteCustodyComponent', () => {
       );
     });
     expect(await screen.findByText('order:entry:12')).toBeTruthy();
+  });
+
+  /** #2106: `target` arrives as an `input()` sourced from the live fleet
+   * directory. If the lane rebinds between when the operator opened the
+   * confirmation and when they confirm it, minting the command from
+   * `target()` at either point would silently carry the new (wrong)
+   * generation. The frozen `fence` input, not `target()`'s live generation,
+   * must decide what is sent. */
+  it('sends the generation shown when the action opened, not the one current at confirm', async () => {
+    const cancel = action({
+      action_id: 'cancel_verified_working_orders',
+      label: 'Cancel verified working orders',
+      explanation: 'Cancel only order:entry:12.',
+      freshness: 'fresh',
+      evidence: [{
+        reference: 'order:order:entry:12',
+        label: 'Verified working order',
+        observed_at_ms: NOW - 100,
+        age_ms: 100,
+        freshness: 'fresh',
+      }],
+      confirmation: {
+        title: 'Cancel verified orders?',
+        explanation: 'Only the listed order will be canceled.',
+        confirm_label: 'Cancel verified orders',
+      },
+    });
+    const receipt = {
+      action_id: cancel.action_id,
+      outcome: 'success',
+      applied: true,
+      receipt_id: 'order:entry:12',
+      recorded_at_ms: NOW + 20,
+      command: null,
+      reconciliation: null,
+      orders: [],
+    } satisfies SqliteRecoveryResult;
+    const executeSqliteRecoveryAction = vi.fn().mockResolvedValue(receipt);
+    const { fixture } = await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection([cancel])),
+      executeSqliteRecoveryAction,
+    });
+
+    await screen.findByRole('button', { name: cancel.label });
+    // The lane rebinds (a directory refresh) after the panel rendered but
+    // before the operator opens the confirmation. `target()` now reports the
+    // new generation; the fence frozen at render time, `fence`, does not
+    // move — the command minted when the confirmation opens must still carry
+    // the generation the operator was shown.
+    fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'PA1', bindingGeneration: 99, routingEpoch: 55,
+    }));
+    fixture.detectChanges();
+    fireEvent.click(await screen.findByRole('button', { name: cancel.label }));
+    const confirmation = fixture.debugElement.query(By.directive(TypedHaltConfirmComponent));
+    confirmation.componentInstance.confirmed.emit();
+
+    await waitFor(() => {
+      expect(executeSqliteRecoveryAction).toHaveBeenCalledWith(
+        expect.objectContaining({ bindingGeneration: 4, routingEpoch: 1 }), cancel,
+      );
+    });
+  });
+
+  /** #2106: a cold directory at render time freezes `fence` with a null
+   * generation; `commandContextOf` sends no generation check at all for one.
+   * Refuse rather than dispatch blind. */
+  it('refuses a mutating action when the lane had no known binding at render', async () => {
+    const cancel = action({
+      action_id: 'cancel_verified_working_orders',
+      label: 'Cancel verified working orders',
+      explanation: 'Cancel only order:entry:12.',
+      freshness: 'fresh',
+      evidence: [],
+      confirmation: null,
+    });
+    const executeSqliteRecoveryAction = vi.fn().mockResolvedValue({});
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection([cancel])),
+      executeSqliteRecoveryAction,
+    }, { fence: { bindingGeneration: null, routingEpoch: null } });
+
+    fireEvent.click(await screen.findByRole('button', { name: cancel.label }));
+
+    expect(executeSqliteRecoveryAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
   });
 
   it('refreshes and renders the safe-flatten plan without executing a mutation', async () => {

@@ -27,6 +27,12 @@ import {
   withCommand,
   withEntity,
 } from '../../../fleet/resource-target';
+import {
+  fencedTarget,
+  laneFenceIsEnforceable,
+  LANE_FENCE_UNENFORCEABLE_MESSAGE,
+  type LaneFence,
+} from '../../../fleet/lane-fence';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -62,6 +68,10 @@ import { AlpacaOrderPreviewComponent } from './alpaca-order-preview.component';
 export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
   readonly target = input.required<ResourceTarget>();
+  /** The binding-generation fence frozen at desk-render time (#2106) —
+   * combined with `target` only at the moment a command is minted
+   * (`newCommandTarget`), never used to re-derive `target` itself. */
+  readonly fence = input.required<LaneFence>();
 
   private requireClerkId(): string { return this.target().clerkId; }
   readonly initialSymbol = input('');
@@ -206,6 +216,7 @@ export class AlpacaOrderEntryComponent {
     this.submitError.set(null);
     const ticketId = this.manualTicketId();
     if (ticketId === null) return;
+    if (this.refuseIfLaneUnenforceable()) return;
     const target = this.newCommandTarget();
     this.previewTarget.set(target);
     this.submitting.set(true);
@@ -298,6 +309,7 @@ export class AlpacaOrderEntryComponent {
   protected async cancelManualTicket(): Promise<void> {
     const ticketId = this.cancelableManualTicketId();
     if (ticketId === null || this.cancelling()) return;
+    if (this.refuseIfLaneUnenforceable()) return;
     this.cancelling.set(true);
     this.submitError.set(null);
     try {
@@ -328,6 +340,7 @@ export class AlpacaOrderEntryComponent {
   protected async continueManualTicket(): Promise<void> {
     const ticket = this.manualTicket();
     if (ticket === null || !this.canContinueTicket() || this.submitting()) return;
+    if (this.refuseIfLaneUnenforceable()) return;
     this.submitting.set(true);
     this.submitError.set(null);
     try {
@@ -372,11 +385,21 @@ export class AlpacaOrderEntryComponent {
     return globalThis.crypto.randomUUID();
   }
 
+  /** See `LANE_FENCE_UNENFORCEABLE_MESSAGE`'s doc for why this check exists. */
+  private refuseIfLaneUnenforceable(): boolean {
+    if (laneFenceIsEnforceable(this.fence())) return false;
+    this.submitError.set(LANE_FENCE_UNENFORCEABLE_MESSAGE);
+    return true;
+  }
+
   private newCommandTarget(
     idempotencyKey = this.newStableRequestId(),
     entityId: string | null = null,
   ): ResourceTarget {
-    const target = withEntity(withAccount(this.target(), this.expectedAccountId()), entityId);
+    const target = withEntity(
+      withAccount(fencedTarget(this.target(), this.fence()), this.expectedAccountId()),
+      entityId,
+    );
     return withCommand(target, 'manual_orders', idempotencyKey);
   }
 
@@ -385,9 +408,17 @@ export class AlpacaOrderEntryComponent {
     return target.accountId;
   }
 
-  /** A preview is display state, so it cannot cross a route or binding change. */
+  /** A preview is display state, so it cannot cross a route or binding change.
+   * Compares against the current desk identity re-stamped with the CURRENT
+   * fence, not the raw `target()` (#2106): the fence is frozen at
+   * desk-render time, so a live directory rebind moves `target()`'s
+   * generation on its own without the operator having changed desks. That
+   * divergence is exactly what the frozen fence is for — it must not read as
+   * "the route changed" and discard an otherwise-current preview. Only an
+   * actual desk change (clerk/account) or a fence recompute (route change)
+   * counts as stale. */
   private matchesCurrentRouteTarget(target: ResourceTarget): boolean {
-    const current = this.target();
+    const current = fencedTarget(this.target(), this.fence());
     return current.broker === target.broker
       && current.clerkId === target.clerkId
       && current.accountId === target.accountId

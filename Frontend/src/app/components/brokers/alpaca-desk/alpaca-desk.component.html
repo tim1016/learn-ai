@@ -80,6 +80,7 @@
   >
     <app-alpaca-order-entry
       [target]="contextTarget()!"
+      [fence]="contextFence()"
       [initialSymbol]="orderPrefill()?.symbol ?? ''"
       [expectedAccountId]="ticketAccountId() ?? ''"
       [manualTicketId]="orderPrefill()?.ticketId ?? null"

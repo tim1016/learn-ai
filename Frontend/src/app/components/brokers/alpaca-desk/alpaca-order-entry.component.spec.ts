@@ -6,6 +6,7 @@ import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
+import type { LaneFence } from '../../../fleet/lane-fence';
 
 async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
   fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
@@ -62,6 +63,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
@@ -117,6 +119,132 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
   });
 
+  /** #2106: `target` arrives as an `input()` sourced from the live fleet
+   * directory. If the lane rebinds between when the order pad rendered and
+   * when the operator clicks Preview, a command minted straight from
+   * `target()` would silently carry the NEW (wrong) generation. The frozen
+   * `fence` input must be what decides the generation sent, not whatever
+   * `target()` reports at click time. */
+  it('sends the generation the pad was opened with, not the one current when Preview is clicked', async () => {
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
+      preview_token: 'a'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+    const submitSqliteManualOrder = vi.fn().mockResolvedValue({
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          sequence_index: 0,
+          instruction_hash: 'hash',
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', limit_price: null, time_in_force: 'day' },
+          state: 'IN_PROGRESS',
+          command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+          effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+          order: { order_ref: 'manual/operator/v1:abc', client_order_id: 'manual/operator/v1:abc', broker_order_id: 'broker', broker_state: 'accepted' },
+          cancellation: null,
+        },
+      ],
+    });
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        fence: FENCE,
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [
+        provideFleetDirectory(),
+        {
+          provide: BrokersService,
+          useValue: {
+            previewSqliteManualOrder,
+            submitSqliteManualOrder,
+            getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+          },
+        },
+      ],
+    });
+
+    await fillFirstLeg('spy', '2');
+    // The lane rebinds (a directory refresh) between render and the click.
+    // `target()` now reports the new generation; the fence frozen at render
+    // time, `fence`, does not move.
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'PA1', bindingGeneration: 99, routingEpoch: 55,
+    }));
+    view.fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    await vi.waitFor(() => expect(submitSqliteManualOrder).toHaveBeenCalledTimes(1));
+    expect(submitSqliteManualOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingGeneration: 7, routingEpoch: 4 }),
+      '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      expect.anything(),
+    );
+  });
+
+  /** #2106: a cold directory at render time freezes `fence` with a null
+   * generation; `commandContextOf` sends no generation check at all for one.
+   * Refuse rather than dispatch blind. */
+  it('refuses to preview when the lane had no known binding at render', async () => {
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
+      preview_token: 'a'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        fence: { bindingGeneration: null, routingEpoch: null },
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [
+        provideFleetDirectory(),
+        {
+          provide: BrokersService,
+          useValue: {
+            previewSqliteManualOrder,
+            getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+          },
+        },
+      ],
+    });
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+
+    expect(previewSqliteManualOrder).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
+
   it('lets a SQLite ticket preview a SELL reduction even when new exposure is unavailable', async () => {
     const previewSqliteManualOrder = vi.fn().mockResolvedValue({
       capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
@@ -129,6 +257,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
@@ -211,6 +340,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -281,6 +411,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -339,6 +470,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
@@ -400,6 +532,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: firstTicket.ticket_id,
         manualLegId: firstTicket.legs[0].leg_id,
@@ -438,6 +571,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: activeTicket.ticket_id,
       },
@@ -476,6 +610,7 @@ describe('AlpacaOrderEntryComponent', () => {
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: pausedTicket.ticket_id,
       },
@@ -513,6 +648,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       },
@@ -560,6 +696,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualCapability: {
@@ -609,6 +746,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
+        fence: FENCE,
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
         manualCapability: {
@@ -642,3 +780,4 @@ describe('AlpacaOrderEntryComponent', () => {
 const TARGET = resourceTarget('alpaca', 'clrk_spec', {
   accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,
 });
+const FENCE: LaneFence = { bindingGeneration: 7, routingEpoch: 4 };

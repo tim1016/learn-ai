@@ -14,6 +14,7 @@ import {
 } from './account-desk-transaction-history.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
+import type { LaneFence } from '../../../fleet/lane-fence';
 
 const TARGET = resourceTarget('alpaca', 'clerk-1', {
   accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,
@@ -21,6 +22,7 @@ const TARGET = resourceTarget('alpaca', 'clerk-1', {
 const NEXT_TARGET = resourceTarget('alpaca', 'clerk-2', {
   accountId: 'PA2', bindingGeneration: 3, routingEpoch: 5,
 });
+const FENCE: LaneFence = { bindingGeneration: 7, routingEpoch: 4 };
 
 if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -137,6 +139,123 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(load).toHaveBeenCalledWith('PA1');
   });
 
+  /** #2106: `target` arrives as an `input()` sourced from the live fleet
+   * directory. If the lane rebinds between when the row rendered and when
+   * the operator opens its receipt, minting the acknowledgement command from
+   * `target()` directly would silently carry the new (wrong) generation. The
+   * frozen `fence` input, not `target()`'s live generation, must decide what
+   * is sent. */
+  it('sends the generation shown at render, not the one current when the receipt is opened', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue(undefined);
+    const view = await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+
+    // The lane rebinds (a directory refresh) after the row rendered but
+    // before the operator opens its receipt. `target()` now reports the new
+    // generation; the fence frozen at render time, `fence`, does not move.
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clerk-1', {
+      accountId: 'PA1', bindingGeneration: 99, routingEpoch: 55,
+    }));
+    view.fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
+      target: { value: 'operator@example.test' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+
+    await vi.waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingGeneration: 7, routingEpoch: 4 }),
+      'alpaca-external-1',
+      'operator@example.test',
+    ));
+  });
+
+  /** #2106: a cold directory at render time freezes `fence` with a null
+   * generation; `commandContextOf` sends no generation check at all for one.
+   * Refuse rather than dispatch blind. */
+  it('refuses to open a receipt when the lane had no known binding at render', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue(undefined);
+    await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, { acknowledgeExternalOrder }, false, vi.fn(), { bindingGeneration: null, routingEpoch: null });
+
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+
+    expect(screen.queryByRole('button', { name: 'Acknowledge external order' })).toBeNull();
+    expect(acknowledgeExternalOrder).not.toHaveBeenCalled();
+    expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
+  });
+
+  /** #2106: `currentReceiptContext` (and the effect that resets an open
+   * receipt when it changes) is keyed off `target()`'s live generation. A
+   * lane rebind while a receipt is open would then read as "the desk
+   * changed" and silently close the receipt out from under the operator,
+   * even though the fenced identity backing the pending command has not
+   * moved. It must key off the frozen fence instead. */
+  it('keeps an open receipt through a lane rebind instead of silently closing it', async () => {
+    const view = await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), {
+      target: { value: 'operator@example.test' },
+    });
+
+    // The lane rebinds (a directory refresh) while the receipt stays open.
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clerk-1', {
+      accountId: 'PA1', bindingGeneration: 99, routingEpoch: 55,
+    }));
+    view.fixture.detectChanges();
+
+    expect((screen.getByRole('textbox', { name: 'Operator' }) as HTMLInputElement).value)
+      .toBe('operator@example.test');
+    expect(screen.getByRole('button', { name: 'Acknowledge external order' })).toBeTruthy();
+  });
+
   it('does not refresh a new lane when an old acknowledgement finishes late', async () => {
     let release = (): void => undefined;
     const pending = new Promise<void>((resolve) => {
@@ -238,6 +357,7 @@ async function renderHistory(
   brokerOverrides: Record<string, unknown> = {},
   showScopeControl = false,
   getPortfolioHistory = vi.fn(),
+  fence: LaneFence | null = FENCE,
 ) {
   const store = {
     accountId: signal('PA1'),
@@ -256,8 +376,8 @@ async function renderHistory(
   };
   return render(AccountDeskTransactionHistoryComponent, {
     inputs: showScopeControl
-      ? { accountId: 'PA1', target: TARGET, showScopeControl: true }
-      : { accountId: 'PA1', target: TARGET, showScopeControl: false, fromMs: 1, toMs: 2 },
+      ? { accountId: 'PA1', target: TARGET, fence, showScopeControl: true }
+      : { accountId: 'PA1', target: TARGET, fence, showScopeControl: false, fromMs: 1, toMs: 2 },
     providers: [
       provideFleetDirectory(),
       { provide: AccountDeskTransactionHistoryStore, useValue: store },
