@@ -259,6 +259,11 @@ jobs:
     defaults:
       run:
         working-directory: PythonDataService
+    env:
+      # The fleet operation catalog import chain reaches `app.config`, whose
+      # Settings require this at module import. Same placeholder the Alpaca
+      # SQLite qualification smoke job already uses.
+      POLYGON_API_KEY: test-key-for-testing
     steps:
       - uses: actions/checkout@v4
         with:
