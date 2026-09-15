@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from tests.contracts.test_fleet_env_example_completeness import (
     _environment_as_key_value,
     _render_module,
@@ -60,11 +62,35 @@ def _services(name: str) -> dict[str, dict[str, str]]:
 
 
 def _merged_environment(names: tuple[str, ...], service: str) -> dict[str, str]:
-    """Compose's own key-for-key `environment:` merge across several files."""
+    """MODELS Compose's key-for-key `environment:` merge across several
+    files — for plain, UNTAGGED maps only. `load_compose_document` parses
+    `!override`/`!reset` as ordinary data (see its own docstring), so this
+    model cannot see a tag and would silently misreport a merge that one
+    changes. `_environment_node_tag` below guards that blind spot directly
+    rather than leaving it implicit.
+    """
     merged: dict[str, str] = {}
     for name in names:
         merged.update(_services(name).get(service, {}))
     return merged
+
+
+_PLAIN_MAP_TAG = "tag:yaml.org,2002:map"
+
+
+def _environment_node_tag(name: str, service: str) -> str:
+    """The YAML tag on `services.<service>.environment` in one compose file,
+    read without construction so a Compose merge tag is visible.
+    `load_compose_document` (via `ComposeTagTolerantLoader`) constructs
+    `!override`/`!reset` nodes into plain dicts indistinguishable from an
+    untagged map — exactly the blind spot `_merged_environment` above
+    cannot see through.
+    """
+    root = yaml.compose((ROOT / name).read_text(encoding="utf-8"), Loader=yaml.SafeLoader)
+    services_node = next(value for key, value in root.value if key.value == "services")
+    service_node = next(value for key, value in services_node.value if key.value == service)
+    environment_node = next(value for key, value in service_node.value if key.value == "environment")
+    return environment_node.tag
 
 
 def test_a_declared_worker_service_always_names_its_own_service_key() -> None:
@@ -140,9 +166,21 @@ def test_the_fleet_coordinator_fences_off_the_base_files_worker_name() -> None:
 
 def test_the_qualification_overlay_inherits_each_lanes_declaration() -> None:
     """The overlay re-declares nothing; this proves the omission is safe by
-    checking the merge its harness actually runs, not the overlay alone."""
+    checking the merge `_merged_environment` MODELS for the harness that
+    actually runs it, not the overlay alone. That model only holds while the
+    overlay's own `environment:` nodes stay untagged — the overlay already
+    uses `!override` on `depends_on:`/`volumes:` for other services in this
+    same file (`fleet-coordinator`), so the second assertion below pins that
+    the lanes' `environment:` has not been given the same treatment; a future
+    `!override` there would silently invalidate the model above without it.
+    """
     for lane in ("alpaca-paper-clerk", "alpaca-live-clerk"):
         assert _merged_environment(QUALIFICATION_MERGE, lane)[DECLARATION_KEY] == lane
+        assert _environment_node_tag(QUALIFICATION_MERGE[1], lane) == _PLAIN_MAP_TAG, (
+            f"{QUALIFICATION_MERGE[1]}:{lane} tags its environment: node — "
+            "the key-for-key merge model above no longer reflects Compose's "
+            "actual merge for this service"
+        )
 
 
 def test_the_declaration_is_never_a_secret_or_an_endpoint() -> None:

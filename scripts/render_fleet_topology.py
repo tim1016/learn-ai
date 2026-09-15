@@ -58,7 +58,11 @@ _ENV_FILE_DEFAULTS = {
 # environment value. ALPACA_CLERK_DIR="" on the coordinator neutralizes the
 # base clerk path so no clerk surface can reappear there; this turns that
 # invariant from a comment into a checked, still secret-free fact.
-_FENCE_KEYS = ("ALPACA_CLERK_DIR",)
+# FLEET_WORKER_SERVICE="" on compose.fleet.dev.yaml's coordinator neutralizes
+# the base file's combined-worker name for the same reason (see that file's
+# own comment on the key) -- otherwise flipping the fence to a real value
+# renders an identical snapshot diff.
+_FENCE_KEYS = ("ALPACA_CLERK_DIR", "FLEET_WORKER_SERVICE")
 
 
 class ComposeTagTolerantLoader(yaml.SafeLoader):

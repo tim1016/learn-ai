@@ -5,13 +5,16 @@
   ],
   "fenced_empty_env_keys": {
     "alpaca-live-clerk": {
-      "ALPACA_CLERK_DIR": false
+      "ALPACA_CLERK_DIR": false,
+      "FLEET_WORKER_SERVICE": false
     },
     "alpaca-paper-clerk": {
-      "ALPACA_CLERK_DIR": false
+      "ALPACA_CLERK_DIR": false,
+      "FLEET_WORKER_SERVICE": false
     },
     "python-service": {
-      "ALPACA_CLERK_DIR": true
+      "ALPACA_CLERK_DIR": true,
+      "FLEET_WORKER_SERVICE": true
     }
   },
   "networks": [

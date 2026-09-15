@@ -34,21 +34,30 @@ def test_settings_allowed_origins_parses_comma_separated(monkeypatch):
     ]
 
 
-def test_fleet_worker_service_accepts_a_compose_service_name():
+def test_fleet_worker_service_accepts_a_compose_service_name() -> None:
     assert FleetSettings(WORKER_SERVICE="alpaca-paper-clerk").WORKER_SERVICE == (
         "alpaca-paper-clerk"
     )
 
 
-def test_fleet_worker_service_reads_an_undeclared_deployment_as_none():
+def test_fleet_worker_service_reads_an_undeclared_deployment_as_none() -> None:
     """An empty declaration is "this deployment said nothing", not a service
     named "". Compose writes an unset `${VAR}` through as an empty string, so
     the two must collapse to the same absent value."""
     assert FleetSettings(WORKER_SERVICE="").WORKER_SERVICE is None
 
 
+def test_fleet_worker_service_reads_the_declared_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The constructor-kwarg tests above prove the field and its validator;
+    this proves the env var actually reaches the field. A typo in the field
+    name, or a change to `env_prefix`, would break every deployment while
+    leaving those tests green."""
+    monkeypatch.setenv("FLEET_WORKER_SERVICE", "alpaca-paper-clerk")
+    assert FleetSettings().WORKER_SERVICE == "alpaca-paper-clerk"
+
+
 @pytest.mark.parametrize("declared", ["alpaca paper", "a;rm -rf", "Alpaca-Paper", "-leading"])
-def test_fleet_worker_service_refuses_a_value_no_compose_service_could_be(declared: str):
+def test_fleet_worker_service_refuses_a_value_no_compose_service_could_be(declared: str) -> None:
     """The value is pasted verbatim into a command the operator runs. A
     declaration that is not a compose service name is a deployment mistake and
     must stop the process at boot rather than reach a copy button."""
