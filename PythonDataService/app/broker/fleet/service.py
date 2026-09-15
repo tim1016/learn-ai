@@ -1559,7 +1559,9 @@ class FleetControlService:
 
     # ---- audit read surface (#2104) -----------------------------------------
 
-    def _capability_for_operation_kind(self, *, broker: str, operation_kind: str) -> str | None:
+    def _capability_for_operation_kind(
+        self, *, broker: str, operation_kind: str, warned: set[tuple[str, str]]
+    ) -> str | None:
         """The capability ``operation_kind`` currently maps to, or ``None``.
 
         Resolved *at read time* from the live provider catalog -- ``capability``
@@ -1572,21 +1574,31 @@ class FleetControlService:
         reported as ``None``, loudly logged, and never coerced to a wrong
         capability or allowed to fail the whole read (owner principle: fail
         loudly over silent pass).
+
+        ``warned`` is one request's dedup set, owned by the caller (#2133
+        P2-b): a page of receipts from one retired operation would otherwise
+        log once *per receipt* -- up to ``limit`` warnings per poll, forever,
+        for a single already-known fact. The warning still fires once per
+        distinct ``(broker, operation_kind)`` per request; it is never
+        silenced across requests, only de-duplicated within one.
         """
         adapter = self._provider_adapters.get(broker)
         if adapter is not None:
             for operation in adapter.operations():
                 if operation.operation_id == operation_kind:
                     return operation.capability.value
-        logger.warning(
-            "Audit read surface found no catalog operation for a routing "
-            "receipt's operation_kind; capability is unresolved.",
-            extra={
-                "action": "audit_capability_unresolved",
-                "broker": broker,
-                "operation_kind": operation_kind,
-            },
-        )
+        key = (broker, operation_kind)
+        if key not in warned:
+            warned.add(key)
+            logger.warning(
+                "Audit read surface found no catalog operation for a routing "
+                "receipt's operation_kind; capability is unresolved.",
+                extra={
+                    "action": "audit_capability_unresolved",
+                    "broker": broker,
+                    "operation_kind": operation_kind,
+                },
+            )
         return None
 
     def list_routing_receipts(
@@ -1633,6 +1645,7 @@ class FleetControlService:
         page = fetched[:limit]
         next_before_ms = page[-1].created_at_ms if has_more else None
         next_before_correlation_id = page[-1].correlation_id if has_more else None
+        unresolved_capability_warned: set[tuple[str, str]] = set()
         return {
             "observed_at_ms": now,
             "receipts": [
@@ -1642,7 +1655,9 @@ class FleetControlService:
                     "broker": receipt.broker,
                     "operation_kind": receipt.operation_kind,
                     "capability": self._capability_for_operation_kind(
-                        broker=receipt.broker, operation_kind=receipt.operation_kind
+                        broker=receipt.broker,
+                        operation_kind=receipt.operation_kind,
+                        warned=unresolved_capability_warned,
                     ),
                     "routing_state": receipt.state.value,
                     "nonsecret_target_ref": receipt.nonsecret_target_ref,

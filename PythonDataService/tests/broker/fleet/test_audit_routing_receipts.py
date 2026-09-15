@@ -410,6 +410,49 @@ def test_capability_is_none_for_an_operation_kind_the_catalog_no_longer_declares
     ), "the unresolved capability is logged loudly, not silently swallowed"
 
 
+def test_capability_unresolved_warning_is_deduplicated_per_broker_operation_kind_per_request(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A page of receipts from one retired operation logs the unresolved
+    warning *once*, not once per receipt.
+
+    Five receipts share one retired ``operation_kind``; a sixth carries a
+    second, distinct retired ``operation_kind`` on the same lane, proving the
+    dedup key is ``(broker, operation_kind)`` and not a single "already
+    warned this request" flag that would wrongly silence the second one too.
+    Reddens if the per-request dedup set were dropped: a 500-row page from a
+    single retired operation would then emit up to 500 warnings per poll,
+    forever -- exactly the historical case this branch exists to support.
+    """
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="flood", tmp_path=control_dir.parent
+    )
+    bind_lane(fleet_service, lane, account="acct-flood")
+    for i in range(5):
+        _open_and_settle(
+            fleet_service, lane, key=f"flood-{i}", operation_kind="operation_retired_a"
+        )
+    _open_and_settle(fleet_service, lane, key="flood-other", operation_kind="operation_retired_b")
+
+    with caplog.at_level("WARNING", logger="app.broker.fleet.service"):
+        result = fleet_service.list_routing_receipts(since_ms=0, clerk_id=lane.clerk_id)
+
+    assert len(result["receipts"]) == 6, "positive control: all six receipts are in the page"
+    assert {entry["capability"] for entry in result["receipts"]} == {None}
+
+    unresolved_warnings = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("action") == "audit_capability_unresolved"
+    ]
+    warned_kinds = {record.__dict__.get("operation_kind") for record in unresolved_warnings}
+    assert warned_kinds == {"operation_retired_a", "operation_retired_b"}
+    assert len(unresolved_warnings) == 2, (
+        f"expected exactly one warning per distinct (broker, operation_kind), got "
+        f"{len(unresolved_warnings)}: {[r.__dict__.get('operation_kind') for r in unresolved_warnings]}"
+    )
+
+
 # ---- service: clerk scoping is an exclusion, and limit keeps the newest ----
 
 
