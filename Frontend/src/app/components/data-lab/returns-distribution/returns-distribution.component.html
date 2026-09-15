@@ -1,0 +1,99 @@
+<section class="rd" aria-label="Return distribution study">
+  @if (ticker(); as t) {
+    @if (windowStartMs() === null || windowEndMs() === null) {
+      <p class="rd__empty">
+        Pick a ticker and date range in the Data Lab scope bar above, then come back —
+        the study follows the committed scope.
+      </p>
+    } @else if (study.isLoading()) {
+      <p class="rd__empty rd__loading">
+        Fetching <app-asset-identity [symbol]="t" size="sm" /> minute bars into
+        the data lake and crunching the window… (a first-time capture can take a minute)
+      </p>
+    } @else if (errorInfo(); as error) {
+      <div class="rd__error" role="alert">
+        <p class="rd__error-title">{{ error.title }}</p>
+        <p class="rd__error-body">{{ error.message }}</p>
+        @if (error.capturedSymbols.length) {
+          <p class="rd__error-body rd__captured">
+            Captured symbols:
+            @for (symbol of error.capturedSymbols; track symbol) {
+              <app-asset-identity [symbol]="symbol" size="sm" />
+            }
+          </p>
+        }
+      </div>
+    } @else if (activeKindDistribution(); as dist) {
+      <header class="rd__controls">
+        <div class="rd__kind" role="group" aria-label="Return definition">
+          @for (option of kindLabels; track option.kind) {
+            <button
+              type="button"
+              class="rd__kind-btn"
+              [class.rd__kind-btn--active]="kind() === option.kind"
+              [title]="option.hint"
+              (click)="kind.set(option.kind)"
+            >
+              {{ option.label }}
+            </button>
+          }
+        </div>
+        <label class="rd__width">
+          Bin width
+          <select [value]="binWidthValue()" (change)="onBinWidthChange($event)">
+            <option value="0.5">0.5%</option>
+            <option value="1">1%</option>
+          </select>
+        </label>
+      </header>
+
+      @if (captureLine(); as capture) {
+        <p class="rd__capture" role="status">{{ capture }}</p>
+      }
+
+      @if (warnings().length) {
+        <ul class="rd__warnings" role="status">
+          @for (warning of warnings(); track warning) {
+            <li>{{ warning }}</li>
+          }
+        </ul>
+      }
+
+      <app-returns-histogram-chart
+        [distribution]="dist"
+        [selectedBinIndex]="selectedBinIndex()"
+        (binSelected)="onBinSelected($event)"
+      />
+
+      <dl class="rd__stats">
+        @for (row of statsRows(); track row.label) {
+          <div class="rd__stat" [title]="row.hint">
+            <dt>{{ row.label }}</dt>
+            <dd>{{ row.value }}</dd>
+          </div>
+        }
+      </dl>
+
+      @if (selectedBinInfo(); as info) {
+        <app-bin-drill-down
+          [days]="study.value()?.days ?? []"
+          [bin]="info.bin"
+          [kind]="kind()"
+          [binIndex]="info.index"
+          (daySelected)="onDaySelected($event)"
+        />
+      }
+
+      @if (selectedDayMs(); as dayMs) {
+        <app-day-candles [ticker]="t" [sessionOpenMsUtc]="dayMs" />
+      }
+    } @else {
+      <p class="rd__empty">No distribution available for this scope.</p>
+    }
+  } @else {
+    <p class="rd__empty">
+      Pick a ticker and date range in the Data Lab scope bar above, then come back —
+      the study follows the committed scope.
+    </p>
+  }
+</section>

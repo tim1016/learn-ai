@@ -182,3 +182,67 @@ class AllowedTimeframesRequest(BaseModel):
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
     session: str = Field("rth", description="'rth' or 'extended'")
+
+
+class ChartDataBar(BaseModel):
+    """One resampled OHLCV bar of the /api/chart/data success payload."""
+
+    t: int = Field(..., ge=0, description="Bar timestamp as int64 ms UTC")
+    o: float | None = Field(..., description="Open; null when the source row was absent")
+    h: float | None = None
+    l: float | None = None
+    c: float | None = None
+    v: float = Field(default=0.0, ge=0.0)
+    session: str | None = Field(default=None, description="Present only on bars the resampler tagged")
+    synthetic: bool | None = Field(
+        default=None, description="True only on gap-filled synthetic bars"
+    )
+
+
+class ChartGapDetail(BaseModel):
+    before_ts: int
+    after_ts: int
+    duration_minutes: int
+    classification: str
+
+
+class ChartQualityReport(BaseModel):
+    """Resample-quality receipt mirroring chart_service.QualityReport."""
+
+    raw_bar_count: int
+    duplicates_removed: int
+    gaps_found: int
+    largest_gap_minutes: int
+    missing_sessions: int
+    session_coverage_pct: float
+    synthetic_bars: int
+    resampled_bar_count: int
+    gap_details: list[ChartGapDetail] = Field(default_factory=list)
+    missing_session_dates: list[str] = Field(default_factory=list)
+    flat_bars_detected: int
+    ohlc_violations_detected: int
+    out_of_order_fixed: int
+
+
+class ChartDataResponse(BaseModel):
+    """Success payload of POST /api/chart/data.
+
+    The route's handler computes a plain dict; declaring it as the
+    ``response_model`` publishes the contract (ADR 0031 generated OpenAPI
+    types) and pins the bar keys (``t``/``o``/``h``/``l``/``c``/``v``) the
+    Data Lab charts already consume, so no client invents a transport
+    mirror. Error responses are typed ``detail`` payloads raised as
+    HTTPException and are therefore not part of this model.
+    """
+
+    bars: list[ChartDataBar]
+    indicators: list[ChartIndicatorResult] = Field(default_factory=list)
+    quality: ChartQualityReport
+    allowed_timeframes: list[str]
+    estimated_bars_per_timeframe: dict[str, int]
+    recommended_timeframe: str
+    meta: dict[str, bool]
+    bar_sources: dict[str, Any] | None = Field(
+        default=None,
+        description="Per-source ingest receipts; present only when the lake is in the read path",
+    )

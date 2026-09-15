@@ -715,3 +715,169 @@ def materialize_chart_range(
         reused_artifact_count=result.reused_artifact_count,
         detail=_describe_failures(withheld),
     )
+
+
+# ---------------------------------------------------------------------------
+# On-demand symbol-history materialization (research consumers)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolHistoryMaterialization:
+    """What an on-demand capture of a symbol window did, as a typed receipt.
+
+    Best-effort like :class:`ChartRangeMaterialization`, but the closed
+    status vocabulary includes ``failed``: a research consumer has no
+    provider fallback, so "the capture did not happen" must be
+    distinguishable from "it happened and the lake is still short".
+    ``complete``/``partial`` mirror :class:`DataAvailabilityResult`'s
+    overall status; ``skipped`` means a precondition (lake-addressability,
+    pinned digest, sane window) ruled the capture out before it started.
+    """
+
+    status: Literal["complete", "partial", "failed", "skipped"]
+    fetched_artifact_count: int
+    reused_artifact_count: int
+    # None for complete; why another status happened, for the log and the
+    # consumer-facing receipt.
+    detail: str | None = None
+
+
+def _build_symbol_history_spec(
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    requester: str | None,
+    fetch_timeout_seconds: int,
+) -> DataRunSpec:
+    """Describe what a research consumer needs from the lake for a window.
+
+    Minute trade bars plus the factor and map files: the research reads
+    adjust returns through the factor file, so a newly captured symbol
+    must land with its corporate-action inputs or degrade (documented) to
+    raw returns. No daily rollup, for the same window-keyed data-contract
+    reason as the chart spec. ``run_type="chart"`` on purpose: this is a
+    UI-triggered, best-effort ingest of exactly the artifact class the
+    chart seam fetches, and sharing the label is what lets catalog claims
+    coalesce a study's cold capture with a chart's request for the same
+    sessions into one provider fetch.
+    """
+    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
+
+    if not PINNED_LEAN_IMAGE_DIGEST:
+        raise LakeMaterializationError(
+            "no pinned LEAN image digest; the lake sources its session calendar from that image "
+            "(run scripts/lean_sidecar_pin_image.py)"
+        )
+
+    return DataRunSpec(
+        request_id=uuid4(),
+        run_type="chart",
+        requester=requester,
+        market="usa",
+        symbols=[symbol.upper()],
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
+        resolution="minute",
+        data_types=["trade"],
+        price_adjustment_mode="raw",
+        provider="polygon",
+        include_factor_files=True,
+        include_map_files=True,
+        include_daily_trade=False,
+        lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+        fetch_timeout_seconds=fetch_timeout_seconds,
+    )
+
+
+async def materialize_symbol_history(
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    requester: str | None = None,
+    fetch_timeout_seconds: int = 600,
+) -> SymbolHistoryMaterialization:
+    """Put a window's minute bars + factor/map files in the lake, best-effort.
+
+    The async sibling of :func:`materialize_chart_range` for consumers that
+    live on the request loop. Unlike a bare :func:`ensure_data` call, the
+    capture here goes through :func:`_materialize_run_data`, so it (a) waits
+    out a sibling fetch that owns the catalog claim instead of returning
+    its ``lease_timeout`` as a final answer, and (b) is bounded by
+    ``fetch_timeout_seconds`` wall-clock. Contention on artifacts this
+    consumer only benefits from (a factor file still being fetched
+    elsewhere) is not waited out — the study degrades to raw returns with a
+    warning rather than blocking on it, exactly as it would alone.
+
+    Never raises for a data reason; every failure lands in the receipt's
+    ``failed``/``skipped`` status and ``detail``.
+    """
+    if end < start:
+        return SymbolHistoryMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"inverted window {start}..{end}",
+        )
+    canonical = symbol.upper()
+    if not is_lake_addressable_symbol(canonical):
+        return SymbolHistoryMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"{symbol!r} is not lake-addressable",
+        )
+    try:
+        spec = _build_symbol_history_spec(
+            symbol=canonical,
+            start=start,
+            end=end,
+            requester=requester,
+            fetch_timeout_seconds=fetch_timeout_seconds,
+        )
+    except LakeMaterializationError as exc:
+        return SymbolHistoryMaterialization(
+            status="skipped",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=str(exc),
+        )
+
+    try:
+        result = await _materialize_run_data(spec, resolution="minute")
+    except (TimeoutError, CatalogUnavailableError, asyncpg.PostgresError) as exc:
+        logger.warning(
+            "data_lake.run_materialization: symbol-history capture for %s %s..%s failed "
+            "(%s: %s)",
+            canonical,
+            start,
+            end,
+            type(exc).__name__,
+            exc,
+        )
+        return SymbolHistoryMaterialization(
+            status="failed",
+            fetched_artifact_count=0,
+            reused_artifact_count=0,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+
+    detail = _describe_failures(result.failures) if result.failures else None
+    if result.overall_status != "complete" and detail:
+        logger.warning(
+            "data_lake.run_materialization: symbol-history capture for %s %s..%s returned "
+            "%s (%s)",
+            canonical,
+            start,
+            end,
+            result.overall_status,
+            detail,
+        )
+    return SymbolHistoryMaterialization(
+        status=result.overall_status,
+        fetched_artifact_count=result.fetched_artifact_count,
+        reused_artifact_count=result.reused_artifact_count,
+        detail=detail,
+    )

@@ -2132,3 +2132,12 @@ Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-
 - **Lake artifact** — one catalogued unit of bar data (a symbol's trading day at a resolution and adjustment mode), identified with its adjustment mode in the identity so adjusted and raw coexist without collision, and carrying the hash of the bytes on disk. Unrelated to the live-run *artifacts* (decisions/executions/trades parquet) of ADR 0001's substrate.
 - **Data coverage** — what the lake catalog says is owned for a symbol over a span, measured against trading days from the canonical calendar module. Distinct from the retired cache's completeness test, which counted exchange holidays as days it should have and so could never report complete (issue #1830). Unrelated to **execution-coverage quarantine**, which is about fills.
 - **Claim / lease** — the coordination rows that make two concurrent ensures for one artifact produce one fetch. Replaces the cache's filesystem advisory lock; the mechanism ADR 0001 anticipated for the case a file substrate can't cleanly express.
+
+## Session-segmented returns (resolved 2026-09-14)
+
+**Lineage: live.** Vocabulary for the Return Distribution study (`/data-lab/returns`, `POST /api/research/return-distribution`); method note in `docs/references/return-distribution.md`.
+
+- **Return kinds** — the three answers to "what did the day do": *close-to-close* (previous scheduled RTH close → this RTH close; the headline number), *session* (RTH open → RTH close), and *overnight gap* (previous RTH close → RTH open). Close-to-close decomposes as overnight + session exactly in log space.
+- **Session segments** — the full-24h drill-down of one day's move: overnight gap, pre-market, morning (open → 12:00 ET), afternoon (12:00 ET → scheduled close), after-hours. Half-days segment against their scheduled close, never a 16:00 literal. A segment with no traded bars reports "no data", never zero.
+- **Basket** — one histogram bin of daily returns (fixed width, 0 on an edge), including the two open edge bins ("worse than −span", "span or better") that keep crash and gap days visible instead of clipped. The word is the study's own; it is not the Strategy Lab's basket notion.
+- **Historical VaR-95 / CVaR-95 (one day)** — read straight off the empirical distribution: the 5th percentile of daily returns, and the average of the returns at or below it. Descriptive statistics of captured history, not a forecast and not the LEAN parametric VaR of portfolio statistics.

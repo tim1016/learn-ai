@@ -42,18 +42,47 @@ def api() -> FastAPI:
     return app
 
 
+_received_windows: list[dict[str, Any]] = []
+
+
 @pytest.fixture(autouse=True)
 def _stub_chart_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutralize the fetch: the chart service receives the window and answers
-    with a minimal valid payload, so the test observes only the router's
-    date resolution. Patched on the router module — it imported the name."""
+    with the minimal payload the /data response model accepts, so the test
+    observes only the router's date resolution. The received window is
+    recorded for assertions. Patched on the router module — it imported the
+    name."""
     chart_service._resample_cache.clear()
     chart_service._indicator_cache.clear()
-    monkeypatch.setattr(
-        chart_router,
-        "get_chart_data",
-        lambda **kwargs: {"received": kwargs},
-    )
+    _received_windows.clear()
+
+    def _stub(**kwargs: Any) -> dict[str, Any]:
+        _received_windows.append(kwargs)
+        return {
+            "bars": [],
+            "indicators": [],
+            "quality": {
+                "raw_bar_count": 0,
+                "duplicates_removed": 0,
+                "gaps_found": 0,
+                "largest_gap_minutes": 0,
+                "missing_sessions": 0,
+                "session_coverage_pct": 0.0,
+                "synthetic_bars": 0,
+                "resampled_bar_count": 0,
+                "gap_details": [],
+                "missing_session_dates": [],
+                "flat_bars_detected": 0,
+                "ohlc_violations_detected": 0,
+                "out_of_order_fixed": 0,
+            },
+            "allowed_timeframes": ["1D"],
+            "estimated_bars_per_timeframe": {"1D": 1},
+            "recommended_timeframe": "1D",
+            "meta": {"cached_resample": False, "cached_indicators": False},
+        }
+
+    monkeypatch.setattr(chart_router, "get_chart_data", _stub)
 
 
 async def _post(client: httpx.AsyncClient, body: dict[str, Any]) -> httpx.Response:
@@ -68,8 +97,8 @@ async def test_numeric_window_overrides_both_date_strings(api: FastAPI) -> None:
             {**_REQUEST, "start_ms_utc": AUG_1_MS, "end_ms_utc": SEP_11_MS},
         )
     assert response.status_code == 200
-    assert response.json()["received"]["from_date"] == "2026-08-01"
-    assert response.json()["received"]["to_date"] == "2026-09-11"
+    assert _received_windows[-1]["from_date"] == "2026-08-01"
+    assert _received_windows[-1]["to_date"] == "2026-09-11"
 
 
 @pytest.mark.asyncio
@@ -77,7 +106,7 @@ async def test_numeric_precedence_is_per_field(api: FastAPI) -> None:
     async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
         response = await _post(client, {**_REQUEST, "end_ms_utc": SEP_11_MS})
     assert response.status_code == 200
-    received = response.json()["received"]
+    received = _received_windows[-1]
     assert received["from_date"] == _REQUEST["from_date"]
     assert received["to_date"] == "2026-09-11"
 
@@ -98,7 +127,7 @@ async def test_date_strings_still_drive_the_window_without_ms_fields(api: FastAP
     async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
         response = await _post(client, _REQUEST)
     assert response.status_code == 200
-    received = response.json()["received"]
+    received = _received_windows[-1]
     assert received["from_date"] == _REQUEST["from_date"]
     assert received["to_date"] == _REQUEST["to_date"]
 
