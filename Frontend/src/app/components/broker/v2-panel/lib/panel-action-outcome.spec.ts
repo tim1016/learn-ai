@@ -216,6 +216,23 @@ describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
 
     expect(deriveActionRejection(error, 'fallback').outcome).toBe('failure');
   });
+
+  it('falls back to the vocabulary message for a known code with no message field at all', () => {
+    // `QualificationMarketDependencyUnavailable.model_dump()`
+    // (`PythonDataService/app/routers/fleet_qualification.py`) emits exactly
+    // `{"reason": "qualification_market_status_unavailable"}` — no `message`
+    // key, unlike every other fixture in this file. `detail?.['message']`
+    // is `undefined`, so this is the one case that reaches the
+    // `knownRefusal.message` fallback rather than a backend-authored string.
+    const error = new HttpErrorResponse({
+      status: 503,
+      error: { reason: 'qualification_market_status_unavailable' },
+    });
+
+    expect(deriveActionRejection(error, 'fallback').message).toBe(
+      'The market-liveness dependency this qualification probe needs is not available.',
+    );
+  });
 });
 
 describe('nested legacy bodies that carry next_step', () => {
