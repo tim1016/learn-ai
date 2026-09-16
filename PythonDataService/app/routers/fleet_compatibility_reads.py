@@ -26,11 +26,10 @@ never had a legitimate answer to measure in the first place.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import JSONResponse
 
 from app.broker.fleet.errors import flat_refusal_body
-from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import PanelProfile
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 
@@ -48,16 +47,13 @@ _LIVE_VERDICT_RETIRED_NEXT_STEP = (
 )
 
 
-@router.get("/{broker}/live-verdict", summary="Legacy broker verdict compatibility read")
-async def get_legacy_live_verdict(broker: str) -> AlpacaLiveVerdict:
-    """Refuse: a standalone coordinator has no clerk runtime to answer from.
-
-    The return type stays ``AlpacaLiveVerdict`` so this route's exported
-    OpenAPI shape keeps agreeing with the canonical ``brokers.py`` handler
-    that answers it correctly on a ``combined`` process (see
-    ``tests/contracts/test_fleet_role_openapi_agreement.py``); FastAPI never
-    validates a returned ``Response`` instance against that annotation.
-    """
+@router.get(
+    "/{broker}/live-verdict",
+    status_code=410,
+    summary="Legacy broker verdict compatibility read",
+)
+async def get_legacy_live_verdict(broker: str) -> Response:
+    """Refuse: a standalone coordinator has no clerk runtime to answer from."""
     del broker
     return JSONResponse(
         status_code=410,
