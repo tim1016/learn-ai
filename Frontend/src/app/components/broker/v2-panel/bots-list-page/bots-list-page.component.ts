@@ -16,6 +16,8 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
+import { AlpacaLiveBannerComponent } from '../../../../shell/alpaca-live-banner.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { fmtElapsedSince } from '../../format';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
@@ -68,9 +70,11 @@ interface ScopedSnapshot<T> {
   imports: [
     AccountStripComponent,
     AlpacaDeployDrawerComponent,
+    AlpacaLiveBannerComponent,
     CohortArchiveDrawerComponent,
     BotTriageDetailComponent,
     BotsRosterComponent,
+    ReceiptLabelPipe,
     RouterLink,
   ],
   templateUrl: './bots-list-page.component.html',
@@ -112,6 +116,13 @@ export class BotsListPageComponent {
           ?.effective_binding_generation ?? null,
       routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
     }),
+  );
+
+  /** The routed lane itself, for the header's lane-context strip: its pill
+   * (the same trust anchor the shell renders) plus its authority fact, so the
+   * operator always sees which lane and which account this roster serves. */
+  protected readonly routedLane = computed(
+    () => this.fleetDirectory.lane(this.broker(), this.clerkId()) ?? null,
   );
 
   /** The fence the operator was shown. Captured when the roster renders the

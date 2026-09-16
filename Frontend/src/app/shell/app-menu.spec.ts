@@ -39,10 +39,10 @@ describe('app menu projections', () => {
 
     expect(deploy?.routerLink).toBe('/brokers/alpaca');
     expect(deploy?.queryParams).toEqual({ deploy: '' });
-    expect(bots?.routerLink).toBe('/brokers/alpaca');
-    expect(bots?.queryParams).toEqual({ surface: 'bots' });
-    expect(gallery?.routerLink).toBe('/brokers/alpaca');
-    expect(gallery?.queryParams).toEqual({ surface: 'gallery' });
+    expect(bots?.routerLink).toBe('/brokers/alpaca/bots');
+    expect(bots?.queryParams).toBeUndefined();
+    expect(gallery?.routerLink).toBe('/brokers/alpaca/gallery');
+    expect(gallery?.queryParams).toBeUndefined();
   });
 
   it.each([
@@ -72,9 +72,12 @@ describe('app menu projections', () => {
     ).toBe(ACTIVE_GROUP_CLASS);
   });
 
-  it.each(['bots', 'gallery'] as const)('resolves the %s lane-selection alias', (surface) => {
-    expect(activeMenuNodeFor(`/brokers/alpaca?surface=${surface}`)?.item.title)
-      .toBe(surface === 'bots' ? 'Bots' : 'Gallery');
+  it.each([
+    ['bots', 'Bots'],
+    ['gallery', 'Gallery'],
+  ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {
+    expect(activeMenuNodeFor(`/brokers/alpaca/${surface}`)?.item.title).toBe(title);
+    expect(pageTitleFor(`/brokers/alpaca/${surface}`)).toBe(title);
   });
 
   it('resolves page titles through the active menu node', () => {

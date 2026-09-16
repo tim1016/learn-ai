@@ -11,6 +11,11 @@ import { describe, expect, it } from 'vitest';
 
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
+import { AlpacaClerkSurfaceUnavailableComponent } from './components/brokers/alpaca-desk/lane-directory/alpaca-clerk-surface-unavailable.component';
+import { AlpacaSurfaceChooserComponent } from './components/brokers/alpaca-desk/alpaca-surface-chooser.component';
+import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
+import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
+import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -135,4 +140,59 @@ describe('routes', () => {
     expect(await route.loadComponent()).toBe(DataLakeObservatoryComponent);
     expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
+
+  it('lazily loads the read-only surface choosers with their surface data', async () => {
+    const bots = routes.find((candidate) => candidate.path === 'brokers/alpaca/bots');
+    const gallery = routes.find((candidate) => candidate.path === 'brokers/alpaca/gallery');
+
+    expect(await bots?.loadComponent?.()).toBe(AlpacaSurfaceChooserComponent);
+    expect(bots?.data).toMatchObject({ surface: 'bots' });
+    expect(await gallery?.loadComponent?.()).toBe(AlpacaSurfaceChooserComponent);
+    expect(gallery?.data).toMatchObject({ surface: 'gallery', fullBleed: true });
+  });
+
+  it('lazily loads the clerk-only surface routes with their surface data', async () => {
+    const bots = routes.find((candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId/bots');
+    const gallery = routes.find(
+      (candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId/gallery',
+    );
+
+    expect(await bots?.loadComponent?.()).toBe(AlpacaClerkSurfaceUnavailableComponent);
+    expect(bots?.data).toMatchObject({ surface: 'bots' });
+    expect(await gallery?.loadComponent?.()).toBe(AlpacaClerkSurfaceUnavailableComponent);
+    expect(gallery?.data).toMatchObject({ surface: 'gallery' });
+  });
+
+  it('retires the desk surface hints through the redirect guard', () => {
+    const desk = routes.find((candidate) => candidate.path === 'brokers/alpaca');
+
+    expect(desk?.canActivate).toContain(alpacaSurfaceRedirectGuard);
+  });
+
+  it.each([
+    [
+      'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots',
+      BotsListPageComponent,
+      'the bots roster',
+    ],
+    [
+      'brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery',
+      BotGalleryPageComponent,
+      'the gallery',
+    ],
+  ])(
+    'keeps %s on its own operational component — never a redirect to configuration',
+    async (path, expectedComponent, _surfaceLabel) => {
+      // Regression: an operator reported a clerk-scoped Bots URL landing on
+      // the broker configuration page. No such redirect exists in the table;
+      // this pins that the canonical operational routes stay loadComponent
+      // routes with no redirectTo and no canActivate retargeting.
+      const route = routes.find((candidate) => candidate.path === path);
+      if (route === undefined) throw new Error(`Route ${path} is missing.`);
+
+      expect(route.redirectTo).toBeUndefined();
+      expect(route.canActivate).toBeUndefined();
+      expect(await route.loadComponent?.()).toBe(expectedComponent);
+    },
+  );
 });

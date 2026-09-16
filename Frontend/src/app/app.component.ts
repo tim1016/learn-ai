@@ -7,7 +7,7 @@ import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-d
 import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
-import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
+import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
@@ -79,6 +79,11 @@ import { CurrentUrlService } from './shell/current-url.service';
     @media (max-width: 760px) {
       .shell-actions {
         gap: 3px;
+        /* The live-verdict pills are the account-mode trust anchor (ADR 0059
+           D8): they wrap to a second row rather than being clipped when the
+           header runs out of width. */
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
       .shell-quick-link {
@@ -121,14 +126,14 @@ import { CurrentUrlService } from './shell/current-url.service';
   `],
   template: `
     <div class="shell">
-      <app-top-bar [accountMode]="shellAccountMode()">
+      <app-top-bar>
         <app-menubar shell-nav />
         <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
-          <a class="shell-quick-link" routerLink="/brokers/alpaca" [queryParams]="{ surface: 'bots' }">
+          <a class="shell-quick-link" routerLink="/brokers/alpaca/bots">
             <i class="pi pi-server" aria-hidden="true"></i>
             <span>Bots</span>
           </a>
-          <a class="shell-quick-link" routerLink="/brokers/alpaca" [queryParams]="{ surface: 'gallery' }">
+          <a class="shell-quick-link" routerLink="/brokers/alpaca/gallery">
             <i class="pi pi-th-large" aria-hidden="true"></i>
             <span>Gallery</span>
           </a>
@@ -161,28 +166,6 @@ export class AppComponent {
   private readonly currentUrl = inject(CurrentUrlService).url;
   protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
-  // Worst case wins across every lane (#2110 D2): a lane that is armed live,
-  // unarmed live, or cannot be determined at all outranks a confirmed paper
-  // lane, so the shell chrome never reads calmer than its riskiest lane.
-  protected readonly shellAccountMode = computed<ShellAccountMode>(() => {
-    const lanes = this.alpacaLanes();
-    // An empty roster is the least-known state, not a calm one: it is every
-    // boot until the directory resolves, and indefinitely if that load fails.
-    // 'unknown' would paint the neutral default chrome — the exact calm-while-
-    // live-money-trades failure this anchor exists to kill — so it reads live.
-    if (lanes.length === 0) return 'live';
-    const finalVerdicts = lanes.map(
-      (lane) => this.alpacaLive.stateFor(lane.clerk_id).verdict?.final_verdict,
-    );
-    const undeterminedOrLive = finalVerdicts.some(
-      (verdict) =>
-        verdict === undefined ||
-        verdict === 'unknown' ||
-        verdict === 'live-unarmed' ||
-        verdict === 'live-armed',
-    );
-    return undeterminedOrLive ? 'live' : 'paper';
-  });
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();
     return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');

@@ -92,20 +92,27 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
     }
     if (url.pathname.startsWith('/api/brokers/alpaca')) {
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
-      if (url.pathname === '/api/brokers/alpaca/live-verdict') {
+      // The shell's trust-anchor poll reads one verdict per clerk lane
+      // (#2161). It is deliberately excluded from every "no clerk-scoped
+      // request" assertion below: it proves the shell is alive, not that a
+      // surface reached into a lane.
+      if (url.pathname.endsWith('/live-verdict')) {
+        const paperRead = url.pathname.startsWith(`${PAPER_SCOPE}/`);
         await route.fulfill({
           json: {
-            configured_mode: 'paper',
-            observed_account_id: PAPER_ACCOUNT,
+            configured_mode: paperRead ? 'paper' : 'live',
+            observed_account_id: paperRead ? PAPER_ACCOUNT : LIVE_ACCOUNT,
             mode_agreement: 'agreed',
             clerk_authority: 'sqlite',
             clerk_refusal_reason_code: null,
             armed_instance_count: 0,
             envelope_state: 'not_applicable',
+            envelope_agreement: 'not_applicable',
             shadow_state: 'not_applicable',
-            final_verdict: 'paper',
-            headline: `Paper account ${PAPER_ACCOUNT}`,
-            detail: 'The shell verdict is a retained broker-level read.',
+            loss_hold: 'not_applicable',
+            final_verdict: paperRead ? 'paper' : 'unknown',
+            headline: paperRead ? `Paper account ${PAPER_ACCOUNT}` : 'Fixture verdict unread',
+            detail: 'Per-clerk verdict read mocked at the fleet boundary.',
             observed_at_ms: 1_789_310_400_000,
           },
         });
@@ -148,6 +155,12 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
   });
 }
 
+/** Drop the shell's per-clerk live-verdict trust-anchor polls from a
+ * request ledger: they prove the shell is alive on every route, not that a
+ * surface reached into a lane. */
+const withoutVerdictPolls = (requests: string[]): string[] =>
+  requests.filter((entry) => !entry.includes('/live-verdict'));
+
 test.describe('Alpaca multi-clerk frontend cutover', () => {
   test('keeps a failed lane visible while the healthy lane stays explicitly routable', async ({ page }) => {
     const brokerRequests: string[] = [];
@@ -160,7 +173,12 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     const liveLane = page.locator('li').filter({ hasText: 'Live lane' });
     await expect(paperLane).toContainText(PAPER_ACCOUNT);
     await expect(liveLane).toContainText('This lane is unavailable');
-    await expect(liveLane.getByRole('link', { name: 'Bots' })).toHaveCount(0);
+    // The failed lane's surface links never vanish: Bots stays selectable
+    // through the lane's own clerk-only route — never another lane's URL.
+    await expect(liveLane.getByRole('link', { name: 'Bots' })).toHaveAttribute(
+      'href',
+      `/brokers/alpaca/clerks/${LIVE_CLERK}/bots`,
+    );
 
     const deskLink = paperLane.getByRole('link', { name: 'Desk' });
     await expect(deskLink).toHaveAttribute(
@@ -176,9 +194,8 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect.poll(() => brokerRequests.some((entry) => entry === `GET ${PAPER_SCOPE}/account`))
       .toBe(true);
 
-    expect(brokerRequests.filter(
-      (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`)
-        && !entry.startsWith('GET /api/brokers/alpaca/live-verdict'),
+    expect(withoutVerdictPolls(brokerRequests).filter(
+      (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
   });
 
@@ -199,11 +216,13 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
   test('turns a global Bots intent into an explicit clerk-lane choice', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
-
+    // The retired `?surface=bots` bookmark redirects onto the real chooser
+    // route, which selects nothing by itself.
     await page.goto('/brokers/alpaca?surface=bots');
-    await expect(page.getByText(/choose a ready clerk lane below to open its Bots roster/i))
-      .toBeVisible();
-    await page.getByRole('region', { name: 'Alpaca clerk lanes' })
+    await expect(page).toHaveURL('/brokers/alpaca/bots');
+    await expect(page.getByRole('heading', { name: 'Clerk lanes — Bots roster' })).toBeVisible();
+    await page.locator('li')
+      .filter({ hasText: 'Paper lane' })
       .getByRole('link', { name: 'Bots' })
       .click();
 
@@ -229,9 +248,8 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     );
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Deploy a bot' })).toBeVisible();
-    expect(brokerRequests.filter(
-      (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`)
-        && !entry.startsWith('GET /api/brokers/alpaca/live-verdict'),
+    expect(withoutVerdictPolls(brokerRequests).filter(
+      (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
 
     await page.getByRole('button', { name: 'Close deploy a bot' }).click();
@@ -262,15 +280,19 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
       ),
     })).toEqual({ snapshot: true, stream: true });
     expect(pageErrors).toEqual([]);
-    expect(brokerRequests.some((entry) => entry.includes(`/clerks/${LIVE_CLERK}/`))).toBe(false);
+    expect(withoutVerdictPolls(brokerRequests).filter(
+      (entry) => entry.includes(`/clerks/${LIVE_CLERK}/`),
+    )).toEqual([]);
   });
 
   test('fails unscoped operational links in place instead of choosing a lane', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
 
+    // `/brokers/alpaca/bots` is the read-only lane chooser now, so it stays
+    // out of this failure loop; these are the compatibility URLs that still
+    // have no lane to resolve to.
     for (const path of [
-      '/brokers/alpaca/bots',
       '/brokers/alpaca/deploy',
       '/brokers/alpaca/accounts/unresolved/deploy',
     ]) {
@@ -278,7 +300,9 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
       await expect(page.getByRole('heading', { name: 'Broker lane unavailable' })).toBeVisible();
       await expect(page).toHaveURL(new RegExp(`${path}$`));
     }
-    expect(brokerRequests.some((entry) => entry.includes('/clerks/'))).toBe(false);
+    expect(
+      withoutVerdictPolls(brokerRequests).filter((entry) => entry.includes('/clerks/')),
+    ).toEqual([]);
   });
 
   test('fails a wrong-provider canonical link in place', async ({ page }) => {
@@ -290,6 +314,8 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
 
     await expect(page.getByRole('heading', { name: 'Broker lane unavailable' })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
-    expect(brokerRequests.some((entry) => entry.includes('/clerks/'))).toBe(false);
+    expect(
+      withoutVerdictPolls(brokerRequests).filter((entry) => entry.includes('/clerks/')),
+    ).toEqual([]);
   });
 });

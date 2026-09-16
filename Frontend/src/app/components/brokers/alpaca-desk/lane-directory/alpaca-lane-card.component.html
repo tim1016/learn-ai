@@ -1,0 +1,59 @@
+<li class="lane-card" [class.lane-card--degraded]="!isReady()">
+  <div class="lane-card__head">
+    <span class="lane-card__label">{{ lane().display_label }}</span>
+    <span class="lane-card__badges">
+      <span class="lane-mode-chip lane-mode-chip--{{ modeChip().tone }}">{{ modeChip().mode }}</span>
+      <span class="lane-card__lifecycle">{{ lane().lifecycle_state | receiptLabel }}</span>
+    </span>
+  </div>
+  <dl class="lane-card__facts">
+    <div class="lane-card__fact">
+      <dt>Endpoint mode</dt>
+      <dd>{{ lane().provider_summary?.endpoint_mode ?? '—' | receiptLabel }}</dd>
+    </div>
+    <div class="lane-card__fact">
+      <dt>Authority</dt>
+      <dd>{{ lane().provider_summary?.authority_state ?? '—' | receiptLabel }}</dd>
+    </div>
+    <div class="lane-card__fact">
+      <dt>Binding generation</dt>
+      <dd>{{ lane().effective_binding_generation ?? '—' }}</dd>
+    </div>
+    <div class="lane-card__fact">
+      <dt>Account</dt>
+      <dd class="lane-card__account">{{ account() ?? 'unbound' }}</dd>
+    </div>
+  </dl>
+  @if (!isReady()) {
+    <p class="lane-card__failure" role="status">
+      This lane is unavailable. Other healthy lanes remain available.
+    </p>
+  }
+  <nav class="lane-card__links" aria-label="{{ lane().display_label }} surfaces">
+    @if (account(); as accountId) {
+      @if (isReady() && supports('account_read')) {
+        <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId]">Desk</a>
+      }
+    }
+    <a
+      [routerLink]="surfaceRoute('bots')"
+      [class.lane-card__link--blocked]="!servesSurface('bots')"
+    >Bots</a>
+    <a
+      [routerLink]="surfaceRoute('gallery')"
+      [class.lane-card__link--blocked]="!servesSurface('gallery')"
+    >Gallery</a>
+    @if (account(); as accountId) {
+      @if (isReady() && supports('deploy')) {
+        <a
+          [routerLink]="['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId]"
+          [queryParams]="{ deploy: '' }"
+          queryParamsHandling="merge"
+        >Deploy</a>
+      }
+    }
+    @if (supports('configuration_manage')) {
+      <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'configuration']">Configuration</a>
+    }
+  </nav>
+</li>

@@ -14,6 +14,8 @@ import { MessageService } from 'primeng/api';
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
+import { AlpacaLiveBannerComponent } from '../../../../../shell/alpaca-live-banner.component';
+import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import {
   freezeLaneFence,
   laneFenceVerdict,
@@ -54,7 +56,7 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
 @Component({
   selector: 'app-bot-gallery-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, BotGalleryDockComponent],
+  imports: [RouterLink, BotGalleryDockComponent, AlpacaLiveBannerComponent, ReceiptLabelPipe],
   providers: [GalleryLiveStore],
   templateUrl: './bot-gallery-page.component.html',
   styleUrl: './bot-gallery-page.component.scss',
@@ -82,6 +84,13 @@ export class BotGalleryPageComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
+
+  /** The routed lane itself, for the lane-context strip above the dock: its
+   * pill (the same trust anchor the shell renders) plus its authority fact,
+   * so the gallery never loses sight of which lane/account it serves. */
+  protected readonly routedLane = computed(
+    () => this.fleetDirectory.lane(this.broker(), this.clerkId()) ?? null,
+  );
 
   /** The fence the operator was shown. Captured when the gallery renders the
    * lane and again only when the route identity changes; never at click time

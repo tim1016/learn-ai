@@ -1,21 +1,19 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { NgOptimizedImage } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
-export type ShellAccountMode = 'paper' | 'live' | 'unknown';
-
-/** Universal shell chrome with typed projection boundaries for feature slices. */
+/** Universal shell chrome with typed projection boundaries for feature slices.
+ *
+ * The header is mode-neutral by design: the per-lane live-verdict pills
+ * (ADR 0059 D8; PR #2161) are the account-mode trust anchor, and a
+ * worst-case header tint stopped distinguishing anything the moment a second
+ * lane arrived — one live lane kept it permanently red. */
 @Component({
   selector: 'app-top-bar',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgOptimizedImage, RouterLink],
   template: `
-    <header
-      class="top-bar"
-      [class.top-bar--paper]="accountMode() === 'paper'"
-      [class.top-bar--live]="accountMode() === 'live'"
-      aria-label="Botasur application"
-    >
+    <header class="top-bar" aria-label="Botasur application">
       <div class="top-bar__left">
         <div class="top-bar__nav" data-shell-slot="nav">
           <ng-content select="[shell-nav]" />
@@ -41,6 +39,4 @@ export type ShellAccountMode = 'paper' | 'live' | 'unknown';
   `,
   styleUrl: './top-bar.component.scss',
 })
-export class TopBarComponent {
-  readonly accountMode = input<ShellAccountMode>('unknown');
-}
+export class TopBarComponent {}
