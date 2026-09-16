@@ -156,6 +156,33 @@ async def describe_broker_clerk(
     return JSONResponse(fields)
 
 
+# ---- Resilient directory aggregate (PRD FR-083/084) ------------------------
+
+
+@router.get(
+    "/broker-clerks/aggregate/directory",
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+    summary="Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)",
+)
+async def aggregate_broker_clerks_directory(request: Request) -> Response:
+    """The same per-lane data as ``GET /broker-clerks``, per-lane isolated.
+
+    ``directory()`` loops every registered clerk with no per-lane exception
+    isolation -- one clerk's descriptor projection throwing fails the whole
+    roster. This calls the same projection through ``aggregate_lane_reads``'s
+    provenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one
+    lane's exception is that lane's explicit ``ok: False`` entry, never an
+    omission, a substitution, or a 500 for every other lane. No local
+    ``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the
+    audit read): ``aggregate_lane_reads`` already isolates every per-lane
+    exception, so the only ``FleetControlError`` this route could ever see is
+    an uninstalled fleet service, which the coordinator's global handler
+    already answers identically to ``_refuse`` -- the same reason
+    ``list_broker_clerks`` above carries no local try either.
+    """
+    return JSONResponse(_fleet_service(request).aggregate_directory_reads())
+
+
 # ---- Audit read surface (#2104) --------------------------------------------
 
 

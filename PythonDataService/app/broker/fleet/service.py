@@ -1835,6 +1835,32 @@ class FleetControlService:
             results.append(outcome)
         return {"observed_at_ms": now, "lanes": results}
 
+    def aggregate_directory_reads(
+        self, *, include_retired: bool = False
+    ) -> dict[str, object]:
+        """The resilient twin of :meth:`directory` (PRD FR-083/084).
+
+        ``directory()`` projects every registered clerk in a plain ``for``
+        loop with no per-lane exception isolation -- one clerk's descriptor
+        projection throwing fails the whole roster. This reads the same
+        per-lane data (``describe_clerk(...).public_fields()``) through
+        :meth:`aggregate_lane_reads`'s partial aggregation instead, so one
+        lane's failure surfaces as that lane's own ``ok: False`` entry and
+        every other lane still reports.
+        """
+        clerks = self._store.list_clerks(include_retired=include_retired)
+        lane_reads = [
+            (
+                clerk.broker,
+                clerk.clerk_id,
+                lambda clerk_id=clerk.clerk_id: self.describe_clerk(
+                    clerk_id
+                ).public_fields(),
+            )
+            for clerk in clerks
+        ]
+        return self.aggregate_lane_reads(lane_reads)
+
     # ---- internal ------------------------------------------------------------
 
     def _require_clerk(self, clerk_id: str) -> ClerkRecord:

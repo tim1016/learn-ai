@@ -301,8 +301,11 @@ three wire-contract or semantics changes that need an owner decision before any 
   returns the body; it does not nest under a `detail` key.)
 - **The durable audit trail has no read surface.** Routing receipts, assignment history and
   session history are append-only, trigger-protected, and reachable only by opening the
-  coordinator's SQLite file by hand. `aggregate_lane_reads` (PRD FR-083/084) has **no HTTP route**
-  and only a test as caller.
+  coordinator's SQLite file by hand. `aggregate_lane_reads` (PRD FR-083/084) now has an HTTP
+  route — `GET /api/broker-clerks/aggregate/directory`, via
+  `FleetControlService.aggregate_directory_reads()` — a resilient, per-lane-isolated twin of
+  `GET /api/broker-clerks`; no frontend consumer was built (deliberately, per the closed
+  merged-roster-UI decision).
 - **`X-Fleet-Correlation-Id` and `X-Fleet-Routing-State`** are written on every command and read by
   nothing.
 - **Two diagnostic facts are computed, handed to the adapter, then dropped before the wire** —
