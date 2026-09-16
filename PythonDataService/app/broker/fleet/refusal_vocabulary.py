@@ -73,7 +73,11 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
         "command_envelope_invalid",
         # app/broker/fleet/lane_runtime.py -- a retired compatibility-read
         # alias route, written directly as JSON on a raw-ASGI middleware path
-        # with no Response object to raise through.
+        # with no Response object to raise through. Also minted (as a flat
+        # JSONResponse, not raised) by app/routers/fleet_compatibility_reads.py's
+        # `get_legacy_live_verdict` (#2140): unlike the evidence-gated ASGI
+        # path, this one refuses unconditionally -- a standalone coordinator
+        # never has a legitimate answer to measure.
         "compatibility_read_retired",
         # app/broker/fleet/lane_runtime.py -- the compatibility-retirement
         # evidence file is unreadable; same raw-ASGI constraint as above.
