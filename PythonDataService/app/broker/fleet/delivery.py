@@ -152,7 +152,7 @@ class StreamDeliveryResult:
 
 
 def verify_identity_echo(
-    headers: Mapping[str, str], request: DeliveryRequest
+    headers: Mapping[str, str], request: DeliveryRequest, *, status_code: int
 ) -> None:
     """Verify the serving runtime's identity echo against the pinned attempt.
 
@@ -161,6 +161,15 @@ def verify_identity_echo(
     the echo of a pinned dimension is not verifiable and refuses (a missing
     echo can never distinguish the serving runtime from a reflection or a
     refusal in flight). Only unpinned dimensions go unchecked.
+
+    One distinction (#2164): the echo headers exist only on a response the
+    identity middleware actually served. A handler-raised 5xx — and an
+    unrouted 404 — returns without them, and on a non-2xx that absence is the
+    *lane failing*, not the wrong lane answering. An absent echo alongside a
+    non-2xx is therefore passed through so the caller sees the lane's own
+    status and refusal body; a present-but-wrong echo refuses at any status,
+    and an absent echo on a 2xx remains exactly the unverifiable-provenance
+    refusal this check was written for.
     """
     # Header sources differ in case (httpx normalizes; a raw-ASGI dispatch
     # carries ASGI's lowercase names in a plain mapping), and the identity
@@ -168,6 +177,13 @@ def verify_identity_echo(
     lowered = {name.lower(): value for name, value in headers.items()}
     served_broker = lowered.get("x-fleet-broker")
     served_clerk = lowered.get("x-fleet-clerk-id")
+    if (
+        served_broker is None or served_clerk is None
+    ) and not 200 <= status_code < 300:
+        # No echo to verify and the lane already refused: the status and body
+        # are the lane's own answer, and must not be masked as a 409 identity
+        # mismatch with a retry instruction that can never succeed (#2164).
+        return
     if served_broker != request.broker:
         raise DeliveryIdentityMismatch(
             f"The response names broker {served_broker!r}; the attempt pinned "
@@ -268,7 +284,9 @@ class HttpLaneDelivery:
                     COORDINATOR_TOKEN_HEADER: self._token,
                 },
             )
-            verify_identity_echo(response.headers, request)
+            verify_identity_echo(
+                response.headers, request, status_code=response.status_code
+            )
             return DeliveryResult(
                 status_code=response.status_code,
                 headers=dict(response.headers),
@@ -293,7 +311,9 @@ class HttpLaneDelivery:
             stream=True,
         )
         try:
-            verify_identity_echo(response.headers, request)
+            verify_identity_echo(
+                response.headers, request, status_code=response.status_code
+            )
         except DeliveryIdentityMismatch:
             # A refused echo still holds an open stream: release both ends
             # before surfacing the uncertain outcome.
@@ -361,7 +381,7 @@ class LocalLaneDelivery:
                 "the in-process handler returned "
                 f"{type(result).__name__}, not a DeliveryResult"
             )
-        verify_identity_echo(result.headers, request)
+        verify_identity_echo(result.headers, request, status_code=result.status_code)
         return result
 
     async def stream(self, request: DeliveryRequest) -> StreamDeliveryResult:
@@ -374,7 +394,7 @@ class LocalLaneDelivery:
                 "the in-process handler returned "
                 f"{type(result).__name__}, not a StreamDeliveryResult"
             )
-        verify_identity_echo(result.headers, request)
+        verify_identity_echo(result.headers, request, status_code=result.status_code)
         return StreamDeliveryResult(
             status_code=result.status_code,
             headers=result.headers,
