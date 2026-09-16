@@ -312,4 +312,95 @@ describe('AlpacaLiveVerdictService', () => {
 
     expect(brokers.readLane).toHaveBeenCalledTimes(2);
   });
+
+  describe('poll cadence backoff', () => {
+    it('keeps the 5000ms cadence while every tick stays healthy', async () => {
+      vi.useFakeTimers();
+      const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
+      brokers.readLane.mockResolvedValue(makeVerdict());
+
+      svc.start();
+      await flush(); // tick 1 (immediate)
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(2); // tick 2 due at the base cadence
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(3); // tick 3, still exactly 5000ms later
+    });
+
+    it('doubles the interval, capped, under sustained widespread failure', async () => {
+      vi.useFakeTimers();
+      const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
+      brokers.readLane.mockRejectedValue(new Error('down'));
+
+      svc.start();
+      await flush(); // tick 1 fails -> interval 5000 -> 10000
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(1); // tick 2 not due yet at the old 5s gap
+
+      await vi.advanceTimersByTimeAsync(5000); // total 10000 since tick 1
+      expect(brokers.readLane).toHaveBeenCalledTimes(2); // tick 2 fires -> interval 10000 -> 20000
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(2); // tick 3 needs the full 20000
+
+      await vi.advanceTimersByTimeAsync(10000); // total 20000 since tick 2
+      expect(brokers.readLane).toHaveBeenCalledTimes(3); // tick 3 fires -> interval 20000 -> 40000
+
+      await vi.advanceTimersByTimeAsync(40000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(4); // tick 4 fires -> interval 40000 -> 80000, capped to 50000
+
+      // If the cap held at 50000, tick 5 already fired by +50000; if it had
+      // gone uncapped to 80000, this assertion would still read 4.
+      await vi.advanceTimersByTimeAsync(50000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(5);
+    });
+
+    it('resets the interval to 5000ms as soon as a tick succeeds again', async () => {
+      vi.useFakeTimers();
+      const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
+      brokers.readLane.mockRejectedValue(new Error('down'));
+
+      svc.start();
+      await flush(); // tick 1 fails -> interval 5000 -> 10000
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(2); // tick 2 fails -> interval 10000 -> 20000
+
+      brokers.readLane.mockResolvedValue(makeVerdict());
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(3); // tick 3 succeeds -> interval resets to 5000
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(4); // tick 4 due at the reset base cadence, not 10000
+    });
+
+    it("a single lane's persistent failure never backs off the cadence or touches its healthy neighbor (FR-093)", async () => {
+      vi.useFakeTimers();
+      const { svc, brokers } = setup([
+        testLane({ clerk_id: 'clrk_bad', broker: 'alpaca', display_label: 'Bad' }),
+        testLane({ clerk_id: 'clrk_good', broker: 'alpaca', display_label: 'Good' }),
+      ]);
+      const goodVerdict = makeVerdict({ final_verdict: 'live-armed', configured_mode: 'live' });
+      brokers.readLane.mockImplementation(async (clerkId: string) => {
+        if (clerkId === 'clrk_bad') throw new Error('bad lane down');
+        return goodVerdict;
+      });
+
+      svc.start();
+      await flush(); // tick 1
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(4); // tick 2 due at the un-backed-off 5s cadence
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(brokers.readLane).toHaveBeenCalledTimes(6); // tick 3, still 5000ms later -> no backoff engaged
+
+      expect(svc.stateFor('clrk_good')).toEqual({ verdict: goodVerdict, lastError: null });
+      expect(svc.stateFor('clrk_bad').verdict).toBeNull();
+      expect(svc.stateFor('clrk_bad').lastError).toBeInstanceOf(Error);
+    });
+  });
 });
