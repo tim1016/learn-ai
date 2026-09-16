@@ -241,6 +241,7 @@ def test_reconcilable_effect_projection_matches_authority_for_every_state_and_or
                             broker_state=order_status,
                             submitted_at_ms=now_ms,
                             updated_at_ms=now_ms,
+                            filled_quantity=(0.0 if order_status == "filled" else None),
                         ),
                     )
                 projected.append(

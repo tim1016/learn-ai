@@ -12,8 +12,6 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
@@ -32,9 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKN
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder
-
-if TYPE_CHECKING:
-    from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
 
 
 def submit_absence_grace_ms() -> int:
@@ -55,6 +51,7 @@ __all__ = [
     "fold_order_acknowledgement",
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
+    "fold_order_submission_response",
     "fold_submit_absence_void",
     "fold_uncertain",
     "order_never_reached_broker",
@@ -275,6 +272,38 @@ def fold_order_submission_acknowledgement(
         )
         return
     fold_order_acknowledgement(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=order,
+    )
+
+
+def fold_order_submission_response(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+    trade: BrokerTradePort,
+) -> None:
+    """Fold one submit response according to the adapter's evidence authority.
+
+    Real broker acknowledgements never become fill math here. Deterministic
+    no-submit adapters execute completely inside ``submit`` and explicitly
+    advertise that their returned aggregate is the authoritative execution
+    observation, so withholding it would create a filled order with no
+    durable position attribution.
+    """
+    if (
+        isinstance(trade, AuthoritativeSubmissionEvidencePort)
+        and trade.submission_response_is_authoritative_evidence
+    ):
+        fold_order_evidence(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order=order,
+        )
+        return
+    fold_order_submission_acknowledgement(
         repo,
         effect_operation_id=effect_operation_id,
         order=order,

@@ -575,7 +575,11 @@ def reconcilable_effect_operations(
         + subject_clause +
         "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
-        "('filled','canceled','expired','rejected','replaced')) "
+        "('filled','canceled','expired','rejected','replaced') "
+        "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
+        "SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)))) "
         "ORDER BY e.created_at_ms ASC",
         params,
     ).fetchall()

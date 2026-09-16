@@ -128,3 +128,18 @@ class BrokerTradePort(Protocol):
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> BrokerOrder | None: ...
+
+
+@runtime_checkable
+class AuthoritativeSubmissionEvidencePort(Protocol):
+    """Optional capability for deterministic no-submit execution adapters.
+
+    Real broker submit acknowledgements are not execution feeds; their fill
+    accounting arrives through trade updates or bounded recovery.  A
+    deterministic adapter that executes entirely inside ``submit`` may expose
+    this capability so the returned aggregate order is folded as execution
+    evidence before control returns to the strategy runtime.
+    """
+
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool: ...

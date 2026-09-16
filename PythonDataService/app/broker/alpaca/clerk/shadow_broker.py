@@ -166,6 +166,11 @@ class EvidenceLedgers:
         with self.open(account_id) as ledger:
             return ledger.bars_after(provider=provider, symbol=symbol, start_ms=start_ms)
 
+    def latest_for_symbol(self, account_id: str, *, symbol: str) -> RetainedSourceBar | None:
+        """Return the newest durable bar from one instance's evidence namespace."""
+        with self.open(account_id) as ledger:
+            return ledger.latest_for_symbol(symbol)
+
 
 class _Settlable(NamedTuple):
     """One resting order's settlement inputs, narrowed once for the whole pass."""
@@ -224,6 +229,22 @@ class ShadowOrderBook:
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
         self._require_own_evidence(client_order_id, retained_bar)
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind a recovery EXIT to the latest bar its own instance retained.
+
+        Strategy decisions always bind their exact deciding bar before submit.
+        Recovery EXITs have no strategy decision bar, so their distinct durable
+        decision identity explicitly selects the newest retained observation
+        from the order namespace that owns the exposure. ``False`` keeps the
+        recovery effect uncertain when no such evidence exists.
+        """
+        account_id = self._evidence_namespace_for(client_order_id)
+        retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
+        if retained_bar is None:
+            return False
+        self.bind_evaluated_bar(client_order_id, retained_bar)
+        return True
 
     def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         # One book serves every instance on this authority, so the order's own
@@ -497,8 +518,15 @@ class NoSubmitAlpacaTradePort:
     def __init__(self, book: ShadowOrderBook) -> None:
         self._book = book
 
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool:
+        return True
+
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
         self._book.bind_evaluated_bar(client_order_id, retained_bar)
+
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol)
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         return self._book.submit(leg, client_order_id=client_order_id)
