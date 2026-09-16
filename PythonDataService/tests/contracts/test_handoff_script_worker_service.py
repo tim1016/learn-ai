@@ -1,4 +1,6 @@
-"""Contract: the Paper-to-Live handoff script never hardcodes a compose target.
+"""Contract: the Paper-to-Live handoff script never hardcodes a compose
+target, never guesses one, and resolves the identical compose invocation the
+desk itself authors for the same lane.
 
 ``alpaca-paper-to-live-handoff.sh`` used to call ``podman compose <verb>
 python-service`` directly at five call sites (stop, the dev-reset run, start,
@@ -9,14 +11,34 @@ that motivated authoring the desk's own restart command from the deployment's
 declared ``FLEET_WORKER_SERVICE``
 (``PythonDataService/app/broker_configuration/desk_state.py``'s
 ``worker_restart_command`` / ``runtime.py``'s ``worker_restart_target_from``,
-#2138). This pins the script's own derivation, mirrored in bash because a
-shell asset cannot import the Python desk module.
+#2138).
+
+``FLEET_WORKER_SERVICE`` and its compose-context siblings are declared only
+inside compose service environments (``compose.yaml``,
+``compose.fleet.dev.yaml``, ``compose.fleet.yaml``) — a repo-root ``.env``
+never carries them. The script no longer pretends otherwise: it reads these
+four as plain shell-exported variables (never a ``.env`` fallback), requires
+``FLEET_WORKER_SERVICE`` with no default, and the Configuration page's
+"Copy handoff script" button is what supplies the correct value, by reading
+the same desk-authored ``restart_command`` the switch guide renders and
+splicing matching ``export`` lines into the copied bytes
+(``configuration-handoff-script.component.ts``'s ``withWorkerExports``).
+
+The tests below execute the script's own header against ``worker_restart_command``'s
+canonical output for the same target — both sides run, per CLAUDE.md guiding
+philosophy #5 — rather than pinning a second, hand-maintained expectation
+that could drift from the function it mirrors.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+
+import pytest
+
+from app.broker_configuration.desk_state import WorkerRestartTarget, worker_restart_command
+from app.config import FleetSettings
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 HANDOFF_SCRIPT = (
@@ -29,7 +51,9 @@ def _script() -> str:
 
 
 def test_no_compose_verb_hardcodes_python_service() -> None:
-    """Every ``podman compose <verb>`` call site targets the derived variable."""
+    """Every ``podman compose <verb>`` call site targets the derived variable,
+    and the script contains no functional fallback to the coordinator's own
+    service name — the exact bug #2147 exists to fix."""
     script = _script()
     for verb in ("stop", "start", "restart", "run --rm --no-deps", "exec -T"):
         assert f"{verb} python-service" not in script, (
@@ -39,21 +63,20 @@ def test_no_compose_verb_hardcodes_python_service() -> None:
             "restart command."
         )
 
-    # The one legitimate remaining functional reference: the combined-posture
-    # fallback, when FLEET_WORKER_SERVICE is undeclared (comments may still
-    # name python-service in prose explaining the coordinator distinction).
     non_comment_lines = [
         line for line in script.splitlines() if not line.strip().startswith("#")
     ]
     functional_references = [
         line for line in non_comment_lines if "python-service" in line
     ]
-    assert functional_references == ['worker_service="${worker_service:-python-service}"'], (
-        f"unexpected non-comment reference(s) to python-service: {functional_references}"
+    assert functional_references == [], (
+        f"unexpected non-comment reference(s) to python-service: {functional_references}; "
+        "the script must require FLEET_WORKER_SERVICE rather than default to the "
+        "coordinator's own service name."
     )
 
 
-def _run_header(env: dict[str, str], cwd: Path) -> dict[str, str]:
+def _run_header(env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Drive the script's real derivation logic (through the compose_words
     build), against a fake repo root, and report what it resolved.
 
@@ -70,7 +93,7 @@ def _run_header(env: dict[str, str], cwd: Path) -> dict[str, str]:
         'printf "WORKER_SERVICE=%s\\n" "$worker_service"\n'
         'printf "COMPOSE_WORDS=%s\\n" "${compose_words[*]}"\n'
     )
-    completed = subprocess.run(
+    return subprocess.run(
         ["bash", "-c", header + probe],
         cwd=cwd,
         env=env,
@@ -78,6 +101,10 @@ def _run_header(env: dict[str, str], cwd: Path) -> dict[str, str]:
         text=True,
         timeout=10,
     )
+
+
+def _resolved(env: dict[str, str], cwd: Path) -> dict[str, str]:
+    completed = _run_header(env, cwd)
     assert completed.returncode == 0, completed.stderr
     result: dict[str, str] = {}
     for line in completed.stdout.splitlines():
@@ -92,68 +119,104 @@ def _fake_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_derivation_falls_back_to_python_service_when_undeclared(tmp_path: Path) -> None:
-    """The combined dev posture (no FLEET_WORKER_SERVICE) is unchanged."""
-    resolved = _run_header(env={"PATH": "/usr/bin:/bin"}, cwd=_fake_repo(tmp_path))
-    assert resolved["WORKER_SERVICE"] == "python-service"
+def _shell_env_for(target: WorkerRestartTarget) -> dict[str, str]:
+    """The FLEET_* shell exports the Configuration page's copy button would
+    splice in for this target (`configuration-handoff-script.component.ts`'s
+    `workerExportLines`) — the same four variables the script's header reads
+    directly, with no `.env` fallback."""
+    env = {"PATH": "/usr/bin:/bin", "FLEET_WORKER_SERVICE": target.service}
+    if target.compose_project is not None:
+        env["FLEET_COMPOSE_PROJECT"] = target.compose_project
+    if target.compose_files:
+        env["FLEET_COMPOSE_FILES"] = ",".join(target.compose_files)
+    if target.compose_profile is not None:
+        env["FLEET_COMPOSE_PROFILE"] = target.compose_profile
+    return env
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        WorkerRestartTarget(
+            service="python-service", compose_project=None, compose_files=(), compose_profile=None
+        ),
+        WorkerRestartTarget(
+            service="alpaca-paper-clerk",
+            compose_project=None,
+            compose_files=("compose.yaml", "compose.fleet.dev.yaml"),
+            compose_profile=None,
+        ),
+        WorkerRestartTarget(
+            service="alpaca-live-clerk",
+            compose_project="learn-ai-fleet",
+            compose_files=("compose.yaml", "compose.fleet.yaml"),
+            compose_profile="fleet",
+        ),
+    ],
+    ids=["combined-dev", "dev-two-lane", "fleet"],
+)
+def test_derivation_matches_the_canonical_restart_command(
+    target: WorkerRestartTarget, tmp_path: Path
+) -> None:
+    """Both sides execute: given this lane's exact shell-exported FLEET_*
+    variables, the script's header resolves the identical compose invocation
+    `worker_restart_command` (desk_state.py) authors for the same target —
+    the value the Configuration page's copy button actually fills in."""
+    canonical = worker_restart_command(target)
+    assert canonical is not None
+    expected_suffix = f" restart {target.service}"
+    assert canonical.endswith(expected_suffix)
+    canonical_words = canonical[: -len(expected_suffix)]
+
+    resolved = _resolved(_shell_env_for(target), _fake_repo(tmp_path))
+
+    assert resolved["WORKER_SERVICE"] == target.service
+    assert resolved["COMPOSE_WORDS"] == canonical_words
+
+
+def test_a_shell_exported_worker_service_is_the_only_source(tmp_path: Path) -> None:
+    """The script reads FLEET_WORKER_SERVICE directly; nothing else (a
+    repo-root .env, an unset default) can supply it — matching the finding
+    that neither .env nor .env.example ever declares a FLEET_* key."""
+    resolved = _resolved(
+        {"PATH": "/usr/bin:/bin", "FLEET_WORKER_SERVICE": "alpaca-paper-clerk"},
+        _fake_repo(tmp_path),
+    )
+
+    assert resolved["WORKER_SERVICE"] == "alpaca-paper-clerk"
     assert resolved["COMPOSE_WORDS"] == "podman compose"
 
 
-def test_derivation_reads_worker_service_from_dot_env(tmp_path: Path) -> None:
-    """A deployment's declared FLEET_WORKER_SERVICE overrides the fallback."""
-    repo = _fake_repo(tmp_path)
-    (repo / ".env").write_text("FLEET_WORKER_SERVICE=alpaca-paper-worker\n", encoding="utf-8")
+def test_derivation_trims_a_spaced_file_list_like_fleet_settings_does(tmp_path: Path) -> None:
+    """A FLEET_COMPOSE_FILES value with a space after the comma — legal input,
+    since FleetSettings.get_compose_files() (config.py's _split_compose_files)
+    strips each entry — resolves to the same two file names on the bash side,
+    not a second file name with a leading space baked into the `-f` argument."""
+    raw = "compose.yaml, compose.fleet.yaml"
+    canonical_files = FleetSettings(COMPOSE_FILES=raw).get_compose_files()
+    assert canonical_files == ("compose.yaml", "compose.fleet.yaml")
 
-    resolved = _run_header(env={"PATH": "/usr/bin:/bin"}, cwd=repo)
-
-    assert resolved["WORKER_SERVICE"] == "alpaca-paper-worker"
-    assert resolved["COMPOSE_WORDS"] == "podman compose"
-
-
-def test_derivation_builds_the_full_compose_context_in_order(tmp_path: Path) -> None:
-    """Project, then every -f file in order, then profile — matching
-    worker_restart_command's own word order (desk_state.py)."""
-    repo = _fake_repo(tmp_path)
-    (repo / ".env").write_text(
-        "FLEET_WORKER_SERVICE=alpaca-live-worker\n"
-        "FLEET_COMPOSE_PROJECT=learnai-fleet\n"
-        "FLEET_COMPOSE_FILES=compose.yaml,compose.fleet.yaml\n"
-        "FLEET_COMPOSE_PROFILE=live\n",
-        encoding="utf-8",
+    resolved = _resolved(
+        {
+            "PATH": "/usr/bin:/bin",
+            "FLEET_WORKER_SERVICE": "alpaca-live-clerk",
+            "FLEET_COMPOSE_FILES": raw,
+        },
+        _fake_repo(tmp_path),
     )
 
-    resolved = _run_header(env={"PATH": "/usr/bin:/bin"}, cwd=repo)
-
-    assert resolved["WORKER_SERVICE"] == "alpaca-live-worker"
-    assert resolved["COMPOSE_WORDS"] == (
-        "podman compose --project-name learnai-fleet "
-        "-f compose.yaml -f compose.fleet.yaml --profile live"
+    assert resolved["COMPOSE_WORDS"] == "podman compose " + " ".join(
+        f"-f {compose_file}" for compose_file in canonical_files
     )
 
 
-def test_a_shell_exported_override_wins_over_dot_env(tmp_path: Path) -> None:
-    """Matching compose's own precedent: the shell environment wins."""
-    repo = _fake_repo(tmp_path)
-    (repo / ".env").write_text("FLEET_WORKER_SERVICE=from-dot-env\n", encoding="utf-8")
+def test_derivation_refuses_loudly_when_worker_service_is_unset(tmp_path: Path) -> None:
+    """No FLEET_WORKER_SERVICE means an immediate, loud refusal — never a
+    silent fall-through to whatever the bare command would resolve to. This
+    is the regression #2147 exists to close: the script used to default to
+    python-service, the coordinator, and restart the wrong container."""
+    completed = _run_header({"PATH": "/usr/bin:/bin"}, _fake_repo(tmp_path))
 
-    resolved = _run_header(
-        env={"PATH": "/usr/bin:/bin", "FLEET_WORKER_SERVICE": "from-shell"}, cwd=repo
-    )
-
-    assert resolved["WORKER_SERVICE"] == "from-shell"
-
-
-def test_derivation_never_aborts_under_set_dash_e_with_no_dot_env(tmp_path: Path) -> None:
-    """A missing FLEET_* key (grep finds nothing) must not trip `set -e`.
-
-    This is the regression a naive `grep ... | cut ...` introduces: under
-    `pipefail`, grep's no-match exit status kills the whole script the
-    instant it resolves the very first key, before the account-id prompt
-    ever appears.
-    """
-    repo = _fake_repo(tmp_path)
-    (repo / ".env").write_text("SOME_OTHER_VAR=1\n", encoding="utf-8")
-
-    resolved = _run_header(env={"PATH": "/usr/bin:/bin"}, cwd=repo)
-
-    assert resolved["WORKER_SERVICE"] == "python-service"
+    assert completed.returncode != 0
+    assert "FLEET_WORKER_SERVICE" in completed.stderr
+    assert completed.stdout == ""

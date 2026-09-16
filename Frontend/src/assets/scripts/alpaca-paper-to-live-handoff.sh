@@ -6,42 +6,41 @@ if [[ ! -f compose.yaml || ! -d PythonDataService ]]; then
   exit 1
 fi
 
-# The worker's compose target, derived the same way the desk authors its own
-# restart command (PythonDataService/app/broker_configuration/desk_state.py's
+# The worker's compose target, matching exactly what the desk authored for
+# this lane (PythonDataService/app/broker_configuration/desk_state.py's
 # worker_restart_command, fed by runtime.py's worker_restart_target_from):
 # the deployment's declared FLEET_WORKER_SERVICE, plus whatever compose
-# context its own file does not already resolve. Undeclared (the combined
-# dev posture) keeps python-service, the only service compose.yaml declares
-# on its own. On the dev two-lane posture and the fleet overlays,
-# python-service is the coordinator, not a lane worker — restarting it does
-# not restart either lane, which is exactly the bug this derivation fixes.
-_fleet_env_var() {
-  local key="$1"
-  if [[ -n "${!key:-}" ]]; then
-    printf '%s' "${!key}"
-    return
-  fi
-  if [[ -f .env ]]; then
-    grep -E "^${key}=" .env | tail -n 1 | cut -d '=' -f2- || true
-  fi
-}
-worker_service="$(_fleet_env_var FLEET_WORKER_SERVICE)"
-worker_service="${worker_service:-python-service}"
+# context its own file does not already resolve. In the fleet posture each
+# lane is its own service, so a wrong guess here restarts a process that
+# applies no lane's staged profile — exactly the bug #2147 exists to fix.
+#
+# These are never read from a repo-root .env: FLEET_WORKER_SERVICE and its
+# compose-context siblings are declared only inside compose service
+# environments (compose.yaml, compose.fleet.dev.yaml, compose.fleet.yaml),
+# so a host shell never sees them unless something sets them first. The
+# Configuration page's "Copy handoff script" button is that something — it
+# fills in this lane's exact values before you paste. Running the raw asset
+# without going through that button requires exporting FLEET_WORKER_SERVICE
+# yourself; there is no default, because a wrong guess here means silently
+# restarting the wrong container.
+worker_service="${FLEET_WORKER_SERVICE:?Set FLEET_WORKER_SERVICE to the compose service for this lane, or copy this script from the Configuration page, which fills it in for you.}"
 compose_words=(podman compose)
-compose_project="$(_fleet_env_var FLEET_COMPOSE_PROJECT)"
-if [[ -n "$compose_project" ]]; then
-  compose_words+=(--project-name "$compose_project")
+if [[ -n "${FLEET_COMPOSE_PROJECT:-}" ]]; then
+  compose_words+=(--project-name "$FLEET_COMPOSE_PROJECT")
 fi
-compose_files_raw="$(_fleet_env_var FLEET_COMPOSE_FILES)"
-if [[ -n "$compose_files_raw" ]]; then
-  IFS=',' read -r -a compose_files <<< "$compose_files_raw"
+if [[ -n "${FLEET_COMPOSE_FILES:-}" ]]; then
+  IFS=',' read -r -a compose_files <<< "$FLEET_COMPOSE_FILES"
   for compose_file in "${compose_files[@]}"; do
+    # Trim surrounding whitespace per entry, matching config.py's
+    # _split_compose_files (entry.strip()) — "a, b" must resolve to the
+    # same two file names on both sides, not "a" and " b".
+    compose_file="${compose_file#"${compose_file%%[![:space:]]*}"}"
+    compose_file="${compose_file%"${compose_file##*[![:space:]]}"}"
     compose_words+=(-f "$compose_file")
   done
 fi
-compose_profile="$(_fleet_env_var FLEET_COMPOSE_PROFILE)"
-if [[ -n "$compose_profile" ]]; then
-  compose_words+=(--profile "$compose_profile")
+if [[ -n "${FLEET_COMPOSE_PROFILE:-}" ]]; then
+  compose_words+=(--profile "$FLEET_COMPOSE_PROFILE")
 fi
 
 read -r -p "Disposable Alpaca Paper account ID: " PAPER_ACCOUNT_ID
