@@ -50,7 +50,14 @@ from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 
 logger = logging.getLogger(__name__)
-_RECOVERY_DECISION_PREFIXES = ("recovery-flatten-", "exit-redrive-")
+
+# The two decision-id namespaces documented on ``exit.accept_recovery_exit``
+# (minted by ``safe_flatten_execution`` and ``exit_watchdog`` respectively).
+# Named here, the module both namespaces classify against, so a rename or a
+# third namespace has exactly one declaration to update.
+RECOVERY_FLATTEN_DECISION_PREFIX = "recovery-flatten-"
+EXIT_REDRIVE_DECISION_PREFIX = "exit-redrive-"
+_RECOVERY_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, EXIT_REDRIVE_DECISION_PREFIX)
 
 
 async def resolve_exit(

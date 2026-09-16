@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.exit import (
     accept_recovery_exit,
     resolve_accepted_exit,
 )
+from app.broker.alpaca.clerk.sqlite.exit_resolution import RECOVERY_FLATTEN_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
@@ -111,7 +112,7 @@ async def execute_safe_flatten_plan(
                     repo,
                     account_id=account_id,
                     strategy_instance_id=leg.strategy_instance_id,
-                    decision_id=f"recovery-flatten-{decision_token}",
+                    decision_id=f"{RECOVERY_FLATTEN_DECISION_PREFIX}{decision_token}",
                     entry_order_ref=entries[-1].order_ref,
                     # Re-asserted inside the capture transaction: recovery
                     # policy refused presentation with RUN_STILL_ACTIVE, but a
