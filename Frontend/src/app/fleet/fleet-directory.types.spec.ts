@@ -97,6 +97,27 @@ describe('laneDisplayName', () => {
     expect(laneDisplayName(first, [first, second])).toEqual({ name: 'Paper', disambiguator: null });
     expect(laneDisplayName(second, [first, second])).toEqual({ name: 'Paper', disambiguator: null });
   });
+
+  it('suppresses the disambiguator case- and whitespace-insensitively too, matching the collision check', () => {
+    // Thermo review follow-up: the suppression guard used to compare `name`
+    // to `lane.display_label` with exact `!==`, while the collision check
+    // above it was already case- and whitespace-insensitive — a label
+    // differing only by case or padding would collide but not suppress,
+    // rendering the still-uninformative "paper (Paper)".
+    const first = lane({
+      clerk_id: 'clrk_first',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: null },
+    });
+    const second = lane({
+      clerk_id: 'clrk_second',
+      display_label: '  paper  ',
+      provider_summary: { account_nickname: null },
+    });
+
+    expect(laneDisplayName(first, [first, second]).disambiguator).toBeNull();
+    expect(laneDisplayName(second, [first, second]).disambiguator).toBeNull();
+  });
 });
 
 describe('laneDisplayNameText', () => {

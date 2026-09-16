@@ -69,6 +69,14 @@ function laneRawDisplayName(lane: LaneDescriptor): string {
     : lane.display_label;
 }
 
+/** Trimmed and case-folded, for name *comparisons* only — never rendered.
+ * Every place two display names are compared (the collision check and the
+ * disambiguator-suppression guard below) goes through this one function, so
+ * the two can't drift into comparing by different rules. */
+function normalizedForComparison(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 /** A lane's display name, plus its own label to show beside it when that
  * name is shared with another lane in the directory.
  *
@@ -87,13 +95,16 @@ export function laneDisplayName(
   allLanes: readonly LaneDescriptor[],
 ): LaneDisplayName {
   const name = laneRawDisplayName(lane);
-  const normalized = name.toLowerCase();
+  const normalizedName = normalizedForComparison(name);
   const isShared = allLanes.some(
     (other) =>
       other.clerk_id !== lane.clerk_id
-      && laneRawDisplayName(other).toLowerCase() === normalized,
+      && normalizedForComparison(laneRawDisplayName(other)) === normalizedName,
   );
-  const disambiguator = isShared && name !== lane.display_label ? lane.display_label : null;
+  const disambiguator =
+    isShared && normalizedName !== normalizedForComparison(lane.display_label)
+      ? lane.display_label
+      : null;
   return { name, disambiguator };
 }
 
