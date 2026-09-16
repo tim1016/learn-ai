@@ -2,6 +2,7 @@ import { DestroyRef, Injectable, inject, signal } from '@angular/core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import { FleetDirectoryService } from '../fleet/fleet-directory.service';
+import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import { resourceTarget } from '../fleet/resource-target';
 import { BrokersService } from './brokers.service';
 
@@ -26,14 +27,27 @@ export const UNPOLLED_LANE_STATE: LaneVerdictState = Object.freeze({
  * Polls `GET /api/brokers/alpaca/clerks/{clerk_id}/live-verdict` for every
  * lane `FleetDirectoryService.lanesOf('alpaca')` currently reports, every
  * five seconds, and exposes the latest per-lane state as one signal. The
- * shell renders one badge per lane from it (FR-093: one lane's failed or
- * slow read must never blank, delay, or overwrite another lane's state —
- * this service stores each lane under its own key, so a rejected read for
- * one `clerk_id` only ever overwrites that `clerk_id`'s entry).
+ * shell renders one badge per lane from it.
  *
- * A single poll timer drives every lane's read, and each read still goes
- * through `BrokersService`'s shared `PolledReadScheduler` — this does not
- * add an independent poller per lane, it fans one 5 s tick out to N reads.
+ * FR-093 — one lane's failed **or slow** read must never blank, delay, or
+ * overwrite another lane's state — is satisfied at both layers, and it takes
+ * both:
+ *
+ * - **State.** Each lane is stored under its own key, so a rejected read for
+ *   one `clerk_id` only ever overwrites that `clerk_id`'s entry.
+ * - **Transport.** The tick's reads are handed to the scheduler as one
+ *   concurrent group (`BrokersService.getLiveVerdicts`). Per-lane `try/catch`
+ *   alone is not enough: the shared scheduler dispatches one read at a time
+ *   and spends `POLL_REQUEST_TIMEOUT_MS` from enqueue, so a live lane hanging
+ *   15 s used to reject the paper lane's queued read with "the poll ceiling
+ *   elapsed while it waited for a turn" — a genuinely live-armed lane losing
+ *   its account id and armed count because a sibling was slow.
+ *
+ * A single poll timer drives every lane's read and the group is one entry in
+ * the shared queue, so this is still one poller fanning out to N reads, not
+ * N pollers. Single-flight by URL is preserved: a tick that overlaps a still
+ * outstanding read for the same lane joins it rather than racing it, so the
+ * 5 s timer outliving a 15 s read carries no stale-overwrite hazard.
  *
  * Never derive the mode from an env var or an account-id shape here: the
  * server's verdict is the only source of truth (ADR 0011 §7).
@@ -69,17 +83,48 @@ export class AlpacaLiveVerdictService {
   }
 
   /** One polling tick across every known Alpaca lane. Each lane's read is
-   * independent end to end — its own request, its own try/catch, its own
-   * map entry — so one lane's rejection can never touch another's state. */
+   * independent end to end — its own concurrent request, its own try/catch,
+   * its own map entry — so one lane's rejection or latency can never touch
+   * another's state. */
   async refresh(): Promise<void> {
-    const lanes = this.directory.lanesOf('alpaca');
-    await Promise.all(lanes.map((lane) => this.refreshLane(lane.broker, lane.clerk_id)));
+    const lanes = await this.roster();
+    const reads = this.brokers.getLiveVerdicts(
+      lanes.map((lane) => resourceTarget(lane.broker, lane.clerk_id)),
+    );
+    // `getLiveVerdicts` returns synchronously and `storeLane` attaches its
+    // handler before its first await, so every read is claimed in this same
+    // synchronous block — no read is ever left momentarily unhandled.
+    await Promise.all(lanes.map((lane, index) => this.storeLane(lane.clerk_id, reads[index])));
+    this.pruneTo(new Set(lanes.map((lane) => lane.clerk_id)));
   }
 
-  private async refreshLane(broker: string, clerkId: string): Promise<void> {
+  /**
+   * The lanes this tick reads, driving the directory rather than waiting for
+   * some other surface to.
+   *
+   * Only three broker feature pages and the redirect guard used to call
+   * `ensureLoaded`. On every other route a failed directory load left
+   * `lanesOf` empty for the whole session, and the shell's trust anchor — the
+   * global answer to "is real money at risk?" — stayed blank while a live
+   * lane traded. Driving it from the shell's own tick makes a failed load
+   * retried, at the directory's own paced cooldown, instead of terminal.
+   */
+  private async roster(): Promise<LaneDescriptor[]> {
     try {
-      const verdict = await this.brokers.getLiveVerdict(resourceTarget(broker, clerkId));
-      this.setState(clerkId, { verdict, lastError: null });
+      await this.directory.ensureLoaded();
+    } catch {
+      // Handled where it belongs, not swallowed: FleetDirectoryService owns
+      // this error and already exposes it as observable state. An unresolved
+      // roster is exactly the condition the shell's "lanes unknown" badge
+      // renders, so this tick reads whatever the directory last knew and the
+      // next tick asks again.
+    }
+    return this.directory.lanesOf('alpaca');
+  }
+
+  private async storeLane(clerkId: string, read: Promise<AlpacaLiveVerdict>): Promise<void> {
+    try {
+      this.setState(clerkId, { verdict: await read, lastError: null });
     } catch (err) {
       // A failed read means this lane's verdict is unknown to this client;
       // never keep rendering a stale mode over a network fault.
@@ -91,6 +136,19 @@ export class AlpacaLiveVerdictService {
     this._stateByClerkId.update((current) => {
       const next = new Map(current);
       next.set(clerkId, state);
+      return next;
+    });
+  }
+
+  /** Forget lanes the directory no longer reports. The roster is
+   * authoritative, and a retained entry would render a pre-departure verdict
+   * for a returning lane before its first fresh read lands. */
+  private pruneTo(clerkIds: ReadonlySet<string>): void {
+    this._stateByClerkId.update((current) => {
+      const stale = [...current.keys()].filter((clerkId) => !clerkIds.has(clerkId));
+      if (stale.length === 0) return current;
+      const next = new Map(current);
+      for (const clerkId of stale) next.delete(clerkId);
       return next;
     });
   }

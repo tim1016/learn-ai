@@ -132,13 +132,31 @@ describe('BrokersService', () => {
   });
 
   it('GETs the lane-scoped live verdict via the catalog-declared operation', async () => {
-    const promise = service.getLiveVerdict(TARGET);
+    const [promise] = service.getLiveVerdicts([TARGET]);
 
     const req = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/live-verdict`);
     expect(req.request.method).toBe('GET');
     req.flush({ final_verdict: 'paper' });
 
     await expect(promise).resolves.toMatchObject({ final_verdict: 'paper' });
+  });
+
+  it('issues every lane\'s live verdict at once, and settles each on its own', async () => {
+    const other = resourceTarget('alpaca', 'clrk_other');
+
+    const [first, second] = service.getLiveVerdicts([TARGET, other]);
+
+    // Both are in flight together: serialized, the second URL would not exist
+    // yet and would inherit the first lane's latency (FR-093).
+    httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/live-verdict`).flush({
+      final_verdict: 'paper',
+    });
+    httpMock
+      .expectOne('/api/brokers/alpaca/clerks/clrk_other/live-verdict')
+      .flush('boom', { status: 500, statusText: 'Server Error' });
+
+    await expect(first).resolves.toMatchObject({ final_verdict: 'paper' });
+    await expect(second).rejects.toBeDefined();
   });
 
   it('GETs the custody diagnosis for the named broker', async () => {

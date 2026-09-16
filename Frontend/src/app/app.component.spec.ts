@@ -149,6 +149,22 @@ describe('AppComponent', () => {
     expect(badges[1].textContent).toContain('assume real money');
   });
 
+  it('renders a loud lanes-unknown badge and live chrome when the roster is empty', () => {
+    // Every boot until /api/broker-clerks resolves, and indefinitely after a
+    // failed load. Zero badges plus the neutral default chrome is the calm-
+    // while-real-money-trades failure this anchor exists to kill (#2110 D2).
+    directory.rebind({ observed_at_ms: 3, clerks: [] });
+    fixture.detectChanges();
+
+    const badges = fixture.nativeElement.querySelectorAll('app-alpaca-live-banner [role="status"]');
+    expect(badges.length).toBe(1);
+    expect(badges[0].className).toContain('is-undetermined');
+    expect(badges[0].textContent).toContain('Alpaca lanes unknown');
+    expect(badges[0].textContent).toContain('assume real money');
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(false);
+  });
+
   it('sets the browser title from the current menu page title', async () => {
     const router = TestBed.inject(Router);
 

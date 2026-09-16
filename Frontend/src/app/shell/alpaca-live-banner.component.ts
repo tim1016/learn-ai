@@ -1,8 +1,43 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 
+import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
+
+/**
+ * The standing assumption an undetermined badge carries. It is in the badge's
+ * own visible text AND in its accessible name: `aria-label` wins the
+ * accessible-name computation and screen readers commonly announce a labelled
+ * live region by its name, so a warning whose meaning lives only in the
+ * visible copy and the amber is the WCAG 1.4.1 failure this badge exists to
+ * prevent. Closed operator copy — a transport/roster fact the server cannot
+ * author (ADR 0011 §2; #2110 D2).
+ */
+const ASSUME_REAL_MONEY = 'Assume real money until a read succeeds.';
+
+/** Which of the four treatments a badge renders in. */
+type BadgeTone = 'is-paper' | 'is-live-unarmed' | 'is-live-armed' | 'is-undetermined';
+
+/**
+ * One rendered badge. Built once per change in TypeScript so the closed
+ * `final_verdict` union is mapped exhaustively in one place: a fifth verdict
+ * added to the contract is a compile error here, rather than warning *text*
+ * silently paired with calm *styling* in a template `@else`.
+ */
+interface LaneBadge {
+  readonly tone: BadgeTone;
+  /** The lane's own label, or null when no lane can be named because the
+   * directory itself has not resolved. */
+  readonly lane: string | null;
+  readonly mode: string;
+  readonly ariaLabel: string;
+  readonly detail: string;
+  readonly account: string | null;
+  readonly armedCount: number | null;
+  readonly lossHold: boolean;
+  readonly refusalCode: string | null;
+}
 
 /**
  * Compact Alpaca account-mode trust anchor for ONE lane (ADR 0059 D8;
@@ -13,11 +48,25 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
  * The server verdict remains the only truth source. Live mode keeps the
  * account id and armed count visible even in the dense global header.
  *
- * A lane whose mode cannot be determined — the server itself reports
- * `final_verdict: 'unknown'`, or this lane's own read failed — renders a
- * LOUD warning, never the grey "not configured" styling: an undeterminable
- * lane could be real money, so the badge says so in its own text, not only
- * through colour (WCAG 1.4.1).
+ * **It never renders nothing.** Four distinct things leave a mode
+ * undetermined, and all four render the same LOUD amber warning rather than
+ * the banned grey "not configured" styling and rather than silence:
+ *
+ * 1. the server itself reports `final_verdict: 'unknown'`;
+ * 2. this lane's own read failed;
+ * 3. no read has completed for this lane yet (~5 s on every boot, and again
+ *    whenever a lane joins mid-session);
+ * 4. there is no lane at all — the shell passes `null` when the directory is
+ *    still loading or its load failed, which on any non-broker route used to
+ *    leave the header calm and badge-less for the entire session.
+ *
+ * An undeterminable lane could be real money, so the badge says so in its own
+ * text and in its accessible name, not only through colour (WCAG 1.4.1).
+ *
+ * Note: `display_label` is operator-renameable, so two lanes can be given the
+ * same label and their badges become ambiguous again. The label is operator
+ * prose, not a backend identifier, so it deliberately does not go through
+ * `receiptLabel`; disambiguating duplicates belongs to whatever assigns them.
  */
 @Component({
   selector: 'app-alpaca-live-banner',
@@ -42,61 +91,142 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
     .alpaca-banner__hold { font-weight: 750; color: #ffaaa8; }
   `],
   template: `
-    @let s = state();
-    @let v = s.verdict;
-    @if (v) {
-      <div
-        class="alpaca-banner"
-        [class.is-paper]="v.final_verdict === 'paper'"
-        [class.is-live-unarmed]="v.final_verdict === 'live-unarmed'"
-        [class.is-live-armed]="v.final_verdict === 'live-armed'"
-        [class.is-undetermined]="v.final_verdict === 'unknown'"
-        role="status"
-        [attr.aria-label]="laneLabel() + ': ' + v.headline"
-        [attr.title]="v.detail"
-      >
-        <span class="alpaca-banner__lane">{{ laneLabel() }}</span>
-        @if (v.final_verdict === 'paper') {
-          <span class="alpaca-banner__mode">Paper money</span>
-        } @else if (v.final_verdict === 'live-unarmed' || v.final_verdict === 'live-armed') {
-          <span class="alpaca-banner__mode">Live</span>
-          <span class="alpaca-banner__detail">· {{ v.observed_account_id ?? 'account unknown' }}</span>
-          <span class="alpaca-banner__detail">· {{ v.armed_instance_count }} armed</span>
-        } @else {
-          <span class="alpaca-banner__mode">Mode unknown — assume real money</span>
-        }
-        @if (v.loss_hold === 'held') {
-          <span class="alpaca-banner__hold">· loss hold</span>
-        }
-        @if (v.clerk_refusal_reason_code && v.final_verdict === 'unknown') {
-          <span>· {{ v.clerk_refusal_reason_code | receiptLabel }}</span>
-        }
-      </div>
-    } @else if (s.lastError) {
-      <div
-        class="alpaca-banner is-undetermined"
-        role="status"
-        [attr.aria-label]="laneLabel() + ': ' + unavailableHeadline"
-        [attr.title]="unavailableDetail"
-      >
-        <span class="alpaca-banner__lane">{{ laneLabel() }}</span>
-        <span class="alpaca-banner__mode">Mode unavailable — assume real money</span>
-      </div>
-    }
+    @let b = badge();
+    <div
+      class="alpaca-banner"
+      [class]="b.tone"
+      role="status"
+      [attr.aria-label]="b.ariaLabel"
+      [attr.title]="b.detail"
+    >
+      @if (b.lane) {
+        <span class="alpaca-banner__lane">{{ b.lane }}</span>
+      }
+      <span class="alpaca-banner__mode">{{ b.mode }}</span>
+      @if (b.account) {
+        <span class="alpaca-banner__detail">· {{ b.account }}</span>
+        <span class="alpaca-banner__detail">· {{ b.armedCount }} armed</span>
+      }
+      @if (b.lossHold) {
+        <span class="alpaca-banner__hold">· loss hold</span>
+      }
+      @if (b.refusalCode) {
+        <span>· {{ b.refusalCode | receiptLabel }}</span>
+      }
+    </div>
   `,
 })
 export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
 
-  readonly lane = input.required<LaneDescriptor>();
+  /** The lane this badge speaks for, or `null` when the directory has not
+   * produced one. `null` is a rendered state, not an absent input. */
+  readonly lane = input.required<LaneDescriptor | null>();
 
-  protected readonly laneLabel = computed(() => this.lane().display_label);
-  protected readonly state = computed(() => this.service.stateFor(this.lane().clerk_id));
+  protected readonly badge = computed<LaneBadge>(() => {
+    const lane = this.lane();
+    if (lane === null) {
+      return undetermined({
+        lane: null,
+        mode: 'Alpaca lanes unknown — assume real money',
+        headline: 'The Alpaca lane directory has not resolved',
+        detail: `The shell cannot list this browser's Alpaca lanes, so no lane's mode is known. ${ASSUME_REAL_MONEY}`,
+      });
+    }
 
-  // Closed operator copy for a transport fact the server cannot author — the
-  // poll itself failed. The trust anchor degrades to an explicit warning,
-  // never to silence and never to a reassuring grey (ADR 0011 §2; #2110 D2).
-  protected readonly unavailableHeadline = 'Account verdict unavailable — the last read failed';
-  protected readonly unavailableDetail =
-    "The shell could not read this lane's Alpaca live verdict. Assume real money until a read succeeds.";
+    const label = lane.display_label;
+    const { verdict, lastError } = this.service.stateFor(lane.clerk_id);
+    if (verdict !== null) return verdictBadge(label, verdict);
+    if (lastError !== null) {
+      return undetermined({
+        lane: label,
+        mode: 'Mode unavailable — assume real money',
+        headline: 'Account verdict unavailable — the last read failed',
+        detail: `The shell could not read this lane's Alpaca live verdict. ${ASSUME_REAL_MONEY}`,
+      });
+    }
+    return undetermined({
+      lane: label,
+      mode: 'Mode not yet read — assume real money',
+      headline: 'Account verdict not yet read for this lane',
+      detail: `No live-verdict read has completed for this lane yet. ${ASSUME_REAL_MONEY}`,
+    });
+  });
+}
+
+function verdictBadge(lane: string, v: AlpacaLiveVerdict): LaneBadge {
+  const base = {
+    lane,
+    ariaLabel: `${lane}: ${v.headline}`,
+    detail: v.detail,
+    lossHold: v.loss_hold === 'held',
+  };
+  switch (v.final_verdict) {
+    case 'paper':
+      return {
+        ...base,
+        tone: 'is-paper',
+        mode: 'Paper money',
+        account: null,
+        armedCount: null,
+        refusalCode: null,
+      };
+    case 'live-unarmed':
+    case 'live-armed':
+      return {
+        ...base,
+        tone: v.final_verdict === 'live-armed' ? 'is-live-armed' : 'is-live-unarmed',
+        mode: 'Live',
+        account: v.observed_account_id ?? 'account unknown',
+        armedCount: v.armed_instance_count,
+        refusalCode: null,
+      };
+    case 'unknown':
+      return {
+        ...undetermined({
+          lane,
+          mode: 'Mode unknown — assume real money',
+          // The server's own sentence survives in the accessible name and the
+          // tooltip; the closed `mode` copy above is what the chip shows.
+          headline: v.headline,
+          detail: v.detail,
+          refusalCode: v.clerk_refusal_reason_code,
+        }),
+        lossHold: base.lossHold,
+      };
+  }
+}
+
+/** The one loud treatment every undetermined cause renders through. Only the
+ * sentence differs; the tone, the visible assumption, and the accessible name
+ * carrying that assumption do not. */
+function undetermined({
+  lane,
+  mode,
+  headline,
+  detail,
+  refusalCode = null,
+}: {
+  /** Null only when the roster itself is the undetermined thing. */
+  readonly lane: string | null;
+  /** The chip's own visible sentence. */
+  readonly mode: string;
+  /** What the accessible name says happened. */
+  readonly headline: string;
+  /** Tooltip prose. */
+  readonly detail: string;
+  readonly refusalCode?: string | null;
+}): LaneBadge {
+  const named = lane === null ? headline : `${lane}: ${headline}`;
+  return {
+    tone: 'is-undetermined',
+    lane,
+    mode,
+    ariaLabel: `${named}. ${ASSUME_REAL_MONEY}`,
+    detail,
+    account: null,
+    armedCount: null,
+    lossHold: false,
+    refusalCode,
+  };
 }

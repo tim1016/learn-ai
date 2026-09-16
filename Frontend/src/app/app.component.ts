@@ -138,6 +138,10 @@ import { CurrentUrlService } from './shell/current-url.service';
           <app-broker-banner />
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
+          } @empty {
+            <!-- Never zero badges. An unresolved roster is itself an
+                 undetermined mode, and the banner says so loudly. -->
+            <app-alpaca-live-banner [lane]="null" />
           }
         </nav>
       </app-top-bar>
@@ -167,7 +171,11 @@ export class AppComponent {
   // lane, so the shell chrome never reads calmer than its riskiest lane.
   protected readonly shellAccountMode = computed<ShellAccountMode>(() => {
     const lanes = this.alpacaLanes();
-    if (lanes.length === 0) return 'unknown';
+    // An empty roster is the least-known state, not a calm one: it is every
+    // boot until the directory resolves, and indefinitely if that load fails.
+    // 'unknown' would paint the neutral default chrome — the exact calm-while-
+    // live-money-trades failure this anchor exists to kill — so it reads live.
+    if (lanes.length === 0) return 'live';
     const finalVerdicts = lanes.map(
       (lane) => this.alpacaLive.stateFor(lane.clerk_id).verdict?.final_verdict,
     );

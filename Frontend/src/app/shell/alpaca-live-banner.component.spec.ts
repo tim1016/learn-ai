@@ -34,9 +34,9 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
   };
 }
 
-async function renderWith(lane: LaneDescriptor, state: LaneVerdictState) {
+async function renderWith(lane: LaneDescriptor | null, state: LaneVerdictState) {
   const stateFor = (clerkId: string): LaneVerdictState =>
-    clerkId === lane.clerk_id ? state : UNPOLLED_LANE_STATE;
+    clerkId === lane?.clerk_id ? state : UNPOLLED_LANE_STATE;
   return render(AlpacaLiveBannerComponent, {
     inputs: { lane },
     providers: [{ provide: AlpacaLiveVerdictService, useValue: { stateFor } }],
@@ -47,9 +47,22 @@ const PAPER_LANE = testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_
 const LIVE_LANE = testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' });
 
 describe('AlpacaLiveBannerComponent', () => {
-  it('renders nothing before the first read for this lane', async () => {
+  it('warns loudly before the first read for this lane, never renders nothing', async () => {
     await renderWith(PAPER_LANE, { verdict: null, lastError: null });
-    expect(screen.queryByRole('status')).toBeNull();
+
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-undetermined');
+    expect(status.textContent).toContain('Paper');
+    expect(status.textContent).toContain('assume real money');
+  });
+
+  it('warns loudly when there is no lane at all, because the roster itself is unknown', async () => {
+    await renderWith(null, UNPOLLED_LANE_STATE);
+
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-undetermined');
+    expect(status.textContent).toContain('Alpaca lanes unknown');
+    expect(status.textContent).toContain('assume real money');
   });
 
   it('renders paper mode as a compact Paper money chip labeled with its lane', async () => {
@@ -139,6 +152,13 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).not.toContain('is-unknown');
     expect(status.textContent).toContain('assume real money');
     expect(status.textContent).toContain('Live Mode Disagreement');
+
+    // The amber treatment's own markup, never axe-run before this round.
+    // `color-contrast` stays off because jsdom computes no layout or cascade,
+    // so axe cannot evaluate it here — asserting it would be a check that
+    // cannot fail. The remaining rules do apply to this path.
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations).toEqual([]);
   });
 
   it('keeps an explicit loud warning on screen when the last read failed, never a grey unknown', async () => {
@@ -149,6 +169,45 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.textContent).toContain('Mode unavailable');
     expect(status.textContent).toContain('assume real money');
   });
+
+  it.each([
+    [
+      'the last read failed',
+      PAPER_LANE,
+      { verdict: null, lastError: new Error('down') } satisfies LaneVerdictState,
+    ],
+    [
+      'no read has completed yet',
+      PAPER_LANE,
+      UNPOLLED_LANE_STATE,
+    ],
+    [
+      'the server itself reports unknown',
+      LIVE_LANE,
+      {
+        verdict: verdict({
+          configured_mode: 'live',
+          observed_account_id: null,
+          final_verdict: 'unknown',
+          headline: 'Live mode configured — account state unknown',
+        }),
+        lastError: null,
+      } satisfies LaneVerdictState,
+    ],
+    ['there is no lane at all', null, UNPOLLED_LANE_STATE],
+  ])(
+    'carries the real-money assumption in the ACCESSIBLE NAME when %s (WCAG 1.4.1)',
+    async (_cause, lane, state) => {
+      await renderWith(lane, state);
+
+      // `aria-label` wins the accessible-name computation, so a screen reader
+      // announcing this live region by name must still hear the assumption —
+      // it cannot survive in the visible text and the amber alone.
+      const name = screen.getByRole('status').getAttribute('aria-label');
+      expect(name).toContain('Assume real money');
+      if (lane) expect(name).toContain(lane.display_label);
+    },
+  );
 
   it('renders a live-armed account in the loudest treatment with the armed count', async () => {
     await renderWith(LIVE_LANE, {

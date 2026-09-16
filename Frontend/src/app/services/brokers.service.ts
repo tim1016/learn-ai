@@ -120,18 +120,26 @@ export class BrokersService {
   }
 
   /**
-   * The server-derived Alpaca live verdict for one lane (ADR 0059 D8; #2110).
-   * Pure on the server — it never contacts the broker — so it is safe to
-   * poll from the shell. Lane-scoped and declared at configuration-access
-   * readiness, so a lane that is up but refusing (e.g. an unactivated paper
-   * lane) still answers with its refusal reason instead of going
-   * unreachable. The client renders it and never composes one (ADR 0011 §7).
+   * The server-derived Alpaca live verdict for every named lane (ADR 0059 D8;
+   * #2110), as one promise per target in caller order. Pure on the server —
+   * it never contacts the broker — so it is safe to poll from the shell.
+   * Lane-scoped and declared at configuration-access readiness, so a lane
+   * that is up but refusing (e.g. an unactivated paper lane) still answers
+   * with its refusal reason instead of going unreachable. The client renders
+   * the verdict and never composes one (ADR 0011 §7).
+   *
+   * Issued as one concurrent group, not N serialized reads. Lanes are
+   * isolated by construction, so their verdict reads must be too: queued
+   * behind one another, a live lane hanging out the poll ceiling would
+   * reject the paper lane's read and flip that lane's trust badge to "mode
+   * unavailable" for a fault that was never its own (FR-093). The group is
+   * still one entry in the shared scheduler's queue (#1912) — the shell
+   * polls this every 5 s and must not become an N-th independent poller.
    */
-  getLiveVerdict(target: ResourceTarget): Promise<AlpacaLiveVerdict> {
-    // Polled from the shell every 5 s, so it shares the scheduler every
-    // polled read goes through (#1912) rather than adding a fifth
-    // independent poller to the roster's tick.
-    return this.polls.get<AlpacaLiveVerdict>(operationUrl('live_verdict', target));
+  getLiveVerdicts(targets: readonly ResourceTarget[]): Promise<AlpacaLiveVerdict>[] {
+    return this.polls.getGroup<AlpacaLiveVerdict>(
+      targets.map((target) => operationUrl('live_verdict', target)),
+    );
   }
 
   listPositions(target: ResourceTarget): Promise<BrokerPosition[]> {

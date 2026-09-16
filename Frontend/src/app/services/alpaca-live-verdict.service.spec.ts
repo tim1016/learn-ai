@@ -1,14 +1,32 @@
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import { FleetDirectoryService } from '../fleet/fleet-directory.service';
 import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
+import type { LaneDescriptor } from '../fleet/fleet-directory.types';
+import type { ResourceTarget } from '../fleet/resource-target';
 import { AlpacaLiveVerdictService, UNPOLLED_LANE_STATE } from './alpaca-live-verdict.service';
 import { BrokersService } from './brokers.service';
+import { POLL_REQUEST_TIMEOUT_MS } from './poll-timeout';
 
+/**
+ * Per-lane behaviour without the transport.
+ *
+ * It deliberately cannot observe whether the lane reads were *dispatched*
+ * concurrently — stubbing `BrokersService` stubs out `PolledReadScheduler`,
+ * which is the layer where lane isolation is won or lost. The slow-lane test
+ * below therefore runs against the real service over `HttpTestingController`;
+ * nothing here can stand in for it.
+ */
 class FakeBrokersService {
-  getLiveVerdict = vi.fn();
+  readonly readLane = vi.fn<(clerkId: string) => Promise<AlpacaLiveVerdict>>();
+
+  getLiveVerdicts(targets: readonly ResourceTarget[]): Promise<AlpacaLiveVerdict>[] {
+    return targets.map((target) => this.readLane(target.clerkId));
+  }
 }
 
 function makeVerdict(overrides: Partial<AlpacaLiveVerdict> = {}): AlpacaLiveVerdict {
@@ -45,8 +63,31 @@ function setup(lanes = [testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]) {
   return { svc: TestBed.inject(AlpacaLiveVerdictService), brokers, directory };
 }
 
+/** The same service over the real `BrokersService` and `PolledReadScheduler`,
+ * so dispatch order and the poll ceiling are the ones that ship. */
+function setupOverHttp(lanes: LaneDescriptor[]) {
+  const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: lanes });
+  TestBed.configureTestingModule({
+    providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      { provide: FleetDirectoryService, useValue: directory.useValue },
+    ],
+  });
+  return {
+    svc: TestBed.inject(AlpacaLiveVerdictService),
+    http: TestBed.inject(HttpTestingController),
+  };
+}
+
+/** Let one tick resolve its roster and dispatch its lane reads. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+}
+
 afterEach(() => {
   TestBed.resetTestingModule();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -64,7 +105,7 @@ describe('AlpacaLiveVerdictService', () => {
       envelope_agreement: 'unsealed',
       loss_hold: 'clear',
     });
-    brokers.getLiveVerdict.mockResolvedValue(v);
+    brokers.readLane.mockResolvedValue(v);
 
     await svc.refresh();
 
@@ -73,9 +114,9 @@ describe('AlpacaLiveVerdictService', () => {
 
   it('refresh() records the error and clears this lane\'s verdict when its read fails', async () => {
     const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
-    brokers.getLiveVerdict.mockResolvedValue(makeVerdict());
+    brokers.readLane.mockResolvedValue(makeVerdict());
     await svc.refresh();
-    brokers.getLiveVerdict.mockRejectedValue(new Error('down'));
+    brokers.readLane.mockRejectedValue(new Error('down'));
 
     await svc.refresh();
 
@@ -90,8 +131,8 @@ describe('AlpacaLiveVerdictService', () => {
       testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' }),
     ]);
     const liveVerdict = makeVerdict({ final_verdict: 'live-armed', configured_mode: 'live' });
-    brokers.getLiveVerdict.mockImplementation(async (target: { clerkId: string }) => {
-      if (target.clerkId === 'clrk_paper') throw new Error('paper lane down');
+    brokers.readLane.mockImplementation(async (clerkId: string) => {
+      if (clerkId === 'clrk_paper') throw new Error('paper lane down');
       return liveVerdict;
     });
 
@@ -102,17 +143,106 @@ describe('AlpacaLiveVerdictService', () => {
     expect(svc.stateFor('clrk_live')).toEqual({ verdict: liveVerdict, lastError: null });
   });
 
+  it("one lane's SLOW read never costs another lane its badge, through the real scheduler (FR-093)", async () => {
+    vi.useFakeTimers();
+    const { svc, http } = setupOverHttp([
+      testLane({ clerk_id: 'clrk_slow', broker: 'alpaca', display_label: 'Live' }),
+      testLane({ clerk_id: 'clrk_fast', broker: 'alpaca', display_label: 'Paper' }),
+    ]);
+
+    const tick = svc.refresh();
+    await flush();
+
+    // Both lanes are in flight at once. Serialized — which is what the shared
+    // scheduler does by default — only the first URL would appear here, and
+    // the second lane's read would later be rejected with "the poll ceiling
+    // elapsed while it waited for a turn" for a fault that was never its own.
+    const open = http.match((request) => request.url.endsWith('/live-verdict'));
+    expect(open.map((request) => request.request.url)).toEqual([
+      '/api/brokers/alpaca/clerks/clrk_slow/live-verdict',
+      '/api/brokers/alpaca/clerks/clrk_fast/live-verdict',
+    ]);
+
+    const fast = makeVerdict({
+      configured_mode: 'live',
+      final_verdict: 'live-armed',
+      observed_account_id: '9LIVE0001',
+      armed_instance_count: 2,
+    });
+    open[1].flush(fast);
+
+    // The slow lane answers nothing and burns the entire ceiling.
+    await vi.advanceTimersByTimeAsync(POLL_REQUEST_TIMEOUT_MS + 1);
+    await tick;
+
+    expect(svc.stateFor('clrk_fast')).toEqual({ verdict: fast, lastError: null });
+    expect(svc.stateFor('clrk_slow').verdict).toBeNull();
+    expect(svc.stateFor('clrk_slow').lastError).toBeDefined();
+  });
+
+  it('drives the fleet directory itself and retries a failed load on the next tick', async () => {
+    const brokers = new FakeBrokersService();
+    const lanes = [testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })];
+    let attempts = 0;
+    const ensureLoaded = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('directory down');
+      return { observed_at_ms: 1, clerks: lanes };
+    });
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: BrokersService, useValue: brokers },
+        {
+          provide: FleetDirectoryService,
+          useValue: { ensureLoaded, lanesOf: () => (attempts > 1 ? lanes : []) },
+        },
+      ],
+    });
+    const svc = TestBed.inject(AlpacaLiveVerdictService);
+    brokers.readLane.mockResolvedValue(makeVerdict());
+
+    // A failed directory load is state, not a terminal condition: the tick
+    // completes with no lanes rather than throwing, and asks again next time.
+    await svc.refresh();
+    expect(ensureLoaded).toHaveBeenCalledTimes(1);
+    expect(svc.stateFor('clrk_a')).toEqual(UNPOLLED_LANE_STATE);
+
+    await svc.refresh();
+
+    expect(ensureLoaded).toHaveBeenCalledTimes(2);
+    expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+  });
+
+  it('forgets a lane the directory stops reporting, so its return renders a fresh read', async () => {
+    const { svc, brokers, directory } = setup([
+      testLane({ clerk_id: 'clrk_a', broker: 'alpaca' }),
+      testLane({ clerk_id: 'clrk_b', broker: 'alpaca' }),
+    ]);
+    brokers.readLane.mockResolvedValue(makeVerdict());
+    await svc.refresh();
+    expect(svc.stateFor('clrk_b').verdict).not.toBeNull();
+
+    directory.rebind({
+      observed_at_ms: 2,
+      clerks: [testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })],
+    });
+    await svc.refresh();
+
+    expect(svc.stateFor('clrk_b')).toEqual(UNPOLLED_LANE_STATE);
+    expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+  });
+
   it('start() is idempotent and refreshes every known lane immediately', async () => {
     const { svc, brokers } = setup([
       testLane({ clerk_id: 'clrk_a', broker: 'alpaca' }),
       testLane({ clerk_id: 'clrk_b', broker: 'alpaca' }),
     ]);
-    brokers.getLiveVerdict.mockResolvedValue(makeVerdict());
+    brokers.readLane.mockResolvedValue(makeVerdict());
 
     svc.start();
     svc.start();
-    await Promise.resolve();
+    await flush();
 
-    expect(brokers.getLiveVerdict).toHaveBeenCalledTimes(2);
+    expect(brokers.readLane).toHaveBeenCalledTimes(2);
   });
 });
