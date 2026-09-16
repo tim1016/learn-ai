@@ -1653,6 +1653,156 @@ async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacem
         service.close()
 
 
+async def test_a_re_confirmation_refused_once_more_retries_on_a_later_beat_not_another_refusal(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A P1 gap in the fix above: the *immediate* re-confirmation can itself flap.
+
+    ``_repair_lane_after_refused_beat`` re-registers and then re-presents the
+    grant in one shot. If re-registration succeeds against a coordinator
+    that is recovering but the very next call — the re-confirmation — still
+    lands on a transient 503, the old code logged it, dropped it, and left
+    ``boot.session`` pointed at the replacement session with nothing marking
+    the grant as still-pending. Because the replacement session is otherwise
+    healthy, every later ``observe()`` succeeds normally, so
+    ``_repair_lane_after_refused_beat`` — gated on a *refused* beat — never
+    ran again, and the assignment stayed fenced to the session that
+    confirmed it before the flap forever (until a human restarted the
+    container). The fix tracks the session a grant was actually confirmed
+    under (``boot.confirmed_grant_session``) and checks it on every beat, not
+    only a refused one, so this second failure gets retried on the very next
+    ordinary heartbeat instead.
+
+    Both refusals are injected at the presence seam, exactly once each, on
+    two different calls (``observe`` and ``confirm``) — the transport is
+    where both a coordinator's refusal and its recovery arrive from.
+    Everything else is the real thing: the real re-registration, the real
+    epoch bump, the real ``confirm_assignment`` re-acknowledgement.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_report,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+    from app.broker.fleet.presence import FleetPresenceError
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        await reserve_account(boot, external_account_id=account_id)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="live",
+        )
+        confirming_session = boot.session
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
+
+        observe_refused: list[object] = []
+        real_observe = boot.presence.observe
+
+        async def _refuse_the_next_observation(**kwargs: object) -> None:
+            """Refuse once, the way a coordinator's transient 5xx arrives."""
+            if not observe_refused:
+                observe_refused.append(kwargs)
+                raise FleetPresenceError(
+                    "The fleet coordinator refused /internal/fleet/sessions/observe: 503.",
+                )
+            await real_observe(**kwargs)
+
+        confirm_attempts: list[object] = []
+        real_confirm = boot.presence.confirm
+
+        async def _refuse_the_immediate_re_confirmation(**kwargs: object):
+            """Fail only the repair's own re-confirmation attempt — the one
+            fired immediately after re-registration succeeds — not the
+            original confirmation above and not the later retry this test
+            proves."""
+            confirm_attempts.append(kwargs)
+            if len(confirm_attempts) == 1:
+                raise FleetPresenceError(
+                    "The fleet coordinator refused /internal/fleet/sessions/confirm: 503.",
+                )
+            return await real_confirm(**kwargs)
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_the_next_observation)
+        monkeypatch.setattr(boot.presence, "confirm", _refuse_the_immediate_re_confirmation)
+        clock.advance(1)
+
+        # Wait for the refused beat's repair to run and mint the replacement
+        # session — an in-process signal, not a store poll, since the
+        # deliberately-failed re-confirmation below writes nothing to wait on.
+        loop = asyncio.get_running_loop()
+        give_up_at = loop.time() + 5.0
+        while boot.session.agent_instance_id == confirming_session.agent_instance_id:
+            if loop.time() >= give_up_at:
+                raise AssertionError(
+                    "the refused beat never re-registered the session within 5.0s"
+                )
+            await asyncio.sleep(0.01)
+
+        assert observe_refused, "the beat was never refused, so nothing re-registered"
+        assert len(confirm_attempts) == 1, "repair never attempted the immediate re-confirmation"
+        replacement_session = boot.session
+        assert replacement_session.agent_instance_id != confirming_session.agent_instance_id
+
+        # The immediate re-confirmation was refused: the assignment is still
+        # fenced to the session that confirmed it before the flap, and the
+        # lane is stuck exactly the way #2168 described.
+        stale = service._store.read_assignment(broker="alpaca", canonical_account_id=account_id)
+        assert stale is not None
+        assert stale.confirmed_agent_instance_id == confirming_session.agent_instance_id
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "starting"
+
+        # No second observation refusal follows — only ordinary, successful
+        # beats from here on. The re-confirmation must still retry on its own.
+        clock.advance(1)
+        await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+
+        assert len(confirm_attempts) >= 2, (
+            "the re-confirmation was never retried on a later beat; it took "
+            "another observation refusal to run again"
+        )
+        stored = service._store.read_assignment(broker="alpaca", canonical_account_id=account_id)
+        assert stored is not None
+        assert stored.confirmed_binding_generation == 1
+        assert stored.confirmed_agent_instance_id == replacement_session.agent_instance_id
+        assert stored.confirmed_routing_epoch == replacement_session.routing_epoch
+        # The projection the operator actually sees: the lane recovers to
+        # ready on its own, with no second flap and no container restart.
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_a_refused_beat_on_an_unbound_lane_re_registers_without_confirming_anything(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
