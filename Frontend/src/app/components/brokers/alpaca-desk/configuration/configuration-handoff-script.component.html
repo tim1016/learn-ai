@@ -13,7 +13,7 @@
     @if (script.hasValue()) {
       <app-copy-button
         variant="button"
-        [text]="script.value()"
+        [text]="renderedScript()"
         label="Copy handoff script"
         copiedLabel="Script copied"
         ariaLabel="Copy Paper-to-Live handoff script" />
@@ -25,13 +25,21 @@
     reset targets, rechecks current safety evidence, and never arms or launches a Live bot.
   </p>
 
+  @if (restartCommand() === null) {
+    <p class="handoff__command-unknown" role="note">
+      This deployment did not declare this lane's worker service, so the copied script cannot
+      fill it in. Export FLEET_WORKER_SERVICE (and its compose context, if this lane needs one)
+      yourself before running it.
+    </p>
+  }
+
   @if (script.error()) {
     <p class="handoff__error" role="alert">
       The local handoff script could not be loaded.
       <a [href]="scriptUrl">Open the script directly</a>.
     </p>
   } @else if (script.hasValue()) {
-    <pre class="handoff__source" tabindex="0"><code>{{ script.value() }}</code></pre>
+    <pre class="handoff__source" tabindex="0"><code>{{ renderedScript() }}</code></pre>
   } @else {
     <p class="handoff__loading" role="status">Loading the local handoff script…</p>
   }

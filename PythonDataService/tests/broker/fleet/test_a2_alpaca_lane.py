@@ -614,6 +614,49 @@ def test_heartbeat_facts_map_an_unknown_authority_kind_to_unavailable() -> None:
     }
 
 
+def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kind() -> None:
+    """#2146: the heartbeat's own authority-state vocabulary must not drift
+    from ``AccountAuthorityKind`` — the wire vocabulary ``heartbeat_facts``
+    hand-rolls (``real_paper``/``real_live``/``shadow``/``synthetic``,
+    preserved byte-for-byte through #2137) is meant to name exactly that
+    closed set. Nothing enforces it structurally, so this reddens the moment
+    a value is added to ``AccountAuthorityKind`` with no heartbeat
+    counterpart, rather than letting the two silently drift apart.
+    """
+    from typing import get_args
+
+    from app.broker.alpaca.clerk.account_authority import AccountAuthorityKind
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    # "sqlite" is the only facade kind whose wire state depends on the
+    # endpoint mode (real_paper vs. real_live); every other facade kind's
+    # wire state is fixed regardless of mode.
+    reachable_wire_states = {
+        heartbeat_facts(
+            account_pin=None,
+            effective_binding_generation=0,
+            authority_kind="sqlite",
+            endpoint_mode=mode,
+        )["reported_summary"]["authority_state"]
+        for mode in ("paper", "live")
+    } | {
+        heartbeat_facts(
+            account_pin=None,
+            effective_binding_generation=0,
+            authority_kind=authority_kind,
+            endpoint_mode="unidentified",
+        )["reported_summary"]["authority_state"]
+        for authority_kind in ("shadow", "synthetic")
+    }
+
+    missing = set(get_args(AccountAuthorityKind)) - reachable_wire_states
+    assert not missing, (
+        f"AccountAuthorityKind value(s) {sorted(missing)} have no heartbeat "
+        "wire counterpart — add a case to heartbeat_facts' authority-state "
+        "map (fleet_boot.py)."
+    )
+
+
 @pytest.mark.parametrize(
     ("account_pin", "effective_binding_generation", "granted"),
     [
@@ -1418,6 +1461,161 @@ async def test_a_refused_beat_re_registers_under_the_endpoint_reference_it_regis
         assert beat.routing_epoch > epoch_at_registration
         assert beat.agent_instance_id == boot.session.agent_instance_id
         assert beat.endpoint_ref == "agent:paper-1"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_point_of_death(
+    control_dir: Path,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2142: an exception that is not a ``FleetControlError`` must not die quietly.
+
+    ``_beat`` used to let anything other than ``FleetControlError`` escape the
+    loop with no raise and no log at the point of death — the task simply
+    ended, and nothing announced it until the coordinator eventually
+    projected the lane ``unreachable`` or ``stop_heartbeat`` noticed the
+    already-dead task at shutdown. The fix logs loudly the instant the beat
+    dies and still lets the task end (the same outcome as today otherwise),
+    closing the silent window rather than widening the beat's exception
+    handling.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def _raise_something_not_fleet_control(**_kwargs: object) -> None:
+            raise RuntimeError("a raw local-store error, not a FleetControlError")
+
+        monkeypatch.setattr(boot.presence, "observe", _raise_something_not_fleet_control)
+
+        with caplog.at_level(logging.ERROR):
+            start_heartbeat(boot, interval_s=0.05)
+            heartbeat = boot.heartbeat
+            assert heartbeat is not None
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while not heartbeat.done():
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("the beat never died on the injected exception")
+                await asyncio.sleep(0.01)
+
+        assert isinstance(heartbeat.exception(), RuntimeError)
+        death_logs = [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.ERROR
+            and getattr(record, "clerk_id", None) == boot.clerk_id
+        ]
+        assert death_logs, "the beat's death must be logged at the point it happened"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_beat_that_dies_reregistering_after_a_refusal_is_also_logged_at_the_point_of_death(
+    control_dir: Path,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The re-registration await, not only the observation await, must log.
+
+    ``_beat``'s inner ``try`` around ``presence.register`` catches only
+    ``FleetControlError`` — Python does not route an exception raised inside
+    an ``except`` clause to a sibling ``except`` of the same ``try``, so an
+    unexpected exception here (a transport error, exactly the kind more
+    likely when the coordinator is already misbehaving) used to escape the
+    whole ``_beat`` with no log at the point of death, even though the
+    sibling clause around the observation await logged its own. This
+    complements ``test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_point_of_death``,
+    which only ever proved the observation await; this one drives the
+    re-registration path the same way, by first refusing the observation
+    with a ``FleetControlError`` (so ``_beat`` enters its re-registration
+    branch) and then raising something else from ``register`` itself.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+    from app.broker.fleet.errors import FleetControlError
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def _refuse_every_observation(**_kwargs: object) -> None:
+            raise FleetControlError("The coordinator refuses this lane's observation.")
+
+        async def _raise_something_not_fleet_control(**_kwargs: object) -> None:
+            raise RuntimeError("a raw transport error, not a FleetControlError")
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_every_observation)
+        monkeypatch.setattr(boot.presence, "register", _raise_something_not_fleet_control)
+
+        with caplog.at_level(logging.ERROR):
+            start_heartbeat(boot, interval_s=0.05)
+            heartbeat = boot.heartbeat
+            assert heartbeat is not None
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while not heartbeat.done():
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("the beat never died on the injected re-registration exception")
+                await asyncio.sleep(0.01)
+
+        assert isinstance(heartbeat.exception(), RuntimeError)
+        death_logs = [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.ERROR
+            and getattr(record, "clerk_id", None) == boot.clerk_id
+        ]
+        assert death_logs, "the beat's death during re-registration must be logged at the point it happened"
     finally:
         await close_fleet_lane(boot)
         service.close()

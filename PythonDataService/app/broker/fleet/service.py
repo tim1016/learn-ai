@@ -1012,8 +1012,12 @@ class FleetControlService:
                     f"Account {canonical} under broker {broker!r} changed while "
                     "confirming; re-read and retry.",
                 )
-            # The session's observed facts follow the confirmed observation,
-            # so the directory projects the acknowledged binding.
+            # The confirmation above is the write this method is named for
+            # (the coordinator's confirmed observation, in
+            # ``account_assignments``); the session's reported facts are a
+            # separate write this transaction also makes, so the directory
+            # projects the acknowledged binding immediately rather than wait
+            # for the next heartbeat to say the same thing.
             self._store.touch_session(
                 conn,
                 clerk_id=clerk_id,
