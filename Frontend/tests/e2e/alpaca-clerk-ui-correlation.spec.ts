@@ -366,6 +366,13 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         return;
       }
       if (path.startsWith('/api/')) {
+        // The shell's per-clerk live-verdict trust-anchor poll (#2161) runs
+        // on every page regardless of route; it is not part of this
+        // campaign's read-only evidence surface and is answered, not counted.
+        if (path.endsWith('/live-verdict')) {
+          await route.fulfill({ status: 503, json: { detail: 'Outside this campaign.' } });
+          return;
+        }
         unexpectedApiRequests.push(`${request.method()} ${path}`);
         await route.fulfill({ status: 501, json: { detail: 'Unexpected E2E API request.' } });
         return;

@@ -1,11 +1,20 @@
 <section class="lane-directory" aria-label="Alpaca clerk lanes">
   <header class="lane-directory__head">
-    <h2>Clerk lanes</h2>
+    <h2>{{ heading() }}</h2>
     <span class="lane-directory__hint">{{ lanes().length }} registered</span>
   </header>
 
-  @if (requestedSurfaceHint(); as hint) {
-    <p class="lane-directory__state" role="status">{{ hint }}</p>
+  @if (deployIntent()) {
+    <p class="lane-directory__state" role="status">
+      Choose a ready clerk lane below to deploy a strategy.
+    </p>
+  }
+
+  @if (surface(); as surface) {
+    <p class="lane-directory__state" role="status">
+      Choose a clerk lane below to open its {{ SURFACE_LABEL[surface].long }}.
+      No lane is selected automatically; unavailable lanes stay selectable and explain themselves.
+    </p>
   }
 
   @if (failed()) {
@@ -26,58 +35,7 @@
 
   <ul class="lane-directory__lanes">
     @for (lane of lanes(); track lane.clerk_id) {
-      <li class="lane-card" [class.lane-card--degraded]="lane.lifecycle_state !== 'ready'">
-        <div class="lane-card__head">
-          <span class="lane-card__label">{{ lane.display_label }}</span>
-          <span class="lane-card__lifecycle">{{ lane.lifecycle_state | receiptLabel }}</span>
-        </div>
-        <dl class="lane-card__facts">
-          <div class="lane-card__fact">
-            <dt>Endpoint mode</dt>
-            <dd>{{ lane.provider_summary?.endpoint_mode ?? '—' | receiptLabel }}</dd>
-          </div>
-          <div class="lane-card__fact">
-            <dt>Authority</dt>
-            <dd>{{ lane.provider_summary?.authority_state ?? '—' | receiptLabel }}</dd>
-          </div>
-          <div class="lane-card__fact">
-            <dt>Binding generation</dt>
-            <dd>{{ lane.effective_binding_generation ?? '—' }}</dd>
-          </div>
-          <div class="lane-card__fact">
-            <dt>Account</dt>
-            <dd class="lane-card__account">{{ accountOf(lane) ?? 'unbound' }}</dd>
-          </div>
-        </dl>
-        @if (!isReady(lane)) {
-          <p class="lane-card__failure" role="status">
-            This lane is unavailable. Other healthy lanes remain available.
-          </p>
-        }
-        <nav class="lane-card__links">
-          @if (accountOf(lane); as accountId) {
-            @if (isReady(lane) && supports(lane, 'account_read')) {
-              <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'accounts', accountId]">Desk</a>
-            }
-            @if (isReady(lane) && supports(lane, 'bot_panel_read')) {
-              <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'accounts', accountId, 'bots']">Bots</a>
-            }
-            @if (isReady(lane) && supports(lane, 'gallery_read')) {
-              <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'accounts', accountId, 'gallery']">Gallery</a>
-            }
-            @if (isReady(lane) && supports(lane, 'deploy')) {
-              <a
-                [routerLink]="['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'accounts', accountId]"
-                [queryParams]="{ deploy: '' }"
-                queryParamsHandling="merge"
-              >Deploy</a>
-            }
-          }
-          @if (supports(lane, 'configuration_manage')) {
-            <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'configuration']">Configuration</a>
-          }
-        </nav>
-      </li>
+      <app-alpaca-lane-card [lane]="lane" [surface]="surface()" />
     }
   </ul>
 </section>

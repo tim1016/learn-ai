@@ -87,18 +87,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
         queryParams: { deploy: '' },
         activePath: '/brokers/alpaca/deploy',
       },
-      {
-        title: 'Bots',
-        route: '/brokers/alpaca',
-        queryParams: { surface: 'bots' },
-        activePath: '/brokers/alpaca/bots',
-      },
-      {
-        title: 'Gallery',
-        route: '/brokers/alpaca',
-        queryParams: { surface: 'gallery' },
-        activePath: '/brokers/alpaca/gallery',
-      },
+      { title: 'Bots', route: '/brokers/alpaca/bots' },
+      { title: 'Gallery', route: '/brokers/alpaca/gallery' },
     ],
   },
   {
@@ -145,17 +135,16 @@ const ACTIVE_MENU_ITEMS = APP_MENU.flatMap((group) =>
 export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   const { path, query } = splitUrl(url);
   const queryParams = new URLSearchParams(query);
-  if (path === '/brokers/alpaca') {
-    if (queryParams.has('deploy')) return nodeForActivePath('/brokers/alpaca/deploy');
-    const surface = queryParams.get('surface');
-    if (surface === 'bots' || surface === 'gallery') {
-      return nodeForActivePath(`/brokers/alpaca/${surface}`);
-    }
+  if (path === '/brokers/alpaca' && queryParams.has('deploy')) {
+    return nodeForActivePath('/brokers/alpaca/deploy');
   }
 
+  // Clerk-scoped surface URLs — with or without an account segment — map
+  // onto their surface's menu entry, so a clerk-only Bots refusal page
+  // highlights Bots and titles itself Bots, not Accounts.
   const accountScopedBrokerSurface = path.match(
     /^\/brokers\/([^/]+)(?:\/clerks\/[^/]+)?\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
-  );
+  ) ?? path.match(/^\/brokers\/([^/]+)\/clerks\/[^/]+\/(bots|gallery)(?:\/|$)/);
   if (accountScopedBrokerSurface) {
     const [, broker, surface] = accountScopedBrokerSurface;
     const accountNode = nodeForActivePath(`/brokers/${broker.toLowerCase()}/${surface}`);

@@ -28,13 +28,12 @@ describe('TopBarComponent', () => {
     );
   });
 
-  it.each([
-    ['paper', 'top-bar--paper'],
-    ['live', 'top-bar--live'],
-  ] as const)('reflects the %s account mode in the header treatment', async (accountMode, className) => {
-    await render(TopBarComponent, { inputs: { accountMode }, providers: [provideRouter([])] });
+  it('renders the header mode-neutral — the per-lane pills own the account-mode signal', async () => {
+    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 
-    expect(screen.getByRole('banner').classList.contains(className)).toBe(true);
+    expect(screen.getByRole('banner').classList.contains('top-bar--paper')).toBe(false);
+    expect(screen.getByRole('banner').classList.contains('top-bar--live')).toBe(false);
+    expect(container.querySelector('.top-bar--paper, .top-bar--live')).toBeNull();
   });
 
   it('provides named regions for shell extensions', async () => {

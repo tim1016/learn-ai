@@ -171,9 +171,15 @@ async function renderDesk(
   brokers = brokerService(),
   deskState: AlpacaDeskState = accountActivation,
   fleetDirectory = provideFleetDirectory(),
+  /** Render the broker-root desk (`/brokers/alpaca`) instead of the
+   * clerk-scoped one: no clerk or account in the route, so the directory
+   * is the whole surface. */
+  rootDesk = false,
 ) {
   const queryParamMap = convertToParamMap(query);
-  const paramMap = convertToParamMap({ clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA1' });
+  const paramMap = convertToParamMap(
+    rootDesk ? {} : { clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA1' },
+  );
   const view = await render(AlpacaDeskComponent, {
     providers: [
       fleetDirectory,
@@ -393,6 +399,25 @@ describe('AlpacaDeskComponent', () => {
     await renderDesk({ deploy: '' });
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+  });
+
+  it('makes a broker-wide deploy intent an explicit lane choice at the root desk', async () => {
+    await renderDesk({ deploy: '' }, undefined, undefined, undefined, true);
+
+    expect(
+      screen.getByText(/choose a ready clerk lane below to deploy a strategy/i),
+    ).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Alpaca clerk lanes' })).toBeTruthy();
+  });
+
+  it('retires the surface hints — a ?surface query renders the plain directory', async () => {
+    // The surface hints moved to real chooser routes (`/brokers/alpaca/bots`
+    // and `/gallery`); a stale `?surface=` query on the desk itself renders
+    // the plain directory rather than annotating it.
+    await renderDesk({ surface: 'bots' }, undefined, undefined, undefined, true);
+
+    expect(screen.getByRole('heading', { name: 'Clerk lanes' })).toBeTruthy();
+    expect(screen.queryByText(/choose a ready clerk lane below to open its bots roster/i)).toBeNull();
   });
 
   it('blocks a matching manual-order deep link when SQLite authority is unavailable', async () => {

@@ -30,6 +30,34 @@ export const UNPOLLED_LANE_STATE: LaneVerdictState = Object.freeze({
   lastError: null,
 });
 
+/** What one lane's mode chip renders: the tone vocabulary is shared with the
+ * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
+ * everywhere it is named. */
+export interface LaneModeChip {
+  readonly tone: 'paper' | 'live' | 'undetermined';
+  readonly mode: string;
+}
+
+/** Project one lane's verdict state into its compact chip form.
+ *
+ * A verdict that is unread, failed, or `unknown` renders the loud
+ * undetermined treatment and *says the real-money assumption in its own
+ * text* (decision D2, #2110/#2139 — the same fail-closed stance as the
+ * pills; grey or neutral "not configured" wording is banned). The verdict
+ * stays the only truth source; the chip never guesses a mode from
+ * account-id shape or env (ADR 0011 §7). */
+export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
+  switch (state.verdict?.final_verdict) {
+    case 'paper':
+      return { tone: 'paper', mode: 'Paper money' };
+    case 'live-unarmed':
+    case 'live-armed':
+      return { tone: 'live', mode: 'Live' };
+    default:
+      return { tone: 'undetermined', mode: 'Mode unknown — assume real money' };
+  }
+}
+
 /**
  * Singleton owner of the Alpaca live-verdict signal, keyed by `clerk_id`
  * (ADR 0059 D8; #2110).

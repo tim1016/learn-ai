@@ -1,5 +1,6 @@
 import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction } from "@angular/router";
+import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>
@@ -317,6 +318,27 @@ export const routes: Routes = [
       ).then((m) => m.AlpacaConfigurationPageComponent),
   },
   {
+    // A clerk-only surface URL: the lane's in-place explanation for why its
+    // Bots roster cannot open (not ready, unbound, or without the
+    // capability). Selectable from the choosers; never redirected to another
+    // lane (FR-096).
+    path: "brokers/alpaca/clerks/:clerkId/bots",
+    data: { broker: "alpaca", surface: "bots" },
+    loadComponent: () =>
+      import(
+        "./components/brokers/alpaca-desk/lane-directory/alpaca-clerk-surface-unavailable.component"
+      ).then((m) => m.AlpacaClerkSurfaceUnavailableComponent),
+  },
+  {
+    // The Gallery twin of the clerk-only surface route above.
+    path: "brokers/alpaca/clerks/:clerkId/gallery",
+    data: { broker: "alpaca", surface: "gallery" },
+    loadComponent: () =>
+      import(
+        "./components/brokers/alpaca-desk/lane-directory/alpaca-clerk-surface-unavailable.component"
+      ).then((m) => m.AlpacaClerkSurfaceUnavailableComponent),
+  },
+  {
     // A lane deep link without a surface: its configuration is the lane's
     // own home (the desk directory is the broker-level surface).
     path: "brokers/alpaca/clerks/:clerkId",
@@ -358,8 +380,30 @@ export const routes: Routes = [
       ),
   },
   {
+    // Read-only lane choosers: every Alpaca lane listed side by side, each
+    // linking to its own canonical operational URL (or its clerk-only
+    // explanation). No lane is ever selected automatically (FR-096).
+    path: "brokers/alpaca/bots",
+    data: { broker: "alpaca", surface: "bots" },
+    loadComponent: () =>
+      import("./components/brokers/alpaca-desk/alpaca-surface-chooser.component").then(
+        (m) => m.AlpacaSurfaceChooserComponent,
+      ),
+  },
+  {
+    path: "brokers/alpaca/gallery",
+    data: { fullBleed: true, broker: "alpaca", surface: "gallery" },
+    loadComponent: () =>
+      import("./components/brokers/alpaca-desk/alpaca-surface-chooser.component").then(
+        (m) => m.AlpacaSurfaceChooserComponent,
+      ),
+  },
+  {
     // Broker System v2 read-only desk — separate from every v1 broker page.
+    // Retires the old `?surface=bots|gallery` hint bookmarks by redirecting
+    // them to the real chooser routes above.
     path: "brokers/alpaca",
+    canActivate: [alpacaSurfaceRedirectGuard],
     loadComponent: () =>
       import("./components/brokers/alpaca-desk/alpaca-desk.component").then(
         (m) => m.AlpacaDeskComponent,

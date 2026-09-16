@@ -92,6 +92,11 @@ export class AlpacaDeskComponent {
 
   /** Null at `/brokers/alpaca`: that root is the directory only. */
   protected readonly contextTarget = this.accountData.target;
+  /** A broker-wide `?deploy` intent at the root desk: the directory's lane
+   * list is the deploy entry point's lane-selection step. */
+  protected readonly deployIntent = computed(
+    () => this.deployOpen() && this.contextTarget() === null,
+  );
   /** The frozen command fence order entry must mint against — never the live
    * directory (#2106). See `AlpacaDeskAccountDataService.fence`. */
   protected readonly contextFence = this.accountData.fence;
@@ -111,11 +116,6 @@ export class AlpacaDeskComponent {
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
-  protected readonly directorySurface = computed<'deploy' | 'bots' | 'gallery' | null>(() => {
-    if (this.queryParams().has('deploy')) return 'deploy';
-    const surface = this.queryParams().get('surface');
-    return surface === 'bots' || surface === 'gallery' ? surface : null;
-  });
   protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
   private readonly routedOrderPrefill = computed(() =>
     parseManualOrderTicketQuery(this.queryParams()),
