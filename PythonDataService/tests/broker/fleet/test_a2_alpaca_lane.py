@@ -1543,6 +1543,191 @@ async def test_a_refused_beat_re_registers_under_the_endpoint_reference_it_regis
         service.close()
 
 
+async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacement_session(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2168: a lane that re-registers must re-confirm, or it never leaves ``starting``.
+
+    The coordinator fences a confirmed observation by the instance id and
+    routing epoch that wrote it (``service._descriptor``), so the replacement
+    session a refused beat mints inherits the binding but not its
+    confirmation: ``confirmed_by_current_session`` is false, and the lane
+    projects ``starting`` forever — until a human restarts the container and
+    its boot re-runs ``confirm_and_report``. That is the operator report this
+    fix answers ("clicking Bots on the shadow-live lane opened the broker
+    configuration page"), and it was never reproducible by restarting
+    anything, because it needs the *asymmetric* failure driven here: the
+    observation is refused (a transient 5xx is enough) while the registration
+    that answers it succeeds. A full coordinator outage refuses both calls,
+    leaves ``boot.session`` untouched, and self-heals — which is why the
+    refusal is injected on ``observe`` alone.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_report,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+    from app.broker.fleet.presence import FleetPresenceError
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        await reserve_account(boot, external_account_id=account_id)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="live",
+        )
+        confirming_session = boot.session
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
+
+        refused: list[object] = []
+        real_observe = boot.presence.observe
+
+        async def _refuse_the_next_observation(**kwargs: object) -> None:
+            """Refuse once, the way a coordinator's transient 5xx arrives."""
+            if not refused:
+                refused.append(kwargs)
+                raise FleetPresenceError(
+                    "The fleet coordinator refused /internal/fleet/sessions/observe: 503.",
+                )
+            await real_observe(**kwargs)
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_the_next_observation)
+        # Off the confirmation's own stamp, so the wait below cannot return on
+        # the touch `confirm_and_report` already wrote.
+        clock.advance(1)
+
+        beat = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_confirmed"
+        )
+
+        assert refused, "the beat was never refused, so nothing re-registered"
+        assert beat.routing_epoch > confirming_session.routing_epoch
+        assert boot.session.agent_instance_id != confirming_session.agent_instance_id
+        stored = service._store.read_assignment(broker="alpaca", canonical_account_id=account_id)
+        assert stored is not None
+        assert stored.confirmed_binding_generation == 1
+        assert stored.confirmed_agent_instance_id == boot.session.agent_instance_id
+        assert stored.confirmed_routing_epoch == boot.session.routing_epoch
+        # The projection the operator actually sees: a re-registered lane that
+        # re-confirmed is ready, not starting.
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
+        # The durable evidence names the session that confirmed, as it does at
+        # boot — the next FR-066 offline recovery reads it as fact.
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None
+        assert evidence.agent_instance_id == boot.session.agent_instance_id
+        assert evidence.routing_epoch == boot.session.routing_epoch
+        assert evidence.effective_profile_id == "prof_1"
+        assert evidence.effective_revision == 2
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_refused_beat_on_an_unbound_lane_re_registers_without_confirming_anything(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-confirmation is a repair for a granted binding, not a new step.
+
+    An unbound lane has nothing to confirm — a pin the operator typed is not a
+    grant the registry made (``binding_is_granted``) — and a beat that
+    confirmed one anyway would mint the very fence the coordinator checks
+    routed commands against, from a lane that never reached
+    ``selection/apply``.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+    from app.broker.fleet.presence import FleetPresenceError
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        refused: list[object] = []
+        confirmed: list[object] = []
+        real_observe = boot.presence.observe
+        real_confirm = boot.presence.confirm
+
+        async def _refuse_the_next_observation(**kwargs: object) -> None:
+            if not refused:
+                refused.append(kwargs)
+                raise FleetPresenceError(
+                    "The fleet coordinator refused /internal/fleet/sessions/observe: 503.",
+                )
+            await real_observe(**kwargs)
+
+        async def _record_confirmation(**kwargs: object):
+            """Record and delegate: a double that swallowed the real call would
+            fail this test on the resulting ``AttributeError`` somewhere else
+            instead of on the assertion that names the invariant."""
+            confirmed.append(kwargs)
+            return await real_confirm(**kwargs)
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_the_next_observation)
+        monkeypatch.setattr(boot.presence, "confirm", _record_confirmation)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+
+        await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_pending")
+
+        assert refused, "the beat was never refused, so nothing re-registered"
+        assert not confirmed, "an unbound lane confirmed a binding it was never granted"
+        assert read_confirmation_evidence(root) is None
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_point_of_death(
     control_dir: Path,
     clock: FrozenClock,
