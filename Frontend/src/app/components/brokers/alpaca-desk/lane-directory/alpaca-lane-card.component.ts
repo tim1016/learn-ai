@@ -23,6 +23,12 @@ import {
  * the canonical operational URL when the lane serves the surface, otherwise
  * the lane's own clerk-only route — so a link never vanishes, it explains
  * itself (FR-096: one lane's failure never masks or substitutes another).
+ *
+ * The host renders `display: contents` (no box of its own) so its `<li>`
+ * root is the list's effective direct child for layout and the
+ * accessibility tree, without an attribute selector — this repo's
+ * `component-selector` lint rule requires `app-` kebab-case element
+ * selectors.
  */
 @Component({
   selector: 'app-alpaca-lane-card',

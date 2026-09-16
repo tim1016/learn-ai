@@ -139,9 +139,12 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
     return nodeForActivePath('/brokers/alpaca/deploy');
   }
 
+  // Clerk-scoped surface URLs — with or without an account segment — map
+  // onto their surface's menu entry, so a clerk-only Bots refusal page
+  // highlights Bots and titles itself Bots, not Accounts.
   const accountScopedBrokerSurface = path.match(
     /^\/brokers\/([^/]+)(?:\/clerks\/[^/]+)?\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
-  );
+  ) ?? path.match(/^\/brokers\/([^/]+)\/clerks\/[^/]+\/(bots|gallery)(?:\/|$)/);
   if (accountScopedBrokerSurface) {
     const [, broker, surface] = accountScopedBrokerSurface;
     const accountNode = nodeForActivePath(`/brokers/${broker.toLowerCase()}/${surface}`);

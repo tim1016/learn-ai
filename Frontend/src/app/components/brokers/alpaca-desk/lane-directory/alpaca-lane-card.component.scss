@@ -1,11 +1,13 @@
-/* The host is the flex item of the directory's lane list; the card li it
-   renders fills it. */
+/* display: contents gives the host no box of its own, so the `<li>` it
+   renders is the flex item of the directory's lane list — and the list's
+   effective direct child for layout and the accessibility tree — instead
+   of the host wrapping it. */
 :host {
-  display: block;
-  min-width: 16rem;
+  display: contents;
 }
 
 .lane-card {
+  min-width: 16rem;
   border: 1px solid var(--surface-border, #ddd);
   border-radius: 6px;
   padding: 0.5rem 0.75rem;

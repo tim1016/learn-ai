@@ -136,7 +136,7 @@ describe('AlpacaLaneDirectoryComponent', () => {
       ],
     });
 
-    const chips = screen.getAllByText('Mode unknown');
+    const chips = screen.getAllByText('Mode unknown — assume real money');
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
       expect(chip.classList.contains('lane-mode-chip--undetermined')).toBe(true);
@@ -176,15 +176,15 @@ describe('verdictModeChip', () => {
   it('renders unread, failed, and server-unknown modes as the loud undetermined chip', () => {
     expect(verdictModeChip(UNPOLLED_LANE_STATE)).toEqual({
       tone: 'undetermined',
-      mode: 'Mode unknown',
+      mode: 'Mode unknown — assume real money',
     });
     expect(verdictModeChip({ verdict: null, lastError: new Error('down') })).toEqual({
       tone: 'undetermined',
-      mode: 'Mode unknown',
+      mode: 'Mode unknown — assume real money',
     });
     expect(verdictModeChip(fakeVerdictState('unknown'))).toEqual({
       tone: 'undetermined',
-      mode: 'Mode unknown',
+      mode: 'Mode unknown — assume real money',
     });
   });
 });

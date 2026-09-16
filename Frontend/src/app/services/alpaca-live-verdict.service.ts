@@ -41,9 +41,11 @@ export interface LaneModeChip {
 /** Project one lane's verdict state into its compact chip form.
  *
  * A verdict that is unread, failed, or `unknown` renders the loud
- * undetermined treatment — the same fail-closed stance as the pills, never a
- * calm grey "not configured". The verdict stays the only truth source; the
- * chip never guesses a mode from account-id shape or env (ADR 0011 §7). */
+ * undetermined treatment and *says the real-money assumption in its own
+ * text* (decision D2, #2110/#2139 — the same fail-closed stance as the
+ * pills; grey or neutral "not configured" wording is banned). The verdict
+ * stays the only truth source; the chip never guesses a mode from
+ * account-id shape or env (ADR 0011 §7). */
 export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
   switch (state.verdict?.final_verdict) {
     case 'paper':
@@ -52,7 +54,7 @@ export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
     case 'live-armed':
       return { tone: 'live', mode: 'Live' };
     default:
-      return { tone: 'undetermined', mode: 'Mode unknown' };
+      return { tone: 'undetermined', mode: 'Mode unknown — assume real money' };
   }
 }
 

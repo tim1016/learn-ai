@@ -65,6 +65,20 @@ describe('app menu projections', () => {
     expect(node?.item.title).toBe('Gallery');
   });
 
+  it.each([
+    ['bots', 'Bots'],
+    ['gallery', 'Gallery'],
+  ] as const)(
+    'maps a clerk-only %s refusal page (no account segment) onto its stable menu entry',
+    (surface, title) => {
+      const node = activeMenuNodeFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`);
+
+      expect(node?.group.title).toBe('Alpaca');
+      expect(node?.item.title).toBe(title);
+      expect(pageTitleFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`)).toBe(title);
+    },
+  );
+
   it('resolves the deploy query alias to its menu entry', () => {
     expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.title).toBe('Deploy');
     expect(
