@@ -44796,6 +44796,54 @@
         ]
       }
     },
+    "/api/broker-clerks/aggregate/directory": {
+      "get": {
+        "description": "The same per-lane data as ``GET /broker-clerks``, per-lane isolated.\n\n``directory()`` loops every registered clerk with no per-lane exception\nisolation -- one clerk's descriptor projection throwing fails the whole\nroster. This calls the same projection through ``aggregate_lane_reads``'s\nprovenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one\nlane's exception is that lane's explicit ``ok: False`` entry, never an\nomission, a substitution, or a 500 for every other lane. No local\n``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the\naudit read): ``aggregate_lane_reads`` already isolates every per-lane\nexception, so the only ``FleetControlError`` this route could ever see is\nan uninstalled fleet service, which the coordinator's global handler\nalready answers identically to ``_refuse`` -- the same reason\n``list_broker_clerks`` above carries no local try either.",
+        "operationId": "aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/broker-clerks/audit/routing-receipts": {
       "get": {
         "description": "Routing receipts at or after ``since_ms``, newest first.\n\nRead-only: no idempotency key, no command envelope, no ceremony. The\ndurable audit trail (routing receipts, assignment history, session\nhistory) was otherwise reachable only by opening the coordinator's\nSQLite file by hand.\n\nThe receipt ledger covers **commands only** (ADR 0063, #2153): routed\nstreams open no receipt and a lane's own bot runner never enters the\ncoordinator, so an empty or quiet window is not evidence of lane\ninactivity.\n\n``before_ms``/``before_correlation_id`` continue a previous page's keyset\n(#2133) -- pass back a truncated page's ``next_before_ms``/\n``next_before_correlation_id`` verbatim to walk the full window past\n``limit`` instead of only ever reaching the newest page.",

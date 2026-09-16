@@ -5,8 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
-from app.broker.fleet.errors import ClerkUnreachable
+from app.broker.fleet.errors import (
+    ClerkUnreachable,
+    DataPlaneControlSecretRefused,
+    FleetControlPlaneNotInstalled,
+)
+from app.config import settings
+from app.routers import broker_clerks
+from app.security.data_plane_control import CONTROL_SECRET_HEADER
+from app.utils.error_handlers import install_fleet_control_error_handler
 from tests.broker.fleet.conftest import (
     FAKE_ALPHA_CAPABILITIES,
     FAKE_BETA_CAPABILITIES,
@@ -219,6 +229,59 @@ def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
     assert "value" not in lanes[1]
 
 
+def test_aggregate_directory_reads_mirrors_directory_when_every_clerk_projects_cleanly(
+    control_dir: Path, fleet_service
+) -> None:
+    """The resilient directory read (FR-083/084) carries every registered
+    clerk, ``ok: True``, with the same per-lane data ``directory()`` computes."""
+    alpha = _live(fleet_service, control_dir.parent, "fake_alpha", "agg-healthy")
+    beta = _live(fleet_service, control_dir.parent, "fake_beta", "agg-healthy-2")
+
+    result = fleet_service.aggregate_directory_reads()
+
+    assert set(result) == {"observed_at_ms", "lanes"}
+    lanes = {lane["clerk_id"]: lane for lane in result["lanes"]}
+    assert set(lanes) == {alpha.clerk_id, beta.clerk_id}
+    assert all(lane["ok"] is True for lane in lanes.values())
+    directory_entries = {
+        entry["clerk_id"]: entry for entry in fleet_service.directory()["clerks"]
+    }
+    assert lanes[alpha.clerk_id]["value"] == directory_entries[alpha.clerk_id]
+    assert lanes[beta.clerk_id]["value"] == directory_entries[beta.clerk_id]
+
+
+def test_aggregate_directory_reads_isolates_one_clerks_projection_failure(
+    control_dir: Path, fleet_service
+) -> None:
+    """One clerk's ``describe_clerk`` failure is that lane's own ``ok: False``
+    entry; the other clerk still reports ``ok: True`` — the actual FR-083/084
+    behavior this resilient read exists to prove, unlike ``directory()``'s
+    plain loop which has no per-lane exception isolation at all."""
+    healthy = _live(fleet_service, control_dir.parent, "fake_alpha", "agg-ok")
+    broken = _live(fleet_service, control_dir.parent, "fake_beta", "agg-broken")
+    original_describe_clerk = fleet_service.describe_clerk
+
+    def flaky_describe_clerk(clerk_id: str):
+        if clerk_id == broken.clerk_id:
+            raise ClerkUnreachable("agent timed out")
+        return original_describe_clerk(clerk_id)
+
+    fleet_service.describe_clerk = flaky_describe_clerk
+    try:
+        result = fleet_service.aggregate_directory_reads()
+    finally:
+        del fleet_service.describe_clerk
+
+    lanes = {lane["clerk_id"]: lane for lane in result["lanes"]}
+    assert lanes[healthy.clerk_id]["ok"] is True
+    assert "value" in lanes[healthy.clerk_id]
+    assert lanes[broken.clerk_id]["ok"] is False
+    assert lanes[broken.clerk_id]["error_reason"] == "clerk_unreachable"
+    # A failed lane carries no value at all — the healthy lane's fact never
+    # substitutes for it (FR-084).
+    assert "value" not in lanes[broken.clerk_id]
+
+
 def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
     control_dir: Path, fleet_service
 ) -> None:
@@ -259,3 +322,156 @@ def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
         clerk_id=lane.clerk_id,
         readiness=OperationReadiness.CONFIGURATION_ACCESS,
     )
+
+
+# ---- HTTP: GET /broker-clerks/aggregate/directory (PRD FR-083/084) --------
+
+_AGGREGATE_ROUTE = "/api/broker-clerks/aggregate/directory"
+_TEST_SECRET = "test-aggregate-directory-secret"
+
+
+def _coordinator_app(fleet_service) -> FastAPI:
+    """The minimal coordinator surface this read needs: no lane router, no agent."""
+    app = FastAPI()
+    app.state.fleet_service = fleet_service
+    install_fleet_control_error_handler(app)
+    app.include_router(broker_clerks.router)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_returns_every_clerk_ok_true_when_all_project_cleanly(
+    control_dir: Path, fleet_service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    alpha = _live(fleet_service, control_dir.parent, "fake_alpha", "http-agg-alpha")
+    beta = _live(fleet_service, control_dir.parent, "fake_beta", "http-agg-beta")
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _AGGREGATE_ROUTE, headers={CONTROL_SECRET_HEADER: _TEST_SECRET}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["observed_at_ms"], int)
+    lanes = {lane["clerk_id"]: lane for lane in body["lanes"]}
+    assert set(lanes) == {alpha.clerk_id, beta.clerk_id}
+    assert all(lane["ok"] is True for lane in lanes.values())
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_isolates_one_clerks_failure_from_the_other(
+    control_dir: Path, fleet_service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The router-level twin of the service test above: one clerk's exception
+    reaches the wire as that lane's ``ok: False``, never a 500 for the page."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    healthy = _live(fleet_service, control_dir.parent, "fake_alpha", "http-agg-ok")
+    broken = _live(fleet_service, control_dir.parent, "fake_beta", "http-agg-broken")
+    original_describe_clerk = fleet_service.describe_clerk
+
+    def flaky_describe_clerk(clerk_id: str):
+        if clerk_id == broken.clerk_id:
+            raise ClerkUnreachable("agent timed out")
+        return original_describe_clerk(clerk_id)
+
+    fleet_service.describe_clerk = flaky_describe_clerk
+    app = _coordinator_app(fleet_service)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                _AGGREGATE_ROUTE, headers={CONTROL_SECRET_HEADER: _TEST_SECRET}
+            )
+    finally:
+        del fleet_service.describe_clerk
+
+    assert response.status_code == 200
+    lanes = {lane["clerk_id"]: lane for lane in response.json()["lanes"]}
+    assert lanes[healthy.clerk_id]["ok"] is True
+    assert lanes[broken.clerk_id]["ok"] is False
+    assert lanes[broken.clerk_id]["error_reason"] == "clerk_unreachable"
+    assert "value" not in lanes[broken.clerk_id]
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_rejects_the_request_without_the_secret_header(
+    fleet_service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(_AGGREGATE_ROUTE)
+
+    assert response.status_code == 403
+    assert response.json()["reason"] == DataPlaneControlSecretRefused.reason
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_rejects_the_wrong_secret_header(
+    fleet_service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _AGGREGATE_ROUTE, headers={CONTROL_SECRET_HEADER: "wrong"}
+        )
+
+    assert response.status_code == 403
+    assert response.json()["reason"] == DataPlaneControlSecretRefused.reason
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_accepts_the_request_with_the_correct_secret_header(
+    fleet_service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Positive control for the two rejections above: the identical route,
+    correctly authenticated, succeeds — so the 403s are proven to come from
+    the secret gate, not some other shared misconfiguration."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = _coordinator_app(fleet_service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _AGGREGATE_ROUTE, headers={CONTROL_SECRET_HEADER: _TEST_SECRET}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["observed_at_ms"], int)
+    assert body["lanes"] == []
+
+
+@pytest.mark.asyncio
+async def test_http_aggregate_directory_503s_when_fleet_service_is_absent_not_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The handler carries no local ``try``/``except`` (see its docstring):
+    ``aggregate_lane_reads`` already isolates every per-lane exception, so
+    the only ``FleetControlError`` this route can ever see is an uninstalled
+    fleet service, and that case is left to the coordinator's global handler
+    -- exactly like ``GET /broker-clerks`` above it. This proves the global
+    handler still turns a missing fleet service into the existing 503
+    family, never a raw 500."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    app = FastAPI()
+    install_fleet_control_error_handler(app)
+    app.include_router(broker_clerks.router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _AGGREGATE_ROUTE, headers={CONTROL_SECRET_HEADER: _TEST_SECRET}
+        )
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == FleetControlPlaneNotInstalled.reason
