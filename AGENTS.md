@@ -2,6 +2,22 @@
 
 A scientific platform for porting and validating trading logic. Reference implementations (LEAN, open-source backtesters, academic papers) are mined for math, then ported into this repo with strict numerical equivalence and vanishing external dependency.
 
+## REQUIRED: IBKR market data → Alpaca orders
+
+**Owner decision, 2026-09-16: retain Interactive Brokers as the live market-data
+provider for every Alpaca Paper, Live Shadow, and Live bot. Alpaca handles
+accounts, orders, and execution reports. Direct Alpaca market-data subscriptions
+are prohibited; the owner rejects their additional subscription cost.**
+
+The IBKR deprecations below apply to bot control and navigation, **never to the
+read-only market-data connection, bars, or trading-status evidence**. Preserve
+`IBKR_BROKER_ENABLED=true`, `IBKR_READONLY=true`, and distinct Gateway client IDs
+on clerk agents. Repair Gateway connectivity instead of disabling the feed.
+For provider wiring, account setup/removal, or launch failures, read
+[the account runbook](docs/runbooks/add-an-alpaca-account.md) and
+[ADR 0062's provider decision](docs/architecture/adrs/0062-broker-clerk-fleet-control-plane.md#retained-market-data-provider--owner-decision-2026-09-16).
+Changing this provider boundary requires an explicit owner decision.
+
 ## STOP: legacy IBKR bot control is deprecated
 
 The Interactive Brokers bot list and bot control panel are deprecated:

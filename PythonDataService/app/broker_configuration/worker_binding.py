@@ -589,6 +589,17 @@ def _record_refusal(
         return None
 
 
+def record_worker_startup_refusal(
+    *, bound: BoundWorker, recovery: str,
+    service_factory: ServiceFactory = get_broker_configuration_service,
+) -> None:
+    """Expose a failed custody boot and consume only its own pending Apply."""
+    candidate = bound.candidate
+    if candidate is None or candidate.intent is not BindingIntent.APPLY:
+        return
+    _record_refusal(service_factory(), candidate=candidate, reason=recovery)
+
+
 def _read_revision(
     service: BrokerConfigurationService, candidate: BindingCandidate
 ) -> ProfileRevision:

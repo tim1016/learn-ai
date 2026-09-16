@@ -33,6 +33,11 @@ Subcommands
     ``clerk.db``, which then makes ``cutover-initialize`` refuse with
     ``AlreadyInitialized`` and bricks the lane.
 
+``status``
+    Read the fleet binding and deployment gates without starting a bot.
+    ``--require roster`` checks routing; ``--require deploy`` also checks
+    the strategy permissions, account holds and live data needed to launch.
+
 Run directly::
 
     python3 scripts/alpaca_onboarding_gates.py <subcommand> --help
@@ -418,6 +423,106 @@ def command_wal_checkpoint(args: argparse.Namespace) -> None:
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
+def gate_lane_ready(
+    lane: dict[str, Any], *, require: str, deploy: dict[str, Any] | None,
+    roster: dict[str, Any] | list[Any] | None = None,
+) -> None:
+    """Process health is insufficient: require confirmed custody, then admission."""
+    summary = lane.get("provider_summary", {})
+    if lane.get("lifecycle_state") != "ready" or not summary.get("confirmed_by_current_session"):
+        raise GateFailed(
+            f"REFUSE: lane is {lane.get('lifecycle_state', 'unknown')}; its current worker "
+            "has not confirmed a ready account binding. Read the startup refusal above."
+        )
+    if summary.get("authority_state") not in {"real_paper", "shadow", "real_live"}:
+        raise GateFailed(
+            "REFUSE: lane has not reported a usable custody authority. "
+            "After startup, wait for its next heartbeat; otherwise read the startup refusal."
+        )
+    if isinstance(roster, dict) and "http_status" in roster:
+        raise GateFailed(f"REFUSE: roster read failed with HTTP {roster['http_status']}: {roster.get('refusal')}")
+    if require == "deploy" and (deploy is None or not deploy.get("eligibility", {}).get("eligible")):
+        reasons = [] if deploy is None else [
+            check["evidence_summary"] for check in deploy.get("readiness_checks", []) if not check["ready"]
+        ]
+        raise GateFailed("REFUSE: deployment blocked: " + "; ".join(reasons or ["deployment check unavailable"]))
+
+
+_STATUS_READ_SNIPPET = """\
+import json, os, sys, urllib.request, urllib.error
+clerk_id = sys.argv[1]
+headers = {"X-Data-Plane-Control-Secret": os.environ["DATA_PLANE_CONTROL_SECRET"]}
+def get(path):
+    request = urllib.request.Request("http://127.0.0.1:8000" + path, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        return {"http_status": error.code, "refusal": json.load(error)}
+directory = get("/api/broker-clerks")
+lane = next((item for item in directory.get("clerks", []) if item["clerk_id"] == clerk_id), None)
+if lane is None:
+    raise SystemExit("The lane is missing from the fleet directory; inspect coordinator health.")
+prefix = "/api/brokers/alpaca/clerks/" + clerk_id
+selection = get(prefix + "/configuration/selection")
+account = selection.get("effective_account_id")
+deploy = get(prefix + "/accounts/" + account + "/bots/deploy") if account else None
+roster = get(prefix + "/accounts/" + account + "/bots/catalog") if account else None
+sys.stdout.write(json.dumps({"lane": lane, "selection": selection, "deploy": deploy, "roster": roster}))
+"""
+
+
+_STARTUP_READ_SNIPPET = """\
+import json, os, sys, urllib.request, urllib.error
+headers = {
+    "X-Fleet-Coordinator-Token": os.environ["FLEET_COORDINATOR_SERVICE_TOKEN"],
+    "X-Fleet-Clerk-Id": os.environ["FLEET_CLERK_ID"], "X-Fleet-Broker": "alpaca",
+}
+request = urllib.request.Request("http://127.0.0.1:8000/api/brokers/alpaca/clerk/status", headers=headers)
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        json.load(response)
+        sys.stdout.write("Clerk custody is installed.\\n")
+except urllib.error.HTTPError as error:
+    sys.stdout.write(json.dumps(json.load(error)) + "\\n")
+except urllib.error.URLError:
+    sys.stdout.write("The worker has not opened its API yet. Wait for startup, then rerun status.\\n")
+"""
+
+
+def command_status(args: argparse.Namespace) -> None:
+    container = _resolve(args, "container")
+    clerk_id = _podman(
+        "exec", container, CONTAINER_PYTHON, "-c",
+        "import os,sys; sys.stdout.write(os.environ['FLEET_CLERK_ID'])",
+    ).strip()
+    data = json.loads(_podman(
+        "exec", args.coordinator, CONTAINER_PYTHON, "-c", _STATUS_READ_SNIPPET, clerk_id,
+    ))
+    lane, selection, deploy = data["lane"], data["selection"], data["deploy"]
+    summary = lane["provider_summary"]
+    sys.stdout.write(json.dumps({
+        "container": container, "clerk_id": clerk_id,
+        "state": lane["lifecycle_state"], "authority": summary.get("authority_state"),
+        "account": selection.get("effective_account_id"),
+        "last_apply_refusal": selection.get("last_apply_refusal_reason"),
+        "roster_url": (
+            f"http://localhost:4200/brokers/alpaca/clerks/{clerk_id}/accounts/"
+            f"{selection['effective_account_id']}/bots"
+            if selection.get("effective_account_id") else None
+        ),
+        "deployment_blockers": [] if deploy is None else [
+            check["evidence_summary"] for check in deploy.get("readiness_checks", []) if not check["ready"]
+        ],
+    }, indent=2) + "\n")
+    if lane["lifecycle_state"] != "ready" or summary.get("authority_state") not in {"real_paper", "shadow", "real_live"}:
+        sys.stdout.write(_podman("exec", container, CONTAINER_PYTHON, "-c", _STARTUP_READ_SNIPPET))
+    if lane["lifecycle_state"] == "ready" and not selection.get("effective_account_id"):
+        raise GateFailed("REFUSE: ready lane's effective account could not be read; inspect configuration access")
+    gate_lane_ready(lane, require=args.require, deploy=deploy, roster=data["roster"])
+    sys.stdout.write(f"OK: {args.require} readiness verified for {container}. No bot was started.\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alpaca_onboarding_gates.py", description=__doc__.splitlines()[0])
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -447,6 +552,12 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("--account-id", required=True)
     checkpoint.add_argument("--artifacts-root", default=DEFAULT_ARTIFACTS_ROOT)
     checkpoint.set_defaults(handler=command_wal_checkpoint)
+
+    status = subparsers.add_parser("status", help="Check the account binding and launch blockers, read-only.")
+    add_common(status)
+    status.add_argument("--coordinator", default="polygon-data-service")
+    status.add_argument("--require", choices=["roster", "deploy"], default="roster")
+    status.set_defaults(handler=command_status)
     return parser
 
 

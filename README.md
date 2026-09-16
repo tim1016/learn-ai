@@ -7,6 +7,13 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 ## Architecture
 
+> [!IMPORTANT]
+> **Live bot data comes from Interactive Brokers; orders go through Alpaca.**
+> This applies to Paper, Live Shadow, and Live. The retained IBKR feed is
+> read-only and required. Direct Alpaca market-data subscriptions are excluded
+> by owner decision. Retiring IBKR bot-control pages does not retire IBKR data.
+> [Account setup, removal, and launch troubleshooting runbook](docs/runbooks/add-an-alpaca-account.md).
+
 ```
 ┌──────────────┐     GraphQL      ┌──────────────┐     REST/HTTP     ┌──────────────────┐
 │   Angular 22 │ ◄──────────────► │  .NET 10     │ ◄──────────────► │  Python FastAPI   │

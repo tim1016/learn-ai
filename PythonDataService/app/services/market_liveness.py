@@ -187,7 +187,7 @@ def compose_market_liveness(
             connection_changed_at_ms=connection_changed_at_ms,
             symbol_status=symbol_status,
             reason_code="STATUS_STREAM_DISCONNECTED",
-            reason="The live Alpaca trading-status stream is not connected.",
+            reason="The live market-data trading-status source is not connected.",
         )
     return MarketLivenessFact(
         symbol=normalized_symbol,
@@ -319,6 +319,18 @@ class MarketLivenessStore:
         self._connected = False
         self._connection_changed_at_ms = 0
         self._upstream_observed_at_ms: int | None = None
+        self._status_source = "alpaca.stock_data.status"
+        self._requested_symbols: dict[str, int] = {}
+
+    def requested_symbols(self) -> tuple[str, ...]:
+        """Symbols consulted within the last minute; bounds idle subscriptions."""
+        from app.utils.timestamps import now_ms_utc
+
+        cutoff = now_ms_utc() - 60_000
+        self._requested_symbols = {
+            symbol: at for symbol, at in self._requested_symbols.items() if at >= cutoff
+        }
+        return tuple(self._requested_symbols)
 
     def observe_clock(self, clock: BrokerClockEvidence) -> None:
         """Record one fresh market-wide broker-clock observation."""
@@ -370,6 +382,7 @@ class MarketLivenessStore:
     def status_snapshot(self, *, now_ms: int) -> MarketStatusSnapshot:
         """Export connection proof and unchanged vendor halt/resume evidence."""
         return MarketStatusSnapshot(
+            source=self._status_source,
             connected=self._status_connected(now_ms),
             observed_at_ms=(
                 now_ms if self._upstream_observed_at_ms is None
@@ -386,6 +399,7 @@ class MarketLivenessStore:
         if self._upstream_observed_at_ms is not None and snapshot.observed_at_ms < self._upstream_observed_at_ms:
             raise ValueError("Shared market-status snapshot is older than retained evidence.")
         self._upstream_observed_at_ms = snapshot.observed_at_ms
+        self._status_source = snapshot.source
         self._connected = snapshot.connected
         self._connection_changed_at_ms = snapshot.connection_changed_at_ms
         for evidence in snapshot.symbol_statuses:
@@ -400,17 +414,33 @@ class MarketLivenessStore:
     def fact(self, symbol: str, *, now_ms: int) -> MarketLivenessFact:
         """Return the one current live fact for Start, panel, and Clerk gates."""
         normalized_symbol = symbol.upper()
+        self._requested_symbols[normalized_symbol] = now_ms
+        status = self._symbol_statuses.get(normalized_symbol)
+        if self._status_source == "ibkr.market_data.status" and (
+            status is None or (
+                status.state != "HALTED"
+                and not 0 <= now_ms - status.observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS
+            )
+        ):
+            status = SymbolTradingStatusEvidence(
+                symbol=normalized_symbol, state="UNKNOWN", source=self._status_source,
+                observed_at_ms=now_ms, reason="Waiting for this symbol's IBKR subscription.",
+            )
         return compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=self._market_clock,
             connected=self._status_connected(now_ms),
             connection_changed_at_ms=self._connection_changed_at_ms,
-            symbol_status=self._symbol_statuses.get(normalized_symbol),
+            symbol_status=status,
         )
 
 
 def _status_order(evidence: SymbolTradingStatusEvidence) -> tuple[int, int]:
+    if evidence.source == "ibkr.market_data.status":
+        # IBKR snapshots are current observations, not transition events. A
+        # recent trade may predate a later explicit resume/unavailable tick.
+        return evidence.observed_at_ms, evidence.observed_at_ms
     return evidence.source_timestamp_ms or evidence.observed_at_ms, evidence.observed_at_ms
 
 

@@ -23331,9 +23331,13 @@
             "type": "integer"
           },
           "source": {
-            "const": "alpaca.stock_data.status",
             "default": "alpaca.stock_data.status",
-            "title": "Source"
+            "enum": [
+              "alpaca.stock_data.status",
+              "ibkr.market_data.status"
+            ],
+            "title": "Source",
+            "type": "string"
           },
           "symbol_statuses": {
             "items": {

@@ -375,6 +375,10 @@ class IbkrMarketDataFeed:
             )
         return closed
 
+    def active_symbols(self) -> tuple[str, ...]:
+        """Symbols with bar consumers, including runners between decisions."""
+        return tuple(symbol for symbol, state in self._symbol_liveness.items() if state.active_count > 0)
+
     def health(self, symbol: str | None = None) -> FeedHealth:
         """Return aggregate or symbol-scoped point-in-time feed health."""
         connected = self._client.is_connected() and not self._client.connection_lost

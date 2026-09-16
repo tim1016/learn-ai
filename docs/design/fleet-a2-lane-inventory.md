@@ -83,6 +83,13 @@ escapes it refuses before any database writer or broker client opens.
 3. **Live bars aggregation.** `LIVE_BAR_AGGREGATOR` moves wholesale into the
    agent (root re-homed per the table); the coordinator keeps no bar state.
 
+Owner clarification, 2026-09-16: **IBKR supplies live bars and trading-status
+evidence; Alpaca supplies account/order execution only.** Direct Alpaca data
+subscriptions are excluded. See [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md#retained-market-data-provider--owner-decision-2026-09-16).
+The lane's exact strategy/account permissions also persist on its custody
+volume at `canary_admission/events.json`, beneath `live_artifacts_root()`;
+container recreation must preserve them along with profiles and custody.
+
 ## Routers by role
 
 | Router family | combined | fleet_coordinator | clerk_agent |

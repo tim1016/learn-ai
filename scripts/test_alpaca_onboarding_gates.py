@@ -468,5 +468,37 @@ class WalCheckpointAgainstRealSqlite(unittest.TestCase):
         self.assertIn("not a plausible Alpaca account number", stderr)
 
 
+class LaneReadinessGate(unittest.TestCase):
+    def test_confirmed_lane_cannot_hide_a_failed_roster_read(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "roster read failed with HTTP 503"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "ready",
+                "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+            }, require="roster", deploy=None, roster={"http_status": 503, "refusal": "custody unavailable"})
+
+    def test_healthy_process_with_unconfirmed_binding_is_not_roster_ready(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "starting"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "starting",
+                "provider_summary": {"authority_state": "real_paper"},
+            }, require="roster", deploy=None)
+
+    def test_shadow_is_ready_for_the_roster_without_real_money_activation(self) -> None:
+        gates.gate_lane_ready({
+            "lifecycle_state": "ready",
+            "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+        }, require="roster", deploy=None)
+
+    def test_roster_ready_does_not_prove_launch_ready(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "market-data feed"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "ready",
+                "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+            }, require="deploy", deploy={
+                "eligibility": {"eligible": False},
+                "readiness_checks": [{"ready": False, "evidence_summary": "Missing market-data feed"}],
+            })
+
+
 if __name__ == "__main__":
     unittest.main()

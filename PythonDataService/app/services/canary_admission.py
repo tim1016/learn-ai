@@ -49,6 +49,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
+from app.broker.ibkr.config import live_artifacts_root
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.canary_admission import (
     CanaryActivationEvidence,
@@ -72,8 +73,10 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_SERVICE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CANARY_ADMISSION_LEDGER_PATH = _SERVICE_ROOT / "artifacts/canary_admission/events.json"
+# Account permissions are lane state, alongside the durable bot bindings.
+# A source-relative artifacts directory is an ephemeral container layer in
+# the fleet topology and loses every approval when the container is replaced.
+DEFAULT_CANARY_ADMISSION_LEDGER_PATH = live_artifacts_root() / "canary_admission/events.json"
 _MAX_CONFIRMATION_TTL_MS = 5 * 60_000
 
 # SAFETY: exact by (program_key, account_id) — never a prefix, a program-only
@@ -143,11 +146,16 @@ def canary_pairing_admitted(
     ships empty. Real local activation is always reconstructed from the
     verified append-only ledger.
     """
-    pair = (program_key, account_id)
-    if pair in CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS:
+    # Setup reviews the external account; Shadow seals its isolated custody
+    # namespace. Both refer to the same reviewed account permission. Preserve
+    # older explicit shadow grants, without extending them to live custody.
+    pairs = {(program_key, account_id)}
+    if account_id.startswith("shadow:"):
+        pairs.add((program_key, account_id.removeprefix("shadow:")))
+    if pairs & CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS:
         return True
     try:
-        return pair in active_canary_pairings(ledger_path=ledger_path)
+        return bool(pairs & active_canary_pairings(ledger_path=ledger_path))
     except CanaryAdmissionLedgerError as exc:
         logger.error("Canary admission failed closed: %s", exc)
         return False

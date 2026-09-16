@@ -263,13 +263,16 @@ async def test_feed_active_count_decrements_after_consumer_exits(
     feed = IbkrMarketDataFeed(client)
 
     assert feed.health("SPY").active_subscription_count == 0
+    assert feed.active_symbols() == ()
 
     bars: list[MarketDataBar] = []
     async for bar in feed.stream_bars("SPY"):
         assert feed.health("SPY").active_subscription_count == 1
+        assert feed.active_symbols() == ("SPY",)
         bars.append(bar)
 
     assert feed.health("SPY").active_subscription_count == 0
+    assert feed.active_symbols() == ()
     assert len(bars) == 1
 
 

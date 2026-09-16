@@ -7,7 +7,32 @@
 **Vocabulary:** `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)".
 **Supersedes:** [ADR 0060](0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) Decision 5's clause "**one worker per installation … no `worker_id` column and no workers table**" **and only that clause**, in exactly the way ADR 0060 itself anticipated: it deferred cross-installation multi-worker to "a shared Clerk volume, a worker key, one-worker-per-account enforced in the profiles database" and named it so it would be *designed rather than discovered*. This ADR is that design, generalized: the worker identity lives in the fleet registry as a durable `worker_key` bound to one clerk, and one-writer-per-account is enforced broker-qualified across volumes by the fleet assignment fence. ADR 0060's remaining content — profiles DB on the Clerk volume, staged/effective/sealed, `selection_generation` fencing, the envelope type fidelity, Paper developer reset — stands unchanged **per clerk**: each clerk volume keeps its own profiles database and its own installation selection row, and nothing in this ADR moves configuration off the Clerk volume. This ADR also **extends** (does not weaken) ADR 0059's "Not done by this ADR: more than one live account per installation": a fleet installation may now operate multiple clerks, but every `real_live` clerk retains the full three-way mode agreement, per-instance arming, sealed envelope and cash-bound ENTER semantics independently, and a second live clerk is enrolled only after the PRD's Phase 5 gates pass.
 
-## Context
+## Retained market-data provider — owner decision 2026-09-16
+
+IBKR remains the live market-data provider for Alpaca Paper, Live Shadow, and
+Live lanes. Alpaca owns account reads, its execution API clock, order submission,
+and execution reports. **Direct Alpaca market-data subscriptions are excluded:**
+the owner explicitly rejects the additional subscription cost (quoted by the
+owner as $99). The earlier IBKR product decommissioning retires its control UI
+and order authority, not the read-only data dependency. This distinction is
+required even when the code retains a historical `IBKR_BROKER_ENABLED` name.
+
+Each clerk retains a read-only Gateway connection with a distinct client ID.
+Its bars and symbol status evidence come from IBKR. A connected socket alone
+does not prove symbol tradability: an explicit tick-49 not-halted observation
+or a real-time trade no older than five seconds is required; delayed/frozen
+data and explicit unavailable status refuse. A reported halt stays latched
+across reconnects until IBKR explicitly reports not halted. The Alpaca execution
+clock remains an account-side market-open check, not a market-data subscription.
+Scheduled phases remain calendar-owned. An outage never activates a paid
+Alpaca fallback or weakens these checks.
+
+This corrects the September 15 configuration change that disabled the retained
+feed and replaces the prior Alpaca stock-data status dependency. Provider
+changes require a new explicit owner decision. Vocabulary: none owed; this
+clarifies the existing market-data and execution-provider roles.
+
+## Fleet context
 
 One installation can address exactly one effective clerk. The frontend can render configuration and the Trader/Operator lenses, but it has no durable clerk identity with which to address multiple isolated execution lanes, and the routing contract carries no lane identity at all — a command's destination is whatever the single active runtime happens to be.
 

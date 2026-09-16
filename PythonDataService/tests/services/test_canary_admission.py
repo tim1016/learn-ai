@@ -9,6 +9,9 @@ applicability, and the Clerk-proved rollback boundary.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +47,22 @@ from app.services.strategy_validation_manifest import (
 )
 
 _NOW = 1_700_000_010_000
+
+
+def test_recreated_lane_resolves_admission_ledger_on_its_persistent_volume(tmp_path: Path) -> None:
+    """A fresh process must find permissions beside its durable bot bindings."""
+    lane_root = tmp_path / "paper-clerk-volume"
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "import sys\n"
+            "from app.services.canary_admission import DEFAULT_CANARY_ADMISSION_LEDGER_PATH\n"
+            "sys.stdout.write(str(DEFAULT_CANARY_ADMISSION_LEDGER_PATH))\n"
+        )],
+        env={**os.environ, "IBKR_LIVE_RUNS_ROOT": str(lane_root / "live_runs")},
+        capture_output=True, text=True, check=True, timeout=20,
+    )
+
+    assert Path(result.stdout) == lane_root / "canary_admission" / "events.json"
 
 
 def test_canary_allowlist_ships_empty() -> None:
@@ -573,3 +592,20 @@ def test_canary_rollback_decision_carries_the_exact_stop_outcome_it_classified()
     assert decision.stop_outcome == "STOP_REQUIRES_FLATTEN"
     assert decision.strategy_instance_id == "sid-1"
     assert decision.evaluated_at_ms == _NOW
+
+
+@pytest.mark.parametrize("custody_account,admitted", [
+    ("shadow:318420190", True), ("shadow:other-account", False),
+    ("sim:318420190", False), ("318420190", True),
+])
+def test_shadow_custody_uses_the_same_exact_account_permission_as_the_setup_screen(
+    monkeypatch, tmp_path, custody_account, admitted,
+):
+    monkeypatch.setattr(
+        "app.services.canary_admission.active_canary_pairings",
+        lambda **kwargs: frozenset({("ema_crossover_signal", "318420190")}),
+    )
+    assert canary_pairing_admitted(
+        program_key="ema_crossover_signal", account_id=custody_account,
+        ledger_path=tmp_path / "ledger.json",
+    ) is admitted

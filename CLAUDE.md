@@ -2,6 +2,17 @@
 
 A scientific platform for porting and validating trading logic. Reference implementations (LEAN, open-source backtesters, academic papers) are mined for math, then ported into this repo with strict numerical equivalence and vanishing external dependency.
 
+## Required broker-provider boundary
+
+**IBKR supplies live market data; Alpaca handles accounts and orders.** The
+owner reaffirmed this on 2026-09-16 and prohibits direct Alpaca market-data
+subscriptions because of their additional cost. IBKR bot-control/navigation
+deprecation never permits removing its read-only data feed. Preserve enabled,
+read-only IBKR connections on clerk agents; repair Gateway outages instead of
+disabling them. For provider changes or account/launch repair, read
+[ADR 0062's provider decision](docs/architecture/adrs/0062-broker-clerk-fleet-control-plane.md#retained-market-data-provider--owner-decision-2026-09-16)
+and [the account runbook](docs/runbooks/add-an-alpaca-account.md).
+
 ## Guiding philosophy
 
 1. **Math rigor before stack hygiene.** This repo's primary job is porting mathematical logic from reference sources and proving numerical equivalence. Stack conventions matter but never override math correctness.
