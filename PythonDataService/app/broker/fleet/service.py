@@ -1387,6 +1387,13 @@ class FleetControlService:
         idempotency key returns the existing attempt — unless the retry names
         a different operation, target or pinned context, which is a conflict,
         never a silent cross-attribution.
+
+        This ledger covers **commands only** (ADR 0063): routed streams open
+        no receipt, so receipt silence is never lane silence — a lane serving
+        open streams reads as quiet here. Streams gain their own attempt
+        record only if they are ever to count as drain evidence; until then
+        every consumer reasoning about lane activity must say this scope in
+        its own docstring (#2153).
         """
         now = self._clock()
         existing = self._store.find_routing_receipt_by_idempotency(
