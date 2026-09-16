@@ -9,12 +9,23 @@ import { BrokersService } from './brokers.service';
 const POLL_INTERVAL_MS = 5000;
 
 /**
+ * Ceiling for the backed-off poll cadence, doubling from `POLL_INTERVAL_MS`
+ * on sustained fleet-wide failure (see `applyBackoff`). Same 10x ratio as
+ * the reconnect backoff this is adapted from (`authenticated-sse-connection.ts`:
+ * 500 ms base, 5 s cap) — a fleet-wide outage stretches the cadence to at
+ * most 50 s instead of hammering every lane every 5 s forever.
+ */
+const POLL_BACKOFF_MAX_MS = 50_000;
+
+/**
  * How many `roster()` ticks separate one forced `directory.refresh()` from
  * the next. `FleetDirectoryService.ensureLoaded()` is a permanent no-op once
  * one load has succeeded, so left alone this trust anchor would never learn
  * about a lane provisioned after the tab's first successful directory load.
  * At the `POLL_INTERVAL_MS` (5 s) cadence, 6 ticks is one forced refresh
- * every 6 * 5 s = 30 s.
+ * every 6 * 5 s = 30 s. Under backoff, ticks are simply spaced further
+ * apart — the 6-tick count itself is untouched, so a forced refresh still
+ * naturally lands less often while the fleet is unhealthy.
  */
 const DIRECTORY_REFRESH_EVERY_N_TICKS = 6;
 
@@ -29,6 +40,15 @@ export const UNPOLLED_LANE_STATE: LaneVerdictState = Object.freeze({
   verdict: null,
   lastError: null,
 });
+
+/** What one `roster()` call produced: the lanes this tick should read, and
+ * whether the directory load itself failed — returned together, rather than
+ * through a side-channel field, so `refresh()` reads a snapshot instead of
+ * racing a future concurrent tick over mutable instance state. */
+interface RosterResult {
+  readonly lanes: readonly LaneDescriptor[];
+  readonly directoryLoadFailed: boolean;
+}
 
 /** What one lane's mode chip renders: the tone vocabulary is shared with the
  * shell's live-verdict pills (ADR 0059 D8), so a lane reads the same colour
@@ -89,6 +109,14 @@ export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
  *
  * Never derive the mode from an env var or an account-id shape here: the
  * server's verdict is the only source of truth (ADR 0011 §7).
+ *
+ * The poll cadence backs off — doubling, capped at `POLL_BACKOFF_MAX_MS` —
+ * when a tick's failure is widespread (every lane's read failed, or the
+ * directory itself failed to load), and resets to `POLL_INTERVAL_MS` the
+ * moment a tick is healthy again. A single lane's isolated failure never
+ * triggers backoff: that would let one bad lane slow every other lane's
+ * badge, which is exactly the cross-lane leakage FR-093 forbids for state.
+ * See `applyBackoff`.
  */
 @Injectable({ providedIn: 'root' })
 export class AlpacaLiveVerdictService {
@@ -99,12 +127,18 @@ export class AlpacaLiveVerdictService {
   private readonly _stateByClerkId = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
   readonly stateByClerkId = this._stateByClerkId.asReadonly();
 
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
 
   /** Ticks since this service started; drives the every-6th-tick forced
    * directory refresh in `roster()`. */
   private tickCount = 0;
+
+  /** The delay before the next scheduled tick. Doubles (capped) on
+   * widespread failure, resets to `POLL_INTERVAL_MS` on a healthy tick. A
+   * plain `setInterval` can't express this — its period is fixed at
+   * creation — so polling is a self-rescheduling `setTimeout` chain instead. */
+  private currentIntervalMs = POLL_INTERVAL_MS;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.stop());
@@ -114,8 +148,29 @@ export class AlpacaLiveVerdictService {
   start(): void {
     if (this.started) return;
     this.started = true;
-    void this.refresh();
-    this.pollTimer = setInterval(() => void this.refresh(), POLL_INTERVAL_MS);
+    this.runTick();
+  }
+
+  /** Run one tick and arm the next relative to when THIS tick started, not
+   * when it settled. A slow lane's read (up to `POLL_REQUEST_TIMEOUT_MS`)
+   * would otherwise tack a full `currentIntervalMs` on top of its own delay
+   * before the next tick fires — stalling every other lane's cadence behind
+   * the slowest read, which is exactly the cross-lane leakage FR-093
+   * forbids. */
+  private runTick(): void {
+    const tickStartedAtMs = Date.now();
+    void this.refresh().finally(() => this.scheduleNextTick(tickStartedAtMs));
+  }
+
+  /** Arm the next tick at the current (possibly backed-off) interval, minus
+   * however much of it this tick already spent settling. A no-op once
+   * `stop()` has run, so a tick already in flight when the service is
+   * destroyed can't resurrect the timer after teardown. */
+  private scheduleNextTick(tickStartedAtMs: number): void {
+    if (!this.started) return;
+    const elapsedMs = Date.now() - tickStartedAtMs;
+    const delayMs = Math.max(0, this.currentIntervalMs - elapsedMs);
+    this.pollTimer = setTimeout(() => this.runTick(), delayMs);
   }
 
   /** This lane's latest state, or the unpolled default if it has never
@@ -129,15 +184,46 @@ export class AlpacaLiveVerdictService {
    * its own map entry — so one lane's rejection or latency can never touch
    * another's state. */
   async refresh(): Promise<void> {
-    const lanes = await this.roster();
+    const { lanes, directoryLoadFailed } = await this.roster();
     const reads = this.brokers.getLiveVerdicts(
       lanes.map((lane) => resourceTarget(lane.broker, lane.clerk_id)),
     );
     // `getLiveVerdicts` returns synchronously and `storeLane` attaches its
     // handler before its first await, so every read is claimed in this same
     // synchronous block — no read is ever left momentarily unhandled.
-    await Promise.all(lanes.map((lane, index) => this.storeLane(lane.clerk_id, reads[index])));
+    const outcomes = await Promise.all(
+      lanes.map((lane, index) => this.storeLane(lane.clerk_id, reads[index])),
+    );
     this.pruneTo(new Set(lanes.map((lane) => lane.clerk_id)));
+    this.applyBackoff(this.isWidespreadFailure(directoryLoadFailed, lanes.length, outcomes));
+  }
+
+  /**
+   * Widespread means "the fleet is unhealthy", not "a lane is unhealthy":
+   * the directory read itself failed, or — with at least one lane known —
+   * every one of this tick's lane reads failed. One lane failing among
+   * healthy siblings is never widespread; that's the same FR-093 boundary
+   * `storeLane`'s per-key state already enforces, applied to cadence.
+   */
+  private isWidespreadFailure(
+    directoryLoadFailed: boolean,
+    laneCount: number,
+    outcomes: readonly boolean[],
+  ): boolean {
+    if (directoryLoadFailed) return true;
+    return laneCount > 0 && outcomes.every((succeeded) => !succeeded);
+  }
+
+  /**
+   * Doubling-capped backoff for the poll cadence, adapted from the
+   * reconnect backoff in `authenticated-sse-connection.ts`. This governs
+   * only the `setTimeout` gap between ticks — not per-request retries,
+   * which stay `PolledReadScheduler`'s job via `POLL_REQUEST_TIMEOUT_MS`.
+   */
+  private applyBackoff(widespreadFailure: boolean): void {
+    this.currentIntervalMs = widespreadFailure
+      ? Math.min(this.currentIntervalMs * 2, POLL_BACKOFF_MAX_MS)
+      : POLL_INTERVAL_MS;
   }
 
   /**
@@ -161,9 +247,10 @@ export class AlpacaLiveVerdictService {
    * deciding where a URL lands — a max-age there would occasionally block
    * navigation on a network request.
    */
-  private async roster(): Promise<LaneDescriptor[]> {
+  private async roster(): Promise<RosterResult> {
     this.tickCount += 1;
     const dueForRefresh = this.tickCount % DIRECTORY_REFRESH_EVERY_N_TICKS === 0;
+    let directoryLoadFailed: boolean;
     try {
       // `refresh()` rejects where `ensureLoaded()` may resolve; this catch
       // covers both.
@@ -172,23 +259,31 @@ export class AlpacaLiveVerdictService {
       } else {
         await this.directory.ensureLoaded();
       }
+      directoryLoadFailed = false;
     } catch {
       // Handled where it belongs, not swallowed: FleetDirectoryService owns
       // this error and already exposes it as observable state. An unresolved
       // roster is exactly the condition the shell's "lanes unknown" badge
       // renders, so this tick reads whatever the directory last knew and the
-      // next tick asks again.
+      // next tick asks again. `refresh()` also folds this into the
+      // widespread-failure check that drives cadence backoff.
+      directoryLoadFailed = true;
     }
-    return this.directory.lanesOf('alpaca');
+    return { lanes: this.directory.lanesOf('alpaca'), directoryLoadFailed };
   }
 
-  private async storeLane(clerkId: string, read: Promise<AlpacaLiveVerdict>): Promise<void> {
+  /** Stores this lane's read outcome and reports whether it succeeded, so
+   * `refresh()` can fold it into the widespread-failure check without
+   * touching this lane's own FR-093 isolation. */
+  private async storeLane(clerkId: string, read: Promise<AlpacaLiveVerdict>): Promise<boolean> {
     try {
       this.setState(clerkId, { verdict: await read, lastError: null });
+      return true;
     } catch (err) {
       // A failed read means this lane's verdict is unknown to this client;
       // never keep rendering a stale mode over a network fault.
       this.setState(clerkId, { verdict: null, lastError: err });
+      return false;
     }
   }
 
@@ -215,7 +310,7 @@ export class AlpacaLiveVerdictService {
 
   private stop(): void {
     if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
     this.started = false;
