@@ -39,14 +39,31 @@ first — a combined role can host at most one account, ever.
 ## 0. Prerequisites
 
 - The stack is up (`./restart.sh` from the repo root; see `.claude/CLAUDE.md`).
-- `jq`, on the host — every JSON response this runbook parses (§6's broker
-  captures, §7's fleet-directory check) is parsed with it, not by eye.
+- On the host: `podman` (including `podman cp`, used in §6), and `python3` —
+  3.9 or newer, so the macOS system interpreter is enough; the gates below are
+  stdlib-only and need no virtualenv. `jq` only for the one JSON projection §7
+  asks you to read by eye; no gate in this runbook needs it, or `shasum`
+  (GNU/Linux hosts ship `sha256sum` instead, which is why no gate shells out to
+  either).
 - You have decided **Paper** or **Live** for this account, and you know
   which lane (which Clerk container) it is going into. A lane serves
   exactly one account for its lifetime — [see the "why" in
   `fleet-dev-two-lane-posture.md`](fleet-dev-two-lane-posture.md#why-the-combined-role-cannot-host-a-second-lane).
   If no free lane exists yet, [§2](#2-provision-the-lane-skip-if-reusing-an-existing-lane)
   provisions one.
+
+**Every gate in this runbook is one command whose exit status is the whole
+answer.** The gates live in `scripts/alpaca_onboarding_gates.py` — checked,
+tested by `scripts/test_alpaca_onboarding_gates.py`, and run from the repo root
+— rather than as shell pasted into this page. That is not a style preference:
+three earlier drafts of this runbook each shipped a hand-rolled gate that could
+not refuse. A credential check that passed when the credential was missing on
+*both* sides. A flatness check that passed on a real Alpaca 401 body. A "safe
+alternative to `rm`" that created a 0-byte database and called it success. A
+gate that needs you to read its output and decide is not a gate. So: if any
+command below exits non-zero, stop there — it prints exactly one `REFUSE:` or
+`DISQUALIFIED:` line saying why — and if it exits zero, the thing it checked
+holds.
 
 ## 1. Get Alpaca API credentials
 
@@ -109,9 +126,32 @@ identity:
 ```bash
 # runs on: host, repo root
 chmod 600 deploy/fleet/env/paper.env   # or deploy/fleet/env/live.env — only this account's file
-podman compose -f compose.yaml -f compose.fleet.dev.yaml -f compose.override.yaml \
-  up -d --force-recreate alpaca-paper-clerk   # or alpaca-live-clerk
+COMPOSE_ARGS=(--file compose.yaml)
+if [[ -f compose.fleet.dev.yaml ]]; then COMPOSE_ARGS+=(--file compose.fleet.dev.yaml); fi
+if [[ -f compose.override.yaml ]]; then COMPOSE_ARGS+=(--file compose.override.yaml); fi
+podman compose "${COMPOSE_ARGS[@]}" up -d --force-recreate alpaca-paper-clerk   # or alpaca-live-clerk
 ```
+
+Both optional files are guarded, exactly as `restart.sh:63-68` guards them:
+`compose.override.yaml` is gitignored (`.gitignore:12`) and simply absent on a
+fresh clone, so a hardcoded third `-f` turns a working host into a failed
+recreate.
+
+**Three lists of compose files are in circulation, and this one wins.** The
+running paper lane reports `FLEET_COMPOSE_FILES: compose.yaml,compose.override.yaml`;
+`compose.fleet.dev.yaml:136` and `:156` commit
+`compose.yaml,compose.fleet.dev.yaml` for the two lanes; the block above
+resolves whichever of the three files actually exist. Each declared value is
+"pasted verbatim into a command an operator runs"
+(`app/config.py:112-114`), so the desk can hand you a different list than this
+page prints. Take `restart.sh`'s resolution — what the block above reproduces —
+as the authority here: it is the only one of the three that describes what is on
+*this* host's disk, while a lane's `FLEET_COMPOSE_FILES` is that lane's own
+claim about itself. A disagreement is a declaration to fix, not a list to pick
+between, and the tiebreak is empirical rather than editorial — `podman compose
+"${COMPOSE_ARGS[@]}" config --services` must name the lane you are about to
+recreate. If it doesn't, stop: a recreate resolved against the wrong file set is
+precisely the silent identity-dropping failure this paragraph exists to prevent.
 
 Then confirm the lane's HTTP surface is answering, checked from the
 coordinator's own network (the lane has no host-published port) — the exact
@@ -128,21 +168,34 @@ answers `/health` exactly like a correctly recreated one. Worst case on
 §2's "reusing an already-provisioned lane" path: the recreate silently
 doesn't take, §4 binds and pins whichever account the container actually
 holds, and the operator believes they onboarded the new one — wrong lane,
-wrong account, no error. Close that gap by comparing a hash, never a
-credential value:
+wrong account, no error. Close that gap by comparing hashes, never credential
+values:
 
 ```bash
-# runs on: host — the container's credential must hash-match the file you
-# just wrote; a mismatch means the recreate above didn't actually take
-HOST_HASH=$(grep ^ALPACA_API_KEY_ID= deploy/fleet/env/paper.env | cut -d= -f2- | shasum -a 256 | cut -d' ' -f1)
-CONTAINER_HASH=$(podman exec alpaca-paper-clerk /opt/venv/bin/python -c \
-  "import hashlib, os; print(hashlib.sha256(os.environ.get('ALPACA_API_KEY_ID', '').encode()).hexdigest())")
-[ "$HOST_HASH" = "$CONTAINER_HASH" ] \
-  || { echo "REFUSE: container credentials do not match deploy/fleet/env/paper.env" >&2; exit 1; }
+# runs on: host, repo root — exits 0 only if the lane's live credential pair
+# hash-matches the env file you just wrote
+python3 scripts/alpaca_onboarding_gates.py credential-match --mode paper
 ```
 
-(For Live: `ALPACA_CREDENTIAL_LIVE_KEY_ID`, `deploy/fleet/env/live.env`,
-`alpaca-live-clerk`.)
+(For Live: `--mode live`. The mode resolves everything else — `live.env`, the
+`live` slot's genuinely different `ALPACA_CREDENTIAL_LIVE_KEY_ID` /
+`ALPACA_CREDENTIAL_LIVE_SECRET_KEY` pair, and `alpaca-live-clerk` — from one
+flag, so there is no second place to get the slot mapping wrong. `--env-file`
+and `--container` override the defaults if your deployment names them
+differently.)
+
+Both the key id and the secret are checked. Each value is hashed where it lives
+— the container prints only a digest, never a value, and the host-side value
+never leaves the gate's own process — and the gate refuses on three separate
+conditions, any one of which exits non-zero: the variable is empty or absent in
+the env file, it is empty or absent inside the container, or the two digests
+differ. The empty checks are the load-bearing half, not defensive padding: a
+credential absent on *both* sides hashes to the same `e3b0c442…` on both sides,
+so a gate that only compares digests hands a green check to exactly the operator
+it exists for — one who forgot the credential, or whose recreate picked up an
+empty env file. In the other direction, the gate parses the env file the way
+Compose's `env_file:` does, stripping surrounding quotes and a trailing `\r`, so
+a correctly recreated lane whose value happens to be quoted is not refused.
 
 ## 4. Bind the account through the desk
 
@@ -271,112 +324,95 @@ ceremony" — it's one capture for `initialize`, then a second capture that
 `plan` and `apply` share (see gotcha 2 below for why that second pair must
 be exact).
 
-The tool never calls Alpaca itself (it is deliberately broker-free); you
-capture the evidence yourself, straight from Alpaca's REST API, using
-whichever credential pair matches the account's real mode — the same slot
-split as §3, not the same variable names for both:
+The cutover tool never calls Alpaca itself — it is deliberately broker-free,
+and `_validate_cutover_broker_state`
+(`app/broker/alpaca/clerk/sqlite/cutover.py:698-716`) refuses only on what the
+evidence JSON says, never on anything it fetches. So the capture, the flatness
+check and the evidence file are all yours, and for Live they are the only thing
+standing between a non-flat real-money account and a receipt that claims
+otherwise. One command does all three, once per capture:
 
 ```bash
-# runs on: host — Paper (slot `default`, deploy/fleet/env/paper.env)
-KEY_ID=$(grep ^ALPACA_API_KEY_ID= deploy/fleet/env/paper.env | cut -d= -f2-)
-SECRET_KEY=$(grep ^ALPACA_API_SECRET_KEY= deploy/fleet/env/paper.env | cut -d= -f2-)
-BASE_URL=https://paper-api.alpaca.markets
+# runs on: host, repo root — capture 1 of 2, the one `cutover-initialize` reads
+python3 scripts/alpaca_onboarding_gates.py capture-evidence \
+  --mode paper --phase initialize --account-id <ACCOUNT_ID>
 ```
 
 ```bash
-# runs on: host — Live (slot `live`, deploy/fleet/env/live.env)
-KEY_ID=$(grep ^ALPACA_CREDENTIAL_LIVE_KEY_ID= deploy/fleet/env/live.env | cut -d= -f2-)
-SECRET_KEY=$(grep ^ALPACA_CREDENTIAL_LIVE_SECRET_KEY= deploy/fleet/env/live.env | cut -d= -f2-)
-BASE_URL=https://api.alpaca.markets
+# runs on: host, repo root — capture 2 of 2, taken after the verified backup;
+# `cutover-plan` and `cutover-apply` share this one
+python3 scripts/alpaca_onboarding_gates.py capture-evidence \
+  --mode paper --phase plan --account-id <ACCOUNT_ID>
 ```
 
-Live's key/secret variables are a genuinely different pair, not the same
-names in a different file — greping `ALPACA_API_KEY_ID` out of `live.env`
-finds nothing there and silently hands `curl` an empty credential. Then,
-with whichever pair applies:
+`--mode live` switches all of it at once: `deploy/fleet/env/live.env`, the
+`live` slot's `ALPACA_CREDENTIAL_LIVE_KEY_ID` / `ALPACA_CREDENTIAL_LIVE_SECRET_KEY`
+pair, `https://api.alpaca.markets`, and `alpaca-live-clerk`. Live's key/secret
+variables are a genuinely different pair, not the same names in a different
+file, and the mode flag is the only place that choice is made — there is no
+second spot to get it half-right.
 
-```bash
-# runs on: host
-curl -sS --fail-with-body "$BASE_URL/v2/account" \
-  -H "APCA-API-KEY-ID: $KEY_ID" -H "APCA-API-SECRET-KEY: $SECRET_KEY" \
-  > /tmp/alpaca-account.json
-curl -sS --fail-with-body "$BASE_URL/v2/orders?status=open" \
-  -H "APCA-API-KEY-ID: $KEY_ID" -H "APCA-API-SECRET-KEY: $SECRET_KEY" \
-  > /tmp/alpaca-open-orders.json
-```
+Each invocation, in order, and stopping the moment any step refuses:
 
-`--fail-with-body` is load-bearing, not decoration. Bare `curl -s` exits `0`
-on a 401/403 and writes the error body into the capture file as if it were
-account data — the cutover tool never talks to Alpaca itself (it is
-deliberately broker-free), so a bad credential pair would otherwise sail
-straight through these files, past the JSON you hand-assemble below, and
-into a completed cutover with nothing having verified real broker state. If
-either `curl` above exits non-zero, stop: the file it wrote is an error
-response, not evidence.
+1. **Reads the mode's credential pair** from the mode's env file and refuses if
+   either half is empty. (`grep … | cut -d= -f2-` out of the wrong file finds
+   nothing and silently hands an empty credential to an authenticated request.)
+2. **Captures three endpoints** — `/v2/account`, `/v2/orders?status=open` and
+   `/v2/positions` — and aborts on any non-2xx. The error body is written to
+   disk so you can read it, and is never treated as evidence. Three, not two,
+   because three is what the real 2026-09-15 ceremony captured, and the third
+   is the one its receipt cites.
+3. **Gates the account as flat and quiet.** `/v2/positions` must be a JSON array
+   of length zero — direct, with no field-name dependency, wrapping the same
+   endpoint `app/broker/alpaca/client.py:289-290` already uses, and unable to
+   pass on an error body. `/v2/orders?status=open` must likewise be an *array*
+   of length zero (`{}` also has length zero, which is how a bare length check
+   passes an error object). `long_market_value` and `short_market_value` must
+   both read as zero, taken by direct subscript exactly as
+   `app/broker/alpaca/adapter.py:211-212` takes them: a missing key is an error
+   body, not a zero. And the account number the credentials actually answered
+   for must be the `--account-id` you named — the cheapest possible catch for
+   "right ceremony, wrong lane's env file".
+4. **Retains all three raw responses** under
+   `broker_captures/cutover-<UTC date>/` on the lane's artifacts volume — the
+   lane's own `BROKER_CAPTURE_DIR` (`compose.fleet.dev.yaml:48`), which is where
+   the real run left them. Nothing else copies them there, and
+   `_validate_cutover_broker_state` checks `proof_reference` for non-emptiness
+   only (`cutover.py:654-655`, `:706-707`) — it never resolves it as a path, so
+   an unpopulated reference would go unnoticed by the tool. Override the
+   directory with `--capture-dir` if you are re-running on a later date.
+5. **Writes the broker evidence file** the CLI reads, in the shape fixed by the
+   subprocedure's [§ Broker evidence
+   files](alpaca-sqlite-clerk-recovery-and-cutover.md#broker-evidence-files),
+   and copies it in beside the captures:
 
-**Read what you captured before typing anything below — this is the step
-that actually establishes flatness, not an assumption about "genuinely
-fresh" accounts:**
+   ```json
+   {
+     "account_id": "<ACCOUNT_ID>",
+     "account_mode": "paper",
+     "observed_at_ms": 1800000000000,
+     "proof_reference": "broker_captures/cutover-2026-09-15/init-positions.json",
+     "positions": {},
+     "open_order_ids": []
+   }
+   ```
 
-```bash
-# runs on: host
-jq -e '((.long_market_value // "0") | tonumber) == 0
-       and ((.short_market_value // "0") | tonumber) == 0' \
-  /tmp/alpaca-account.json \
-  || { echo "DISQUALIFIED: account is not flat — stop, do not cut over" >&2; exit 1; }
-jq -e 'length == 0' /tmp/alpaca-open-orders.json \
-  || { echo "DISQUALIFIED: account has open orders — stop, do not cut over" >&2; exit 1; }
-```
+   `observed_at_ms` is `int64 ms UTC` (per this repo's temporal-rigor rule),
+   taken immediately *before* the first request so the evidence is never
+   claimed fresher than it is — `--max-evidence-age-ms` is measured against it.
+   `proof_reference` names a **file**, not a directory: the phase's
+   `…-positions.json`, which is the capture that directly answers
+   `positions: {}`, and the same shape both the subprocedure's example and the
+   real ceremony's receipt use. `positions` and `open_order_ids` are
+   transcriptions of the gates in step 3, which have just proven both — not
+   defaults you are entitled to assume.
 
-Both checks must pass before you write `positions: {}` and
-`open_order_ids: []` below — that JSON is a transcription of what the two
-files above actually say, not a default you're entitled to assume. If
-either check fails, this account is not a candidate for the fresh-account
-path this runbook documents; stop and escalate rather than hand-editing a
-non-empty result away. For Live this is the only thing standing between a
-non-flat real-money account and a receipt that claims otherwise —
-`_validate_cutover_broker_state` (`app/broker/alpaca/clerk/sqlite/cutover.py:698-716`)
-refuses only on what the JSON says, never on anything it fetches itself.
+Finally it prints the `--broker-evidence <path>` to hand
+`manage_alpaca_sqlite_clerk`, already inside the container.
 
-Now retain both raw responses at the exact path `proof_reference` below
-will name, inside the lane's own artifacts volume — nothing else copies
-them there, and `_validate_cutover_broker_state` checks `proof_reference`
-for non-emptiness only (`cutover.py:654-655`, `:706-707`) and never
-resolves it as a path, so an unpopulated directory would go unnoticed by
-the tool:
-
-```bash
-# runs on: host
-CAPTURE_DIR=accounts/alpaca/<ACCOUNT_ID>/broker_captures/cutover-2026-09-15
-podman exec alpaca-paper-clerk mkdir -p "/app/artifacts/alpaca_clerk/$CAPTURE_DIR"
-podman cp /tmp/alpaca-account.json "alpaca-paper-clerk:/app/artifacts/alpaca_clerk/$CAPTURE_DIR/alpaca-account.json"
-podman cp /tmp/alpaca-open-orders.json "alpaca-paper-clerk:/app/artifacts/alpaca_clerk/$CAPTURE_DIR/alpaca-open-orders.json"
-```
-
-(For Live, target `alpaca-live-clerk`.) Do this for each of the two
-captures this ceremony needs (see above) — the second capture's directory
-is the one `plan` and `apply` will cite as `proof_reference`. Then
-hand-assemble the evidence file the CLI actually reads — the shape is fixed
-by the subprocedure's [§ Broker evidence
-files](alpaca-sqlite-clerk-recovery-and-cutover.md#broker-evidence-files):
-
-```json
-{
-  "account_id": "<ACCOUNT_ID>",
-  "account_mode": "paper",
-  "observed_at_ms": 1800000000000,
-  "proof_reference": "accounts/alpaca/<ACCOUNT_ID>/broker_captures/cutover-2026-09-15",
-  "positions": {},
-  "open_order_ids": []
-}
-```
-
-`observed_at_ms` is `int64 ms UTC` (per this repo's temporal-rigor rule) —
-the wall-clock instant you captured the two API responses above, not a
-rounded or reformatted value. `account_mode` is `"paper"` or `"live"`,
-matching the account's real mode. `proof_reference` must be the exact
-`$CAPTURE_DIR` you just created and populated above, not the illustrative
-form this runbook wrote before its own captures existed anywhere.
+If any of this refuses, the account is not a candidate for the fresh-account
+path this runbook documents. Stop and escalate; do not hand-edit a non-empty
+result away.
 
 ### Two things that were proven the hard way on 2026-09-15
 
@@ -389,23 +425,47 @@ both will bite you again if you skip this paragraph.
    pair, left behind by a connection that exited without a clean close.
    `cutover-plan` refuses to run against it (the refusal text itself says
    "remove no files manually" — believe it). There is no CLI subcommand for
-   this (`manage_alpaca_sqlite_clerk` has none; the only callers of the
-   checkpoint helper are internal, non-operator-facing scripts), so run it
-   directly with the container's own interpreter, against the account's
-   database under `--artifacts-root` (`accounts/alpaca/<ACCOUNT_ID>/clerk.db`):
+   this: `manage_alpaca_sqlite_clerk` has none, and the only callers of the
+   checkpoint helper are internal, non-operator-facing scripts. **With nothing
+   holding the database open** — no governed bot running against this account,
+   which on a brand-new lane is trivially true — run:
 
    ```bash
-   # runs on: inside alpaca-paper-clerk (or alpaca-live-clerk)
-   podman exec alpaca-paper-clerk /opt/venv/bin/python -c \
-     "import sqlite3; c = sqlite3.connect('/app/artifacts/alpaca_clerk/accounts/alpaca/<ACCOUNT_ID>/clerk.db'); \
-   print(c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()); c.close()"
+   # runs on: host, repo root
+   python3 scripts/alpaca_onboarding_gates.py wal-checkpoint \
+     --mode paper --account-id <ACCOUNT_ID>
    ```
 
-   A successful checkpoint prints `(0, ...)` — a nonzero first element means
-   something still holds the database open; stop and investigate rather
-   than retrying blind. SQLite removes the sidecar files itself once the
-   checkpoint succeeds and the connection closes. Never `rm` a `-wal` or
-   `-shm` file by hand.
+   SQLite removes the sidecar files itself once the checkpoint succeeds and the
+   connection closes. Never `rm` a `-wal` or `-shm` file by hand. Two things
+   this gate exists to refuse, neither of which the obvious one-line
+   `sqlite3.connect(...)` can:
+
+   - **`sqlite3.connect()` creates the file.** A typo'd `<ACCOUNT_ID>` or
+     artifacts root silently writes a new 0-byte `clerk.db` into the custody
+     volume, and `ClerkSqliteRepository.initialize` then refuses the account
+     outright because `clerk.db` already exists (`repository.py:309-310`,
+     `AlreadyInitialized` at `:112-113`) — so the "safe alternative to `rm`"
+     bricks the very `cutover-initialize` you are about to run, and the only
+     obvious recovery is the `rm` this whole paragraph forbids. The gate opens
+     the database read-write through a `file:…?mode=rw` URI behind an explicit
+     existence check, so it creates nothing and tells you the path was wrong.
+   - **`(0, …)` is not a success criterion.** An empty database returns
+     `(0, -1, -1)` — indistinguishable from a real checkpoint under a
+     "first element is zero" rule, and exactly what the typo above produces.
+     The gate requires `(0, n, n)` with both frame counts non-negative.
+
+   A busy result (`(1, n, n)`; SQLite does not raise for it) means something
+   still holds the database open. The remedy, in this order: stop every
+   governed bot for this account — the subprocedure's own boundary — and if the
+   lane's Clerk process is itself the holder, which is the usual case in the
+   scenario this gotcha is about (a lane whose Clerk container stays up between
+   attempts), `podman restart alpaca-paper-clerk` and re-run the gate. That is
+   safe here: checkpointing is crash-safe, the restart does not touch the
+   database's contents, and a pre-activation lane composes no SQLite authority
+   to reopen it with. A busy result that survives that is an incident to
+   escalate, not something to retry blind — and still never a reason to delete
+   a sidecar.
 2. **`cutover-apply` refuses evidence that differs from the plan's, byte
    for byte.** `cutover-plan` and `cutover-apply` consume the *same*
    capture — the second one above, taken after the backup, not the earlier
@@ -432,9 +492,10 @@ Capture broker evidence again — the *second* capture — then follow [§
 Produce the read-only
 plan](alpaca-sqlite-clerk-recovery-and-cutover.md#produce-the-read-only-plan)
 (`cutover-plan`) and finally `cutover-apply` with the token that command
-prints, reusing that same second evidence file for both. Use the container
-form from the top of this section throughout. Review every receipt as it's
-produced; none of these steps are silent.
+prints, reusing that same second evidence file for both — each capture prints
+the in-container `--broker-evidence` path to pass. Use the container form from
+the top of this section throughout. Review every receipt as it's produced; none
+of these steps are silent.
 
 ## 7. Verify the account is genuinely live
 
@@ -443,7 +504,7 @@ the third — they are necessary post-§4 facts, not proof §6 ran:
 
 ```bash
 # runs on: host, repo root
-curl -s localhost:8000/api/broker-clerks \
+curl -sS --fail-with-body localhost:8000/api/broker-clerks \
   -H "X-Data-Plane-Control-Intent: learn-ai-browser-control" \
   -H "X-Data-Plane-Control-Secret: $(grep ^DATA_PLANE_CONTROL_SECRET= .env | cut -d= -f2-)" \
   | jq '.clerks[] | {clerk_id, lifecycle_state, effective_binding_generation,
@@ -455,16 +516,27 @@ curl -s localhost:8000/api/broker-clerks \
 above from `provider_summary.authority_state`, which is where the composed
 authority kind actually lives — not a top-level field) is the only one of
 the three fields in this payload that actually observes whether §6 ran. It
-names the composed authority: `real_paper` for an activated Paper account,
-`real_live` for an activated Live account, `shadow` if you stopped after §4
-for a Live account per the asymmetry in §5, or **`unavailable`** — the
-reading for a lane that completed §4 and has not yet run, or not yet
-completed, §6, Paper or Live
-(`app/broker/alpaca/clerk/fleet_boot.py:558-563`, the
-`.get(authority_kind, "unavailable")` fallback). Seeing `shadow` here for a
-Paper account is itself a bug report — Paper has no shadow fallback.
-Seeing `unavailable` where you expected `real_paper` / `real_live` means
-§6 has not completed; go run it, don't re-run §4.
+names the composed authority (`app/broker/alpaca/clerk/fleet_boot.py:558-563`),
+and it reads differently by mode for the same "§4 done, §6 not done" state:
+
+- `real_paper` / `real_live` — activated; §6 completed for this account.
+- **`unavailable`** — the reading for a **Paper** lane that completed §4 and
+  has not yet run, or not yet completed, §6. It is also the map's fallback for
+  any authority kind it doesn't recognize (`.get(authority_kind, "unavailable")`).
+- **`shadow`** — the reading for a **Live** lane in that same state, not
+  `unavailable`: a Live account with no activation record is routed to
+  `select_shadow_clerk_runtime` (`active_authority.py:174-184`), which composes
+  `authority_kind="shadow"` (`shadow_authority.py:211`). This is §5's asymmetry
+  showing up in the directory, and it is why a Live lane can look "done" from
+  here while holding no real custody at all.
+- `synthetic` — a distinct state the same map can emit (`fleet_boot.py:561`);
+  it is not an outcome of this runbook, and seeing it after a cutover means
+  something composed a stand-in authority rather than the real one.
+
+Seeing `shadow` for a **Paper** account is itself a bug report — Paper has no
+shadow fallback. Seeing `unavailable` where you expected `real_paper`, or
+`shadow` where you expected `real_live`, means §6 has not completed; go run it,
+don't re-run §4.
 
 **Two facts that are true after §4 alone, and prove nothing about §6 by
 themselves.** `effective_binding_generation` and `lifecycle_state` both
@@ -482,19 +554,29 @@ generation ≥ 1). `_project_lifecycle`
 freshness plus a confirmed binding generation and never looks at authority
 state either.
 
-The rule for the generation, stated plainly rather than as the literal `1`
-that only holds the first time through: it must have moved up by exactly
-one from whatever it was immediately before this cutover. For a first
-activation that is `0 → 1`. After a §8 reset, `intended_generation` is
-`established.authority_generation + 1`
-(`app/broker/alpaca/clerk/sqlite/cutover.py:275-281`), so a lane you're
-re-onboarding through this runbook a second time will legitimately read
-`2`, `3`, and so on — a generation that merely looks nonzero is not the
-check; a generation that moved by exactly one from its pre-cutover value
-is, and even that is a post-§4-or-post-reset fact, not proof of §6.
-Treat `effective_binding_generation` and `lifecycle_state` as necessary
-signals that a bind happened, never as sufficient proof that `cutover-apply`
-succeeded — that proof is `authority_state` above, alone.
+**Where the generation actually moves, and where it doesn't.**
+`effective_binding_generation` advances in `effective_acknowledged`
+(`app/broker_configuration/selection.py:71-92`) and only when an
+acknowledgement changes the effective `(profile, revision, account)` tuple —
+its own docstring is explicit that a stage, a refused Apply, an ordinary
+restart, and an Apply that re-acknowledges the same tuple all leave it alone.
+So it moves at **§4**'s Apply-plus-restart, `0 → 1` on a first onboarding, and
+across the whole of **§6 it moves by zero**. Do not read a cutover as failed
+because the number didn't change; expect it not to.
+
+On a second onboarding of the same lane it will legitimately read `2`, `3`, and
+so on, for a reason worth knowing: the §8 Paper reset clears
+`effective_profile_id`, `effective_revision` and `effective_account_id` but
+leaves `effective_binding_generation` intact (`paper_reset.py:96-111`), so §4's
+next Apply changes the tuple — from cleared back to set — and takes the next
+number. The rule is therefore: **after §4 it must be ≥ 1 and one higher than
+its pre-Apply value; after §6 it must be unchanged.** A different counter,
+`authority_generation`, does advance during the cutover
+(`cutover.py:275-281`), but it lives in the activation record on the lane's
+own volume and appears nowhere in this payload — do not reach for it here.
+Treat `effective_binding_generation` and `lifecycle_state` as necessary signals
+that a bind happened, never as sufficient proof that `cutover-apply` succeeded
+— that proof is `authority_state` above, alone.
 
 **The desk shows it.** Open `http://localhost:4200/brokers/alpaca` — the
 new lane appears in the directory as `ready`, and its account page (via the
@@ -503,8 +585,9 @@ power, and (for a genuinely fresh account) zero positions and zero open
 orders, pulled live from Alpaca rather than placeholder data.
 
 If any of the three disagrees with the others — directory says `ready` but
-the desk hasn't updated, or the generation moved but the summary still says
-`shadow` — do not paper over it by re-running the ceremony. Stop, preserve
+the desk hasn't updated, or the desk shows a real account snapshot while
+`authority_state` still reads `unavailable` — do not paper over it by
+re-running the ceremony. Stop, preserve
 the receipts §6 produced (initialization, backup, plan, and apply), and
 treat it as an incident to escalate rather than a transient glitch to
 retry. (This is a fleet-lifecycle disagreement, not a backtest trade-log
@@ -539,3 +622,5 @@ a separately reviewed reason.
 - [Alpaca Clerk disposable Paper clean slate](alpaca-clerk-disposable-paper-clean-slate.md)
 - [Alpaca live arming](../references/alpaca-live-arming.md)
 - [Broker clerk fleet authority](../broker-clerk-fleet-authority.md)
+- `scripts/alpaca_onboarding_gates.py` — the gates §3, §6 and its WAL gotcha
+  run, with their regression tests in `scripts/test_alpaca_onboarding_gates.py`

@@ -55,6 +55,22 @@ jobs:
       - run: ruff check --config PythonDataService/ruff.toml scripts/dev/fleet/
       - run: timeout --signal=KILL 120s python scripts/dev/fleet/test_fleet_tooling.py -v
 
+  alpaca-onboarding-gates:
+    name: Alpaca Onboarding Gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check --config PythonDataService/ruff.toml scripts/alpaca_onboarding_gates.py scripts/test_alpaca_onboarding_gates.py
+      - run: timeout --signal=KILL 120s python scripts/test_alpaca_onboarding_gates.py -v
+
   fleet-topology-render:
     name: Fleet Topology Render
     runs-on: ubuntu-latest
