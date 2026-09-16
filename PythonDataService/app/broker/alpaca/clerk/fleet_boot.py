@@ -595,6 +595,7 @@ def heartbeat_facts(
     effective_binding_generation: int,
     authority_kind: str,
     endpoint_mode: str,
+    account_nickname: str | None = None,
 ) -> Mapping[str, object]:
     """What this lane reports on every beat, given its binding state.
 
@@ -605,12 +606,16 @@ def heartbeat_facts(
     always passes the settings mode.
 
     Both shapes carry the same bounded typed summary
-    (``ProviderSummaryObservation``): endpoint mode and authority state, and
+    (``ProviderSummaryObservation``): endpoint mode, authority state, and —
+    when the confirmed account has one set — its nickname (PRD #2182), and
     nothing else. That is not a style choice — a summary the coordinator
     cannot parse is refused as an identity mismatch, and ``start_heartbeat``
     answers a refusal by registering a fresh session, so one free-form key
     here would climb the routing epoch on every beat instead of failing once
-    and visibly.
+    and visibly. ``account_nickname`` is omitted entirely rather than sent as
+    ``null`` when none is set, matching how ``detail`` is already optional in
+    this same summary — and matching the rollout requirement: the coordinator
+    must already accept this key before this lane ever sends it.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather
@@ -624,7 +629,9 @@ def heartbeat_facts(
         "synthetic": "synthetic",
         "unavailable": "unavailable",
     }.get(authority_kind, "unavailable")
-    summary = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
+    summary: dict[str, object] = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
+    if account_nickname is not None:
+        summary["account_nickname"] = account_nickname
     if binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
     ):
@@ -651,6 +658,7 @@ async def confirm_and_report(
     effective_revision: int | None,
     authority_kind: str,
     endpoint_mode: str,
+    account_nickname: str | None = None,
 ) -> None:
     """Confirm the grant if there is one; report what installed either way.
 
@@ -686,6 +694,7 @@ async def confirm_and_report(
         effective_binding_generation=effective_binding_generation,
         authority_kind=authority_kind,
         endpoint_mode=endpoint_mode,
+        account_nickname=account_nickname,
     )
 
 

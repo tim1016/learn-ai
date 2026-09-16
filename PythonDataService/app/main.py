@@ -634,14 +634,26 @@ async def _service_lifespan(
                 )
 
                 selection_row = get_broker_configuration_service().selection()
+                # PRD #2182: the same nickname Configuration shows for this
+                # account, read the same way the desk itself reads it
+                # (`desk_state.py`'s `nickname_by_account`) — keyed to the
+                # observed account id, never to a profile.
+                account_pin = alpaca_binding.context.account_pin
+                nickname_by_account = {
+                    nickname.account_id: nickname.nickname
+                    for nickname in get_broker_configuration_service().list_nicknames()
+                }
                 await confirm_and_report(
                     fleet_lane,
-                    account_pin=alpaca_binding.context.account_pin,
+                    account_pin=account_pin,
                     effective_binding_generation=selection_row.effective_binding_generation,
                     effective_profile_id=selection_row.effective_profile_id,
                     effective_revision=selection_row.effective_revision,
                     authority_kind=alpaca_clerk_runtime.authority_kind,
                     endpoint_mode=alpaca_settings.mode,
+                    account_nickname=(
+                        nickname_by_account.get(account_pin) if account_pin is not None else None
+                    ),
                 )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()

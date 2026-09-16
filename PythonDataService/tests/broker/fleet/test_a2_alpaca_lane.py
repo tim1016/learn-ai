@@ -734,6 +734,49 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
     )
 
 
+def test_heartbeat_facts_include_the_account_nickname_when_one_is_set() -> None:
+    """#2182: a confirmed lane's heartbeat carries its account's nickname
+    inside the same bounded summary as endpoint_mode/authority_state, so the
+    fleet directory can project one account name everywhere."""
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    facts = heartbeat_facts(
+        account_pin="ABC",
+        effective_binding_generation=3,
+        authority_kind="sqlite",
+        endpoint_mode="paper",
+        account_nickname="Strategy lab",
+    )
+
+    assert facts["reported_summary"] == {
+        "endpoint_mode": "paper",
+        "authority_state": "real_paper",
+        "account_nickname": "Strategy lab",
+    }
+    observation = ProviderSummaryObservation.parse(facts["reported_summary"])
+    assert observation is not None
+    assert observation.account_nickname == "Strategy lab"
+
+
+def test_heartbeat_facts_omit_the_account_nickname_when_none_is_set() -> None:
+    """No nickname configured omits the key entirely — byte-identical to the
+    pre-#2182 shape, not a null placeholder that would still have to parse."""
+    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
+
+    facts = heartbeat_facts(
+        account_pin="ABC",
+        effective_binding_generation=3,
+        authority_kind="sqlite",
+        endpoint_mode="paper",
+    )
+
+    assert facts["reported_summary"] == {
+        "endpoint_mode": "paper",
+        "authority_state": "real_paper",
+    }
+    assert "account_nickname" not in facts["reported_summary"]
+
+
 @pytest.mark.parametrize(
     ("account_pin", "effective_binding_generation", "granted"),
     [
