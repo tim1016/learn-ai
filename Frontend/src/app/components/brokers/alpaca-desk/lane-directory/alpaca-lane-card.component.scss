@@ -1,0 +1,109 @@
+/* display: contents gives the host no box of its own, so the `<li>` it
+   renders is the flex item of the directory's lane list — and the list's
+   effective direct child for layout and the accessibility tree — instead
+   of the host wrapping it. */
+:host {
+  display: contents;
+}
+
+.lane-card {
+  min-width: 16rem;
+  border: 1px solid var(--surface-border, #ddd);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.lane-card--degraded {
+  border-style: dashed;
+}
+
+.lane-card__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.lane-card__badges {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+/* Same tone vocabulary as the shell's live-verdict pills (ADR 0059 D8):
+   undetermined is loud amber, never grey — an unread lane is assumed live. */
+.lane-mode-chip {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(178, 181, 190, 0.45);
+  color: var(--text-color, #ddd);
+  white-space: nowrap;
+}
+
+.lane-mode-chip--paper {
+  color: #b9edff;
+  border-color: #45b9e1;
+}
+
+.lane-mode-chip--live {
+  color: #ffd0cf;
+  border-color: #f06b68;
+}
+
+.lane-mode-chip--undetermined {
+  color: #fff;
+  border-color: #ffb020;
+  background: rgba(122, 61, 0, 0.85);
+}
+
+.lane-card__label {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.lane-card__lifecycle {
+  font-size: 0.75rem;
+}
+
+.lane-card__facts {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0 0;
+}
+
+.lane-card__fact {
+  dt {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-color-secondary, #777);
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.8125rem;
+    font-family: var(--font-family-monospace, monospace);
+  }
+}
+
+.lane-card__links {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+/* A surface this lane cannot serve yet: the link stays selectable (it
+   explains itself at the clerk-only route) but reads as not-yet-openable. */
+.lane-card__link--blocked {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.lane-card__failure {
+  color: var(--p-red-600, #b42318);
+  font-size: 0.8125rem;
+  margin: 0.5rem 0 0;
+}

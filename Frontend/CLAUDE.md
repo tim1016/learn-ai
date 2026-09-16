@@ -61,6 +61,7 @@ src/app/
 - Setup file: `src/test-setup.ts` (stubs ResizeObserver, Canvas, matchMedia)
 - Test behavior, not implementation — assert rendered output, not signal values
 - Spec files co-located: `*.component.spec.ts`, `*.service.spec.ts`
+- `npm test` (`scripts/run-test-budget.cjs`) runs the full unsharded suite and enforces the 120s budget from `.claude/CLAUDE.md`; on a memory-capped container it can OOM. To run one CI shard's worth locally instead, set `TEST_SHARD_INDEX`/`TEST_SHARD_COUNT` (matching `.github/workflows/ci.yml`'s `frontend-test-shard` matrix, e.g. `TEST_SHARD_INDEX=1 TEST_SHARD_COUNT=6 npm test`) — the script auto-appends `--runner-config=vitest.ci.config.ts`. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable) either way.
 
 ## Gotchas
 

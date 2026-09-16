@@ -15,6 +15,29 @@
   padding: var(--space-2);
 }
 
+/* Lane context: the routed lane's own trust-anchor pill, its authority fact,
+   and the scoped link back to the Bots roster — the gallery never loses
+   sight of which lane/account it serves. */
+.gallery-page__lane {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-1) var(--space-2);
+}
+
+.gallery-page__authority {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.gallery-page__lane-link {
+  font-size: var(--fs-xs);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .gallery-page__skeleton {
   display: grid;
   flex: 1;

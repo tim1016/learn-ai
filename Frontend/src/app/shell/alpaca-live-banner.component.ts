@@ -63,8 +63,9 @@ interface LaneBadge {
  * An undeterminable lane could be real money, so the badge says so in its own
  * text and in its accessible name, not only through colour (WCAG 1.4.1).
  *
- * Note: `display_label` is operator-renameable, so two lanes can be given the
- * same label and their badges become ambiguous again. The label is operator
+ * Note: `display_label` is set once at clerk enrolment via `provision --label`
+ * or `migrate-existing --label`. Two lanes can be given the same label at
+ * enrolment time, and their badges become ambiguous. The label is operator
  * prose, not a backend identifier, so it deliberately does not go through
  * `receiptLabel`; disambiguating duplicates belongs to whatever assigns them.
  */

@@ -39,10 +39,10 @@ describe('app menu projections', () => {
 
     expect(deploy?.routerLink).toBe('/brokers/alpaca');
     expect(deploy?.queryParams).toEqual({ deploy: '' });
-    expect(bots?.routerLink).toBe('/brokers/alpaca');
-    expect(bots?.queryParams).toEqual({ surface: 'bots' });
-    expect(gallery?.routerLink).toBe('/brokers/alpaca');
-    expect(gallery?.queryParams).toEqual({ surface: 'gallery' });
+    expect(bots?.routerLink).toBe('/brokers/alpaca/bots');
+    expect(bots?.queryParams).toBeUndefined();
+    expect(gallery?.routerLink).toBe('/brokers/alpaca/gallery');
+    expect(gallery?.queryParams).toBeUndefined();
   });
 
   it.each([
@@ -65,6 +65,20 @@ describe('app menu projections', () => {
     expect(node?.item.title).toBe('Gallery');
   });
 
+  it.each([
+    ['bots', 'Bots'],
+    ['gallery', 'Gallery'],
+  ] as const)(
+    'maps a clerk-only %s refusal page (no account segment) onto its stable menu entry',
+    (surface, title) => {
+      const node = activeMenuNodeFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`);
+
+      expect(node?.group.title).toBe('Alpaca');
+      expect(node?.item.title).toBe(title);
+      expect(pageTitleFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`)).toBe(title);
+    },
+  );
+
   it('resolves the deploy query alias to its menu entry', () => {
     expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.title).toBe('Deploy');
     expect(
@@ -72,9 +86,12 @@ describe('app menu projections', () => {
     ).toBe(ACTIVE_GROUP_CLASS);
   });
 
-  it.each(['bots', 'gallery'] as const)('resolves the %s lane-selection alias', (surface) => {
-    expect(activeMenuNodeFor(`/brokers/alpaca?surface=${surface}`)?.item.title)
-      .toBe(surface === 'bots' ? 'Bots' : 'Gallery');
+  it.each([
+    ['bots', 'Bots'],
+    ['gallery', 'Gallery'],
+  ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {
+    expect(activeMenuNodeFor(`/brokers/alpaca/${surface}`)?.item.title).toBe(title);
+    expect(pageTitleFor(`/brokers/alpaca/${surface}`)).toBe(title);
   });
 
   it('resolves page titles through the active menu node', () => {

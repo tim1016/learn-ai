@@ -11,9 +11,9 @@ import {
   UNPOLLED_LANE_STATE,
   type LaneVerdictState,
 } from './services/alpaca-live-verdict.service';
+import { fakeVerdictState } from './testing/alpaca-live-verdict-fixtures';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { provideFleetDirectory, testLane, TEST_CLERK_ID } from './fleet/fleet-directory-testing';
-import type { AlpacaLiveVerdict } from './api/alpaca.types';
 
 class FakeAlpacaLiveVerdictService {
   private readonly states = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
@@ -26,25 +26,6 @@ class FakeAlpacaLiveVerdictService {
   setState(clerkId: string, state: LaneVerdictState): void {
     this.states.update((current) => new Map(current).set(clerkId, state));
   }
-}
-
-function verdictStub(finalVerdict: AlpacaLiveVerdict['final_verdict']): AlpacaLiveVerdict {
-  return {
-    configured_mode: finalVerdict === 'paper' ? 'paper' : 'live',
-    observed_account_id: null,
-    mode_agreement: 'agreed',
-    clerk_authority: 'sqlite',
-    clerk_refusal_reason_code: null,
-    armed_instance_count: 0,
-    envelope_state: 'not_applicable',
-    envelope_agreement: 'not_applicable',
-    shadow_state: 'not_applicable',
-    loss_hold: 'not_applicable',
-    final_verdict: finalVerdict,
-    headline: 'stub verdict',
-    detail: 'stub detail',
-    observed_at_ms: 1_700_000_000_000,
-  };
 }
 
 @Component({ template: '<p>Route body</p>', changeDetection: ChangeDetectionStrategy.OnPush })
@@ -95,26 +76,30 @@ describe('AppComponent', () => {
     expect(TestBed.inject(Title).getTitle()).toBe('Botasur');
   });
 
-  it.each([
-    ['paper', 'top-bar--paper'],
-    ['live-unarmed', 'top-bar--live'],
-    ['live-armed', 'top-bar--live'],
-  ] as const)('colors the shell from the server-owned %s verdict', (finalVerdict, expectedClass) => {
+  it('renders the shell mode-neutral for every verdict — the per-lane pills own the mode signal', () => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
 
-    service.setState(TEST_CLERK_ID, { verdict: verdictStub(finalVerdict), lastError: null });
-    fixture.detectChanges();
+    for (const finalVerdict of ['paper', 'live-unarmed', 'live-armed'] as const) {
+      service.setState(TEST_CLERK_ID, fakeVerdictState(finalVerdict));
+      fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains(expectedClass)).toBe(true);
+      const header = fixture.nativeElement.querySelector('.top-bar');
+      expect(header?.classList.contains('top-bar--live')).toBe(false);
+      expect(header?.classList.contains('top-bar--paper')).toBe(false);
+    }
   });
 
-  it('treats a lane whose mode cannot be determined as live, never as calm-unknown', () => {
+  it('keeps the header neutral for a lane whose mode cannot be determined — the badge carries the warning', () => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
 
     service.setState(TEST_CLERK_ID, { verdict: null, lastError: new Error('down') });
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
+    const header = fixture.nativeElement.querySelector('.top-bar');
+    expect(header?.classList.contains('top-bar--live')).toBe(false);
+    expect(header?.classList.contains('top-bar--paper')).toBe(false);
+    const badge = fixture.nativeElement.querySelector('app-alpaca-live-banner [role="status"]');
+    expect(badge?.textContent).toContain('assume real money');
   });
 
   it('renders one badge per lane, each labeled with its own lane and isolated from the others', async () => {
@@ -130,7 +115,7 @@ describe('AppComponent', () => {
     // `lanesOf()` reports.
     await directory.useValue.refresh?.();
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
-    service.setState('clrk_paper', { verdict: verdictStub('paper'), lastError: null });
+    service.setState('clrk_paper', fakeVerdictState('paper'));
     service.setState('clrk_live', { verdict: null, lastError: new Error('down') });
     fixture.detectChanges();
 
@@ -142,10 +127,11 @@ describe('AppComponent', () => {
     expect(badges[1].textContent).toContain('assume real money');
   });
 
-  it('renders a loud lanes-unknown badge and live chrome when the roster is empty', async () => {
+  it('renders a loud lanes-unknown badge while the header stays neutral when the roster is empty', async () => {
     // Every boot until /api/broker-clerks resolves, and indefinitely after a
-    // failed load. Zero badges plus the neutral default chrome is the calm-
-    // while-real-money-trades failure this anchor exists to kill (#2110 D2).
+    // failed load. Zero badges plus a silent shell is the calm-while-real-
+    // money-trades failure this anchor exists to kill (#2110 D2) — the badge
+    // is the loud surface now, not the header tint.
     directory.rebind({ observed_at_ms: 3, clerks: [] });
     // `rebind()` only stages the replacement; `refresh()` promotes it to
     // what `lanesOf()` reports, like the real service's next load.
@@ -157,7 +143,7 @@ describe('AppComponent', () => {
     expect(badges[0].className).toContain('is-undetermined');
     expect(badges[0].textContent).toContain('Alpaca lanes unknown');
     expect(badges[0].textContent).toContain('assume real money');
-    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(false);
     expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(false);
   });
 
@@ -211,14 +197,13 @@ describe('AppComponent', () => {
   });
 
   it('renders quick broker links and global status controls in the top-bar connection region', () => {
-    const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
     // The IBKR-era broker banner is gone (#2149): its health poll 404'd on
     // every cycle, so it could never render anything — the per-lane
     // alpaca-live badges below are the shell's only account-mode anchor.
     expect(connection?.querySelector('app-broker-banner')).toBeNull();
-    expect(connection?.querySelector('a[href="/brokers/alpaca?surface=bots"]')).toBeTruthy();
-    expect(connection?.querySelector('a[href="/brokers/alpaca?surface=gallery"]')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca/bots"]')).toBeTruthy();
+    expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeTruthy();
   });
 
   it('should contain a router-outlet', () => {

@@ -5,7 +5,15 @@ const { parseEnv } = require('node:util');
 
 const DATA_PLANE_CONTROL_SECRET_KEY = 'DATA_PLANE_CONTROL_SECRET';
 const RETIRED_DATA_PLANE_CONTROL_SECRET = 'local-dev-control-secret';
-const DEFAULT_ENV_FILE = path.resolve(__dirname, '../../.env');
+// Test-only escape hatch for the proxy-control guard: it needs to prove
+// proxy.conf.js fails closed when NO secret is configured anywhere (env nor
+// file), and the real repo-root .env would otherwise defeat that on any host
+// that has ever set up the dev stack. Unset in every other context, so
+// production resolution always falls back to the real repo-root .env.
+const DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY = 'DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE';
+const DEFAULT_ENV_FILE = process.env[DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY]
+  ? path.resolve(process.env[DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY])
+  : path.resolve(__dirname, '../../.env');
 const ASSIGNMENT_PATTERN = /^\s*(?:export\s+)?DATA_PLANE_CONTROL_SECRET\s*=[^\r\n]*$/gm;
 
 function validatedSecret(value) {
@@ -93,6 +101,7 @@ if (require.main === module) {
 
 module.exports = {
   DATA_PLANE_CONTROL_SECRET_KEY,
+  DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY,
   RETIRED_DATA_PLANE_CONTROL_SECRET,
   ensureControlSecretFile,
   resolveDataPlaneControlSecret,
