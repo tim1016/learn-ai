@@ -37,27 +37,19 @@
   line-height: 1;
 }
 
-// Always in the DOM (never `@if`-gated) so it stays reachable to assistive
-// tech and keyboard users; hidden at rest and revealed on hover/focus, the
-// same "always focusable, hover is an enhancement" pattern as
-// `copy-button.component.scss`.
+// Always readable next to the symbol — every tile on a single-symbol
+// account used to read only the symbol because this label was clipped to
+// zero width at rest and only grew on hover/focus. It now takes the header's
+// remaining space (between the fixed-width identity and action button) and
+// truncates gracefully when a tile is narrow, rather than disappearing.
 .bot-tile__strategy {
   overflow: hidden;
-  max-width: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--text-muted);
   font-size: var(--fs-xxs);
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.15s ease, max-width 0.15s ease, transform 0.15s ease;
-  transform: translateX(-4px);
-}
-
-.bot-tile:hover .bot-tile__strategy,
-.bot-tile:focus-within .bot-tile__strategy {
-  max-width: 12rem;
-  opacity: 1;
-  transform: translateX(0);
 }
 
 .bot-tile__chart {
