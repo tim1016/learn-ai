@@ -92,7 +92,7 @@ sys.stdout.write(json.dumps(outcome) + "\\n")
 """
 
 
-def _boot_online_unbound_lane(tmp_path: Path) -> dict[str, str]:
+def _boot_online_unbound_lane(tmp_path: Path) -> tuple[dict[str, str], Path]:
     """Env for a real subprocess boot: an enrolled, matching, unbound lane."""
     control_dir = tmp_path / "control"
     volume_root = tmp_path / "volumes" / "paper"

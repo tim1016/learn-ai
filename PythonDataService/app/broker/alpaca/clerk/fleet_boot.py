@@ -417,70 +417,80 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     async def _beat() -> None:
         from app.broker.fleet.identity import new_agent_instance_id
 
-        while True:
-            await asyncio.sleep(interval_s)
-            reported = boot.reported_facts
-            summary = reported.get("reported_summary")
-            if boot.session is None:
-                continue
-            try:
-                await boot.presence.observe(
-                    clerk_id=boot.clerk_id,
-                    agent_instance_id=boot.session.agent_instance_id,
-                    reported_binding_generation=reported.get("reported_binding_generation"),
-                    reported_account_id=reported.get("reported_account_id"),
-                    reported_state=reported.get("reported_state"),
-                    reported_summary=dict(summary) if isinstance(summary, Mapping) else None,
-                )
-            except FleetControlError as exc:
-                logger.warning(
-                    "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
-                )
-                # A coordinator that restarted lost this session: present a
-                # fresh registration so the lane returns to routed without a
-                # process restart. The confirmation on the assignment is not
-                # touched — a re-confirmation is the next boot's first act.
+        try:
+            while True:
+                await asyncio.sleep(interval_s)
+                reported = boot.reported_facts
+                summary = reported.get("reported_summary")
+                if boot.session is None:
+                    continue
                 try:
-                    boot.session = await boot.presence.register(
+                    await boot.presence.observe(
                         clerk_id=boot.clerk_id,
-                        worker_key=boot.worker_key,
-                        agent_instance_id=new_agent_instance_id(),
-                        # The reference this lane registered with, which the
-                        # re-registration always should have carried: a
-                        # coordinator that lost the session re-creates it
-                        # citing whatever arrives here, and a session naming
-                        # no approved endpoint is refused every delivery
-                        # while the lane keeps beating as reachable.
-                        endpoint_ref=boot.endpoint_ref,
-                        adapter_version=_ADAPTER.adapter_version,
-                        fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+                        agent_instance_id=boot.session.agent_instance_id,
+                        reported_binding_generation=reported.get("reported_binding_generation"),
+                        reported_account_id=reported.get("reported_account_id"),
+                        reported_state=reported.get("reported_state"),
+                        reported_summary=dict(summary) if isinstance(summary, Mapping) else None,
                     )
-                    logger.info(
-                        "Fleet session re-registered after heartbeat refusal.",
-                        extra={"clerk_id": boot.clerk_id},
-                    )
-                except FleetControlError as register_exc:
+                except FleetControlError as exc:
                     logger.warning(
-                        "Fleet re-registration refused: %s",
-                        register_exc.message,
-                        extra={"clerk_id": boot.clerk_id},
+                        "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
                     )
-            except Exception:
-                # Anything other than a FleetControlError here is unexpected
-                # (a malformed coordinator response, a raw sqlite3 error from
-                # the local store) and ends the beat — but silently, unless
-                # announced right here: the task simply stops, and nothing
-                # notices until the coordinator eventually projects the lane
-                # `unreachable`, or `stop_heartbeat` logs the already-dead
-                # task at shutdown. Surface it the moment it happens instead
-                # of leaving that window silent, then let it end the task —
-                # the same outcome as today, just never silent.
-                logger.exception(
-                    "Fleet heartbeat ended on an unexpected exception; lane "
-                    "presence has stopped until this process restarts.",
-                    extra={"clerk_id": boot.clerk_id},
-                )
-                raise
+                    # A coordinator that restarted lost this session: present a
+                    # fresh registration so the lane returns to routed without a
+                    # process restart. The confirmation on the assignment is not
+                    # touched — a re-confirmation is the next boot's first act.
+                    try:
+                        boot.session = await boot.presence.register(
+                            clerk_id=boot.clerk_id,
+                            worker_key=boot.worker_key,
+                            agent_instance_id=new_agent_instance_id(),
+                            # The reference this lane registered with, which the
+                            # re-registration always should have carried: a
+                            # coordinator that lost the session re-creates it
+                            # citing whatever arrives here, and a session naming
+                            # no approved endpoint is refused every delivery
+                            # while the lane keeps beating as reachable.
+                            endpoint_ref=boot.endpoint_ref,
+                            adapter_version=_ADAPTER.adapter_version,
+                            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+                        )
+                        logger.info(
+                            "Fleet session re-registered after heartbeat refusal.",
+                            extra={"clerk_id": boot.clerk_id},
+                        )
+                    except FleetControlError as register_exc:
+                        logger.warning(
+                            "Fleet re-registration refused: %s",
+                            register_exc.message,
+                            extra={"clerk_id": boot.clerk_id},
+                        )
+        except asyncio.CancelledError:
+            # Normal shutdown (stop_heartbeat's task.cancel()) is not a death
+            # to log — re-raise it untouched.
+            raise
+        except Exception:
+            # Anything other than a FleetControlError anywhere in the loop is
+            # unexpected (a malformed coordinator response, a raw sqlite3
+            # error from the local store, a transport error on the
+            # re-registration path above) and ends the beat — but silently,
+            # unless announced right here: the task simply stops, and nothing
+            # notices until the coordinator eventually projects the lane
+            # `unreachable`, or `stop_heartbeat` logs the already-dead task at
+            # shutdown. Guarding the whole loop once — rather than adding a
+            # second `except Exception` around the re-registration's inner
+            # `try` — means every exit path shares one log site: a sibling
+            # `except` on the inner `try` would never see an exception raised
+            # from within the `except FleetControlError` handler beside it,
+            # since Python does not route an exception raised inside an
+            # `except` clause to a sibling `except` of the same `try`.
+            logger.exception(
+                "Fleet heartbeat ended on an unexpected exception; lane "
+                "presence has stopped until this process restarts.",
+                extra={"clerk_id": boot.clerk_id},
+            )
+            raise
 
     boot.heartbeat = asyncio.create_task(
         _beat(), name=f"fleet-heartbeat-{boot.clerk_id}"

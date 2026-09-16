@@ -1539,6 +1539,88 @@ async def test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_poin
         service.close()
 
 
+async def test_a_beat_that_dies_reregistering_after_a_refusal_is_also_logged_at_the_point_of_death(
+    control_dir: Path,
+    clock: FrozenClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The re-registration await, not only the observation await, must log.
+
+    ``_beat``'s inner ``try`` around ``presence.register`` catches only
+    ``FleetControlError`` — Python does not route an exception raised inside
+    an ``except`` clause to a sibling ``except`` of the same ``try``, so an
+    unexpected exception here (a transport error, exactly the kind more
+    likely when the coordinator is already misbehaving) used to escape the
+    whole ``_beat`` with no log at the point of death, even though the
+    sibling clause around the observation await logged its own. This
+    complements ``test_a_beat_that_dies_on_an_unexpected_exception_is_logged_at_the_point_of_death``,
+    which only ever proved the observation await; this one drives the
+    re-registration path the same way, by first refusing the observation
+    with a ``FleetControlError`` (so ``_beat`` enters its re-registration
+    branch) and then raising something else from ``register`` itself.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        open_fleet_lane,
+        start_heartbeat,
+    )
+    from app.broker.fleet.errors import FleetControlError
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+
+        async def _refuse_every_observation(**_kwargs: object) -> None:
+            raise FleetControlError("The coordinator refuses this lane's observation.")
+
+        async def _raise_something_not_fleet_control(**_kwargs: object) -> None:
+            raise RuntimeError("a raw transport error, not a FleetControlError")
+
+        monkeypatch.setattr(boot.presence, "observe", _refuse_every_observation)
+        monkeypatch.setattr(boot.presence, "register", _raise_something_not_fleet_control)
+
+        with caplog.at_level(logging.ERROR):
+            start_heartbeat(boot, interval_s=0.05)
+            heartbeat = boot.heartbeat
+            assert heartbeat is not None
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while not heartbeat.done():
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("the beat never died on the injected re-registration exception")
+                await asyncio.sleep(0.01)
+
+        assert isinstance(heartbeat.exception(), RuntimeError)
+        death_logs = [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.ERROR
+            and getattr(record, "clerk_id", None) == boot.clerk_id
+        ]
+        assert death_logs, "the beat's death during re-registration must be logged at the point it happened"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_confirm_binding_records_the_session_it_confirmed_even_if_the_lane_re_registers_mid_confirm(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
