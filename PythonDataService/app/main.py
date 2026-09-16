@@ -634,31 +634,14 @@ async def _service_lifespan(
                 )
 
                 selection_row = get_broker_configuration_service().selection()
-                # PRD #2182: the same nickname Configuration shows for this
-                # account, read the same way (`nickname_for`, keyed to the
-                # observed account id, never to a profile).
-                #
-                # This particular read only seeds `boot.reported_facts` for
-                # the moment between now and the first beat — `start_heartbeat`
-                # (fleet_boot.py) re-reads the nickname fresh from the same
-                # store on every beat after that, so a rename on Configuration
-                # reaches this lane's heartbeat on its own, with no rebind and
-                # no restart. Nothing here needs to react to a later write.
-                account_pin = alpaca_binding.context.account_pin
-                account_nickname = (
-                    get_broker_configuration_service().nickname_for(account_pin)
-                    if account_pin is not None
-                    else None
-                )
                 await confirm_and_report(
                     fleet_lane,
-                    account_pin=account_pin,
+                    account_pin=alpaca_binding.context.account_pin,
                     effective_binding_generation=selection_row.effective_binding_generation,
                     effective_profile_id=selection_row.effective_profile_id,
                     effective_revision=selection_row.effective_revision,
                     authority_kind=alpaca_clerk_runtime.authority_kind,
                     endpoint_mode=alpaca_settings.mode,
-                    account_nickname=account_nickname,
                 )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()

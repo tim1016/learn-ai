@@ -594,7 +594,6 @@ def test_heartbeat_facts_for_a_confirmed_paper_lane_are_byte_identical_to_the_pr
         effective_binding_generation=3,
         authority_kind="sqlite",
         endpoint_mode="paper",
-        account_nickname=None,
     ) == {
         "reported_binding_generation": 3,
         "reported_account_id": "ABC",
@@ -612,7 +611,6 @@ def test_heartbeat_facts_for_a_confirmed_live_shadow_lane_report_live_and_shadow
         effective_binding_generation=2,
         authority_kind="shadow",
         endpoint_mode="live",
-        account_nickname=None,
     ) == {
         "reported_binding_generation": 2,
         "reported_account_id": "U1234567",
@@ -640,7 +638,6 @@ def test_heartbeat_facts_for_an_unconfirmed_lane_report_pending_with_a_summary_t
         effective_binding_generation=0,
         authority_kind="unavailable",
         endpoint_mode="paper",
-        account_nickname=None,
     )
 
     assert facts == {
@@ -664,7 +661,6 @@ def test_heartbeat_facts_without_an_account_pin_still_carry_a_parsable_summary()
         effective_binding_generation=0,
         authority_kind="synthetic",
         endpoint_mode="paper",
-        account_nickname=None,
     )
 
     assert facts == {
@@ -687,7 +683,6 @@ def test_heartbeat_facts_map_an_unknown_authority_kind_to_unavailable() -> None:
         effective_binding_generation=1,
         authority_kind="weird",
         endpoint_mode="live",
-        account_nickname=None,
     )
 
     assert facts["reported_summary"] == {
@@ -719,7 +714,6 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
             effective_binding_generation=0,
             authority_kind="sqlite",
             endpoint_mode=mode,
-            account_nickname=None,
         )["reported_summary"]["authority_state"]
         for mode in ("paper", "live")
     } | {
@@ -728,7 +722,6 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
             effective_binding_generation=0,
             authority_kind=authority_kind,
             endpoint_mode="unidentified",
-            account_nickname=None,
         )["reported_summary"]["authority_state"]
         for authority_kind in ("shadow", "synthetic")
     }
@@ -739,50 +732,6 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
         "wire counterpart — add a case to heartbeat_facts' authority-state "
         "map (fleet_boot.py)."
     )
-
-
-def test_heartbeat_facts_include_the_account_nickname_when_one_is_set() -> None:
-    """#2182: a confirmed lane's heartbeat carries its account's nickname
-    inside the same bounded summary as endpoint_mode/authority_state, so the
-    fleet directory can project one account name everywhere."""
-    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
-
-    facts = heartbeat_facts(
-        account_pin="ABC",
-        effective_binding_generation=3,
-        authority_kind="sqlite",
-        endpoint_mode="paper",
-        account_nickname="Strategy lab",
-    )
-
-    assert facts["reported_summary"] == {
-        "endpoint_mode": "paper",
-        "authority_state": "real_paper",
-        "account_nickname": "Strategy lab",
-    }
-    observation = ProviderSummaryObservation.parse(facts["reported_summary"])
-    assert observation is not None
-    assert observation.account_nickname == "Strategy lab"
-
-
-def test_heartbeat_facts_omit_the_account_nickname_when_none_is_set() -> None:
-    """No nickname configured omits the key entirely — byte-identical to the
-    pre-#2182 shape, not a null placeholder that would still have to parse."""
-    from app.broker.alpaca.clerk.fleet_boot import heartbeat_facts
-
-    facts = heartbeat_facts(
-        account_pin="ABC",
-        effective_binding_generation=3,
-        authority_kind="sqlite",
-        endpoint_mode="paper",
-        account_nickname=None,
-    )
-
-    assert facts["reported_summary"] == {
-        "endpoint_mode": "paper",
-        "authority_state": "real_paper",
-    }
-    assert "account_nickname" not in facts["reported_summary"]
 
 
 def test_summary_with_live_nickname_adds_replaces_and_removes_the_one_key() -> None:
@@ -952,7 +901,6 @@ async def test_a_reserved_only_lane_heartbeats_and_stays_configuration_routable(
             effective_revision=None,
             authority_kind="unavailable",
             endpoint_mode="paper",
-            account_nickname=None,
         )
         session = await _await_beat_at(
             service, boot.clerk_id, clock, reported_state="binding_pending"
@@ -1049,7 +997,6 @@ async def test_a_confirmed_lane_still_confirms_at_boot_and_heartbeats_binding_co
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="paper",
-            account_nickname=None,
         )
         # The confirmation stamped `last_seen_at_ms` itself (and with the same
         # `binding_confirmed` a confirmed lane beats), so move off that instant
@@ -1233,7 +1180,6 @@ async def test_confirm_and_report_switches_the_reported_facts_without_restarting
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="paper",
-            account_nickname=None,
         )
         assert boot.heartbeat is heartbeat
         assert not heartbeat.done()
@@ -1309,7 +1255,6 @@ async def test_a_nickname_set_after_confirmation_reaches_the_next_beat_without_a
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="paper",
-            account_nickname=None,
         )
         clock.advance(1)
 
@@ -1768,7 +1713,6 @@ async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacem
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="live",
-            account_nickname=None,
         )
         confirming_session = boot.session
         assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
@@ -1886,7 +1830,6 @@ async def test_a_re_confirmation_refused_once_more_retries_on_a_later_beat_not_a
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="live",
-            account_nickname=None,
         )
         confirming_session = boot.session
         assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"

@@ -151,7 +151,6 @@ class FleetLaneBoot:
             effective_binding_generation=0,
             authority_kind="unavailable",
             endpoint_mode="unidentified",
-            account_nickname=None,
         )
     )
     #: The grant this lane last confirmed, kept for the same reason
@@ -649,7 +648,6 @@ def heartbeat_facts(
     effective_binding_generation: int,
     authority_kind: str,
     endpoint_mode: str,
-    account_nickname: str | None,
 ) -> Mapping[str, object]:
     """What this lane reports on every beat, given its binding state.
 
@@ -660,24 +658,15 @@ def heartbeat_facts(
     always passes the settings mode.
 
     Both shapes carry the same bounded typed summary
-    (``ProviderSummaryObservation``): endpoint mode, authority state, and —
-    when the confirmed account has one set — its nickname (PRD #2182), and
+    (``ProviderSummaryObservation``): endpoint mode and authority state, and
     nothing else. That is not a style choice — a summary the coordinator
     cannot parse is refused as an identity mismatch, and ``start_heartbeat``
     answers a refusal by registering a fresh session, so one free-form key
     here would climb the routing epoch on every beat instead of failing once
-    and visibly. ``account_nickname`` is omitted entirely rather than sent as
-    ``null`` when none is set, matching how ``detail`` is already optional in
-    this same summary — and matching the rollout requirement: the coordinator
-    must already accept this key before this lane ever sends it.
-
-    ``account_nickname`` is required, not defaulted to ``None`` — every other
-    parameter here is, and a silently-omittable nickname is exactly the
-    "forgot to pass it" failure mode #2182's own review round caught in the
-    frontend's ``allLanes`` prop. This value only seeds ``boot.reported_facts``
-    at confirm/boot time; ``start_heartbeat`` re-reads the nickname fresh on
-    every beat after that (see its docstring), so a caller with nothing fresh
-    yet to offer passes ``None`` explicitly rather than omitting the argument.
+    and visibly. The account's nickname (PRD #2182) is not part of this
+    confirm-time snapshot — it is folded in fresh, per beat, by
+    ``start_heartbeat`` (see its docstring), which is the only place that
+    ever writes ``account_nickname`` onto the outgoing summary.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather
@@ -691,9 +680,7 @@ def heartbeat_facts(
         "synthetic": "synthetic",
         "unavailable": "unavailable",
     }.get(authority_kind, "unavailable")
-    summary: dict[str, object] = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
-    if account_nickname is not None:
-        summary["account_nickname"] = account_nickname
+    summary = {"endpoint_mode": endpoint_mode, "authority_state": authority_state}
     if binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
     ):
@@ -720,7 +707,6 @@ async def confirm_and_report(
     effective_revision: int | None,
     authority_kind: str,
     endpoint_mode: str,
-    account_nickname: str | None,
 ) -> None:
     """Confirm the grant if there is one; report what installed either way.
 
@@ -756,7 +742,6 @@ async def confirm_and_report(
         effective_binding_generation=effective_binding_generation,
         authority_kind=authority_kind,
         endpoint_mode=endpoint_mode,
-        account_nickname=account_nickname,
     )
 
 
