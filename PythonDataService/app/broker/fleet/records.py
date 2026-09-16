@@ -87,7 +87,13 @@ _AUTHORITY_STATE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _DETAIL_MAX_CHARS = 200
 #: PRD #2182: the account nickname an agent may report alongside its lane
 #: summary, bounded the same way ``detail`` is — a short string, refused when
-#: oversized or not a string at all.
+#: oversized or not a string at all. Must equal ``NicknamePutRequest``'s
+#: ``max_length`` (``app/schemas/broker_configuration.py``) — the writer's own
+#: bound on what a nickname can be set to. Not derived from one shared
+#: constant (the two modules sit on either side of a boundary this package
+#: does not import across); ``test_account_nickname_bound_matches_the_writers_own_bound``
+#: (test_admission_probes_2026_09_13.py) pins the two together instead. Raise
+#: both together, never just one.
 _ACCOUNT_NICKNAME_MAX_CHARS = 120
 
 

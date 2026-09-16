@@ -500,6 +500,17 @@ class BrokerConfigurationService:
     def list_nicknames(self) -> list[AccountNickname]:
         return self._store.list_nicknames()
 
+    def nickname_for(self, account_id: str) -> str | None:
+        """One account's nickname, or ``None`` if it has none set.
+
+        A single-key read (`store.get_nickname`), not `list_nicknames()`
+        filtered by hand — the fleet lane's per-beat read (PRD #2182) calls
+        this on a cadence, and a table scan for one key on every heartbeat
+        is the wrong shape there.
+        """
+        record = self._store.get_nickname(account_id)
+        return None if record is None else record.nickname
+
     def set_nickname(self, account_id: str, *, nickname: str) -> AccountNickname:
         owner = self.owner()
         now = self._clock()

@@ -481,6 +481,33 @@ def test_lane_summary_account_nickname_is_bounded_the_same_way_detail_is(
     assert parsed.account_nickname == "x" * 120
 
 
+def test_account_nickname_bound_matches_the_writers_own_bound() -> None:
+    """The reader's and the writer's 120-char bounds agree today by
+    coincidence, not by construction — nothing links
+    ``records.py``'s ``_ACCOUNT_NICKNAME_MAX_CHARS`` to
+    ``NicknamePutRequest``'s ``max_length`` (``schemas/broker_configuration.py``).
+    If the writer's bound is ever raised on its own, every beat from a lane
+    with a newly-too-long nickname would be refused as a malformed summary —
+    this pins the two together so that drift reddens here first, not in a
+    live lane's heartbeat.
+    """
+    from annotated_types import MaxLen
+
+    from app.broker.fleet.records import _ACCOUNT_NICKNAME_MAX_CHARS
+    from app.schemas.broker_configuration import NicknamePutRequest
+
+    writer_bound = next(
+        constraint.max_length
+        for constraint in NicknamePutRequest.model_fields["nickname"].metadata
+        if isinstance(constraint, MaxLen)
+    )
+    assert writer_bound == _ACCOUNT_NICKNAME_MAX_CHARS, (
+        "the fleet summary's account_nickname bound "
+        f"({_ACCOUNT_NICKNAME_MAX_CHARS}) has drifted from the Configuration "
+        f"nickname writer's bound ({writer_bound}) — raise both together."
+    )
+
+
 def test_concurrent_confirmations_from_one_session_settle_atomically(
     control_dir: Path, fleet_service
 ) -> None:

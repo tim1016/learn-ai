@@ -635,27 +635,21 @@ async def _service_lifespan(
 
                 selection_row = get_broker_configuration_service().selection()
                 # PRD #2182: the same nickname Configuration shows for this
-                # account, read the same way the desk itself reads it
-                # (`desk_state.py`'s `nickname_by_account`) — keyed to the
-                # observed account id, never to a profile.
+                # account, read the same way (`nickname_for`, keyed to the
+                # observed account id, never to a profile).
                 #
-                # This is a boot-time / confirm-time SNAPSHOT, not a live
-                # subscription: it is read once, right here, and everything
-                # this lane heartbeats afterward re-sends whatever
-                # `confirm_and_report` captured into `boot.reported_facts`
-                # (fleet_boot.py) at this moment. `PUT /account-nicknames/
-                # {account_id}` writes the SQLite store directly and triggers
-                # no re-report here — a rename on Configuration is NOT picked
-                # up by an already-running lane's heartbeat. The badge/card
-                # keep showing the old name until this process restarts (the
-                # next boot re-reads `list_nicknames()`), not merely "until
-                # the next heartbeat". Live re-reporting on a bare nickname
-                # write is deliberately out of scope for #2182.
+                # This particular read only seeds `boot.reported_facts` for
+                # the moment between now and the first beat — `start_heartbeat`
+                # (fleet_boot.py) re-reads the nickname fresh from the same
+                # store on every beat after that, so a rename on Configuration
+                # reaches this lane's heartbeat on its own, with no rebind and
+                # no restart. Nothing here needs to react to a later write.
                 account_pin = alpaca_binding.context.account_pin
-                nickname_by_account = {
-                    nickname.account_id: nickname.nickname
-                    for nickname in get_broker_configuration_service().list_nicknames()
-                }
+                account_nickname = (
+                    get_broker_configuration_service().nickname_for(account_pin)
+                    if account_pin is not None
+                    else None
+                )
                 await confirm_and_report(
                     fleet_lane,
                     account_pin=account_pin,
@@ -664,9 +658,7 @@ async def _service_lifespan(
                     effective_revision=selection_row.effective_revision,
                     authority_kind=alpaca_clerk_runtime.authority_kind,
                     endpoint_mode=alpaca_settings.mode,
-                    account_nickname=(
-                        nickname_by_account.get(account_pin) if account_pin is not None else None
-                    ),
+                    account_nickname=account_nickname,
                 )
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()

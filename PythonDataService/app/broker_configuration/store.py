@@ -474,6 +474,24 @@ class ProfilesStore:
             for row in rows
         ]
 
+    def get_nickname(self, account_id: str) -> AccountNickname | None:
+        """One account's nickname row, without materializing every row for it.
+
+        The per-beat read path (`heartbeat_facts`) calls this on a cadence —
+        `list_nicknames()` plus a dict build is the wrong shape there.
+        """
+        row = self._query_one(
+            "SELECT account_id, nickname, updated_at_ms FROM account_nicknames WHERE account_id = ?",
+            (account_id,),
+        )
+        if row is None:
+            return None
+        return AccountNickname(
+            account_id=row["account_id"],
+            nickname=row["nickname"],
+            updated_at_ms=int(row["updated_at_ms"]),
+        )
+
     def upsert_nickname(self, conn: sqlite3.Connection, nickname: AccountNickname) -> None:
         conn.execute(
             "INSERT INTO account_nicknames (account_id, nickname, updated_at_ms) VALUES (?, ?, ?) "

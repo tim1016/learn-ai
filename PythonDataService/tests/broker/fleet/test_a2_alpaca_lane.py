@@ -594,6 +594,7 @@ def test_heartbeat_facts_for_a_confirmed_paper_lane_are_byte_identical_to_the_pr
         effective_binding_generation=3,
         authority_kind="sqlite",
         endpoint_mode="paper",
+        account_nickname=None,
     ) == {
         "reported_binding_generation": 3,
         "reported_account_id": "ABC",
@@ -611,6 +612,7 @@ def test_heartbeat_facts_for_a_confirmed_live_shadow_lane_report_live_and_shadow
         effective_binding_generation=2,
         authority_kind="shadow",
         endpoint_mode="live",
+        account_nickname=None,
     ) == {
         "reported_binding_generation": 2,
         "reported_account_id": "U1234567",
@@ -638,6 +640,7 @@ def test_heartbeat_facts_for_an_unconfirmed_lane_report_pending_with_a_summary_t
         effective_binding_generation=0,
         authority_kind="unavailable",
         endpoint_mode="paper",
+        account_nickname=None,
     )
 
     assert facts == {
@@ -661,6 +664,7 @@ def test_heartbeat_facts_without_an_account_pin_still_carry_a_parsable_summary()
         effective_binding_generation=0,
         authority_kind="synthetic",
         endpoint_mode="paper",
+        account_nickname=None,
     )
 
     assert facts == {
@@ -683,6 +687,7 @@ def test_heartbeat_facts_map_an_unknown_authority_kind_to_unavailable() -> None:
         effective_binding_generation=1,
         authority_kind="weird",
         endpoint_mode="live",
+        account_nickname=None,
     )
 
     assert facts["reported_summary"] == {
@@ -714,6 +719,7 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
             effective_binding_generation=0,
             authority_kind="sqlite",
             endpoint_mode=mode,
+            account_nickname=None,
         )["reported_summary"]["authority_state"]
         for mode in ("paper", "live")
     } | {
@@ -722,6 +728,7 @@ def test_heartbeat_authority_state_vocabulary_covers_every_account_authority_kin
             effective_binding_generation=0,
             authority_kind=authority_kind,
             endpoint_mode="unidentified",
+            account_nickname=None,
         )["reported_summary"]["authority_state"]
         for authority_kind in ("shadow", "synthetic")
     }
@@ -768,6 +775,7 @@ def test_heartbeat_facts_omit_the_account_nickname_when_none_is_set() -> None:
         effective_binding_generation=3,
         authority_kind="sqlite",
         endpoint_mode="paper",
+        account_nickname=None,
     )
 
     assert facts["reported_summary"] == {
@@ -775,6 +783,31 @@ def test_heartbeat_facts_omit_the_account_nickname_when_none_is_set() -> None:
         "authority_state": "real_paper",
     }
     assert "account_nickname" not in facts["reported_summary"]
+
+
+def test_summary_with_live_nickname_adds_replaces_and_removes_the_one_key() -> None:
+    """#2182 Major 3: the per-beat merge touches only `account_nickname` —
+    every other key in the confirm-time snapshot passes through untouched,
+    in both directions (a fresh nickname appearing, and one disappearing)."""
+    from app.broker.alpaca.clerk.fleet_boot import _summary_with_live_nickname
+
+    base = {"endpoint_mode": "paper", "authority_state": "real_paper"}
+
+    assert _summary_with_live_nickname(base, "Strategy lab") == {
+        **base,
+        "account_nickname": "Strategy lab",
+    }
+    assert _summary_with_live_nickname(base, None) == base
+    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, "New name") == {
+        **base,
+        "account_nickname": "New name",
+    }
+    # A nickname that was set and then unset (Configuration allows only
+    # setting, but the merge must stay correct either way).
+    assert _summary_with_live_nickname({**base, "account_nickname": "Old name"}, None) == base
+    # Not a bounded typed observation at all: nothing to merge into.
+    assert _summary_with_live_nickname("not-a-mapping", "Strategy lab") is None
+    assert _summary_with_live_nickname(None, "Strategy lab") is None
 
 
 @pytest.mark.parametrize(
@@ -919,6 +952,7 @@ async def test_a_reserved_only_lane_heartbeats_and_stays_configuration_routable(
             effective_revision=None,
             authority_kind="unavailable",
             endpoint_mode="paper",
+            account_nickname=None,
         )
         session = await _await_beat_at(
             service, boot.clerk_id, clock, reported_state="binding_pending"
@@ -1015,6 +1049,7 @@ async def test_a_confirmed_lane_still_confirms_at_boot_and_heartbeats_binding_co
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="paper",
+            account_nickname=None,
         )
         # The confirmation stamped `last_seen_at_ms` itself (and with the same
         # `binding_confirmed` a confirmed lane beats), so move off that instant
@@ -1198,6 +1233,7 @@ async def test_confirm_and_report_switches_the_reported_facts_without_restarting
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="paper",
+            account_nickname=None,
         )
         assert boot.heartbeat is heartbeat
         assert not heartbeat.done()
@@ -1215,6 +1251,91 @@ async def test_confirm_and_report_switches_the_reported_facts_without_restarting
         assert bound.authority_state == "real_paper"
         assert confirmed.routing_epoch == epoch_at_registration
         assert boot.heartbeat is heartbeat
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
+async def test_a_nickname_set_after_confirmation_reaches_the_next_beat_without_a_restart(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2182 Major 3: the nickname is a per-beat live read, not a one-time
+    boot snapshot. Configuration writes a nickname straight to the profiles
+    store with no rebind and no `confirm_and_report` call — so a beat that
+    landed *before* the write must not carry it, and the very next beat,
+    with nothing else changed and no restart, must.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        close_fleet_lane,
+        confirm_and_report,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+    from app.broker_configuration.runtime import get_broker_configuration_service
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        await reserve_account(boot, external_account_id=account_id)
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        # Confirmed with no nickname known yet — exactly what a boot before
+        # any Configuration write looks like.
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="paper",
+            account_nickname=None,
+        )
+        clock.advance(1)
+
+        before = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_confirmed"
+        )
+        before_summary = ProviderSummaryObservation.parse(before.reported_summary_json)
+        assert before_summary is not None
+        assert before_summary.account_nickname is None
+
+        # The Configuration write: straight to the profiles store, no rebind,
+        # no `confirm_and_report` call — this is the seam the last review
+        # round found nothing refreshed.
+        get_broker_configuration_service().set_nickname(account_id, nickname="Strategy lab")
+        clock.advance(1)
+
+        after = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_confirmed"
+        )
+        after_summary = ProviderSummaryObservation.parse(after.reported_summary_json)
+        assert after_summary is not None
+        assert after_summary.account_nickname == "Strategy lab"
+        # Still the same binding generation and routing epoch — nothing
+        # rebound or re-registered to pick up the rename.
+        assert after.reported_binding_generation == before.reported_binding_generation
+        assert after.routing_epoch == before.routing_epoch
     finally:
         await close_fleet_lane(boot)
         service.close()
@@ -1647,6 +1768,7 @@ async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacem
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="live",
+            account_nickname=None,
         )
         confirming_session = boot.session
         assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
@@ -1764,6 +1886,7 @@ async def test_a_re_confirmation_refused_once_more_retries_on_a_later_beat_not_a
             effective_revision=2,
             authority_kind="sqlite",
             endpoint_mode="live",
+            account_nickname=None,
         )
         confirming_session = boot.session
         assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"

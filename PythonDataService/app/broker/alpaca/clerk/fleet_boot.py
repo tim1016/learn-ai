@@ -151,6 +151,7 @@ class FleetLaneBoot:
             effective_binding_generation=0,
             authority_kind="unavailable",
             endpoint_mode="unidentified",
+            account_nickname=None,
         )
     )
     #: The grant this lane last confirmed, kept for the same reason
@@ -453,6 +454,44 @@ def offline_boot_matches(
     )
 
 
+def _live_account_nickname(account_id: str | None) -> str | None:
+    """The account's nickname, read fresh from the profiles store.
+
+    Deliberately not cached anywhere on ``FleetLaneBoot``: called from every
+    beat (``_beat``, below) so a rename via ``PUT /account-nicknames/
+    {account_id}`` reaches this lane's heartbeat on the next beat rather than
+    waiting for this process to restart. The import stays local to this
+    function — the established pattern at this module boundary (see
+    ``main.py``'s own local import of the same accessor) rather than a
+    module-level one.
+    """
+    if account_id is None:
+        return None
+    from app.broker_configuration.runtime import get_broker_configuration_service
+
+    return get_broker_configuration_service().nickname_for(account_id)
+
+
+def _summary_with_live_nickname(
+    summary: object, nickname: str | None
+) -> Mapping[str, object] | None:
+    """``summary`` with its ``account_nickname`` replaced by a fresh read.
+
+    Everything else in the bounded summary (``endpoint_mode``,
+    ``authority_state``, ``detail``) is confirm-time state that only changes
+    on a rebind, so only this one key gets touched here — the rest is
+    whatever ``heartbeat_facts`` last computed at confirm/boot.
+    """
+    if not isinstance(summary, Mapping):
+        return None
+    refreshed = dict(summary)
+    if nickname is not None:
+        refreshed["account_nickname"] = nickname
+    else:
+        refreshed.pop("account_nickname", None)
+    return refreshed
+
+
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     """Observe on a cadence; a refused beat repairs the lane.
 
@@ -461,6 +500,16 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     that installs later changes what the lane says without restarting the
     task that says it. The task is stored on ``boot.heartbeat`` so
     ``close_fleet_lane`` ends the beat with the lane.
+
+    The confirmed account's nickname gets the same treatment, one level
+    deeper: ``boot.reported_facts`` itself only changes when ``confirm_and_
+    report`` runs (a rebind), but a Configuration rename between rebinds must
+    still reach the wire (PRD #2182 — "one account name everywhere" is not
+    true if the badge and card can go stale for the lane's whole remaining
+    lifetime). So every beat re-reads the nickname fresh from the profiles
+    store (``_live_account_nickname``) and folds it into the summary this
+    particular send carries, without mutating the stored snapshot — the same
+    "no restart required" property, applied one field further down.
 
     An observation itself never confirms anything. The refusal path is the
     exception, and it is repair rather than protocol: a beat that re-registers
@@ -481,6 +530,11 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 summary = reported.get("reported_summary")
                 if boot.session is None:
                     continue
+                account_id = reported.get("reported_account_id")
+                live_summary = _summary_with_live_nickname(
+                    summary,
+                    _live_account_nickname(account_id) if isinstance(account_id, str) else None,
+                )
                 try:
                     await boot.presence.observe(
                         clerk_id=boot.clerk_id,
@@ -488,7 +542,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         reported_binding_generation=reported.get("reported_binding_generation"),
                         reported_account_id=reported.get("reported_account_id"),
                         reported_state=reported.get("reported_state"),
-                        reported_summary=dict(summary) if isinstance(summary, Mapping) else None,
+                        reported_summary=live_summary,
                     )
                 except FleetControlError as exc:
                     logger.warning(
@@ -595,7 +649,7 @@ def heartbeat_facts(
     effective_binding_generation: int,
     authority_kind: str,
     endpoint_mode: str,
-    account_nickname: str | None = None,
+    account_nickname: str | None,
 ) -> Mapping[str, object]:
     """What this lane reports on every beat, given its binding state.
 
@@ -616,6 +670,14 @@ def heartbeat_facts(
     ``null`` when none is set, matching how ``detail`` is already optional in
     this same summary — and matching the rollout requirement: the coordinator
     must already accept this key before this lane ever sends it.
+
+    ``account_nickname`` is required, not defaulted to ``None`` — every other
+    parameter here is, and a silently-omittable nickname is exactly the
+    "forgot to pass it" failure mode #2182's own review round caught in the
+    frontend's ``allLanes`` prop. This value only seeds ``boot.reported_facts``
+    at confirm/boot time; ``start_heartbeat`` re-reads the nickname fresh on
+    every beat after that (see its docstring), so a caller with nothing fresh
+    yet to offer passes ``None`` explicitly rather than omitting the argument.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather
@@ -658,7 +720,7 @@ async def confirm_and_report(
     effective_revision: int | None,
     authority_kind: str,
     endpoint_mode: str,
-    account_nickname: str | None = None,
+    account_nickname: str | None,
 ) -> None:
     """Confirm the grant if there is one; report what installed either way.
 
