@@ -15,7 +15,11 @@ of the authority's own semantics:
 3. ``confirm_binding`` — after the worker's local acknowledgement: the
    confirmed binding observation fenced by this session, then the clerk's
    durable confirmation evidence.
-4. ``start_heartbeat`` — observations only; they never confirm anything.
+4. ``start_heartbeat`` — observations only; an observation never confirms
+   anything. Its one exception is repair, not protocol: a refused beat
+   re-registers the lane, and a replacement session that inherits a granted
+   binding re-confirms it (step 3 again) rather than leaving the lane
+   projecting ``starting`` until a human restarts the container.
 
 Step 4 is not sequenced with steps 2 and 3 at all: the beat starts when the
 lane *opens*, before the installation lock, before the profiles database and
@@ -98,6 +102,23 @@ class FleetBootRefused(FleetControlError):
     status_code = 409
 
 
+@dataclass(frozen=True, slots=True)
+class ConfirmedGrant:
+    """The exact grant one confirmation named, re-presentable to a coordinator.
+
+    ``confirm_assignment`` re-acknowledges an equal binding generation only
+    when the effective tuple matches the one that generation already
+    confirmed, so a re-confirmation presents all four values or none. They are
+    one immutable object rather than four fields precisely because no reader
+    may ever see half of them, and no writer may set them apart.
+    """
+
+    external_account_id: str
+    binding_generation: int
+    effective_profile_id: str | None
+    effective_revision: int | None
+
+
 @dataclass
 class FleetLaneBoot:
     """One lane's live fleet state for the process lifetime."""
@@ -132,6 +153,21 @@ class FleetLaneBoot:
             endpoint_mode="unidentified",
         )
     )
+    #: The grant this lane last confirmed, kept for the same reason
+    #: ``endpoint_ref`` is: the beat may have to present it again under a
+    #: replacement session. ``None`` until a confirmation succeeds — an
+    #: unbound lane has nothing to re-present, and neither has a lane whose
+    #: confirmation was refused.
+    confirmed_grant: ConfirmedGrant | None = None
+    #: The session ``confirmed_grant`` was actually confirmed under. A
+    #: re-registration replaces ``session`` without touching this field, so a
+    #: mismatch between the two is exactly "this grant has not been
+    #: re-presented to the current session yet" — the signal every beat
+    #: checks (``_reconfirm_grant_if_stale``), not only the one that follows
+    #: a refused observation. Written together with ``confirmed_grant``
+    #: everywhere either changes; ``None`` alongside ``confirmed_grant is
+    #: None`` means "nothing confirmed".
+    confirmed_grant_session: SessionInfo | None = None
     heartbeat: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -345,6 +381,12 @@ async def confirm_binding(
     ``boot.session`` underneath, so a second read would write evidence naming
     a session that confirmed nothing — and the next boot's FR-066 recovery
     reads that evidence as fact.
+
+    Recording what was confirmed is already this function's job, so the
+    in-process record the beat re-presents (``boot.confirmed_grant``) — and
+    the session it was confirmed under (``boot.confirmed_grant_session``) —
+    is written here beside the durable evidence, and by the same rule: only
+    after the coordinator has accepted it.
     """
     session = boot.session
     if session is None:
@@ -378,6 +420,13 @@ async def confirm_binding(
             routing_epoch=session.routing_epoch,
         ),
     )
+    boot.confirmed_grant = ConfirmedGrant(
+        external_account_id=external_account_id,
+        binding_generation=binding_generation,
+        effective_profile_id=effective_profile_id,
+        effective_revision=effective_revision,
+    )
+    boot.confirmed_grant_session = session
     del assignment_observed  # reserved for the delivery-B forwarding facts
     return confirmed
 
@@ -405,18 +454,26 @@ def offline_boot_matches(
 
 
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
-    """Observe on a cadence; observations never confirm anything.
+    """Observe on a cadence; a refused beat repairs the lane.
 
     Called when the lane opens, so an unbound lane is present too. Each beat
     re-reads ``boot.reported_facts`` rather than closing over them: a binding
     that installs later changes what the lane says without restarting the
     task that says it. The task is stored on ``boot.heartbeat`` so
     ``close_fleet_lane`` ends the beat with the lane.
+
+    An observation itself never confirms anything. The refusal path is the
+    exception, and it is repair rather than protocol: a beat that re-registers
+    replaces the session its binding was confirmed under, so it re-presents
+    that grant immediately (``_repair_lane_after_refused_beat``). If that
+    immediate re-presentation is itself refused (a single transient error
+    right after re-registration), the grant stays pending rather than
+    dropped, and every later beat — refused or not — retries it
+    (``_reconfirm_grant_if_stale``) instead of waiting for a second refused
+    observation that may never come.
     """
 
     async def _beat() -> None:
-        from app.broker.fleet.identity import new_agent_instance_id
-
         try:
             while True:
                 await asyncio.sleep(interval_s)
@@ -437,35 +494,15 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     logger.warning(
                         "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
                     )
-                    # A coordinator that restarted lost this session: present a
-                    # fresh registration so the lane returns to routed without a
-                    # process restart. The confirmation on the assignment is not
-                    # touched — a re-confirmation is the next boot's first act.
-                    try:
-                        boot.session = await boot.presence.register(
-                            clerk_id=boot.clerk_id,
-                            worker_key=boot.worker_key,
-                            agent_instance_id=new_agent_instance_id(),
-                            # The reference this lane registered with, which the
-                            # re-registration always should have carried: a
-                            # coordinator that lost the session re-creates it
-                            # citing whatever arrives here, and a session naming
-                            # no approved endpoint is refused every delivery
-                            # while the lane keeps beating as reachable.
-                            endpoint_ref=boot.endpoint_ref,
-                            adapter_version=_ADAPTER.adapter_version,
-                            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
-                        )
-                        logger.info(
-                            "Fleet session re-registered after heartbeat refusal.",
-                            extra={"clerk_id": boot.clerk_id},
-                        )
-                    except FleetControlError as register_exc:
-                        logger.warning(
-                            "Fleet re-registration refused: %s",
-                            register_exc.message,
-                            extra={"clerk_id": boot.clerk_id},
-                        )
+                    await _repair_lane_after_refused_beat(boot)
+                else:
+                    # The common case is a no-op: `confirmed_grant_session`
+                    # already names this session. It only does work when a
+                    # prior re-registration's immediate re-confirmation
+                    # attempt (above) was itself refused and left the grant
+                    # pending — this is that retry, running on every landed
+                    # beat rather than waiting for another refusal.
+                    await _reconfirm_grant_if_stale(boot)
         except asyncio.CancelledError:
             # Normal shutdown (stop_heartbeat's task.cancel()) is not a death
             # to log — re-raise it untouched.
@@ -473,18 +510,16 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
         except Exception:
             # Anything other than a FleetControlError anywhere in the loop is
             # unexpected (a malformed coordinator response, a raw sqlite3
-            # error from the local store, a transport error on the
-            # re-registration path above) and ends the beat — but silently,
-            # unless announced right here: the task simply stops, and nothing
-            # notices until the coordinator eventually projects the lane
+            # error from the local store, a transport or filesystem error on
+            # the repair path above) and ends the beat — but silently, unless
+            # announced right here: the task simply stops, and nothing notices
+            # until the coordinator eventually projects the lane
             # `unreachable`, or `stop_heartbeat` logs the already-dead task at
-            # shutdown. Guarding the whole loop once — rather than adding a
-            # second `except Exception` around the re-registration's inner
-            # `try` — means every exit path shares one log site: a sibling
-            # `except` on the inner `try` would never see an exception raised
-            # from within the `except FleetControlError` handler beside it,
-            # since Python does not route an exception raised inside an
-            # `except` clause to a sibling `except` of the same `try`.
+            # shutdown. `_repair_lane_after_refused_beat` absorbs the
+            # coordinator's own refusals and nothing else, so every other exit
+            # path — including one raised from inside the `except` clause
+            # above, which Python never routes to a sibling `except` of the
+            # same `try` — shares this one log site.
             logger.exception(
                 "Fleet heartbeat ended on an unexpected exception; lane "
                 "presence has stopped until this process restarts.",
@@ -639,6 +674,13 @@ async def confirm_and_report(
             effective_profile_id=effective_profile_id,
             effective_revision=effective_revision,
         )
+    else:
+        # Stated rather than assumed: whatever this lane confirmed before is
+        # not what installed now, so the beat has nothing to re-present. A
+        # grant left standing here would be re-confirmed under a replacement
+        # session for a binding that is no longer the effective one.
+        boot.confirmed_grant = None
+        boot.confirmed_grant_session = None
     boot.reported_facts = heartbeat_facts(
         account_pin=account_pin,
         effective_binding_generation=effective_binding_generation,
@@ -664,6 +706,109 @@ async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
         )
     if boot.owned_service is not None:
         boot.owned_service.close()
+
+
+async def _repair_lane_after_refused_beat(boot: FleetLaneBoot) -> None:
+    """Re-register the lost session, then re-present the grant it had confirmed.
+
+    A coordinator that restarted lost this session: a fresh registration
+    returns the lane to routed without a process restart. It cites the
+    reference this lane registered with, which the re-registration always
+    should have carried — a coordinator that lost the session re-creates it
+    citing whatever arrives here, and a session naming no approved endpoint is
+    refused every delivery while the lane keeps beating as reachable.
+
+    The replacement session has confirmed nothing, and the coordinator fences
+    a confirmed observation by the instance id and routing epoch that wrote it
+    (``service._descriptor``) — so a lane that re-registered under a live
+    binding projects ``starting`` rather than ``ready`` until it confirms
+    again. Leaving that to "the next boot" (``confirmation.py``'s recovery
+    story, written for a lost confirmation *reply*, not for a session this
+    process replaced) makes a human restarting the container the only repair.
+    The gap opens on an asymmetric failure: the observation is refused — a
+    transient 5xx is enough — and the registration answering it succeeds.
+
+    Both the registration and the re-confirmation are repairs of a
+    coordinator that is already misbehaving, and a beat that died on either
+    would trade a lane the desk shows as ``starting`` for one the coordinator
+    eventually projects ``unreachable`` — so both are logged and dropped
+    rather than raised. They are not symmetric past that: the registration is
+    only retried by the *next refused* beat (this function runs nowhere
+    else), while the re-confirmation it fires immediately below is retried by
+    *every* later beat, refused or not (``_reconfirm_grant_if_stale``,
+    called again from ``_beat``'s normal path) — because a lane with a live,
+    valid session has no reason to wait for another refusal before trying
+    again to present a grant that session has not yet confirmed. Only a
+    ``FleetControlError`` is absorbed here; anything else (a raw transport or
+    filesystem error) still ends the beat at ``_beat``'s one log site,
+    deliberately.
+    """
+    try:
+        boot.session = await boot.presence.register(
+            clerk_id=boot.clerk_id,
+            worker_key=boot.worker_key,
+            agent_instance_id=new_agent_instance_id(),
+            endpoint_ref=boot.endpoint_ref,
+            adapter_version=_ADAPTER.adapter_version,
+            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+        )
+    except FleetControlError as exc:
+        logger.warning(
+            "Fleet re-registration refused: %s",
+            exc.message,
+            extra={"clerk_id": boot.clerk_id},
+        )
+        return
+    logger.info(
+        "Fleet session re-registered after heartbeat refusal.",
+        extra={"clerk_id": boot.clerk_id},
+    )
+    await _reconfirm_grant_if_stale(boot)
+
+
+async def _reconfirm_grant_if_stale(boot: FleetLaneBoot) -> None:
+    """Re-present the confirmed grant if the current session hasn't confirmed it.
+
+    ``boot.confirmed_grant_session`` names the session that actually
+    confirmed ``boot.confirmed_grant``; a re-registration replaces
+    ``boot.session`` without touching either field, so the two fall out of
+    step the moment the session changes and stay out of step until a
+    confirmation under the new session succeeds. A lane with no confirmed
+    grant has nothing to re-present (``binding_is_granted`` already gates
+    what gets confirmed in the first place), and an offline lane has no
+    session to present it under.
+
+    Called from two places: immediately after ``_repair_lane_after_refused_beat``
+    re-registers, and from every other landed beat in ``_beat``. The first
+    call is what used to be this function's entire job; the second is the
+    fix — it is what lets a re-confirmation that is itself refused (a single
+    transient error right after re-registration) retry on a later, ordinary
+    beat instead of being logged, dropped, and never tried again until
+    another observation happens to be refused too.
+    """
+    grant = boot.confirmed_grant
+    session = boot.session
+    if grant is None or session is None or boot.confirmed_grant_session == session:
+        return
+    try:
+        await confirm_binding(
+            boot,
+            external_account_id=grant.external_account_id,
+            binding_generation=grant.binding_generation,
+            effective_profile_id=grant.effective_profile_id,
+            effective_revision=grant.effective_revision,
+        )
+    except FleetControlError as exc:
+        logger.warning(
+            "Fleet binding re-confirmation refused; a later beat retries it: %s",
+            exc.message,
+            extra={"clerk_id": boot.clerk_id},
+        )
+        return
+    logger.info(
+        "Fleet binding re-confirmed under the current session.",
+        extra={"clerk_id": boot.clerk_id},
+    )
 
 
 def _fence_writable_roots(*, volume_root: Path) -> None:
@@ -714,6 +859,7 @@ def _verify_root_against_expectation(
 
 
 __all__ = [
+    "ConfirmedGrant",
     "FleetBootRefused",
     "FleetLaneBoot",
     "binding_is_granted",

@@ -10,7 +10,9 @@ boot order it enforces is the ADR 0062 addendum's admission protocol:
 4. (caller proceeds with its own authority boot);
 5. confirmation of the binding observation, fenced by the instance and epoch
    that registered;
-6. heartbeats, which observe and never confirm.
+6. heartbeats, which observe; a refused beat re-registers and re-presents the
+   grant it had confirmed (step 5 again), which is repair, not protocol — an
+   observation itself still confirms nothing.
 
 Two transports implement the same asynchronous interface: ``LocalPresence``
 calls the in-process control service (single-host deployments, tests), and
