@@ -7,6 +7,7 @@ const {
   ensureControlSecretFile,
   resolveDataPlaneControlSecret,
   RETIRED_DATA_PLANE_CONTROL_SECRET,
+  DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY,
 } = require('./data-plane-control-secret.cjs');
 
 const TEST_DATA_PLANE_CONTROL_SECRET = 'proxy-control-guard-test-secret';
@@ -30,18 +31,36 @@ const {
   shouldAttachDataPlaneSecret,
 } = proxyConfig.__test;
 
-for (const [label, configureSecret] of [
-  ['missing', 'delete process.env.DATA_PLANE_CONTROL_SECRET;'],
-  ['blank', "process.env.DATA_PLANE_CONTROL_SECRET = '   ';"],
-  ['retired', `process.env.DATA_PLANE_CONTROL_SECRET = ${JSON.stringify(RETIRED_DATA_PLANE_CONTROL_SECRET)};`],
-]) {
-  const result = spawnSync(
-    process.execPath,
-    ['-e', `${configureSecret} require(${JSON.stringify(path.resolve(__dirname, '../proxy.conf.js'))});`],
-    { encoding: 'utf8' },
-  );
-  assert.notEqual(result.status, 0, `must reject a ${label} data-plane control secret`);
-  assert.match(result.stderr, /DATA_PLANE_CONTROL_SECRET must be configured/);
+// The 'missing' case must prove proxy.conf.js fails closed when NO secret is
+// configured anywhere, not merely when the in-process env var is absent.
+// resolveDataPlaneControlSecret()'s fallback to the repo-root .env is a
+// legitimate, intentional feature (it's how dev normally supplies the
+// secret) — without neutralizing that fallback too, this case would
+// incidentally pass or fail based on whether the *host running this test*
+// happens to have a real root .env, which every machine that has set up the
+// dev stack does. Point the fallback at a directory that is guaranteed to
+// hold no .env instead.
+const missingSecretEnvFileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-ai-proxy-control-guard-'));
+try {
+  const missingSecretEnvFile = path.join(missingSecretEnvFileRoot, '.env');
+  for (const [label, configureSecret] of [
+    ['missing', 'delete process.env.DATA_PLANE_CONTROL_SECRET;'],
+    ['blank', "process.env.DATA_PLANE_CONTROL_SECRET = '   ';"],
+    ['retired', `process.env.DATA_PLANE_CONTROL_SECRET = ${JSON.stringify(RETIRED_DATA_PLANE_CONTROL_SECRET)};`],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      ['-e', `${configureSecret} require(${JSON.stringify(path.resolve(__dirname, '../proxy.conf.js'))});`],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, [DATA_PLANE_CONTROL_SECRET_ENV_FILE_OVERRIDE_KEY]: missingSecretEnvFile },
+      },
+    );
+    assert.notEqual(result.status, 0, `must reject a ${label} data-plane control secret`);
+    assert.match(result.stderr, /DATA_PLANE_CONTROL_SECRET must be configured/);
+  }
+} finally {
+  fs.rmSync(missingSecretEnvFileRoot, { recursive: true, force: true });
 }
 
 const secretFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-ai-control-secret-'));
