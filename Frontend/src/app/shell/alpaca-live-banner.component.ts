@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
+import { FleetDirectoryService } from '../fleet/fleet-directory.service';
 import { laneDisplayName, laneDisplayNameText, type LaneDescriptor } from '../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
@@ -71,9 +72,12 @@ interface LaneBadge {
  * the lane's account nickname, or its `display_label` (set once at clerk
  * enrolment via `provision --label` / `migrate-existing --label`) until one
  * is set. Both are operator prose, not backend identifiers, so neither goes
- * through `receiptLabel`. A name shared with another lane in `allLanes`
+ * through `receiptLabel`. A name shared with another lane of the same broker
  * shows that lane's own label beside it (ADR 0064 Decision 5); nothing here
- * refuses the duplicate.
+ * refuses the duplicate. Siblings come from injecting `FleetDirectoryService`
+ * directly (`lanesOf(lane.broker)`), not a prop the caller must remember to
+ * pass — a `LaneContextStripComponent` mounted deep in the Bots/Gallery pages
+ * gets correct disambiguation for free, the same as the shell header.
  */
 @Component({
   selector: 'app-alpaca-live-banner',
@@ -129,16 +133,11 @@ interface LaneBadge {
 })
 export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   /** The lane this badge speaks for, or `null` when the directory has not
    * produced one. `null` is a rendered state, not an absent input. */
   readonly lane = input.required<LaneDescriptor | null>();
-
-  /** Every lane in the directory, so a shared display name can be spotted
-   * and shown with its lane label beside it. Defaults empty for callers that
-   * render one lane in isolation (e.g. `LaneContextStripComponent`), which
-   * simply never finds a collision. */
-  readonly allLanes = input<readonly LaneDescriptor[]>([]);
 
   protected readonly badge = computed<LaneBadge>(() => {
     const lane = this.lane();
@@ -151,7 +150,7 @@ export class AlpacaLiveBannerComponent {
       });
     }
 
-    const { name, disambiguator } = laneDisplayName(lane, this.allLanes());
+    const { name, disambiguator } = laneDisplayName(lane, this.fleetDirectory.lanesOf(lane.broker));
     const { verdict, lastError } = this.service.stateFor(lane.clerk_id);
     if (verdict !== null) return verdictBadge(name, disambiguator, verdict);
     if (lastError !== null) {

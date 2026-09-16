@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import type { FleetCapability } from '../../../../fleet/resource-target';
 import {
   type LaneDescriptor,
@@ -41,20 +42,21 @@ import {
 })
 export class AlpacaLaneCardComponent {
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   readonly lane = input.required<LaneDescriptor>();
   /** The surface being chosen, or null on the desk's full directory. */
   readonly surface = input<LaneSurface | null>(null);
-  /** Every lane in the directory, so a display name shared with another
-   * lane is caught and shown with that lane's own label beside it
-   * (ADR 0064 Decision 5). */
-  readonly allLanes = input<readonly LaneDescriptor[]>([]);
 
   protected readonly isReady = computed(() => laneIsReady(this.lane()));
   protected readonly account = computed(() => laneConfirmedAccount(this.lane()));
   /** This lane's display name: its account nickname, or its lane label
-   * until one is set. */
-  protected readonly displayName = computed(() => laneDisplayName(this.lane(), this.allLanes()));
+   * until one is set. Siblings come from injecting `FleetDirectoryService`
+   * directly (`lanesOf(lane.broker)`), not a prop the parent must remember
+   * to pass — one lane card can't render disambiguated from another again. */
+  protected readonly displayName = computed(() =>
+    laneDisplayName(this.lane(), this.fleetDirectory.lanesOf(this.lane().broker)),
+  );
   /** `displayName` as one accessible-name-safe string — carries the
    * disambiguator into `aria-label`, not just the visible text (a shared
    * name is a supported state under ADR 0064 Decision 5, not an edge case

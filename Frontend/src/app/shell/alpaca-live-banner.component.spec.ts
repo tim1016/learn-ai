@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import axe from 'axe-core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import { testLane } from '../fleet/fleet-directory-testing';
+import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
 import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import {
   AlpacaLiveVerdictService,
@@ -37,13 +37,20 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
 async function renderWith(
   lane: LaneDescriptor | null,
   state: LaneVerdictState,
-  allLanes: readonly LaneDescriptor[] = [],
+  siblingLanes: readonly LaneDescriptor[] = [],
 ) {
   const stateFor = (clerkId: string): LaneVerdictState =>
     clerkId === lane?.clerk_id ? state : UNPOLLED_LANE_STATE;
   return render(AlpacaLiveBannerComponent, {
-    inputs: { lane, allLanes },
-    providers: [{ provide: AlpacaLiveVerdictService, useValue: { stateFor } }],
+    inputs: { lane },
+    providers: [
+      { provide: AlpacaLiveVerdictService, useValue: { stateFor } },
+      // Siblings for disambiguation now come from `FleetDirectoryService`
+      // (`lanesOf`), not a prop — an explicit, empty-by-default directory so
+      // a test that doesn't care about collisions never accidentally gets
+      // one from `provideFleetDirectory()`'s own default fixture lane.
+      provideFleetDirectory({ observed_at_ms: 1, clerks: [...siblingLanes] }),
+    ],
   });
 }
 
