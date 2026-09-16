@@ -179,6 +179,11 @@ async def list_routing_receipts_audit(
     history) was otherwise reachable only by opening the coordinator's
     SQLite file by hand.
 
+    The receipt ledger covers **commands only** (ADR 0063, #2153): routed
+    streams open no receipt and a lane's own bot runner never enters the
+    coordinator, so an empty or quiet window is not evidence of lane
+    inactivity.
+
     ``before_ms``/``before_correlation_id`` continue a previous page's keyset
     (#2133) -- pass back a truncated page's ``next_before_ms``/
     ``next_before_correlation_id`` verbatim to walk the full window past

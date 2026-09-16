@@ -291,7 +291,13 @@ class LaneRouter:
         path_params: Mapping[str, str],
         query: Mapping[str, str],
     ) -> RoutedStream:
-        """Open one routed stream; every event is provenance-verified."""
+        """Open one routed stream; every event is provenance-verified.
+
+        Opens **no routing receipt** — the ledger is commands only (ADR
+        0063's accepted scope, #2153), so a lane serving open streams reads
+        as quiet to receipt-based questions. Ledger silence is not lane
+        silence; any drain-style gate built on receipts must say so.
+        """
         _clerk, session, assignment = self._resolve(
             broker=broker,
             clerk_id=clerk_id,
@@ -485,7 +491,23 @@ class LaneRouter:
                 "idempotency key with the provider clerk's receipt; never "
                 "resubmit blindly.",
             ) from exc
-        except FleetControlError:
+        except FleetControlError as exc:
+            # Post-dispatch, a typed refusal is still an attempt the ledger
+            # must settle (#2152): left pinned at dispatched it is
+            # indistinguishable from in-flight, and a drain gate reading
+            # unsettled attempts would refuse forever. A refusal raised after
+            # the dispatch mark cannot prove the command was never applied,
+            # so it settles outcome-unknown like its sibling handlers.
+            self._service.settle_routing_attempt(
+                correlation_id=receipt.correlation_id,
+                outcome=RoutingReceiptState.OUTCOME_UNKNOWN,
+            )
+            logger.warning(
+                "Command %s on %s raised a typed refusal after dispatch: %r",
+                operation.operation_id,
+                clerk_id,
+                exc,
+            )
             raise
         except Exception as exc:
             self._service.settle_routing_attempt(

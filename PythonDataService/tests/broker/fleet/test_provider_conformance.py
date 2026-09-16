@@ -699,6 +699,48 @@ async def test_an_echoless_redirect_on_a_command_never_settles_delivered(
     assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
 
 
+async def test_a_typed_refusal_after_dispatch_still_settles_the_routing_receipt(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2152: ``except FleetControlError: raise`` sat *after*
+    ``mark_routing_dispatched`` and settled nothing, so a typed refusal from
+    the delivery left the receipt pinned at dispatched forever —
+    indistinguishable from in-flight for every future unsettled-attempts
+    gate (ADR 0063's drain ceremony reads exactly that predicate). It must
+    settle outcome-unknown like its sibling handlers."""
+    from app.broker.fleet.delivery import DeliveryResult
+    from app.broker.fleet.errors import ClerkUnreachable
+    from app.broker.fleet.records import RoutingReceiptState
+    from app.broker.fleet.routing import CommandEnvelope
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        raise ClerkUnreachable("the lane refused the dispatch after it was marked")
+
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="post-dispatch-refusal", handler=_handler
+    )
+    bot_action = _alpha_operation("submit_bot_action")
+    with pytest.raises(ClerkUnreachable):
+        await router.deliver_command(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=bot_action,
+            path_params={"account_id": "acct-post-dispatch-refusal", "sid": "bot-1"},
+            query={},
+            body={},
+            envelope=CommandEnvelope(
+                capability=bot_action.capability.value,
+                idempotency_key="post-dispatch-refusal",
+                expected_effective_binding_generation=1,
+                target={},
+            ),
+        )
+    receipts = service._store.list_routing_receipts(clerk_id=lane.clerk_id)
+    settled = [r for r in receipts if r.idempotency_key == "post-dispatch-refusal"]
+    assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
+
+
 async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_body(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:

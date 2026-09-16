@@ -2,10 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@a
 import { Title } from '@angular/platform-browser';
 import { ActivatedRouteSnapshot, Router, RouterLink, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
-import { BrokerBannerComponent } from './shell/broker-banner.component';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
-import { BrokerHealthService } from './services/broker-health.service';
 import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
@@ -25,7 +23,6 @@ import { CurrentUrlService } from './shell/current-url.service';
     RouterOutlet,
     RouterLink,
     AppMenubarComponent,
-    BrokerBannerComponent,
     AlpacaLiveBannerComponent,
     TopBarComponent,
     PageBodyComponent,
@@ -135,7 +132,6 @@ import { CurrentUrlService } from './shell/current-url.service';
             <i class="pi pi-th-large" aria-hidden="true"></i>
             <span>Gallery</span>
           </a>
-          <app-broker-banner />
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
           } @empty {
@@ -158,7 +154,6 @@ import { CurrentUrlService } from './shell/current-url.service';
   `,
 })
 export class AppComponent {
-  private readonly brokerHealth = inject(BrokerHealthService);
   private readonly alpacaLive = inject(AlpacaLiveVerdictService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
@@ -195,10 +190,6 @@ export class AppComponent {
 
   constructor() {
     effect(() => this.title.setTitle(this.pageTitle() ?? 'Botasur'));
-    // Single-source-of-truth poll for the global banner. Components
-    // read ``BrokerHealthService.health()`` instead of polling
-    // /api/broker/health from per-page mounts.
-    this.brokerHealth.start();
     // The Alpaca account-mode banner is the ADR 0011 trust anchor for the
     // Alpaca path (ADR 0059 D8): one root poll, rendered from the server
     // verdict, never composed on the client.

@@ -6,7 +6,6 @@ import { MessageService } from 'primeng/api';
 import { vi } from 'vitest';
 import axe from 'axe-core';
 import { AppComponent } from './app.component';
-import { BrokerHealthService } from './services/broker-health.service';
 import {
   AlpacaLiveVerdictService,
   UNPOLLED_LANE_STATE,
@@ -15,15 +14,6 @@ import {
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { provideFleetDirectory, testLane, TEST_CLERK_ID } from './fleet/fleet-directory-testing';
 import type { AlpacaLiveVerdict } from './api/alpaca.types';
-
-class FakeBrokerHealthService {
-  readonly health = signal(null);
-  readonly bannerState = signal(null);
-  readonly lifecycleAction = signal(null);
-  start = vi.fn();
-  connect = vi.fn().mockResolvedValue(undefined);
-  disconnect = vi.fn().mockResolvedValue(undefined);
-}
 
 class FakeAlpacaLiveVerdictService {
   private readonly states = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
@@ -82,7 +72,6 @@ describe('AppComponent', () => {
       ],
       providers: [
         MessageService,
-        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         { provide: AlpacaLiveVerdictService, useClass: FakeAlpacaLiveVerdictService },
         { provide: FleetDirectoryService, useValue: directory.useValue },
       ],
@@ -224,8 +213,10 @@ describe('AppComponent', () => {
   it('renders quick broker links and global status controls in the top-bar connection region', () => {
     const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
-    expect(nav?.querySelector('app-broker-banner')).toBeNull();
-    expect(connection?.querySelector('app-broker-banner')).toBeTruthy();
+    // The IBKR-era broker banner is gone (#2149): its health poll 404'd on
+    // every cycle, so it could never render anything — the per-lane
+    // alpaca-live badges below are the shell's only account-mode anchor.
+    expect(connection?.querySelector('app-broker-banner')).toBeNull();
     expect(connection?.querySelector('a[href="/brokers/alpaca?surface=bots"]')).toBeTruthy();
     expect(connection?.querySelector('a[href="/brokers/alpaca?surface=gallery"]')).toBeTruthy();
   });
