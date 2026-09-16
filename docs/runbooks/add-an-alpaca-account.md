@@ -52,10 +52,13 @@ procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behin
 
    ```bash
    python3 scripts/alpaca_onboarding_gates.py status --mode paper --require roster
-   python3 scripts/alpaca_onboarding_gates.py status --mode paper --require deploy
+   python3 scripts/alpaca_onboarding_gates.py status --mode paper --require deploy --symbol SPY
    ```
 
-   For Live Shadow, replace `paper` with `live`. These commands read state;
+   For Live Shadow, replace `paper` with `live`. Replace `SPY` with the exact
+   symbol you intend to trade. The deploy check requires `--symbol` and checks
+   that symbol's IBKR data and warmup; an account connection alone is insufficient.
+   These commands read state;
    they do not start a bot, enable trading, or place orders. They print the
    account, authority, exact roster URL, and any deployment blockers.
 
@@ -64,7 +67,10 @@ want to deploy. Paper must say `real_paper`; Live Shadow must say `shadow`.
 `last_apply_refusal` can describe an earlier rejected change while the existing
 account remains ready. Review it before assuming a newly selected profile took
 effect. A per-bot Resume decision can still refuse an old or incompatible seal;
-account-level deploy readiness does not certify every existing bot.
+symbol-scoped deploy readiness does not certify every existing bot. The command
+refuses if Paper is not serving `real_paper`, or Live is not serving `shadow` or
+`real_live`, even when you override `--container`. For Shadow, verify the printed
+authority is specifically `shadow` before proceeding.
 
 If you just restarted, allow about a minute for the prior lease to expire and
 for the new worker to confirm its binding, then run the checks again.

@@ -33,7 +33,7 @@ class IbkrMarketStatusSource:
         self._symbols = symbols
         self._client = client
         self._clock = clock
-        self._generation: tuple[int, int, int] | None = None
+        self._generation: tuple[int, int, int, int] | None = None
         self._owner: IbkrClient | None = None
         self._tickers: dict[str, Any] = {}
         self._halted: dict[str, SymbolTradingStatusEvidence] = {}
@@ -51,11 +51,17 @@ class IbkrMarketStatusSource:
     async def __call__(self) -> MarketStatusSnapshot:
         client = self._client()
         now = self._clock()
-        if client is None or not client.is_connected() or client.connection_lost:
+        # An open API socket does not prove that market-data farms and their
+        # subscriptions are usable. Discard cached ticks on any degraded state.
+        if client is None or client.connection_state != "connected":
             await self.close()
             self._connection_changed_at_ms = now
             return self._snapshot(now, connected=False)
-        generation = (id(client), client.connection_generation, client.connectivity_lost_count)
+        # Farm down/up may finish between polls without changing the socket
+        # generation. Its transition stamp still invalidates cached status.
+        generation = (
+            id(client), client.connection_generation, client.connectivity_lost_count, client.last_event_ms,
+        )
         if generation != self._generation:
             await self.close()
             self._owner = client
@@ -69,12 +75,17 @@ class IbkrMarketStatusSource:
             if symbol not in self._tickers:
                 contract = await asyncio.wait_for(qualify_underlying(client, symbol), timeout=3)
                 self._tickers[symbol] = client.ib.reqMktData(contract, "233", False, False)
-        client.require_live()
         # Qualification is asynchronous: never publish observations across an
-        # intervening reconnect, even if the socket is healthy again now.
-        if generation != (id(client), client.connection_generation, client.connectivity_lost_count):
+        # intervening reconnect or data-farm outage.
+        if (
+            client.connection_state != "connected"
+            or generation != (
+                id(client), client.connection_generation, client.connectivity_lost_count, client.last_event_ms,
+            )
+        ):
             await self.close()
-            return self._snapshot(self._clock(), connected=False)
+            self._connection_changed_at_ms = self._clock()
+            return self._snapshot(self._connection_changed_at_ms, connected=False)
         return self._snapshot(self._clock(), connected=True)
 
     def _snapshot(self, now: int, *, connected: bool) -> MarketStatusSnapshot:

@@ -35,8 +35,8 @@ Subcommands
 
 ``status``
     Read the fleet binding and deployment gates without starting a bot.
-    ``--require roster`` checks routing; ``--require deploy`` also checks
-    the strategy permissions, account holds and live data needed to launch.
+    ``--require roster`` checks routing; ``--require deploy --symbol SPY``
+    also checks strategy permissions, account holds and that symbol's live data.
 
 Run directly::
 
@@ -424,11 +424,11 @@ def command_wal_checkpoint(args: argparse.Namespace) -> None:
 
 # ── entry point ───────────────────────────────────────────────────────────────
 def gate_lane_ready(
-    lane: dict[str, Any], *, require: str, deploy: dict[str, Any] | None,
+    lane: dict[str, Any], *, mode: str, require: str, deploy: dict[str, Any] | None,
     roster: dict[str, Any] | list[Any] | None = None,
 ) -> None:
     """Process health is insufficient: require confirmed custody, then admission."""
-    summary = lane.get("provider_summary", {})
+    summary = lane.get("provider_summary") or {}
     if lane.get("lifecycle_state") != "ready" or not summary.get("confirmed_by_current_session"):
         raise GateFailed(
             f"REFUSE: lane is {lane.get('lifecycle_state', 'unknown')}; its current worker "
@@ -438,6 +438,12 @@ def gate_lane_ready(
         raise GateFailed(
             "REFUSE: lane has not reported a usable custody authority. "
             "After startup, wait for its next heartbeat; otherwise read the startup refusal."
+        )
+    expected = {"real_paper"} if mode == "paper" else {"shadow", "real_live"}
+    if summary["authority_state"] not in expected:
+        raise GateFailed(
+            f"REFUSE: authority {summary['authority_state']} does not match --mode {mode}; "
+            f"expected {' or '.join(sorted(expected))}. Check the lane container and active profile."
         )
     if isinstance(roster, dict) and "http_status" in roster:
         raise GateFailed(f"REFUSE: roster read failed with HTTP {roster['http_status']}: {roster.get('refusal')}")
@@ -449,8 +455,9 @@ def gate_lane_ready(
 
 
 _STATUS_READ_SNIPPET = """\
-import json, os, sys, urllib.request, urllib.error
+import json, os, sys, urllib.request, urllib.error, urllib.parse
 clerk_id = sys.argv[1]
+symbol = sys.argv[2]
 headers = {"X-Data-Plane-Control-Secret": os.environ["DATA_PLANE_CONTROL_SECRET"]}
 def get(path):
     request = urllib.request.Request("http://127.0.0.1:8000" + path, headers=headers)
@@ -466,7 +473,8 @@ if lane is None:
 prefix = "/api/brokers/alpaca/clerks/" + clerk_id
 selection = get(prefix + "/configuration/selection")
 account = selection.get("effective_account_id")
-deploy = get(prefix + "/accounts/" + account + "/bots/deploy") if account else None
+query = "?" + urllib.parse.urlencode({"symbol": symbol}) if symbol else ""
+deploy = get(prefix + "/accounts/" + account + "/bots/deploy" + query) if account else None
 roster = get(prefix + "/accounts/" + account + "/bots/catalog") if account else None
 sys.stdout.write(json.dumps({"lane": lane, "selection": selection, "deploy": deploy, "roster": roster}))
 """
@@ -491,20 +499,24 @@ except urllib.error.URLError:
 
 
 def command_status(args: argparse.Namespace) -> None:
+    symbol = (args.symbol or "").strip().upper()
+    if args.require == "deploy" and not symbol:
+        raise GateFailed("REFUSE: --require deploy needs --symbol (for example --symbol SPY).")
     container = _resolve(args, "container")
     clerk_id = _podman(
         "exec", container, CONTAINER_PYTHON, "-c",
         "import os,sys; sys.stdout.write(os.environ['FLEET_CLERK_ID'])",
     ).strip()
     data = json.loads(_podman(
-        "exec", args.coordinator, CONTAINER_PYTHON, "-c", _STATUS_READ_SNIPPET, clerk_id,
+        "exec", args.coordinator, CONTAINER_PYTHON, "-c", _STATUS_READ_SNIPPET, clerk_id, symbol,
     ))
     lane, selection, deploy = data["lane"], data["selection"], data["deploy"]
-    summary = lane["provider_summary"]
+    summary = lane.get("provider_summary") or {}
     sys.stdout.write(json.dumps({
         "container": container, "clerk_id": clerk_id,
         "state": lane["lifecycle_state"], "authority": summary.get("authority_state"),
         "account": selection.get("effective_account_id"),
+        "symbol": symbol or None,
         "last_apply_refusal": selection.get("last_apply_refusal_reason"),
         "roster_url": (
             f"http://localhost:4200/brokers/alpaca/clerks/{clerk_id}/accounts/"
@@ -519,8 +531,9 @@ def command_status(args: argparse.Namespace) -> None:
         sys.stdout.write(_podman("exec", container, CONTAINER_PYTHON, "-c", _STARTUP_READ_SNIPPET))
     if lane["lifecycle_state"] == "ready" and not selection.get("effective_account_id"):
         raise GateFailed("REFUSE: ready lane's effective account could not be read; inspect configuration access")
-    gate_lane_ready(lane, require=args.require, deploy=deploy, roster=data["roster"])
-    sys.stdout.write(f"OK: {args.require} readiness verified for {container}. No bot was started.\n")
+    gate_lane_ready(lane, mode=args.mode, require=args.require, deploy=deploy, roster=data["roster"])
+    scope = f" / {symbol}" if symbol else ""
+    sys.stdout.write(f"OK: {args.require} readiness verified for {container}{scope}. No bot was started.\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -557,6 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(status)
     status.add_argument("--coordinator", default="polygon-data-service")
     status.add_argument("--require", choices=["roster", "deploy"], default="roster")
+    status.add_argument("--symbol", help="Symbol to check; required with --require deploy (for example SPY).")
     status.set_defaults(handler=command_status)
     return parser
 

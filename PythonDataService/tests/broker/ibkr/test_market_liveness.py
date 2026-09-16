@@ -19,7 +19,10 @@ def source(monkeypatch):
         halted=float("nan"), marketDataType=1,
         rtTime=datetime.fromtimestamp(NOW / 1000, tz=UTC), contract=object(),
     )
-    client = Mock(connection_generation=1, connectivity_lost_count=0, connection_lost=False)
+    client = Mock(
+        connection_generation=1, connectivity_lost_count=0,
+        connection_lost=False, connection_state="connected", last_event_ms=NOW,
+    )
     client.is_connected.return_value = True
     client.ib.reqMktData.return_value = ticker
     monkeypatch.setattr(
@@ -62,10 +65,12 @@ async def test_halt_survives_disconnect_and_fresh_trades_until_explicit_resume(s
     ticker.halted = 2
     assert (await status()).symbol_statuses[0].state == "HALTED"
     client.connection_lost = True
+    client.connection_state = "soft_lost"
     disconnected = await status()
     assert not disconnected.connected
     assert disconnected.symbol_statuses[0].state == "HALTED"
     client.connection_lost = False
+    client.connection_state = "connected"
     client.connectivity_lost_count += 1
     ticker.halted = float("nan")
     assert (await status()).symbol_statuses[0].state == "HALTED"
@@ -103,3 +108,62 @@ async def test_explicit_resume_orders_by_status_observation_not_an_older_trade(s
     ticker.rtTime = datetime.fromtimestamp((NOW - 1000) / 1000, tz=UTC)
     store.apply_status_snapshot(await status(), now_ms=NOW)
     assert store.status_snapshot(now_ms=NOW).symbol_statuses[0].state == "TRADABLE"
+
+
+@pytest.mark.parametrize("connection_state", ["degraded_data_farm", "subscriptions_stale"])
+async def test_unhealthy_data_session_discards_cached_resume_until_resubscribed(source, connection_state):
+    status, client, ticker = source
+    ticker.halted = 0
+    assert (await status()).symbol_statuses[0].state == "TRADABLE"
+
+    # The API socket and order connection stay up during these data outages.
+    client.connection_state = connection_state
+    disconnected = await status()
+    assert not disconnected.connected
+    assert disconnected.symbol_statuses[0].state == "UNKNOWN"
+    client.ib.cancelMktData.assert_called_once_with(ticker.contract)
+    assert not (await status()).connected
+    client.ib.reqMktData.assert_called_once()
+
+    client.connection_state = "connected"
+    recovered_ticker = SimpleNamespace(
+        halted=float("nan"), marketDataType=1, rtTime=None, contract=ticker.contract,
+    )
+    client.ib.reqMktData.return_value = recovered_ticker
+    recovered = await status()
+    assert recovered.connected
+    assert recovered.symbol_statuses[0].state == "UNKNOWN"
+    assert client.ib.reqMktData.call_count == 2
+    recovered_ticker.halted = 0
+    assert (await status()).symbol_statuses[0].state == "TRADABLE"
+
+
+@pytest.mark.parametrize("connection_state", ["degraded_data_farm", "subscriptions_stale"])
+async def test_data_session_failure_during_qualification_cannot_publish_tradable(source, monkeypatch, connection_state):
+    status, client, ticker = source
+    ticker.halted = 0
+
+    async def qualify(*_args):
+        client.connection_state = connection_state
+        return ticker.contract
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.qualify_underlying", qualify)
+    snapshot = await status()
+    assert not snapshot.connected
+    assert snapshot.symbol_statuses[0].state == "UNKNOWN"
+    client.ib.cancelMktData.assert_called_once_with(ticker.contract)
+
+
+async def test_data_farm_recovery_between_polls_requires_new_status_subscription(source):
+    status, client, ticker = source
+    ticker.halted = 0
+    assert (await status()).symbol_statuses[0].state == "TRADABLE"
+    # Farm-down and farm-restored events can both occur between polls without
+    # changing the socket generation or the connectivity-lost counter.
+    client.last_event_ms = NOW + 1
+    client.ib.reqMktData.return_value = SimpleNamespace(
+        halted=float("nan"), marketDataType=1, rtTime=None, contract=object(),
+    )
+    assert (await status()).symbol_statuses[0].state == "UNKNOWN"
+    client.ib.cancelMktData.assert_called_once_with(ticker.contract)
+    assert client.ib.reqMktData.call_count == 2
