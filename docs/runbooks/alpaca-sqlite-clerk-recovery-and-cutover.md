@@ -4,7 +4,10 @@
 
 **Authority:** This is the focused Alpaca SQLite subprocedure incorporated by
 `docs/broker-clerk-fleet-authority.md`. It does not authorize a cutover by itself and
-does not replace that manual.
+does not replace that manual. Its parent end-to-end procedure — get credentials,
+provision or bind a lane, then run this subprocedure's cutover ceremony, then verify —
+is [`add-an-alpaca-account.md`](add-an-alpaca-account.md); an operator onboarding a new
+account should start there, not here.
 
 The tool is broker-free: it verifies operator-captured JSON evidence but never calls
 Alpaca. There is no force flag. Run commands from `PythonDataService/` and replace the
