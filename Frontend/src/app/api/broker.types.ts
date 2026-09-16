@@ -415,6 +415,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/broker-clerks/aggregate/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)
+         * @description The same per-lane data as ``GET /broker-clerks``, per-lane isolated.
+         *
+         *     ``directory()`` loops every registered clerk with no per-lane exception
+         *     isolation -- one clerk's descriptor projection throwing fails the whole
+         *     roster. This calls the same projection through ``aggregate_lane_reads``'s
+         *     provenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one
+         *     lane's exception is that lane's explicit ``ok: False`` entry, never an
+         *     omission, a substitution, or a 500 for every other lane. No local
+         *     ``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the
+         *     audit read): ``aggregate_lane_reads`` already isolates every per-lane
+         *     exception, so the only ``FleetControlError`` this route could ever see is
+         *     an uninstalled fleet service, which the coordinator's global handler
+         *     already answers identically to ``_refuse`` -- the same reason
+         *     ``list_broker_clerks`` above carries no local try either.
+         */
+        get: operations["aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker-clerks/audit/routing-receipts": {
         parameters: {
             query?: never;
@@ -26532,6 +26565,37 @@ export interface operations {
         };
     };
     list_broker_clerks_api_broker_clerks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get: {
         parameters: {
             query?: never;
             header?: {
