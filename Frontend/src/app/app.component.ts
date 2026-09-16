@@ -94,7 +94,7 @@ import { CurrentUrlService } from './shell/current-url.service';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
-        <nav class="shell-actions" shell-connection aria-label="Account status">
+        <div class="shell-actions" shell-connection>
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
           } @empty {
@@ -102,7 +102,7 @@ import { CurrentUrlService } from './shell/current-url.service';
                  undetermined mode, and the banner says so loudly. -->
             <app-alpaca-live-banner [lane]="null" />
           }
-        </nav>
+        </div>
       </app-top-bar>
       <main class="main">
         <div class="main-content">

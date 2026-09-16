@@ -95,7 +95,7 @@ describe('BotTileComponent', () => {
     // single-symbol account read only the symbol: the label was always in
     // the DOM but `max-width: 0; opacity: 0` at rest, so it never had
     // visible width until :hover/:focus-within.
-    expect(style.maxWidth).not.toBe('0px');
+    expect(style.flexGrow).toBe('1');
     expect(style.opacity).not.toBe('0');
   });
 
