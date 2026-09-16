@@ -81,7 +81,7 @@ from app.broker.fleet.presence import (
     SessionInfo,
 )
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
-from app.broker.fleet.records import AccountAssignmentRecord
+from app.broker.fleet.records import _ACCOUNT_NICKNAME_MAX_CHARS, AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService, FleetRegistryStore
 from app.config import FleetSettings
 from app.utils.timestamps import now_ms_utc
@@ -471,6 +471,54 @@ def _live_account_nickname(account_id: str | None) -> str | None:
     return get_broker_configuration_service().nickname_for(account_id)
 
 
+async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> str | None:
+    """``_live_account_nickname``, made safe for the heartbeat's fatal path.
+
+    A cosmetic display name must never be able to end the beat or block the
+    event loop, so this wraps the raw read with the two guards it needs:
+
+    - **Off the loop.** ``_live_account_nickname`` goes through
+      ``ProfilesStore._query_one``, which takes the same ``RLock`` a write
+      ``transaction()`` (``BEGIN IMMEDIATE`` included) holds for its whole
+      duration. Every other async caller of the profiles service already
+      wraps it in ``asyncio.to_thread`` (see
+      ``routers/broker_configuration.py``); this is that same pattern applied
+      here.
+    - **Never fatal.** ``get_broker_configuration_service()`` can raise
+      ``ProfilesDatabaseUnavailable`` on first use (filesystem check,
+      cross-process advisory lock, schema migration), and the query itself
+      can raise a raw ``sqlite3.OperationalError`` — neither may reach
+      ``_beat``'s own broad ``except Exception`` (that one ends the lane's
+      presence until the process restarts). A failed read is logged and
+      treated as "no nickname to report this beat", the same outcome as one
+      simply not being set.
+
+    A nickname longer than the coordinator's own bound
+    (``records.py``'s ``_ACCOUNT_NICKNAME_MAX_CHARS``) is dropped the same
+    way, rather than trusting that constant to still agree with whatever
+    wrote this value — a mismatch there would otherwise refuse every beat
+    from this lane as an identity mismatch, re-registering (and climbing the
+    routing epoch) on every single one.
+    """
+    if account_id is None:
+        return None
+    try:
+        nickname = await asyncio.to_thread(_live_account_nickname, account_id)
+    except Exception:
+        logger.warning(
+            "Account nickname read failed; omitting from this beat",
+            extra={"clerk_id": clerk_id, "action": "nickname_read_failed"},
+        )
+        return None
+    if nickname is not None and len(nickname) > _ACCOUNT_NICKNAME_MAX_CHARS:
+        logger.warning(
+            "Account nickname exceeds the coordinator's bound; omitting from this beat",
+            extra={"clerk_id": clerk_id, "action": "nickname_too_long"},
+        )
+        return None
+    return nickname
+
+
 def _summary_with_live_nickname(
     summary: object, nickname: str | None
 ) -> Mapping[str, object] | None:
@@ -506,7 +554,8 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     still reach the wire (PRD #2182 — "one account name everywhere" is not
     true if the badge and card can go stale for the lane's whole remaining
     lifetime). So every beat re-reads the nickname fresh from the profiles
-    store (``_live_account_nickname``) and folds it into the summary this
+    store, off the loop and guarded against ever ending the beat
+    (``_guarded_live_nickname``), and folds it into the summary this
     particular send carries, without mutating the stored snapshot — the same
     "no restart required" property, applied one field further down.
 
@@ -532,7 +581,10 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 account_id = reported.get("reported_account_id")
                 live_summary = _summary_with_live_nickname(
                     summary,
-                    _live_account_nickname(account_id) if isinstance(account_id, str) else None,
+                    await _guarded_live_nickname(
+                        clerk_id=boot.clerk_id,
+                        account_id=account_id if isinstance(account_id, str) else None,
+                    ),
                 )
                 try:
                     await boot.presence.observe(

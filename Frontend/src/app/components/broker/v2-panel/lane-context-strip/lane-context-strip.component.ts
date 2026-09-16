@@ -11,12 +11,15 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
  * byte-identical inline blocks in `bots-list-page` and `bot-gallery-page`
  * (#2168) — this is the canonical implementation of that markup.
  *
- * Takes the already-resolved `LaneDescriptor` directly, matching
- * `AlpacaLaneCardComponent`'s established convention: the caller already
+ * Takes the already-resolved `LaneDescriptor` directly: the caller already
  * computes its own `routedLane` from `FleetDirectoryService` (for its own
  * frozen-fence and target-scoping needs) and passes that value straight in.
  * This component does not re-derive the lane from `broker`/`clerkId` inputs
- * and must not inject `FleetDirectoryService` itself.
+ * and has no need to inject `FleetDirectoryService` itself — unlike its own
+ * child `AlpacaLiveBannerComponent` (and, elsewhere, `AlpacaLaneCardComponent`),
+ * which now injects `FleetDirectoryService` directly to look up sibling lanes
+ * for disambiguation. That is a leaf-component concern neither this strip nor
+ * its callers share, not a convention this strip is bound to follow.
  *
  * Deliberately does not own the page's wrapping container — each caller's
  * `.bots-page__lane` / `.gallery-page__lane` flex/gap/padding differ and
