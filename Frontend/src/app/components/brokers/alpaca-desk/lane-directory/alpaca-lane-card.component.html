@@ -1,6 +1,9 @@
 <li class="lane-card" [class.lane-card--degraded]="!isReady()">
   <div class="lane-card__head">
-    <span class="lane-card__label">{{ lane().display_label }}</span>
+    <span class="lane-card__label">{{ displayName().name }}</span>
+    @if (displayName().disambiguator; as disambiguator) {
+      <span class="lane-card__disambiguator">({{ disambiguator }})</span>
+    }
     <span class="lane-card__badges">
       <span class="lane-mode-chip lane-mode-chip--{{ modeChip().tone }}">{{ modeChip().mode }}</span>
       <span class="lane-card__lifecycle">{{ lane().lifecycle_state | receiptLabel }}</span>
@@ -29,7 +32,7 @@
       This lane is unavailable. Other healthy lanes remain available.
     </p>
   }
-  <nav class="lane-card__links" aria-label="{{ lane().display_label }} surfaces">
+  <nav class="lane-card__links" aria-label="{{ displayName().name }} surfaces">
     @if (account(); as accountId) {
       @if (isReady() && supports('account_read')) {
         @let accountRoute = ['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId];

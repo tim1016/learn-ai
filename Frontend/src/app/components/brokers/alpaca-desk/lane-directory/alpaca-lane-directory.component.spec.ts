@@ -171,6 +171,43 @@ describe('AlpacaLaneDirectoryComponent', () => {
       '/brokers/alpaca/clerks/',
     );
   });
+
+  it("shows a lane's account nickname instead of its raw label (ADR 0064 Decision 5)", async () => {
+    const named = testLane({
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    await render(AlpacaLaneDirectoryComponent, {
+      providers: [
+        provideRouter([]),
+        provideFleetDirectory({ observed_at_ms: 1, clerks: [named] }),
+      ],
+    });
+
+    expect(screen.getByText('Strategy lab')).toBeTruthy();
+    expect(screen.queryByText('Paper')).toBeNull();
+  });
+
+  it("shows this lane's own label beside a nickname shared with another lane, never refusing the duplicate", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await render(AlpacaLaneDirectoryComponent, {
+      providers: [
+        provideRouter([]),
+        provideFleetDirectory({ observed_at_ms: 1, clerks: [paper, live] }),
+      ],
+    });
+
+    expect(screen.getAllByText('(Paper)')).toHaveLength(1);
+    expect(screen.getAllByText('(Live)')).toHaveLength(1);
+  });
 });
 
 describe('verdictModeChip', () => {

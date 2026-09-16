@@ -1,0 +1,84 @@
+import { describe, expect, it } from 'vitest';
+
+import { testLane } from './fleet-directory-testing';
+import { laneDisplayName, type LaneDescriptor } from './fleet-directory.types';
+
+function lane(overrides: Partial<LaneDescriptor> = {}): LaneDescriptor {
+  return testLane(overrides);
+}
+
+describe('laneDisplayName', () => {
+  it('uses the nickname when the lane has one', () => {
+    const paper = lane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+
+    expect(laneDisplayName(paper, [paper])).toEqual({ name: 'Strategy lab', disambiguator: null });
+  });
+
+  it('falls back to the lane label when no nickname is set', () => {
+    const paper = lane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: null },
+    });
+
+    expect(laneDisplayName(paper, [paper])).toEqual({ name: 'Paper', disambiguator: null });
+  });
+
+  it('falls back to the lane label for a lane with no confirmed account at all', () => {
+    const unbound = lane({
+      clerk_id: 'clrk_unbound',
+      display_label: 'Unbound lane',
+      lifecycle_state: 'starting',
+      provider_summary: null,
+    });
+
+    expect(laneDisplayName(unbound, [unbound])).toEqual({ name: 'Unbound lane', disambiguator: null });
+  });
+
+  it('shows the lane label beside a name shared with another lane, case- and whitespace-insensitively', () => {
+    const paper = lane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy Lab' },
+    });
+    const live = lane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    const all = [paper, live];
+
+    expect(laneDisplayName(paper, all)).toEqual({ name: 'Strategy Lab', disambiguator: 'Paper' });
+    expect(laneDisplayName(live, all)).toEqual({ name: 'strategy lab', disambiguator: 'Live' });
+  });
+
+  it('does not disambiguate against itself', () => {
+    const solo = lane({
+      clerk_id: 'clrk_solo',
+      display_label: 'Solo',
+      provider_summary: { account_nickname: 'Only account' },
+    });
+
+    expect(laneDisplayName(solo, [solo])).toEqual({ name: 'Only account', disambiguator: null });
+  });
+
+  it('does not disambiguate two distinct names', () => {
+    const paper = lane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = lane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: 'Income desk' },
+    });
+
+    expect(laneDisplayName(paper, [paper, live]).disambiguator).toBeNull();
+    expect(laneDisplayName(live, [paper, live]).disambiguator).toBeNull();
+  });
+});

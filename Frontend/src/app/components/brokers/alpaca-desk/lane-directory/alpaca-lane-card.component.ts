@@ -5,6 +5,7 @@ import type { FleetCapability } from '../../../../fleet/resource-target';
 import {
   type LaneDescriptor,
   laneConfirmedAccount,
+  laneDisplayName,
   laneIsReady,
 } from '../../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../../services/alpaca-live-verdict.service';
@@ -43,9 +44,16 @@ export class AlpacaLaneCardComponent {
   readonly lane = input.required<LaneDescriptor>();
   /** The surface being chosen, or null on the desk's full directory. */
   readonly surface = input<LaneSurface | null>(null);
+  /** Every lane in the directory, so a display name shared with another
+   * lane is caught and shown with that lane's own label beside it
+   * (ADR 0064 Decision 5). */
+  readonly allLanes = input<readonly LaneDescriptor[]>([]);
 
   protected readonly isReady = computed(() => laneIsReady(this.lane()));
   protected readonly account = computed(() => laneConfirmedAccount(this.lane()));
+  /** This lane's display name: its account nickname, or its lane label
+   * until one is set. */
+  protected readonly displayName = computed(() => laneDisplayName(this.lane(), this.allLanes()));
 
   /** True when this lane can serve `surface` at its canonical URL right now. */
   protected servesSurface(surface: LaneSurface): boolean {

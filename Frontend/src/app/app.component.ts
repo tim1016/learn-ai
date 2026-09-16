@@ -138,7 +138,7 @@ import { CurrentUrlService } from './shell/current-url.service';
             <span>Gallery</span>
           </a>
           @for (lane of alpacaLanes(); track lane.clerk_id) {
-            <app-alpaca-live-banner [lane]="lane" />
+            <app-alpaca-live-banner [lane]="lane" [allLanes]="alpacaLanes()" />
           } @empty {
             <!-- Never zero badges. An unresolved roster is itself an
                  undetermined mode, and the banner says so loudly. -->

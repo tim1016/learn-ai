@@ -41,7 +41,7 @@
 
   <ul class="lane-directory__lanes">
     @for (lane of lanes(); track lane.clerk_id) {
-      <app-alpaca-lane-card [lane]="lane" [surface]="surface()" />
+      <app-alpaca-lane-card [lane]="lane" [surface]="surface()" [allLanes]="lanes()" />
     }
   </ul>
 </section>

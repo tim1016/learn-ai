@@ -34,11 +34,15 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
   };
 }
 
-async function renderWith(lane: LaneDescriptor | null, state: LaneVerdictState) {
+async function renderWith(
+  lane: LaneDescriptor | null,
+  state: LaneVerdictState,
+  allLanes: readonly LaneDescriptor[] = [],
+) {
   const stateFor = (clerkId: string): LaneVerdictState =>
     clerkId === lane?.clerk_id ? state : UNPOLLED_LANE_STATE;
   return render(AlpacaLiveBannerComponent, {
-    inputs: { lane },
+    inputs: { lane, allLanes },
     providers: [{ provide: AlpacaLiveVerdictService, useValue: { stateFor } }],
   });
 }
@@ -228,5 +232,49 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-live-armed');
     expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('1 armed');
+  });
+
+  it("shows the lane's account nickname instead of its raw label when one is set", async () => {
+    const named = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    await renderWith(named, { verdict: verdict({}), lastError: null });
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Strategy lab');
+    expect(status.querySelector('.alpaca-banner__lane')?.textContent).toBe('Strategy lab');
+  });
+
+  it("shows this lane's own label beside its name when another lane shares it (ADR 0064 Decision 5)", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Strategy lab');
+    expect(status.textContent).toContain('(Paper)');
+  });
+
+  it('never refuses a duplicate name, it only disambiguates', async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Solo' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper]);
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Solo');
+    expect(status.textContent).not.toContain('(Paper)');
   });
 });
