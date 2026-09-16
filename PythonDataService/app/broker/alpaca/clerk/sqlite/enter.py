@@ -91,7 +91,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_failed,
     fold_order_evidence,
-    fold_order_submission_acknowledgement,
+    fold_order_submission_response,
     fold_uncertain,
     resolve_order_submission,
 )
@@ -378,10 +378,11 @@ async def submit_accepted_enter(
             )
         else:
             if order.client_order_id == accepted.order_ref:
-                fold_order_submission_acknowledgement(
+                fold_order_submission_response(
                     repo,
                     effect_operation_id=accepted.effect_operation_id,
                     order=order,
+                    trade=trade,
                 )
                 return _snapshot(
                     repo,

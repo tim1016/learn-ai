@@ -523,7 +523,7 @@ async def submit_manual_order(
     assert accepted.leg.effect_operation_id is not None and accepted.leg.order_ref is not None
     from app.broker.alpaca.clerk.sqlite.order_evidence import (
         fold_failed,
-        fold_order_submission_acknowledgement,
+        fold_order_submission_response,
         fold_uncertain,
     )
 
@@ -564,10 +564,11 @@ async def submit_manual_order(
             unexpected_error = exc
         else:
             if order.client_order_id == accepted.leg.order_ref:
-                fold_order_submission_acknowledgement(
+                fold_order_submission_response(
                     repo,
                     effect_operation_id=accepted.leg.effect_operation_id,
                     order=order,
+                    trade=trade,
                 )
             else:
                 fold_uncertain(

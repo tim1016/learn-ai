@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_entry_never_accepted,
     fold_failed,
     fold_order_evidence,
-    fold_order_submission_acknowledgement,
+    fold_order_submission_response,
     fold_submit_absence_void,
     fold_uncertain,
     order_never_reached_broker,
@@ -50,6 +50,14 @@ from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 
 logger = logging.getLogger(__name__)
+
+# The two decision-id namespaces documented on ``exit.accept_recovery_exit``
+# (minted by ``safe_flatten_execution`` and ``exit_watchdog`` respectively).
+# Named here, the module both namespaces classify against, so a rename or a
+# third namespace has exactly one declaration to update.
+RECOVERY_FLATTEN_DECISION_PREFIX = "recovery-flatten-"
+EXIT_REDRIVE_DECISION_PREFIX = "exit-redrive-"
+_RECOVERY_DECISION_PREFIXES = (RECOVERY_FLATTEN_DECISION_PREFIX, EXIT_REDRIVE_DECISION_PREFIX)
 
 
 async def resolve_exit(
@@ -611,6 +619,20 @@ async def _submit_reducing_order(
         limit_price=facts.limit_price,
         extended_hours=facts.extended_hours,
     )
+    if _is_recovery_exit(repo, effect_operation_id) and not broker.bind_latest_recovery_bar(
+        reducing.client_order_id,
+        symbol=facts.symbol,
+    ):
+        fold_uncertain(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=reducing.order_ref,
+            why=(
+                "Recovery reduction has no retained source bar in its strategy evidence "
+                "namespace; keeping the order unsubmitted."
+            ),
+        )
+        return
     _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
     try:
         observed = await broker.submit(leg, client_order_id=reducing.client_order_id)
@@ -642,11 +664,23 @@ async def _submit_reducing_order(
             ),
         )
         return
-    fold_order_submission_acknowledgement(
+    fold_order_submission_response(
         repo,
         effect_operation_id=effect_operation_id,
         order=observed,
+        trade=broker.trade,
     )
+
+
+def _is_recovery_exit(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:
+    acceptance = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id,
+        transition_kind="EXIT_ACCEPTED",
+    )
+    if acceptance is None:
+        raise AssertionError(f"EXIT effect {effect_operation_id!r} has no acceptance transition")
+    decision_id = ExitAcceptedFacts.from_facts_json(acceptance["facts_json"]).decision_id
+    return decision_id.startswith(_RECOVERY_DECISION_PREFIXES)
 
 
 def _append_order_phase(

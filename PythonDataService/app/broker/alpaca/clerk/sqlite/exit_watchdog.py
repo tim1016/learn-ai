@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.exit import (
     accept_recovery_exit,
     resolve_accepted_exit,
 )
+from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
@@ -97,7 +98,7 @@ async def redrive_or_escalate_stale_exits(
         ).hexdigest()[:12]
         redrives = 0
         while (
-            repo.get_command(f"cmd:{sid}:exit-redrive-{episode_token}-{redrives + 1}")
+            repo.get_command(f"cmd:{sid}:{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-{redrives + 1}")
             is not None
         ):
             redrives += 1
@@ -153,7 +154,7 @@ async def redrive_or_escalate_stale_exits(
                     repo,
                     account_id=repo.account_id,
                     strategy_instance_id=sid,
-                    decision_id=f"exit-redrive-{episode_token}-{redrives + 1}",
+                    decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-{redrives + 1}",
                     entry_order_ref=entries[-1].order_ref,
                 )
             await resolve_accepted_exit(repo, accepted=accepted, trade=trade)

@@ -12,7 +12,9 @@ from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -60,7 +62,7 @@ def test_shadow_facade_requires_a_shadow_id_and_a_live_account(tmp_path: Path) -
         paper.close()
 
 
-async def test_enter_on_the_shadow_authority_is_synthesized_from_the_bound_decision_bar(
+async def test_shadow_entry_and_exit_are_synthesized_from_their_bound_decision_bars(
     tmp_path: Path,
 ) -> None:
     ports = compose_shadow_ports(
@@ -102,10 +104,11 @@ async def test_enter_on_the_shadow_authority_is_synthesized_from_the_bound_decis
             use_rth=True,
             retained_source_bar=decision,
         )
-        # Acknowledged, not yet accounted: a submit response is never fill
-        # math on any authority (``fold_order_submission_acknowledgement``),
-        # so the synthesized fill below is still the sweep's to fold.
         assert receipt.state == "submitted", receipt.explanation
+        # A bar-bound no-submit adapter is the source of this deterministic
+        # execution, so its response must leave no missing-evidence work for a
+        # later sweep or restart to discover.
+        assert await facade.unresolved_effect_count(subject_id=f"bot:{SID}") == 0
         [order] = await ports.read.list_orders()
         assert (order.status, order.filled_avg_price, order.filled_at_ms) == (
             "filled",
@@ -115,6 +118,138 @@ async def test_enter_on_the_shadow_authority_is_synthesized_from_the_bound_decis
         assert order.client_order_id is not None
         assert order.client_order_id.startswith("learn-ai/spy-bot/v1:")
         assert [position.symbol for position in await ports.read.list_positions()] == ["SPY"]
+
+        exit_decision = _retain(evidence, minute=601, close="100.50")
+        exit_receipt = await facade.execute_for_instance(
+            strategy_instance_id=SID,
+            run_id=RUN_ID,
+            decision_id="decision-2",
+            purpose=EffectPurpose.EXIT,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+            use_rth=True,
+            retained_source_bar=exit_decision,
+        )
+
+        assert exit_receipt.state is EffectOperationState.FLAT, exit_receipt.explanation
+        assert await facade.unresolved_effect_count(subject_id=f"bot:{SID}") == 0
+        assert await ports.read.list_positions() == []
+    finally:
+        repo.close()
+        evidence.close()
+
+
+async def test_shadow_fill_survives_restart_and_reconciles_to_attributed_exposure(
+    tmp_path: Path,
+) -> None:
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
+    decision = _retain(evidence, minute=600, close="100.25")
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=ports.read,
+        trade=ports.trade,
+        authority_kind="shadow",
+        account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    await facade.register_strategy_run(binding)
+    receipt = await facade.execute_for_instance(
+        strategy_instance_id=SID,
+        run_id=RUN_ID,
+        decision_id="decision-restart",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+        use_rth=True,
+        retained_source_bar=decision,
+    )
+    assert receipt.state == "submitted", receipt.explanation
+    repo.close()
+    evidence.close()
+
+    restarted_ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    restarted_repo = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    restarted = SqliteAlpacaClerkFacade(
+        repo=restarted_repo,
+        read=restarted_ports.read,
+        trade=restarted_ports.trade,
+        authority_kind="shadow",
+        account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(restarted_ports.read),
+    )
+    try:
+        await restarted.recover()
+        proof = await restarted.prove_instance_custody(SID)
+
+        assert proof.reconciliation_verdict == "clean"
+        assert proof.exposure == {"SPY": 1.0}
+    finally:
+        restarted_repo.close()
+
+
+async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
+    tmp_path: Path,
+) -> None:
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
+    decision = _retain(evidence, minute=600, close="100.25")
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=ports.read,
+        trade=ports.trade,
+        authority_kind="shadow",
+        account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    await facade.register_strategy_run(binding)
+    try:
+        entered = await facade.execute_for_instance(
+            strategy_instance_id=SID,
+            run_id=RUN_ID,
+            decision_id="decision-before-recovery",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+            use_rth=True,
+            retained_source_bar=decision,
+        )
+        assert entered.state == "submitted", entered.explanation
+        await facade.stop_strategy_run(
+            strategy_instance_id=SID,
+            run_id=RUN_ID,
+            reason="test-safe-flatten",
+        )
+        await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            context = reader.recovery_context(strategy_instance_id=SID)
+        finally:
+            reader.close()
+        assert context is not None
+        capability = {
+            item.action_id: item for item in build_recovery_catalog(context)
+        }["execute_safe_flatten"]
+        assert capability.available, capability.unavailable_reason
+        assert capability.reduction_plan is not None
+
+        result = await facade.execute_safe_flatten(plan=capability.reduction_plan)
+        proof = await facade.prove_instance_custody(SID)
+
+        assert len(result.orders) == 1
+        assert proof.reconciliation_verdict == "clean"
+        assert proof.exposure == {}
+        assert await ports.read.list_positions() == []
     finally:
         repo.close()
         evidence.close()

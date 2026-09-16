@@ -163,6 +163,11 @@ class _DecisionBarBoundTradePort:
     def broker_id(self) -> str:
         return self._inner.broker_id
 
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool:
+        """The bound no-submit response is the complete deterministic execution."""
+        return True
+
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self._inner.bind_evaluated_bar(client_order_id, self._retained_bar)
         return await self._inner.submit(leg, client_order_id=client_order_id)

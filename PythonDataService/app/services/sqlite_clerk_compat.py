@@ -336,6 +336,7 @@ def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:
     return not operation.orders or any(
         order.broker_state is None
         or order.broker_state.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+        or (order.broker_state.lower() == "filled" and order.filled_quantity == 0)
         for order in operation.orders
     )
 

@@ -128,6 +128,13 @@ class GuardedBrokerTradePort:
         """Expose the bound marker for composition assertions."""
         return self._intake
 
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool:
+        """Preserve a deterministic adapter's optional evidence capability."""
+        return bool(
+            getattr(self._inner, "submission_response_is_authoritative_evidence", False)
+        )
+
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self._assert_unfenced("submit")
         return await self._inner.submit(leg, client_order_id=client_order_id)
@@ -153,6 +160,14 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
         bind(client_order_id, retained_bar)
+
+    def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str) -> bool:
+        """Bind recovery-only synthetic evidence when the inner port requires it."""
+        self._assert_unfenced("bind_latest_recovery_bar")
+        bind = getattr(self._inner, "bind_latest_recovery_bar", None)
+        if not callable(bind):
+            return True
+        return bool(bind(client_order_id, symbol=symbol))
 
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:

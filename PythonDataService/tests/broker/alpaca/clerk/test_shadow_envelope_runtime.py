@@ -137,6 +137,28 @@ async def _enter(
     )
 
 
+async def _exit(
+    runtime: ActiveClerkRuntime,
+    bar: RetainedSourceBar,
+    *,
+    quantity: int,
+    decision_id: str = "exit-1",
+) -> Any:
+    """Drive one EXIT through the same composed Shadow facade."""
+    assert runtime.clerk is not None
+    binding = _binding(use_rth=True)
+    return await runtime.clerk.execute_for_instance(
+        strategy_instance_id=SID,
+        run_id=RUN_ID,
+        decision_id=decision_id,
+        purpose=EffectPurpose.EXIT,
+        action_plan=binding.action_plan,
+        quantity=quantity,
+        use_rth=True,
+        retained_source_bar=bar,
+    )
+
+
 async def test_a_shadow_authority_without_envelope_values_is_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -235,6 +257,8 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     assert await runtime.envelope_sync.tick() == "observed"
     admitted = await _enter(runtime, registered_running_bot, quantity=1)
     assert admitted.state.value == "submitted", admitted.explanation
+    flattened = await _exit(runtime, registered_running_bot, quantity=1)
+    assert flattened.state.value == "flat", flattened.explanation
 
     # No previous-close equity: there is no loss limit to judge against, so
     # the account is unjudgeable and the observation is withdrawn (plan R3).
@@ -279,11 +303,11 @@ async def test_a_paper_authority_carries_no_envelope_even_when_values_are_offere
             await runtime.close()
 
 
-async def test_a_second_enter_inside_one_sync_interval_is_refused_by_the_first_ones_unrecorded_fill(
+async def test_a_second_enter_inside_one_sync_interval_is_refused_by_attributed_exposure(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     registered_running_bot: RetainedSourceBar,
 ) -> None:
-    """The shadow book fills at submit; until the sweep records that fill the reservation must carry it."""
+    """The deterministic Shadow fill is attributed before another ENTER can be admitted."""
     runtime, broker = shadow_runtime
     broker.cash = 5_000.0
     assert runtime.envelope_sync is not None
@@ -294,8 +318,7 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_the_first_o
 
     second = await _enter(runtime, registered_running_bot, quantity=50, decision_id="d2")
     assert second.state.value == "rejected"
-    assert second.explanation.startswith("LIVE_ENVELOPE_CASH_EXCEEDED:")
-    assert "5000.00 USD reserved by working entries" in second.explanation, second.explanation
+    assert second.explanation.startswith("ATTRIBUTED_EXPOSURE_EXISTS:")
 
 
 async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_synthesized_book(
@@ -378,6 +401,8 @@ async def test_an_environment_change_after_arming_refuses_every_enter_end_to_end
 
     admitted = await _enter(runtime, registered_running_bot, quantity=1)
     assert admitted.state.value == "submitted", admitted.explanation
+    flattened = await _exit(runtime, registered_running_bot, quantity=1)
+    assert flattened.state.value == "flat", flattened.explanation
 
     # The operator edited ALPACA_LIVE_LOSS_USD and restarted nothing.
     runtime.envelope_sync.envelope.values = replace(TEST_ENVELOPE_VALUES, loss_usd=4_000.0)
