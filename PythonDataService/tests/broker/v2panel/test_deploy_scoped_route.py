@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
-from app.services.broker_v2_panel import panel_deploy, panel_errors
+from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
@@ -35,6 +35,11 @@ from tests.broker.v2panel.fixtures import ACCT, SID
 # canary allowlist, so each explicitly enables the one pairing `_BODY`
 # deploys under before submitting through the route.
 _ALLOW_BODY_STRATEGY = frozenset({("ema_crossover_signal", ACCT)})
+
+
+@pytest.mark.asyncio
+async def test_directory_account_case_resolves_to_broker_spelling(deploy_app) -> None:
+    assert await panel_scope.validate_account("alpaca", ACCT.upper()) == ACCT
 
 
 @pytest.mark.asyncio
@@ -200,9 +205,11 @@ async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route_account", [ACCT, ACCT.upper()])
 async def test_deploy_view_is_closed_paper_only_contract(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,
+    route_account: str,
 ) -> None:
     """This is the full deploy-view contract test, so it exercises all three
     of `deploy_app`'s validated strategies -- not the canary allowlist --
@@ -221,7 +228,7 @@ async def test_deploy_view_is_closed_paper_only_contract(
     )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
-        resp = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+        resp = await client.get(f"/api/brokers/alpaca/accounts/{route_account}/bots/deploy")
 
     assert resp.status_code == 200
     body = resp.json()

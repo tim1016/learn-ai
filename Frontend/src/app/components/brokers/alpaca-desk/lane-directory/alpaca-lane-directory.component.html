@@ -6,14 +6,20 @@
 
   @if (deployIntent()) {
     <p class="lane-directory__state" role="status">
-      Choose a ready clerk lane below to deploy a strategy.
+      Choose a ready Paper or Live account below to deploy a strategy.
     </p>
   }
 
   @if (surface(); as surface) {
     <p class="lane-directory__state" role="status">
-      Choose a clerk lane below to open its {{ SURFACE_LABEL[surface].long }}.
+      Choose a Paper or Live account below to open its {{ SURFACE_LABEL[surface].long }}.
       No lane is selected automatically; unavailable lanes stay selectable and explain themselves.
+    </p>
+  } @else if (!deployIntent()) {
+    <p class="lane-directory__state">
+      Choose Account details for balances, Trader view for holdings and activity,
+      Operator view for account health, or Transaction history for orders and fills.
+      Bot roster lists the bots on that account. Live accounts with Shadow authority simulate fills.
     </p>
   }
 

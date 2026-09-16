@@ -7,9 +7,9 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
  * Caches the operator-only evidence for the lifetime of the desk shell.
  *
  * The Trader lens never instantiates this data: both reads stay dormant until
- * the shell has selected Operator. The Clerk status supplies the account
- * identity for the evidence-bound SQLite projection, so the second request
- * cannot accidentally inspect a different account.
+ * the shell has selected Operator. The route supplies the public account
+ * identity; Shadow status names an internal custody ID that must never
+ * replace the account in a fleet URL.
  *
  * `status` and `projection` are bound to the same `projectionRefreshVersion`
  * trigger. `status` carries `operator_posture` — the dominant posture card's
@@ -50,7 +50,7 @@ export class AlpacaOperatorLensDataService {
   private readonly sqliteAccountId = computed(() => {
     const status = this.status.value();
     return this.requested() && SQLITE_PROJECTION_AUTHORITIES.has(status?.authority_kind ?? '')
-      ? status?.account_id
+      ? this.deskAccount.target()?.accountId ?? undefined
       : undefined;
   });
 

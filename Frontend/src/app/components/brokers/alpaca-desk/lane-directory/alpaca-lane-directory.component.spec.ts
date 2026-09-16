@@ -32,7 +32,7 @@ describe('AlpacaLaneDirectoryComponent', () => {
     expect(screen.getAllByText('Paper')).not.toHaveLength(0);
     expect(screen.getByText('Live')).not.toBeNull();
     expect(screen.getByText(/other healthy lanes remain available/i)).not.toBeNull();
-    expect(screen.getAllByRole('link', { name: 'Desk' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Account details' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Deploy' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Configuration' })).toHaveLength(2);
   });
@@ -42,12 +42,19 @@ describe('AlpacaLaneDirectoryComponent', () => {
       providers: [provideRouter([]), provideFleetDirectory()],
     });
 
-    const bots = screen.getByRole('link', { name: 'Bots' });
+    const bots = screen.getByRole('link', { name: 'Bot roster' });
     expect(bots.getAttribute('href')).toBe(
       `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}/bots`,
     );
     expect(screen.getByRole('link', { name: 'Gallery' }).getAttribute('href')).toBe(
       `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}/gallery`,
+    );
+    const accountUrl = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
+    expect(screen.getByRole('link', { name: 'Account details' }).getAttribute('href')).toBe(accountUrl);
+    expect(screen.getByRole('link', { name: 'Trader view' }).getAttribute('href')).toBe(`${accountUrl}?lens=trader`);
+    expect(screen.getByRole('link', { name: 'Operator view' }).getAttribute('href')).toBe(`${accountUrl}?lens=operator`);
+    expect(screen.getByRole('link', { name: 'Transaction history' }).getAttribute('href')).toBe(
+      `${accountUrl}?lens=operator#account-desk-transaction-history`,
     );
   });
 
@@ -68,7 +75,7 @@ describe('AlpacaLaneDirectoryComponent', () => {
       ],
     });
 
-    const botsLinks = screen.getAllByRole('link', { name: 'Bots' }).sort(
+    const botsLinks = screen.getAllByRole('link', { name: 'Bot roster' }).sort(
       (left, right) =>
         (left.getAttribute('href') ?? '').length - (right.getAttribute('href') ?? '').length,
     );
@@ -92,9 +99,9 @@ describe('AlpacaLaneDirectoryComponent', () => {
       ],
     });
 
-    expect(screen.getByRole('link', { name: 'Desk' }).getAttribute('href')).toContain('/accounts/');
+    expect(screen.getByRole('link', { name: 'Account details' }).getAttribute('href')).toContain('/accounts/');
     expect(screen.queryByRole('link', { name: 'Deploy' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Bots' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Bot roster' }).getAttribute('href')).toBe(
       `/brokers/alpaca/clerks/${TEST_CLERK_ID}/bots`,
     );
     expect(screen.getByRole('link', { name: 'Gallery' }).getAttribute('href')).toBe(
@@ -149,7 +156,7 @@ describe('AlpacaLaneDirectoryComponent', () => {
       providers: [provideRouter([]), provideFleetDirectory()],
     });
 
-    expect(screen.getByText('Clerk lanes — Bots roster')).toBeTruthy();
+    expect(screen.getByText('Choose an account — Bots roster')).toBeTruthy();
     expect(screen.getByText(/no lane is selected automatically/i)).toBeTruthy();
   });
 
@@ -159,7 +166,7 @@ describe('AlpacaLaneDirectoryComponent', () => {
       providers: [provideRouter([]), provideFleetDirectory()],
     });
 
-    expect(screen.getByText(/choose a ready clerk lane below to deploy/i)).toBeTruthy();
+    expect(screen.getByText(/choose a ready Paper or Live account below to deploy/i)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Deploy' }).getAttribute('href')).toContain(
       '/brokers/alpaca/clerks/',
     );

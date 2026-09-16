@@ -216,7 +216,7 @@ describe('AlpacaOperatorLensComponent', () => {
     expect(custodyPanel?.hasAttribute('open')).toBe(false);
   });
 
-  it('composes the canonical forensic grid, filters, and shared receipt reader', async () => {
+  it.each(['real_paper', 'shadow'] as const)('composes the %s forensic grid using the public account route', async (authorityKind) => {
     const accountTransaction = vi.fn().mockResolvedValue({
       transaction_id: 'txn-1', broker: 'alpaca', account_id: 'PA1', journal_seq: 1,
       recorded_at_ms: 1_700_000_000_000, transaction_kind: 'strategy_execution',
@@ -243,7 +243,11 @@ describe('AlpacaOperatorLensComponent', () => {
     });
     await render(AlpacaOperatorLensComponent, {
       providers: [
-        lensDataProvider(),
+        lensDataProvider(projection(), vi.fn(), {
+          ...clerkStatus(),
+          authority_kind: authorityKind,
+          account_id: authorityKind === 'shadow' ? 'shadow:PA1' : 'PA1',
+        }),
         {
           provide: BrokersService,
           useValue: {
@@ -256,6 +260,8 @@ describe('AlpacaOperatorLensComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Account Clerk custody is healthy' })).toBeTruthy();
+    expect(screen.queryByText(/Shadow transaction history shows simulated orders and fills/)
+      !== null).toBe(authorityKind === 'shadow');
     await waitFor(() => expect(accountTransactions).toHaveBeenCalledWith('clrk_spec', 'PA1', null, 100, {
       fromMs: 1_700_000_000_000,
       toMs: 1_700_086_400_000,

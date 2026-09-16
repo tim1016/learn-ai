@@ -7,7 +7,9 @@ import json
 import sqlite3
 from pathlib import Path
 
+from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     ExecutionRow,
@@ -285,12 +287,14 @@ def _active_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
                 "The selected SQLite Clerk authority is unavailable after startup failure."
             )
         return None
-    if runtime.authority_kind != "sqlite":
+    if runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES:
         return None
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
         raise RuntimeError("Active SQLite Clerk does not expose its read authority")
-    if clerk.account_id != account_id:
+    if not account_route_matches_custody(
+        account_id, clerk.account_id, shadow=runtime.authority_kind == "shadow",
+    ):
         raise ValueError("Requested account is not the active SQLite authority")
     return clerk
 
@@ -335,7 +339,9 @@ def _all_transaction_history(
     )
     pointers, high_water_sequence = _all_history_pointers(
         db_path=clerk.repository.db_path,
-        account_id=account_id,
+        # The public route may be lowercase or name Shadow's external
+        # account. The database identity remains the exact custody ID.
+        account_id=clerk.account_id,
         authority_generation=meta.authority_generation,
         db_identity_token=meta.db_identity_token,
         lifecycle_state=lifecycle_state,

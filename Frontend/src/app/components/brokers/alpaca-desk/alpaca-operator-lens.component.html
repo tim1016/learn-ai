@@ -12,6 +12,9 @@
   } @else if (status.error()) {
     <p role="alert">Operator data is unavailable right now.</p>
   } @else if (status.value(); as clerkStatus) {
+    @if (clerkStatus.authority_kind === 'shadow') {
+      <p role="status">Shadow transaction history shows simulated orders and fills. For broker-reported account activity, open Trader → Today.</p>
+    }
     <app-alpaca-operator-posture
       [posture]="clerkStatus.operator_posture"
       [moveIsSupported]="isBlockerMoveSupported"
@@ -22,7 +25,7 @@
       <app-account-desk-transaction-history
         [target]="dataTarget()"
         [fence]="dataFence()"
-        [accountId]="clerkStatus.account_id"
+        [accountId]="dataTarget()?.accountId ?? null"
         [refreshVersion]="refreshVersion()"
         [pageSize]="5"
       />
@@ -40,7 +43,7 @@
             <app-alpaca-sqlite-custody
               [target]="dataTarget()!"
               [fence]="dataFence()"
-              [accountId]="clerkStatus.account_id"
+              [accountId]="dataTarget()!.accountId!"
               [projectionRefreshVersion]="projectionRefreshVersion()"
               [timelineQuery]="timelineQuery()"
               (projectionInvalidated)="refreshCustodyProjection()"

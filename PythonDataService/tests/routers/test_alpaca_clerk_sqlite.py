@@ -141,6 +141,36 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shadow", [False, True])
+async def test_public_account_snapshot_resolves_canonical_case_and_shadow(
+    tmp_path: Path, shadow: bool,
+) -> None:
+    custody = f"shadow:{ACCOUNT_ID}" if shadow else ACCOUNT_ID
+    repo = ClerkSqliteRepository.initialize(account_id=custody, artifacts_root=tmp_path)
+    port = FakeAlpacaPort()
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=port, trade=port,
+        account_mode="live" if shadow else "paper",
+        authority_kind="shadow" if shadow else "sqlite",
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="shadow" if shadow else "sqlite", clerk=facade)
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with _client(app) as client:
+            response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID.lower()}/snapshot")
+            assert response.status_code == 200, response.text
+            assert response.json()["account_id"] == custody
+            wrong = await client.get("/api/alpaca-clerk-sqlite/accounts/OTHER/snapshot")
+            assert wrong.status_code == 404
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
 async def test_timeline_route_forwards_all_exact_evidence_filters(
     api: FastAPI,
     monkeypatch: pytest.MonkeyPatch,

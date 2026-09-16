@@ -188,6 +188,28 @@ def live_account_id_for_shadow_account(account_id: str) -> str:
     return account_id.removeprefix(SHADOW_ACCOUNT_PREFIX)
 
 
+def canonical_alpaca_account_id(account_id: str) -> str:
+    """The fleet's public Alpaca identity: account-number case is immaterial."""
+    return account_id.strip().lower()
+
+
+def account_route_matches_custody(
+    account_id: str, custody_account_id: str, *, shadow: bool,
+) -> bool:
+    """Match a public route to this authority without rewriting durable IDs.
+
+    Internal callers may still name the custody ID exactly. Only an explicitly
+    selected Shadow authority also admits its underlying external account.
+    The coordinator independently fences public URLs to that external account.
+    """
+    requested = canonical_alpaca_account_id(account_id)
+    if requested == canonical_alpaca_account_id(custody_account_id):
+        return True
+    return shadow and requested == canonical_alpaca_account_id(
+        live_account_id_for_shadow_account(custody_account_id)
+    )
+
+
 def custody_account_ids_for(live_account_id: str) -> frozenset[str]:
     """Every custody id an authority over this live account may hold.
 

@@ -34,7 +34,7 @@ describe('app menu projections', () => {
   it('carries the query parameters an entry needs to navigate', () => {
     const alpaca = menuItemsFor('/data-lab').find((group) => group.label === 'Alpaca');
     const deploy = alpaca?.items?.find((item) => item.label === 'Deploy');
-    const bots = alpaca?.items?.find((item) => item.label === 'Bots');
+    const bots = alpaca?.items?.find((item) => item.label === 'Bot rosters');
     const gallery = alpaca?.items?.find((item) => item.label === 'Gallery');
 
     expect(deploy?.routerLink).toBe('/brokers/alpaca');
@@ -66,7 +66,7 @@ describe('app menu projections', () => {
   });
 
   it.each([
-    ['bots', 'Bots'],
+    ['bots', 'Bot rosters'],
     ['gallery', 'Gallery'],
   ] as const)(
     'maps a clerk-only %s refusal page (no account segment) onto its stable menu entry',
@@ -87,7 +87,7 @@ describe('app menu projections', () => {
   });
 
   it.each([
-    ['bots', 'Bots'],
+    ['bots', 'Bot rosters'],
     ['gallery', 'Gallery'],
   ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {
     expect(activeMenuNodeFor(`/brokers/alpaca/${surface}`)?.item.title).toBe(title);

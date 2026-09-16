@@ -13,6 +13,7 @@ import logging
 
 import asyncpg
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
@@ -129,7 +130,7 @@ async def get_alpaca_paper_deploy_view(
     (#1777, finding S6).
     """
     account = await resolve_account_snapshot(broker)
-    if account.account_id != account_id:
+    if canonical_alpaca_account_id(account.account_id) != canonical_alpaca_account_id(account_id):
         raise AccountMismatchError(
             f"Account '{account_id}' is not the account for broker '{broker}'.",
             detail=f"The broker's account is '{account.account_id}'.",

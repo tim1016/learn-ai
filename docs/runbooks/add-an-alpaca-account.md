@@ -15,6 +15,7 @@ outage, or restore the retired IBKR bot-control pages. This is the owner's
 | What you want | Follow |
 |---|---|
 | Open the roster or diagnose a disabled launch | [Check the current accounts](#1-check-the-current-accounts) |
+| Find account details, Trader/Operator views, or buy/sell history | [Navigation guide](#find-the-roster-account-details-and-transactions-in-the-menu) |
 | Add/replace credentials for the account already assigned to a lane | [Account setup](#2-account-setup) |
 | Add an additional account alongside existing accounts | [Provision another lane](#3-provision-another-lane) |
 | Recover Paper after a developer reset or activate a fresh Paper account | [Offline Paper activation](#4-offline-paper-activation) |
@@ -46,7 +47,7 @@ procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behin
    entitlement. If using a different Gateway/TWS session, change `IBKR_MODE`
    and its matching port together; never bypass the account sentinel.
 2. Open the app at <http://localhost:4200/brokers/alpaca>. Select the intended
-   account card. Use **Bots** on that card to open its roster.
+   account card. Use **Bot roster** on that card to open its roster.
 3. In a terminal, run the checks for the lane you intend to use:
 
    ```bash
@@ -67,6 +68,41 @@ account-level deploy readiness does not certify every existing bot.
 
 If you just restarted, allow about a minute for the prior lease to expire and
 for the new worker to confirm its binding, then run the checks again.
+
+### Find the roster, account details, and transactions in the menu
+
+Open **Alpaca** in the top navigation bar. Its **Accounts** and **Bot rosters** items
+both ask you to choose an account; they do not automatically choose Paper or
+Live for you.
+
+| What you want to see | Click path |
+|---|---|
+| Paper bot roster | **Alpaca → Bot rosters → Paper card → Bot roster** |
+| Live account bot roster (including Shadow bots) | **Alpaca → Bot rosters → card marked Live → Bot roster** |
+| Account balances and details | **Alpaca → Accounts → intended account card → Account details**; expand **Account details** below the balances |
+| Current holdings and today's buys/sells | On that **Account details** page, scroll below the account cards and choose **Trader → Today**; read **Current positions** and **Activity** |
+| Orders, executions, and their status | On that **Account details** page, choose **Operator → Transaction history**; select **Today**, **30D**, or **60D**, then **View details** on a row |
+| Longer account history | On that **Account details** page, choose **Trader → 30D** or **60D** for the portfolio chart and **Transaction history** |
+| Connection or order-recovery evidence | On that **Account details** page, choose **Operator**, then expand **Broker connection** or **Order custody & recovery** |
+| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Configuration** |
+
+Each account card also has direct **Trader view**, **Operator view**, and
+**Transaction history** links. **Trader** and **Operator** remain tabs inside
+the account-details page. **Activity** reports broker events;
+**Transaction history** includes order status and execution evidence so you can
+distinguish a requested buy/sell from a completed fill. A strategy decision that
+never created an order belongs in that bot's own panel, reached from **Bot roster**.
+
+The **Live** badge identifies the real-money account endpoint. Check its
+**Authority** as well: **Shadow** means simulated fills and no real orders from
+that authority. Shadow transaction history shows simulated Clerk records;
+**Trader → Today → Activity** shows broker-reported events on the real account.
+Opening a roster or desk does not arm a bot.
+
+If the desk says it cannot reach Alpaca, the current UI hides both perspective
+tabs until its account read succeeds. This is a loading/identity problem, not
+another menu you need to find. Likewise, a transaction-history error is not an
+empty trading history; retain the error text when diagnosing it.
 
 ## 2. Account setup
 
@@ -450,7 +486,7 @@ archive or a stopped container has closed it.
 
 | Message or symptom | Meaning | Recovery and completion check |
 |---|---|---|
-| Account card opens but roster does not | Worker has not confirmed ready custody | Run `status --require roster`; follow the startup refusal, not container health alone. |
+| Account card opens but roster does not | Custody may be unavailable, or an account request may have failed | Run `status --require roster`; follow any startup refusal. If it succeeds but the menu still fails, reload the app and retain the failing URL/error for diagnosis; do not reassign the account to fix a link. |
 | `developer_reset_reactivation_required` | Paper authority was deliberately moved aside | Section 4; preserve old generation and backup. |
 | `ACTIVATION_REQUIRED` on fresh Paper | Account verified but custody not activated | Section 4, then check roster readiness. This is not required for Live Shadow. |
 | Account pin missing/mismatch | Verified account was not approved, or credentials changed | Verify the intended number, approve, stage/apply, restart; never pin the wrong returned account. |

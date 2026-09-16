@@ -21,6 +21,7 @@ from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.commands import (
@@ -134,7 +135,9 @@ def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
                 ),
             },
         )
-    if runtime.clerk.account_id != account_id:
+    if not account_route_matches_custody(
+        account_id, runtime.clerk.account_id, shadow=runtime.authority_kind == "shadow",
+    ):
         raise HTTPException(
             status_code=404,
             detail={"reason": "sqlite_account_not_active"},

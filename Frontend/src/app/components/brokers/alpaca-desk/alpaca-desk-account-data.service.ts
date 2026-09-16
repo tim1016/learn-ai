@@ -3,6 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
@@ -62,7 +63,7 @@ export class AlpacaDeskAccountDataService {
         throw new Error('The desk route does not name a rendered Alpaca lane.');
       }
       const account = await this.brokers.getAccount(params);
-      if (account.account_id !== params.accountId) {
+      if (!sameAlpacaAccount(account.account_id, params.accountId)) {
         throw new Error('The Account Clerk returned an account outside the rendered desk route.');
       }
       return account;

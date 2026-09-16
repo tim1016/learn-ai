@@ -20,7 +20,7 @@ describe('AlpacaSurfaceChooserComponent', () => {
       '/brokers/alpaca/gallery',
     );
     expect(
-      screen.getAllByRole('link', { name: 'Desk' }).some((link) => link.getAttribute('href') === '/brokers/alpaca'),
+      screen.getAllByRole('link', { name: 'Accounts & activity' }).some((link) => link.getAttribute('href') === '/brokers/alpaca'),
     ).toBe(true);
   });
 

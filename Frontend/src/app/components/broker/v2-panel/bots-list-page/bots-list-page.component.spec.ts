@@ -61,6 +61,7 @@ async function renderPage(
   bots: BotCatalogView[] = [],
   overrides: {
     account?: BrokerAccountSnapshot;
+    routeAccountId?: string;
     clerk?: ClerkStatus;
     getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
     panelActions?: PanelAction[];
@@ -120,12 +121,18 @@ async function renderPage(
       { provide: BrokerV2PanelService, useValue: mockPanelService },
       { provide: MessageService, useValue: mockMessageService },
     ],
-    componentInputs: { broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' },
+    componentInputs: { broker: 'alpaca', clerkId: 'clrk_spec', accountId: overrides.routeAccountId ?? 'PA9' },
   });
   return { ...view, mockPanelService, mockMessageService };
 }
 
 describe('BotsListPageComponent', () => {
+  it('confirms an uppercase broker account from the lowercase directory link', async () => {
+    await renderPage([], { routeAccountId: 'pa9' });
+    expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
+    expect(screen.queryByText(/Account confirmation unavailable/)).toBeNull();
+  });
+
   describe('fleet staleness banner (#1806 item 3)', () => {
     // The account strip's refresh pills fire on a failure *edge* -- they answer
     // "did a refresh just fail?". This banner answers "is what I am looking at

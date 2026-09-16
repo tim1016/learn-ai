@@ -131,7 +131,7 @@ import { CurrentUrlService } from './shell/current-url.service';
         <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
           <a class="shell-quick-link" routerLink="/brokers/alpaca/bots">
             <i class="pi pi-server" aria-hidden="true"></i>
-            <span>Bots</span>
+            <span>Bot rosters</span>
           </a>
           <a class="shell-quick-link" routerLink="/brokers/alpaca/gallery">
             <i class="pi pi-th-large" aria-hidden="true"></i>

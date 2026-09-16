@@ -87,7 +87,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     service.loadOnce();
 
-    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', 'shadow:9LIVE0001'));
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', TARGET.accountId));
   });
 
   it('reads the SQLite projection for a real_live authority too', async () => {
@@ -109,7 +109,7 @@ describe('AlpacaOperatorLensDataService', () => {
 
     service.loadOnce();
 
-    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', '9LIVE0001'));
+    await vi.waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledWith('clrk_spec', TARGET.accountId));
   });
 
   it('never reads the SQLite projection for an authority outside the projection set', async () => {

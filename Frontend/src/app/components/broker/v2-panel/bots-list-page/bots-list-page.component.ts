@@ -16,6 +16,7 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
+import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../../services/alpaca-account-identity';
 import { fmtElapsedSince } from '../../format';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
@@ -181,7 +182,7 @@ export class BotsListPageComponent {
     loader: async ({ params }) => {
       const snapshot = await this.brokersService.getAccount(params.target);
       if (params.scope !== this.fleetScope()) return snapshot;
-      if (snapshot.account_id !== params.accountId) {
+      if (!sameAlpacaAccount(snapshot.account_id, params.accountId)) {
         throw new Error(
           `Alpaca confirmed account ${snapshot.account_id}, not routed account ${params.accountId}.`,
         );
@@ -206,7 +207,7 @@ export class BotsListPageComponent {
     loader: async ({ params }) => {
       const snapshot = await this.brokersService.getClerkStatus(params.target);
       if (params.scope !== this.fleetScope()) return snapshot;
-      if (snapshot.account_id !== params.accountId) {
+      if (!alpacaClerkMatchesAccount(snapshot, params.accountId)) {
         throw new Error(
           `The Clerk is observing account ${snapshot.account_id}, not routed account ${params.accountId}.`,
         );
