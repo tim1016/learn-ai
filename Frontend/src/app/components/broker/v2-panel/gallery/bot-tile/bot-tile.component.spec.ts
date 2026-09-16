@@ -77,6 +77,28 @@ describe('BotTileComponent', () => {
     expect(screen.getByText('ORB breakout')).toBeTruthy();
   });
 
+  it('gives the strategy label visible width instead of clipping it to zero', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot(),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    const strategy = container.querySelector('.bot-tile__strategy');
+    if (!(strategy instanceof HTMLElement)) throw new Error('expected strategy label to render');
+    const style = getComputedStyle(strategy);
+    // Regression for the gallery-tile bug where every tile on a
+    // single-symbol account read only the symbol: the label was always in
+    // the DOM but `max-width: 0; opacity: 0` at rest, so it never had
+    // visible width until :hover/:focus-within.
+    expect(style.maxWidth).not.toBe('0px');
+    expect(style.opacity).not.toBe('0');
+  });
+
   it('keeps the gallery asset identity compact inside the 24px header', async () => {
     const { container } = await render(BotTileComponent, {
       inputs: {

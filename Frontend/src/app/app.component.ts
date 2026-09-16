@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRouteSnapshot, Router, RouterLink, RouterOutlet } from '@angular/router';
+import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
@@ -21,7 +21,6 @@ import { CurrentUrlService } from './shell/current-url.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterOutlet,
-    RouterLink,
     AppMenubarComponent,
     AlpacaLiveBannerComponent,
     TopBarComponent,
@@ -52,53 +51,20 @@ import { CurrentUrlService } from './shell/current-url.service';
       justify-content: flex-end;
       gap: var(--space-2);
       white-space: nowrap;
-    }
-
-    .shell-quick-link {
-      display: inline-flex;
-      min-height: 30px;
-      align-items: center;
-      gap: 5px;
-      padding: 0 7px;
-      border-radius: var(--radius-sm);
-      color: var(--text-primary);
-      font-size: var(--fs-xs);
-      font-weight: var(--fw-semi);
-      text-decoration: none;
-    }
-
-    .shell-quick-link:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-
-    .shell-quick-link i {
-      color: var(--text-subtle);
-      font-size: 0.7rem;
+      /* The live-verdict pills are the account-mode trust anchor (ADR 0059
+         D8): one badge per lane (FleetDirectoryService.lanesOf('alpaca')),
+         so the row's natural width grows with the fleet. The header's
+         minmax(0, 1fr) side columns let content overflow past their own
+         track rather than being clamped, which used to bleed the pills
+         under the centered Botasur logo at in-between widths. Wrapping
+         unconditionally (not just under the old 760px mobile query) keeps
+         every pill inside this column at any width, never past it. */
+      flex-wrap: wrap;
     }
 
     @media (max-width: 760px) {
       .shell-actions {
         gap: 3px;
-        /* The live-verdict pills are the account-mode trust anchor (ADR 0059
-           D8): they wrap to a second row rather than being clipped when the
-           header runs out of width. */
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
-
-      .shell-quick-link {
-        width: 30px;
-        justify-content: center;
-        padding: 0;
-      }
-
-      .shell-quick-link span {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
       }
     }
 
@@ -128,15 +94,7 @@ import { CurrentUrlService } from './shell/current-url.service';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
-        <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
-          <a class="shell-quick-link" routerLink="/brokers/alpaca/bots">
-            <i class="pi pi-server" aria-hidden="true"></i>
-            <span>Bot rosters</span>
-          </a>
-          <a class="shell-quick-link" routerLink="/brokers/alpaca/gallery">
-            <i class="pi pi-th-large" aria-hidden="true"></i>
-            <span>Gallery</span>
-          </a>
+        <nav class="shell-actions" shell-connection aria-label="Account status">
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
           } @empty {
