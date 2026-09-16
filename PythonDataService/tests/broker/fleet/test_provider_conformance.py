@@ -655,6 +655,50 @@ async def test_a_lane_500_after_a_command_dispatch_names_the_status_not_an_ident
     assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
 
 
+async def test_an_echoless_redirect_on_a_command_never_settles_delivered(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2165 review: the internal client never follows redirects, so a proxy
+    or a stale endpoint can answer a dispatch with an echoless 3xx. Passing
+    it through the echoless bypass would let ``deliver_command`` fall past
+    its ``>= 400`` refusals and settle DELIVERED for a command that never
+    reached the handler — corrupting the durable receipt against a safe
+    retry. The redirect refuses, and the attempt settles outcome-unknown."""
+    from app.broker.fleet.delivery import DeliveryResult
+    from app.broker.fleet.errors import ClerkRoutingOutcomeUnknown
+    from app.broker.fleet.records import RoutingReceiptState
+    from app.broker.fleet.routing import CommandEnvelope
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        return DeliveryResult(
+            status_code=307, headers={"location": "/elsewhere"}, body=b""
+        )
+
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="lane-307", handler=_handler
+    )
+    bot_action = _alpha_operation("submit_bot_action")
+    with pytest.raises(ClerkRoutingOutcomeUnknown):
+        await router.deliver_command(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=bot_action,
+            path_params={"account_id": "acct-lane-307", "sid": "bot-1"},
+            query={},
+            body={},
+            envelope=CommandEnvelope(
+                capability=bot_action.capability.value,
+                idempotency_key="lane-307-command",
+                expected_effective_binding_generation=1,
+                target={},
+            ),
+        )
+    receipts = service._store.list_routing_receipts(clerk_id=lane.clerk_id)
+    settled = [r for r in receipts if r.idempotency_key == "lane-307-command"]
+    assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
+
+
 async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_body(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:

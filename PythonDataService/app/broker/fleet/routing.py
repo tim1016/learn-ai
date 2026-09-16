@@ -81,6 +81,20 @@ def _refusal_excerpt(body: bytes | None) -> str:
     return (body or b"")[:400].decode("utf-8", "replace")
 
 
+def _decoded_headers(start: Mapping[str, Any]) -> dict[str, str]:
+    """An ASGI response-start message's headers as plain ``str`` pairs."""
+    return {
+        name.decode(): value.decode()
+        for name, value in start.get("headers") or []
+    }
+
+
+async def _no_stream_events() -> AsyncIterator[object]:
+    """The refused-stream carrier for a local raw-ASGI dispatch."""
+    return
+    yield
+
+
 class CommandEnvelopeInvalid(ValueError):
     """A command body's §10.3 envelope is absent or incoherent.
 
@@ -876,10 +890,7 @@ class _LocalAsgiHandler:
             )
             return DeliveryResult(
                 status_code=start["status"],
-                headers={
-                    name.decode(): value.decode()
-                    for name, value in start.get("headers") or []
-                },
+                headers=_decoded_headers(start),
                 body=payload,
             )
 
@@ -916,12 +927,28 @@ class _LocalAsgiHandler:
                     task.cancel()
 
         start = await started
+        if start["status"] >= 400:
+            # A refused stream-open is that refusal — the same rule the HTTP
+            # adapter applies: collect the body, deliver no events, and keep
+            # the error page away from the SSE parser. The collected body is
+            # what stream_read's refusal excerpt logs (#2164).
+            refused_body: list[bytes] = []
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                refused_body.append(item)
+            await task
+            connection_open.set()
+            return StreamDeliveryResult(
+                status_code=start["status"],
+                headers=_decoded_headers(start),
+                events=_no_stream_events(),
+                error_body=b"".join(refused_body),
+            )
         return StreamDeliveryResult(
             status_code=start["status"],
-            headers={
-                name.decode(): value.decode()
-                for name, value in start.get("headers") or []
-            },
+            headers=_decoded_headers(start),
             events=iter_sse_events(chunks()),
         )
 

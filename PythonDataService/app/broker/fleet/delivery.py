@@ -164,12 +164,15 @@ def verify_identity_echo(
 
     One distinction (#2164): the echo headers exist only on a response the
     identity middleware actually served. A handler-raised 5xx — and an
-    unrouted 404 — returns without them, and on a non-2xx that absence is the
-    *lane failing*, not the wrong lane answering. An absent echo alongside a
-    non-2xx is therefore passed through so the caller sees the lane's own
-    status and refusal body; a present-but-wrong echo refuses at any status,
-    and an absent echo on a 2xx remains exactly the unverifiable-provenance
-    refusal this check was written for.
+    unrouted 404 — returns without them, and on a 4xx/5xx that absence is
+    the *lane failing*, not the wrong lane answering. A wholly absent echo
+    alongside a 4xx/5xx is therefore passed through so the caller sees the
+    lane's own status and refusal body. Everything else refuses: a partial
+    echo, a 3xx (the internal client never follows redirects, so an
+    echoless redirect must never classify as a served response), a
+    present-but-wrong echo at any status, and an absent echo on a 2xx —
+    each is exactly the unverifiable-provenance refusal this check was
+    written for.
     """
     # Header sources differ in case (httpx normalizes; a raw-ASGI dispatch
     # carries ASGI's lowercase names in a plain mapping), and the identity
@@ -178,11 +181,12 @@ def verify_identity_echo(
     served_broker = lowered.get("x-fleet-broker")
     served_clerk = lowered.get("x-fleet-clerk-id")
     if (
-        served_broker is None or served_clerk is None
-    ) and not 200 <= status_code < 300:
-        # No echo to verify and the lane already refused: the status and body
-        # are the lane's own answer, and must not be masked as a 409 identity
+        served_broker is None and served_clerk is None
+    ) and status_code >= 400:
+        # A wholly absent echo on a 4xx/5xx: the status and body are the
+        # lane's own answer, and must not be masked as a 409 identity
         # mismatch with a retry instruction that can never succeed (#2164).
+        # A partial echo is not "no echo" — it falls through and refuses.
         return
     if served_broker != request.broker:
         raise DeliveryIdentityMismatch(
@@ -399,6 +403,7 @@ class LocalLaneDelivery:
             status_code=result.status_code,
             headers=result.headers,
             events=_identity_validated_events(result.events, request),
+            error_body=result.error_body,
         )
 
 

@@ -2051,13 +2051,18 @@ async def test_verify_identity_echo_refuses_a_wrong_or_missing_echo() -> None:
     )
 
 
-async def test_verify_identity_echo_passes_an_echoless_non_2xx_as_the_lane_failing() -> None:
+async def test_verify_identity_echo_passes_a_wholly_echoless_refusal_as_the_lane_failing() -> None:
     """#2164: the echo headers exist only on a response the identity
     middleware actually served. A handler-raised 5xx — and an unrouted 404 —
     carries none, and that absence is the lane failing, not the wrong lane
     answering: the caller must see the lane's status and refusal body, never
     a 409 identity mask with a retry instruction that cannot succeed (found
-    via #2163, where the lane was erroring on a missing POSTGRES_URL)."""
+    via #2163, where the lane was erroring on a missing POSTGRES_URL).
+
+    The bypass is deliberately narrow — wholly absent echo on a 4xx/5xx
+    only. A partial echo, a 3xx (the internal client never follows
+    redirects, so an echoless redirect must never classify as served), a
+    wrong echo at any status, and a missing echo on a 2xx all refuse."""
     request = DeliveryRequest(
         broker="alpaca",
         clerk_id="clrk_testagent00000000000000aa",
@@ -2065,10 +2070,17 @@ async def test_verify_identity_echo_passes_an_echoless_non_2xx_as_the_lane_faili
         path_params={},
         routing_epoch=4,
     )
-    # No echo at all and the lane already refused: pass through, whatever the
-    # refusal family.
+    # Wholly absent echo and the lane already refused: pass through.
     verify_identity_echo({}, request, status_code=500)
     verify_identity_echo({}, request, status_code=404)
+    # A 3xx is not a refusal the routing layer classifies — an echoless
+    # redirect would fall through deliver_command's >= 400 checks and
+    # settle DELIVERED for a command that never reached the handler.
+    with pytest.raises(DeliveryIdentityMismatch, match="broker"):
+        verify_identity_echo({}, request, status_code=307)
+    # A partial echo is not "no echo" — it cannot prove the serving runtime.
+    with pytest.raises(DeliveryIdentityMismatch, match="broker"):
+        verify_identity_echo({"X-Fleet-Broker": "paper"}, request, status_code=500)
     # A present-but-wrong echo is an active contradiction at any status and
     # always refuses (both echoes present, one naming a different lane).
     with pytest.raises(DeliveryIdentityMismatch, match="broker"):
