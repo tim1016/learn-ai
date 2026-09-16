@@ -62,30 +62,45 @@ export function provideFleetDirectory(
   // subscribes. A plain-variable double let an `untracked()` guard around
   // such a read go unverified by every spec that uses this fixture — the
   // guard could be deleted and no test would notice (#2068 fix round 1).
-  const response = signal(initial);
+  //
+  // `visible` is what every accessor (`value`/`lanesOf`/`lane`/
+  // `laneForAccount`/`ensureLoaded`) reads — it models the real service's
+  // cached `response` signal, which only ever changes when a `load()`
+  // resolves. `staged` models the server-side directory the real
+  // `/api/broker-clerks` would return on the next request; `rebind()` only
+  // updates `staged`. Only `refresh()` promotes `staged` into `visible`,
+  // exactly as the real `FleetDirectoryService.ensureLoaded()` is a no-op
+  // once loaded while `refresh()` re-fetches. A double whose `rebind()`
+  // wrote straight to `visible` made `ensureLoaded()` see a rebind
+  // instantly, which the real service can never do.
+  const visible = signal(initial);
+  let staged = initial;
   return {
     provide: FleetDirectoryService,
     useValue: {
-      value: () => response(),
+      value: () => visible(),
       error: () => undefined,
       isLoading: () => false,
-      lanesOf: (broker: string) => response().clerks.filter((lane) => lane.broker === broker),
+      lanesOf: (broker: string) => visible().clerks.filter((lane) => lane.broker === broker),
       lane: (broker: string, clerkId: string) =>
-        response().clerks.find(
+        visible().clerks.find(
           (candidate) => candidate.broker === broker && candidate.clerk_id === clerkId,
         ),
       laneForAccount: (broker: string, accountId: string) =>
-        response().clerks.find(
+        visible().clerks.find(
           (candidate) =>
             candidate.broker === broker &&
             candidate.provider_summary?.confirmed_account_id?.toLowerCase() ===
               accountId.trim().toLowerCase(),
         ),
-      refresh: () => Promise.resolve(response()),
-      ensureLoaded: () => Promise.resolve(response()),
+      refresh: () => {
+        visible.set(staged);
+        return Promise.resolve(visible());
+      },
+      ensureLoaded: () => Promise.resolve(visible()),
     } as Partial<FleetDirectoryService>,
     rebind(next: FleetDirectoryResponse) {
-      response.set(next);
+      staged = next;
     },
   };
 }

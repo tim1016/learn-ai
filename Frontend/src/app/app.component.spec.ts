@@ -128,7 +128,7 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
   });
 
-  it('renders one badge per lane, each labeled with its own lane and isolated from the others', () => {
+  it('renders one badge per lane, each labeled with its own lane and isolated from the others', async () => {
     directory.rebind({
       observed_at_ms: 2,
       clerks: [
@@ -136,6 +136,10 @@ describe('AppComponent', () => {
         testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' }),
       ],
     });
+    // `rebind()` only stages the replacement, like the real service's next
+    // `/api/broker-clerks` response; `refresh()` promotes it to what
+    // `lanesOf()` reports.
+    await directory.useValue.refresh?.();
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
     service.setState('clrk_paper', { verdict: verdictStub('paper'), lastError: null });
     service.setState('clrk_live', { verdict: null, lastError: new Error('down') });
@@ -149,11 +153,14 @@ describe('AppComponent', () => {
     expect(badges[1].textContent).toContain('assume real money');
   });
 
-  it('renders a loud lanes-unknown badge and live chrome when the roster is empty', () => {
+  it('renders a loud lanes-unknown badge and live chrome when the roster is empty', async () => {
     // Every boot until /api/broker-clerks resolves, and indefinitely after a
     // failed load. Zero badges plus the neutral default chrome is the calm-
     // while-real-money-trades failure this anchor exists to kill (#2110 D2).
     directory.rebind({ observed_at_ms: 3, clerks: [] });
+    // `rebind()` only stages the replacement; `refresh()` promotes it to
+    // what `lanesOf()` reports, like the real service's next load.
+    await directory.useValue.refresh?.();
     fixture.detectChanges();
 
     const badges = fixture.nativeElement.querySelectorAll('app-alpaca-live-banner [role="status"]');

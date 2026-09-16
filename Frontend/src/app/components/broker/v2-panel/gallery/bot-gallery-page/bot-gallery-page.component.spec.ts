@@ -286,6 +286,9 @@ describe('BotGalleryPageComponent', () => {
       observed_at_ms: 1_757_000_000_001,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
     });
+    // `rebind()` only stages the replacement; `refresh()` promotes it to
+    // what `lanesOf()`/`lane()` report, like the real service's next load.
+    await directory.useValue.refresh?.();
 
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));

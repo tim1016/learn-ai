@@ -8,6 +8,16 @@ import { BrokersService } from './brokers.service';
 
 const POLL_INTERVAL_MS = 5000;
 
+/**
+ * How many `roster()` ticks separate one forced `directory.refresh()` from
+ * the next. `FleetDirectoryService.ensureLoaded()` is a permanent no-op once
+ * one load has succeeded, so left alone this trust anchor would never learn
+ * about a lane provisioned after the tab's first successful directory load.
+ * At the `POLL_INTERVAL_MS` (5 s) cadence, 6 ticks is one forced refresh
+ * every 6 * 5 s = 30 s.
+ */
+const DIRECTORY_REFRESH_EVERY_N_TICKS = 6;
+
 /** One lane's latest live-verdict read, or the error from its last attempt. */
 export interface LaneVerdictState {
   readonly verdict: AlpacaLiveVerdict | null;
@@ -64,6 +74,10 @@ export class AlpacaLiveVerdictService {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
+  /** Ticks since this service started; drives the every-6th-tick forced
+   * directory refresh in `roster()`. */
+  private tickCount = 0;
+
   constructor() {
     this.destroyRef.onDestroy(() => this.stop());
   }
@@ -108,10 +122,28 @@ export class AlpacaLiveVerdictService {
    * global answer to "is real money at risk?" — stayed blank while a live
    * lane traded. Driving it from the shell's own tick makes a failed load
    * retried, at the directory's own paced cooldown, instead of terminal.
+   *
+   * `ensureLoaded()` is a permanent no-op once one load has succeeded, so a
+   * lane provisioned after the tab's first successful load would never earn
+   * a badge. Every `DIRECTORY_REFRESH_EVERY_N_TICKS`th tick forces a real
+   * `directory.refresh()` instead, so the roster this trust anchor votes from
+   * is never frozen at page load for longer than that window. The staleness
+   * tolerance lives here, not inside `ensureLoaded`, because `ensureLoaded`'s
+   * other callers are redirect guards that need lanes resolved before
+   * deciding where a URL lands — a max-age there would occasionally block
+   * navigation on a network request.
    */
   private async roster(): Promise<LaneDescriptor[]> {
+    this.tickCount += 1;
+    const dueForRefresh = this.tickCount % DIRECTORY_REFRESH_EVERY_N_TICKS === 0;
     try {
-      await this.directory.ensureLoaded();
+      // `refresh()` rejects where `ensureLoaded()` may resolve; this catch
+      // covers both.
+      if (dueForRefresh) {
+        await this.directory.refresh();
+      } else {
+        await this.directory.ensureLoaded();
+      }
     } catch {
       // Handled where it belongs, not swallowed: FleetDirectoryService owns
       // this error and already exposes it as observable state. An unresolved

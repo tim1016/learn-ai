@@ -85,6 +85,15 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
 }
 
+/** Drive `n` additional polling ticks, awaiting each in turn. `roster()`
+ * forces a real `directory.refresh()` only on every 6th tick
+ * (`DIRECTORY_REFRESH_EVERY_N_TICKS`), so a test proving something about the
+ * post-refresh roster must cross that boundary rather than asserting after
+ * one call. */
+async function driveTicks(svc: AlpacaLiveVerdictService, n: number): Promise<void> {
+  for (let i = 0; i < n; i += 1) await svc.refresh();
+}
+
 afterEach(() => {
   TestBed.resetTestingModule();
   vi.useRealTimers();
@@ -219,17 +228,75 @@ describe('AlpacaLiveVerdictService', () => {
       testLane({ clerk_id: 'clrk_b', broker: 'alpaca' }),
     ]);
     brokers.readLane.mockResolvedValue(makeVerdict());
-    await svc.refresh();
+    await svc.refresh(); // tick 1
     expect(svc.stateFor('clrk_b').verdict).not.toBeNull();
 
+    // The double only promotes a rebind to what `ensureLoaded()`/`lanesOf()`
+    // see once `directory.refresh()` runs — exactly like the real service.
+    // `roster()` only forces that every 6th tick, so cross that boundary
+    // rather than asserting after the very next call.
     directory.rebind({
       observed_at_ms: 2,
       clerks: [testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })],
     });
-    await svc.refresh();
+    await driveTicks(svc, 5); // ticks 2-6; tick 6 is the forced refresh
 
     expect(svc.stateFor('clrk_b')).toEqual(UNPOLLED_LANE_STATE);
     expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+  });
+
+  it('picks up a lane the directory starts reporting after the first load, but only on a refresh tick', async () => {
+    const { svc, brokers, directory } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
+    brokers.readLane.mockResolvedValue(makeVerdict());
+    await svc.refresh(); // tick 1: the roster is cached via ensureLoaded()
+    expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+
+    // A lane provisioned after the tab's first successful directory load —
+    // exactly the case `ensureLoaded()`'s permanent post-load cache can
+    // never see on its own.
+    directory.rebind({
+      observed_at_ms: 2,
+      clerks: [
+        testLane({ clerk_id: 'clrk_a', broker: 'alpaca' }),
+        testLane({ clerk_id: 'clrk_b', broker: 'alpaca' }),
+      ],
+    });
+
+    // Ticks 2-5 still call ensureLoaded(), a no-op once loaded: the new lane
+    // must stay invisible and un-badged through every one of them.
+    for (let i = 0; i < 4; i += 1) {
+      await svc.refresh();
+      expect(svc.stateFor('clrk_b')).toEqual(UNPOLLED_LANE_STATE);
+    }
+
+    // Tick 6 forces directory.refresh() — only now does the new lane get a
+    // badge.
+    await svc.refresh();
+
+    expect(svc.stateFor('clrk_b').verdict).not.toBeNull();
+  });
+
+  it('a failed forced directory refresh leaves the existing roster in place, and the next due tick asks again', async () => {
+    const { svc, brokers, directory } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
+    brokers.readLane.mockResolvedValue(makeVerdict());
+    await svc.refresh(); // tick 1: the roster is cached via ensureLoaded()
+    expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+
+    let refreshAttempts = 0;
+    directory.useValue.refresh = vi.fn(async () => {
+      refreshAttempts += 1;
+      throw new Error('directory refresh failed');
+    });
+
+    await driveTicks(svc, 5); // ticks 2-6; tick 6 is the forced refresh, and it rejects
+
+    expect(refreshAttempts).toBe(1);
+    // Loud, not blank: the last known badge survives a failed refresh.
+    expect(svc.stateFor('clrk_a').verdict).not.toBeNull();
+
+    await driveTicks(svc, 6); // ticks 7-12; tick 12 asks again rather than giving up forever
+
+    expect(refreshAttempts).toBe(2);
   });
 
   it('start() is idempotent and refreshes every known lane immediately', async () => {
