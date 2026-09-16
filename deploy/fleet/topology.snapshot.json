@@ -31,9 +31,9 @@
         "${FLEET_LIVE_ENV_FILE:-./deploy/fleet/env/live.env}"
       ],
       "environment_keys": [
-        "ALPACA_API_KEY_ID",
-        "ALPACA_API_SECRET_KEY",
         "ALPACA_CLERK_DIR",
+        "ALPACA_CREDENTIAL_LIVE_KEY_ID",
+        "ALPACA_CREDENTIAL_LIVE_SECRET_KEY",
         "BROKER_CAPTURE_DIR",
         "FLEET_AGENT_ENDPOINT_REF",
         "FLEET_AGENT_SERVICE_TOKEN",
