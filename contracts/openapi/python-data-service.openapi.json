@@ -44798,7 +44798,7 @@
     },
     "/api/broker-clerks/audit/routing-receipts": {
       "get": {
-        "description": "Routing receipts at or after ``since_ms``, newest first.\n\nRead-only: no idempotency key, no command envelope, no ceremony. The\ndurable audit trail (routing receipts, assignment history, session\nhistory) was otherwise reachable only by opening the coordinator's\nSQLite file by hand.\n\n``before_ms``/``before_correlation_id`` continue a previous page's keyset\n(#2133) -- pass back a truncated page's ``next_before_ms``/\n``next_before_correlation_id`` verbatim to walk the full window past\n``limit`` instead of only ever reaching the newest page.",
+        "description": "Routing receipts at or after ``since_ms``, newest first.\n\nRead-only: no idempotency key, no command envelope, no ceremony. The\ndurable audit trail (routing receipts, assignment history, session\nhistory) was otherwise reachable only by opening the coordinator's\nSQLite file by hand.\n\nThe receipt ledger covers **commands only** (ADR 0063, #2153): routed\nstreams open no receipt and a lane's own bot runner never enters the\ncoordinator, so an empty or quiet window is not evidence of lane\ninactivity.\n\n``before_ms``/``before_correlation_id`` continue a previous page's keyset\n(#2133) -- pass back a truncated page's ``next_before_ms``/\n``next_before_correlation_id`` verbatim to walk the full window past\n``limit`` instead of only ever reaching the newest page.",
         "operationId": "list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get",
         "parameters": [
           {
