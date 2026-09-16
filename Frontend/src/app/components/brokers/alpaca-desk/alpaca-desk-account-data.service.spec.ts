@@ -50,6 +50,21 @@ function neverAccount() {
  * case alone proves `source` is genuinely route-keyed; only both together do.
  */
 describe('AlpacaDeskAccountDataService', () => {
+  it.each([['pa1', true], ['OTHER', false]])('checks the broker account against canonical route %s', async (accountId, accepted) => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideFleetDirectory({ observed_at_ms: 1, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
+        activatedRoute('clrk_spec', accountId).provider,
+        { provide: BrokersService, useValue: { getAccount: vi.fn().mockResolvedValue({ account_id: 'PA1' }) } },
+        AlpacaDeskAccountDataService,
+      ],
+    });
+    const service = TestBed.inject(AlpacaDeskAccountDataService);
+    TestBed.tick();
+    await vi.waitFor(() => expect(service.account.isLoading()).toBe(false));
+    expect(service.account.hasValue()).toBe(accepted);
+  });
+
   it('does not re-derive its command fence when the directory refreshes on the same route', () => {
     const directory = provideFleetDirectory({
       observed_at_ms: 1_757_000_000_000,

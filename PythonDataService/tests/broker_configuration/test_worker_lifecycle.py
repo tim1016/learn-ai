@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.broker.alpaca.active_binding import reset_active_alpaca_binding_for_testing
-from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime, unavailable_runtime
 from app.broker.alpaca.clerk.live_arming import LiveArmingInvalid
 from app.broker.alpaca.profile import resolve_runtime_context
 from app.broker_configuration.binding_decision import BindingCandidate, BindingIntent
@@ -135,6 +135,30 @@ async def test_shadow_acknowledges_the_broker_account_not_its_custody_namespace(
 
     assert result is runtime
     assert service.selection().effective_account_id == "PA-TEST"
+
+
+async def test_failed_custody_records_apply_refusal_instead_of_waiting_for_another_restart(
+    service: BrokerConfigurationService,
+) -> None:
+    profile = paper_profile(service)
+    staged = service.stage_selection(
+        profile_id=profile.profile.profile_id, revision=1, expected_selection_generation=0
+    )
+    requested = service.request_apply(expected_selection_generation=staged.selection_generation)
+    bound = _bound(profile.profile.profile_id, requested.selection_generation)
+    recovery = "Complete a new paper cutover after the developer reset, then record Apply again."
+    runtime = unavailable_runtime(
+        "DEVELOPER_RESET_REACTIVATION_REQUIRED", account_id="PA-TEST", recovery=recovery
+    )
+
+    result = await acknowledge_runtime_binding(bound=bound, runtime=runtime, service_factory=lambda: service)
+
+    assert result is runtime
+    selection = service.selection()
+    assert not selection.apply_requested
+    assert selection.last_apply_outcome == "refused"
+    assert selection.last_apply_refusal_reason == recovery
+    assert selection.effective_account_id is None
 
 
 async def test_unreadable_arming_evidence_during_acknowledgement_closes_custody(

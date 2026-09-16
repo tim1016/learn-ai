@@ -79,7 +79,7 @@ class MarketStatusSnapshot(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source: Literal["alpaca.stock_data.status"] = "alpaca.stock_data.status"
+    source: Literal["alpaca.stock_data.status", "ibkr.market_data.status"] = "alpaca.stock_data.status"
     connected: bool
     observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)

@@ -322,7 +322,7 @@ async def test_production_factory_selects_the_configured_paper_status_source(
         journal: CaptureJournal,
     ) -> MarketStatusSnapshot:
         calls.append((actual_url, control_secret))
-        return source.status_snapshot(now_ms=now_ms_utc())
+        return source.status_snapshot(now_ms=now_ms_utc()).model_copy(update={"source": "ibkr.market_data.status"})
 
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control")
     monkeypatch.setattr("app.broker.alpaca.market_liveness.read_shared_market_status", read_snapshot)
@@ -336,6 +336,57 @@ async def test_production_factory_selects_the_configured_paper_status_source(
     await consumer.refresh_shared_status()
     assert store.status_snapshot(now_ms=now_ms_utc()).connected is True
     assert calls == [(url, "test-control")]
+
+
+async def test_production_factory_uses_ibkr_without_an_alpaca_data_subscription(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.broker.alpaca.config import AlpacaSettings
+
+    calls = []
+
+    async def ibkr_status(self):
+        calls.append("ibkr")
+        return MarketStatusSnapshot(
+            source="ibkr.market_data.status", connected=False,
+            observed_at_ms=_NOW, connection_changed_at_ms=_NOW, symbol_statuses=(),
+        )
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.IbkrMarketStatusSource.__call__", ibkr_status)
+    consumer = AlpacaMarketLivenessConsumer.for_alpaca(
+        read=_Read(), settings=AlpacaSettings(api_key_id="key", api_secret_key="secret"),
+        store=MarketLivenessStore(), journal=CaptureJournal(capture_dir=tmp_path / "capture"),
+    )
+    await consumer.refresh_shared_status()
+    assert calls == ["ibkr"]
+
+
+async def test_production_status_watch_keeps_active_runners_between_slow_decisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.config import AlpacaSettings
+
+    watched = []
+
+    async def ibkr_status(self):
+        watched.extend(self._symbols())
+        return MarketStatusSnapshot(
+            source="ibkr.market_data.status", connected=False,
+            observed_at_ms=_NOW, connection_changed_at_ms=_NOW, symbol_statuses=(),
+        )
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.IbkrMarketStatusSource.__call__", ibkr_status)
+    monkeypatch.setattr("app.marketdata.ibkr_feed.get_market_data_feed", lambda: SimpleNamespace(
+        active_symbols=lambda: ("SPY",),
+    ))
+    consumer = AlpacaMarketLivenessConsumer.for_alpaca(
+        read=_Read(), settings=AlpacaSettings(api_key_id="key", api_secret_key="secret"),
+        store=MarketLivenessStore(), journal=CaptureJournal(capture_dir=tmp_path / "capture"),
+    )
+    await consumer.refresh_shared_status()
+    assert watched == ["SPY"]
 
 
 def test_status_message_without_source_time_is_not_applied(tmp_path: Path) -> None:

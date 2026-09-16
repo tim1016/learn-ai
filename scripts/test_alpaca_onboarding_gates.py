@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -24,7 +25,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
+from unittest.mock import patch
 
 import alpaca_onboarding_gates as gates
 
@@ -466,6 +469,134 @@ class WalCheckpointAgainstRealSqlite(unittest.TestCase):
         code, stderr = self._invoke(account_id="../../etc")
         self.assertEqual(code, 1)
         self.assertIn("not a plausible Alpaca account number", stderr)
+
+
+class LaneReadinessGate(unittest.TestCase):
+    def test_confirmed_lane_cannot_hide_a_failed_roster_read(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "roster read failed with HTTP 503"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "ready",
+                "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+            }, mode="live", require="roster", deploy=None, roster={"http_status": 503, "refusal": "custody unavailable"})
+
+    def test_healthy_process_with_unconfirmed_binding_is_not_roster_ready(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "starting"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "starting",
+                "provider_summary": {"authority_state": "real_paper"},
+            }, mode="paper", require="roster", deploy=None)
+
+    def test_shadow_is_ready_for_the_roster_without_real_money_activation(self) -> None:
+        gates.gate_lane_ready({
+            "lifecycle_state": "ready",
+            "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+        }, mode="live", require="roster", deploy=None)
+
+    def test_roster_ready_does_not_prove_launch_ready(self) -> None:
+        with self.assertRaisesRegex(gates.GateFailed, "market-data feed"):
+            gates.gate_lane_ready({
+                "lifecycle_state": "ready",
+                "provider_summary": {"authority_state": "shadow", "confirmed_by_current_session": True},
+            }, mode="live", require="deploy", deploy={
+                "eligibility": {"eligible": False},
+                "readiness_checks": [{"ready": False, "evidence_summary": "Missing market-data feed"}],
+            })
+
+
+class StatusCommandExitCodes(unittest.TestCase):
+    def setUp(self) -> None:
+        self.lane = {
+            "clerk_id": "clrk_test", "lifecycle_state": "ready",
+            "provider_summary": {"authority_state": "real_paper", "confirmed_by_current_session": True},
+        }
+        self.requests: list[str] = []
+        self.podman_calls: list[tuple[str, ...]] = []
+        self.symbol_ready = True
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def _urlopen(self, request, *, timeout: int) -> io.StringIO:
+        self.assertEqual(timeout, 15)
+        self.requests.append(request.full_url)
+        parsed = urllib.parse.urlparse(request.full_url)
+        if parsed.path == "/api/broker-clerks":
+            result = {"clerks": [self.lane]}
+        elif parsed.path.endswith("/configuration/selection"):
+            result = {"effective_account_id": "PA1"}
+        elif parsed.path.endswith("/bots/deploy"):
+            # Account-level presence is ready even when this symbol is not.
+            ready = self.symbol_ready or not urllib.parse.parse_qs(parsed.query).get("symbol")
+            result = {"eligibility": {"eligible": ready}, "readiness_checks": [
+                {"ready": ready, "evidence_summary": "Waiting for symbol warmup"},
+            ]}
+        elif parsed.path.endswith("/bots/catalog"):
+            result = []
+        else:
+            raise AssertionError(f"unexpected request {request.full_url}")
+        return io.StringIO(json.dumps(result))
+
+    def _podman(self, *argv: str) -> str:
+        self.podman_calls.append(argv)
+        if argv[4] == gates._STATUS_READ_SNIPPET:
+            output = io.StringIO()
+            with (
+                patch.object(sys, "argv", ["status-reader", *argv[5:]]),
+                patch.dict(os.environ, {"DATA_PLANE_CONTROL_SECRET": "test-only"}),
+                patch("urllib.request.urlopen", self._urlopen),
+                contextlib.redirect_stdout(output),
+            ):
+                exec(argv[4], {})
+            return output.getvalue()
+        if argv[4] == gates._STARTUP_READ_SNIPPET:
+            return "The worker has not opened its API yet. Wait for startup, then rerun status.\n"
+        return "clrk_test"
+
+    def _invoke(self, *arguments: str) -> int:
+        with (
+            patch.object(gates, "_podman", self._podman),
+            contextlib.redirect_stdout(self.stdout),
+            contextlib.redirect_stderr(self.stderr),
+        ):
+            return gates.main(["status", *arguments])
+
+    def test_deploy_without_symbol_refuses_before_reading_the_lane(self) -> None:
+        self.assertEqual(self._invoke("--mode", "paper", "--require", "deploy"), 1)
+        self.assertIn("--symbol", self.stderr.getvalue())
+        self.assertEqual(self.podman_calls, [])
+
+    def test_deploy_forwards_symbol_and_refuses_its_warmup_blocker(self) -> None:
+        self.symbol_ready = False
+        self.assertEqual(self._invoke("--mode", "paper", "--require", "deploy", "--symbol", "spy"), 1)
+        self.assertIn("symbol warmup", self.stderr.getvalue())
+        self.assertTrue(any(url.endswith("/bots/deploy?symbol=SPY") for url in self.requests))
+        self.assertNotIn("OK:", self.stdout.getvalue())
+
+    def test_ready_symbol_reports_the_checked_symbol(self) -> None:
+        self.assertEqual(self._invoke("--mode", "paper", "--require", "deploy", "--symbol", "BRK.B"), 0)
+        self.assertIn("BRK.B", self.stdout.getvalue())
+
+    def test_missing_provider_summary_probes_startup_then_refuses(self) -> None:
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                self.lane["lifecycle_state"] = "starting"
+                if missing:
+                    self.lane.pop("provider_summary", None)
+                else:
+                    self.lane["provider_summary"] = None
+                self.assertEqual(self._invoke("--mode", "paper"), 1)
+                self.assertIn("Wait for startup", self.stdout.getvalue())
+                self.assertIn("REFUSE: lane is starting", self.stderr.getvalue())
+
+    def test_requested_mode_must_match_active_authority_even_with_container_override(self) -> None:
+        for mode, authority, expected in (
+            ("paper", "real_paper", 0), ("paper", "shadow", 1), ("paper", "real_live", 1),
+            ("live", "real_paper", 1), ("live", "shadow", 0), ("live", "real_live", 0),
+        ):
+            with self.subTest(mode=mode, authority=authority):
+                self.lane["provider_summary"]["authority_state"] = authority
+                self.assertEqual(self._invoke("--mode", mode, "--container", "custom-lane"), expected)
+                if expected:
+                    self.assertIn("does not match", self.stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from app.broker_configuration.worker_binding import (
     BoundWorker,
     ServiceFactory,
     acknowledge_worker_binding,
+    record_worker_startup_refusal,
 )
 from app.utils.advisory_lock import try_advisory_file_lock
 
@@ -110,6 +111,11 @@ async def acknowledge_runtime_binding(
 ) -> ActiveClerkRuntime:
     """Confirm the runtime before exposing its writer or starting any taps."""
     if runtime.clerk is None:
+        if runtime.startup_failure is not None:
+            record_worker_startup_refusal(
+                bound=bound, recovery=runtime.startup_failure.recovery,
+                service_factory=service_factory,
+            )
         if runtime.startup_failure is not None and runtime.startup_failure.reason_code == "ACCOUNT_PIN_MISMATCH":
             refuse_active_alpaca_binding(UnboundBroker(
                 reason="account_pin_mismatch",

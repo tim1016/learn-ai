@@ -11,6 +11,7 @@ mismatch, so a stale deep link never reads another account's evidence.
 
 from __future__ import annotations
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
@@ -106,7 +107,7 @@ async def clerk_status(*, symbol: str | None = None) -> ClerkStatus:
 
 async def validate_account(broker: str, account_id: str) -> str:
     real_account_id = await resolve_account_id(broker)
-    if account_id != real_account_id:
+    if canonical_alpaca_account_id(account_id) != canonical_alpaca_account_id(real_account_id):
         raise AccountMismatchError(
             f"Account '{account_id}' is not the account for broker '{broker}'.",
             detail=f"The broker's account is '{real_account_id}'.",

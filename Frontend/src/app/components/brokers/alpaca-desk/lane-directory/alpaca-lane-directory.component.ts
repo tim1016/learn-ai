@@ -78,6 +78,6 @@ export class AlpacaLaneDirectoryComponent {
   protected readonly failed = computed(() => this.fleet.error() !== undefined);
   protected readonly heading = computed(() => {
     const surface = this.surface();
-    return surface === null ? 'Clerk lanes' : `Clerk lanes — ${SURFACE_LABEL[surface].long}`;
+    return surface === null ? 'Choose an account' : `Choose an account — ${SURFACE_LABEL[surface].long}`;
   });
 }

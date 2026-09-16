@@ -87,7 +87,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
         queryParams: { deploy: '' },
         activePath: '/brokers/alpaca/deploy',
       },
-      { title: 'Bots', route: '/brokers/alpaca/bots' },
+      { title: 'Bot rosters', route: '/brokers/alpaca/bots' },
       { title: 'Gallery', route: '/brokers/alpaca/gallery' },
     ],
   },

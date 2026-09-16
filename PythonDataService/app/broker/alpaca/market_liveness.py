@@ -1,9 +1,9 @@
-"""Owned Alpaca evidence source for live market liveness (#1671).
+"""Alpaca execution clock plus retained IBKR market-status evidence.
 
 The canonical calendar owns *scheduled* session phases. This consumer owns the
-separate present-tense evidence path: it polls Alpaca's market-wide clock and
-subscribes to the stock-data trading-status stream for symbol halt/resume
-events. The status stream is transition-oriented, so a missing, malformed, or
+separate present-tense evidence path: it polls Alpaca's execution API clock and
+reads IBKR market data for symbol halt/resume evidence. Alpaca market-data
+subscriptions are prohibited by the owner's provider decision. A missing, malformed, or
 disconnected source never implies tradability: the shared fact becomes
 ``UNKNOWN`` and all new exposure fails closed.
 
@@ -40,7 +40,6 @@ type StatusSnapshotSource = Callable[[], Awaitable[MarketStatusSnapshot]]
 
 _STATUS_SOURCE = "alpaca.stock_data.status"
 _STATUS_STREAM = "market_statuses"
-_STATUS_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"
 _CLOCK_POLL_INTERVAL_S = 1.0
 _MAX_RECONNECT_BACKOFF_S = 30.0
 # Tolerance for a status event's source_timestamp_ms reading ahead of our
@@ -72,6 +71,7 @@ class AlpacaMarketLivenessConsumer:
         max_reconnects: int | None = None,
         clock_poll_interval_s: float = _CLOCK_POLL_INTERVAL_S,
         status_snapshot_source: StatusSnapshotSource | None = None,
+        status_source_close: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._read = read
         self._frame_source = frame_source
@@ -82,6 +82,7 @@ class AlpacaMarketLivenessConsumer:
         self._max_reconnects = max_reconnects
         self._clock_poll_interval_s = clock_poll_interval_s
         self._status_snapshot_source = status_snapshot_source
+        self._status_source_close = status_source_close
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -107,6 +108,8 @@ class AlpacaMarketLivenessConsumer:
                 pass
             finally:
                 self._task = None
+        if self._status_source_close is not None:
+            await self._status_source_close()
         self._store.mark_clock_unavailable(
             observed_at_ms=self._clock(),
             reason="Live Alpaca market-liveness source stopped.",
@@ -374,7 +377,7 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
     ) -> AlpacaMarketLivenessConsumer:
-        """Build the consumer with the vendor socket or a shared Paper source.
+        """Use IBKR data locally or through an authenticated IBKR status owner.
 
         ``resolved`` is captured once and closed over by every reconnect, so
         the source keeps using the binding it was started for. A consumer that
@@ -382,11 +385,27 @@ class AlpacaMarketLivenessConsumer:
         status topology without a controlled restart.
         """
         resolved = settings or resolved_alpaca_settings()
+        store = store or get_market_liveness_store()
 
-        def frame_source() -> AsyncIterator[bytes | str]:
-            return alpaca_market_status_frames(resolved)
+        async def frame_source() -> AsyncIterator[bytes | str]:
+            # Production always polls an IBKR source. The injected frame seam
+            # remains available to historical capture/replay tests only.
+            raise RuntimeError("Direct Alpaca market-data subscriptions are disabled.")
+            yield ""  # pragma: no cover
 
-        status_source = None
+        from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
+
+        def watched_symbols() -> tuple[str, ...]:
+            from app.marketdata.ibkr_feed import get_market_data_feed
+
+            feed = get_market_data_feed()
+            # A slow strategy still needs continuously observed halt/resume
+            # evidence between decisions, even with every browser tab closed.
+            active = () if feed is None else feed.active_symbols()
+            return tuple(sorted(set(store.requested_symbols()) | set(active)))
+
+        local_source = IbkrMarketStatusSource(symbols=watched_symbols)
+        status_source = local_source
         if resolved.market_status_upstream_url is not None:
             from app.config import settings as service_settings
 
@@ -394,11 +413,14 @@ class AlpacaMarketLivenessConsumer:
                 raise ValueError("A shared market-status source requires control-channel authentication.")
 
             async def status_source() -> MarketStatusSnapshot:
-                return await read_shared_market_status(
+                snapshot = await read_shared_market_status(
                     str(resolved.market_status_upstream_url),
                     control_secret=service_settings.DATA_PLANE_CONTROL_SECRET,
                     journal=journal or get_capture_journal(),
                 )
+                if snapshot.source != "ibkr.market_data.status":
+                    raise ValueError("The shared market-status source must be IBKR.")
+                return snapshot
 
         return cls(
             read=read,
@@ -406,6 +428,7 @@ class AlpacaMarketLivenessConsumer:
             store=store,
             journal=journal,
             status_snapshot_source=status_source,
+            status_source_close=local_source.close,
         )
 
 
@@ -437,25 +460,6 @@ def _message_timestamp_ms(message: dict[str, Any]) -> int | None:
         return adapter.rfc3339_to_ms(str(timestamp))
     except (TypeError, ValueError):
         return None
-
-
-async def alpaca_market_status_frames(settings: AlpacaSettings) -> AsyncIterator[bytes | str]:
-    """Authenticate and subscribe to raw Alpaca symbol trading-status events."""
-    import websockets
-
-    async with websockets.connect(_STATUS_WS_URL) as socket:
-        await socket.send(
-            json.dumps(
-                {
-                    "action": "auth",
-                    "key": settings.api_key_id.get_secret_value(),
-                    "secret": settings.api_secret_key.get_secret_value(),
-                }
-            )
-        )
-        await socket.send(json.dumps({"action": "subscribe", "statuses": ["*"]}))
-        async for frame in socket:
-            yield frame
 
 
 _consumer: AlpacaMarketLivenessConsumer | None = None

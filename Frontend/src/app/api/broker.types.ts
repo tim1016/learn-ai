@@ -17252,9 +17252,9 @@ export interface components {
             /**
              * Source
              * @default alpaca.stock_data.status
-             * @constant
+             * @enum {string}
              */
-            source?: "alpaca.stock_data.status";
+            source?: "alpaca.stock_data.status" | "ibkr.market_data.status";
             /** Symbol Statuses */
             symbol_statuses: components["schemas"]["SymbolTradingStatusEvidence"][];
         };

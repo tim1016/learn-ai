@@ -30,7 +30,10 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
-from app.schemas.clerk_transaction_projection import ClerkTransactionSummaryRow
+from app.schemas.clerk_transaction_projection import (
+    ClerkTransactionHistoryResponse,
+    ClerkTransactionSummaryRow,
+)
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.sqlite_clerk_transaction_projection import (
     _assert_history_hydration_revision,
@@ -51,6 +54,40 @@ class _UnusedBroker:
 
     async def list_positions(self) -> list:
         return []
+
+
+@pytest.mark.parametrize("shadow", [False, True])
+@pytest.mark.parametrize("requested", ["pa-desk", "PA-DESK", "OTHER"])
+def test_public_account_history_resolves_only_its_active_custody(
+    tmp_path: Path, shadow: bool, requested: str,
+) -> None:
+    custody = "shadow:PA-DESK" if shadow else "PA-DESK"
+    repo = ClerkSqliteRepository.initialize(account_id=custody, artifacts_root=tmp_path)
+    port = _UnusedBroker()
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=port, trade=port,
+        account_mode="live" if shadow else "paper",
+        authority_kind="shadow" if shadow else "sqlite",
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="shadow" if shadow else "sqlite", clerk=facade)
+    )
+    try:
+        def read() -> ClerkTransactionHistoryResponse | None:
+            return sqlite_transaction_history(
+                account_id=requested, limit=10, cursor=None, origin=None,
+                lifecycle_state=None, strategy_instance_id=None, run_id=None,
+            )
+
+        if requested == "OTHER":
+            with pytest.raises(ValueError, match="not the active"):
+                read()
+        else:
+            page = read()
+            assert page is not None and page.projection_available
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
 
 
 def _append_execution(

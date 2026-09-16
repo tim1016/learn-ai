@@ -32,13 +32,17 @@
   <nav class="lane-card__links" aria-label="{{ lane().display_label }} surfaces">
     @if (account(); as accountId) {
       @if (isReady() && supports('account_read')) {
-        <a [routerLink]="['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId]">Desk</a>
+        @let accountRoute = ['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId];
+        <a [routerLink]="accountRoute">Account details</a>
+        <a [routerLink]="accountRoute" [queryParams]="{ lens: 'trader' }">Trader view</a>
+        <a [routerLink]="accountRoute" [queryParams]="{ lens: 'operator' }">Operator view</a>
+        <a [routerLink]="accountRoute" [queryParams]="{ lens: 'operator' }" fragment="account-desk-transaction-history">Transaction history</a>
       }
     }
     <a
       [routerLink]="surfaceRoute('bots')"
       [class.lane-card__link--blocked]="!servesSurface('bots')"
-    >Bots</a>
+    >Bot roster</a>
     <a
       [routerLink]="surfaceRoute('gallery')"
       [class.lane-card__link--blocked]="!servesSurface('gallery')"

@@ -14,12 +14,26 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT = ROOT / "deploy" / "fleet" / "topology.snapshot.json"
 
 
 def _snapshot() -> dict:
     return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+
+
+def test_alpaca_lanes_retain_read_only_ibkr_market_data() -> None:
+    """Retiring IBKR order control must never disable Alpaca's data source."""
+    topology = yaml.load((ROOT / "compose.fleet.dev.yaml").read_text(), Loader=yaml.BaseLoader)
+    environment = topology["x-alpaca-clerk-agent"]["environment"]
+    assert environment["IBKR_BROKER_ENABLED"] == "true"
+    assert environment["IBKR_READONLY"] == "true"
+    services = topology["services"]
+    assert services["alpaca-live-clerk"]["environment"]["IBKR_CLIENT_ID"] != (
+        services["alpaca-paper-clerk"]["environment"]["IBKR_CLIENT_ID"]
+    )
 
 
 def test_snapshot_pins_the_deployed_role_split() -> None:

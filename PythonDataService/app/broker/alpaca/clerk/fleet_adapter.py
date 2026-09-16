@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
@@ -739,7 +740,7 @@ class AlpacaProviderAdapter:
         the result as opaque and provider verification owns real account
         discovery (PRD FR-051).
         """
-        return external_account_id.strip().lower()
+        return canonical_alpaca_account_id(external_account_id)
 
     def provider_summary(self, observation: Mapping[str, object]) -> Mapping[str, object]:
         """Project the lane's provider-authored directory summary.

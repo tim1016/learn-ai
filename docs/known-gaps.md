@@ -604,3 +604,16 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `_SESSIONS_PER_UNIT` family. A calendar-month-anchored variant would need
   a product decision and a resolver change only — the client applies
   whatever dates Python resolves.
+
+## Fleet account retirement — verified 2026-09-16
+
+- **P1: accepted drain/handover contract is not implemented.**
+  [ADR 0063](architecture/adrs/0063-draining-is-an-observed-lane-handover.md)
+  requires observed drain, deadline, command-quiet, and attributed mount
+  evidence. `PythonDataService/scripts/manage_broker_fleet.py` still exposes
+  the older `retire` and fixed-phrase `release-assignment --proof` interface;
+  `app/broker/fleet/service.py` has no drain/force-retire implementation.
+  A served account cannot be permanently retired/reassigned through a
+  compliant supported ceremony yet. Operators can stop and preserve a lane
+  using [the account runbook](runbooks/add-an-alpaca-account.md#6-removal).
+  Do not substitute direct registry edits or the old published proof token.

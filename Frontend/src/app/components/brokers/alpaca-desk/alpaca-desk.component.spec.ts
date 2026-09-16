@@ -405,7 +405,7 @@ describe('AlpacaDeskComponent', () => {
     await renderDesk({ deploy: '' }, undefined, undefined, undefined, true);
 
     expect(
-      screen.getByText(/choose a ready clerk lane below to deploy a strategy/i),
+      screen.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
     ).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Alpaca clerk lanes' })).toBeTruthy();
   });
@@ -416,8 +416,8 @@ describe('AlpacaDeskComponent', () => {
     // the plain directory rather than annotating it.
     await renderDesk({ surface: 'bots' }, undefined, undefined, undefined, true);
 
-    expect(screen.getByRole('heading', { name: 'Clerk lanes' })).toBeTruthy();
-    expect(screen.queryByText(/choose a ready clerk lane below to open its bots roster/i)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Choose an account' })).toBeTruthy();
+    expect(screen.queryByText(/choose a ready Paper or Live account below to open its bots roster/i)).toBeNull();
   });
 
   it('blocks a matching manual-order deep link when SQLite authority is unavailable', async () => {

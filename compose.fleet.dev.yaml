@@ -31,8 +31,8 @@ x-alpaca-clerk-agent: &alpaca-clerk-agent
   environment: &alpaca-clerk-agent-env
     HOST: 0.0.0.0
     PORT: "8000"
-    # A clerk is never a data-plane market-data owner; lane-served reads
-    # resolve lake evidence over POSTGRES_URL below, not a live feed.
+    # Historical lake reads use POSTGRES_URL. Live bot data uses the retained
+    # read-only IBKR feed below; Alpaca supplies account/order execution only.
     # Settings construction requires the Polygon key.
     POLYGON_API_KEY: ""
     FLEET_ROLE: clerk_agent
@@ -48,13 +48,10 @@ x-alpaca-clerk-agent: &alpaca-clerk-agent
     IBKR_LIVE_BARS_ROOT: /app/artifacts/alpaca_clerk/live_bars
     BROKER_CAPTURE_DIR: /app/artifacts/alpaca_clerk/broker_captures
     IBKR_READONLY: "true"
-    # IBKR is decommissioned; this flag gates only the IBKR client and its
-    # routers (no Alpaca path reads it — audited in #2080). Left true it
-    # burned ~350 reconnect log lines per clerk per 30 minutes against a
-    # gateway that no longer exists, burying real lane warnings. The
-    # IBKR-named *path* settings above stay: they carry Alpaca data (#2077's
-    # rename slice owns separating them).
-    IBKR_BROKER_ENABLED: "false"
+    # REQUIRED: IBKR market data -> Alpaca execution. Retired IBKR control
+    # pages/routers do not retire this feed. Never disable it to silence
+    # reconnect warnings: restore Gateway instead. See the account runbook.
+    IBKR_BROKER_ENABLED: "true"
     IBKR_HOST: auto
     IBKR_PORT: "4002"
     # Data lake catalog — the same URL compose.yaml:171 hands the combined

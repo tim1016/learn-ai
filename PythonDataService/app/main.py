@@ -499,15 +499,15 @@ async def _service_lifespan(
             from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
             # One context, passed to every consumer. The broker, the client it
-            # builds, the two websockets and the Clerk are all bound to this exact
+            # builds, the execution websocket and the Clerk are all bound to this exact
             # revision's mode and credential pair, so none of them can answer for a
             # configuration this worker did not bind (ADR 0060; plan §5.5).
             alpaca_settings = alpaca_binding.context.settings
             alpaca_broker = AlpacaBroker(settings=alpaca_settings)
             alpaca_clerk_root = alpaca_settings.clerk_dir
             # #1671: scheduled session structure remains calendar-owned; this
-            # source provides the separate real-time clock + per-symbol
-            # halt/resume evidence used to fail new exposure closed.
+            # source combines Alpaca's execution clock with IBKR's read-only
+            # symbol status. It never subscribes to Alpaca market data.
             from app.broker.alpaca.market_liveness import (
                 AlpacaMarketLivenessConsumer,
                 set_market_liveness_consumer,
@@ -646,7 +646,7 @@ async def _service_lifespan(
             if active_alpaca_binding_refusal() is None:
                 alpaca_market_liveness.start()
                 set_market_liveness_consumer(alpaca_market_liveness)
-                logger.info("Alpaca market-liveness source started.")
+                logger.info("IBKR market-status source and Alpaca execution clock started.")
             set_active_clerk_runtime(alpaca_clerk_runtime)
             if alpaca_clerk_runtime.clerk is not None:
                 logger.info(
@@ -762,7 +762,7 @@ async def _service_lifespan(
         # (PR-B of #1813, 2026-08-27).
         from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
-        # Only the role that runs the IBKR clerk should own ib_async's
+        # Only the role that owns the read-only IBKR feed should own ib_async's
         # client logger — installing this unconditionally at import time
         # would affect every process that merely imports the broker stack.
         install_ib_async_noise_filter()
