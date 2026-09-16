@@ -484,6 +484,250 @@ async def test_a_delivery_contract_violation_on_a_stream_is_reported_as_identity
     assert "not a StreamDeliveryResult" in caplog.text
 
 
+def _routed_lane_with_handler(
+    control_dir: Path,
+    clock: FrozenClock,
+    fleet_service,
+    *,
+    label: str,
+    handler: object,
+) -> tuple:
+    """One bound fake_alpha lane whose every dispatch runs through the given
+    in-process handler behind a real ``LocalLaneDelivery`` -- the seam where
+    an echoless lane failure must be classified, not masked (#2164). A stub
+    delivery would skip ``verify_identity_echo`` entirely and only re-test
+    the router's own status branches, which was never the bug.
+
+    Returns ``(router, lane, service)``; the command-path test reads routing
+    receipts off the service's store."""
+    from app.broker.fleet.delivery import LocalLaneDelivery
+    from app.broker.fleet.routing import LaneRouter
+    from tests.broker.fleet.conftest import bind_lane, fake_alpha, fake_beta, provision_lane
+
+    service = FleetControlService(
+        store=fleet_service._store,
+        provider_adapters={"fake_alpha": fake_alpha(), "fake_beta": fake_beta()},
+        clock=clock,
+    )
+    lane = provision_lane(
+        service, broker="fake_alpha", label=label, tmp_path=control_dir.parent
+    )
+    bind_lane(service, lane, account=f"acct-{label}")
+    router = LaneRouter(
+        service=service,
+        delivery_for=lambda broker, session: LocalLaneDelivery(handler),
+    )
+    return router, lane, service
+
+
+def _alpha_operation(operation_id: str):
+    from tests.broker.fleet.conftest import fake_alpha
+
+    return next(
+        op for op in fake_alpha().operations() if op.operation_id == operation_id
+    )
+
+
+async def test_a_lane_500_without_an_echo_is_the_lane_failing_not_a_lane_identity_mismatch(
+    control_dir: Path, clock: FrozenClock, fleet_service, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2164: the echo headers exist only on a response the identity
+    middleware served, so a handler-raised 5xx carries none. Routing that 500
+    through the identity check answered the operator with a 409
+    ``clerk_identity_mismatch`` and "the wrong lane answered; refresh and
+    retry" -- advice that can never fix a lane that is erroring (#2163's
+    missing POSTGRES_URL died exactly there, three layers beneath a red
+    herring). The 500 must surface as the lane failing: ``ClerkUnreachable``,
+    the status in the message, and the lane's refusal body in the
+    coordinator log."""
+    import logging
+
+    from app.broker.fleet.delivery import DeliveryResult
+    from app.broker.fleet.errors import ClerkIdentityMismatch, ClerkUnreachable
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        return DeliveryResult(
+            status_code=500,
+            headers={},
+            body=b'{"detail": "CatalogUnavailableError: POSTGRES_URL is empty"}',
+        )
+
+    router, lane, _service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="lane-500", handler=_handler
+    )
+    caplog.set_level(logging.WARNING, logger="app.broker.fleet.routing")
+    with pytest.raises(ClerkUnreachable) as excinfo:
+        await router.deliver_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=_alpha_operation("read_account"),
+            path_params={},
+            query={},
+        )
+    assert not issubclass(excinfo.type, ClerkIdentityMismatch)
+    assert excinfo.value.reason == "clerk_unreachable"
+    assert "500" in excinfo.value.message
+    assert "wrong lane" not in (excinfo.value.next_step or "")
+    # The lane's own refusal body is what the next diagnosis needs; it must
+    # reach the coordinator log even though it never reaches the operator.
+    assert "refusal body" in caplog.text
+    assert "POSTGRES_URL is empty" in caplog.text
+
+
+async def test_a_lane_500_on_a_stream_open_is_the_lane_failing_not_an_identity_mismatch(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2164 on ``stream_read``: an echoless 500 at stream open refused as a
+    409 identity mismatch; it is the lane failing to open the stream."""
+    from app.broker.fleet.delivery import StreamDeliveryResult
+    from app.broker.fleet.errors import ClerkIdentityMismatch, ClerkUnreachable
+
+    async def _empty_events():
+        return
+        yield
+
+    async def _handler(request: object) -> StreamDeliveryResult:
+        del request
+        return StreamDeliveryResult(
+            status_code=500,
+            headers={},
+            events=_empty_events(),
+            error_body=b'{"detail": "lane stream open failed"}',
+        )
+
+    router, lane, _service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="stream-lane-500", handler=_handler
+    )
+    with pytest.raises(ClerkUnreachable) as excinfo:
+        await router.stream_read(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=_alpha_operation("read_account"),
+            path_params={},
+            query={},
+        )
+    assert not issubclass(excinfo.type, ClerkIdentityMismatch)
+    assert "500" in excinfo.value.message
+
+
+async def test_a_lane_500_after_a_command_dispatch_names_the_status_not_an_identity_problem(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2164 on ``deliver_command``: the family was already
+    ``ClerkRoutingOutcomeUnknown`` either way (correct after a dispatch), but
+    the message claimed the response "failed identity verification" -- a
+    diagnosis that sends the operator at lane binding for a lane that is
+    merely erroring. The refusal must name the lane's own status, and the
+    attempt must settle outcome-unknown."""
+    from app.broker.fleet.delivery import DeliveryResult
+    from app.broker.fleet.errors import ClerkRoutingOutcomeUnknown
+    from app.broker.fleet.records import RoutingReceiptState
+    from app.broker.fleet.routing import CommandEnvelope
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        return DeliveryResult(status_code=500, headers={}, body=b"lane error")
+
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="command-lane-500", handler=_handler
+    )
+    bot_action = _alpha_operation("submit_bot_action")
+    with pytest.raises(ClerkRoutingOutcomeUnknown) as excinfo:
+        await router.deliver_command(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=bot_action,
+            path_params={"account_id": "acct-command-lane-500", "sid": "bot-1"},
+            query={},
+            body={},
+            envelope=CommandEnvelope(
+                capability=bot_action.capability.value,
+                idempotency_key="lane-500-command",
+                expected_effective_binding_generation=1,
+                target={},
+            ),
+        )
+    assert "500" in excinfo.value.message
+    assert "identity" not in excinfo.value.message
+    receipts = service._store.list_routing_receipts(clerk_id=lane.clerk_id)
+    settled = [r for r in receipts if r.idempotency_key == "lane-500-command"]
+    assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
+
+
+async def test_an_echoless_redirect_on_a_command_never_settles_delivered(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2165 review: the internal client never follows redirects, so a proxy
+    or a stale endpoint can answer a dispatch with an echoless 3xx. Passing
+    it through the echoless bypass would let ``deliver_command`` fall past
+    its ``>= 400`` refusals and settle DELIVERED for a command that never
+    reached the handler — corrupting the durable receipt against a safe
+    retry. The redirect refuses, and the attempt settles outcome-unknown."""
+    from app.broker.fleet.delivery import DeliveryResult
+    from app.broker.fleet.errors import ClerkRoutingOutcomeUnknown
+    from app.broker.fleet.records import RoutingReceiptState
+    from app.broker.fleet.routing import CommandEnvelope
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        return DeliveryResult(
+            status_code=307, headers={"location": "/elsewhere"}, body=b""
+        )
+
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="lane-307", handler=_handler
+    )
+    bot_action = _alpha_operation("submit_bot_action")
+    with pytest.raises(ClerkRoutingOutcomeUnknown):
+        await router.deliver_command(
+            broker="fake_alpha",
+            clerk_id=lane.clerk_id,
+            operation=bot_action,
+            path_params={"account_id": "acct-lane-307", "sid": "bot-1"},
+            query={},
+            body={},
+            envelope=CommandEnvelope(
+                capability=bot_action.capability.value,
+                idempotency_key="lane-307-command",
+                expected_effective_binding_generation=1,
+                target={},
+            ),
+        )
+    receipts = service._store.list_routing_receipts(clerk_id=lane.clerk_id)
+    settled = [r for r in receipts if r.idempotency_key == "lane-307-command"]
+    assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
+
+
+async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_body(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2164: a 404 the identity middleware never served (an unrouted path)
+    also carries no echo. It is the lane's own refusal, so the caller sees
+    that 404 and its body -- not a fabricated lane-identity conflict."""
+    from app.broker.fleet.delivery import DeliveryResult
+
+    async def _handler(request: object) -> DeliveryResult:
+        del request
+        return DeliveryResult(
+            status_code=404, headers={}, body=b'{"detail": "Not Found"}'
+        )
+
+    router, lane, _service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="lane-404", handler=_handler
+    )
+    delivered = await router.deliver_read(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        operation=_alpha_operation("read_account"),
+        path_params={},
+        query={},
+    )
+    assert delivered.status_code == 404
+    assert b"Not Found" in delivered.body
+
+
+
 def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
     """The extension boundary is only provable when the fakes disagree.
 

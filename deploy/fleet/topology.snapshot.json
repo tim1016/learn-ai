@@ -59,6 +59,7 @@
         "IBKR_READONLY",
         "POLYGON_API_KEY",
         "PORT",
+        "POSTGRES_URL",
         "TRUSTED_HOSTS"
       ],
       "image": null,
@@ -109,6 +110,7 @@
         "IBKR_READONLY",
         "POLYGON_API_KEY",
         "PORT",
+        "POSTGRES_URL",
         "TRUSTED_HOSTS"
       ],
       "image": null,

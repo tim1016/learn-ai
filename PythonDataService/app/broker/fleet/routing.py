@@ -70,6 +70,31 @@ _RECEIPT_BODY_KEYS = (
 )
 
 
+def _refusal_excerpt(body: bytes | None) -> str:
+    """A lane refusal body, bounded for the coordinator log.
+
+    The excerpt is the fact the next diagnosis needs (#2164: #2163's missing
+    env var surfaced only through a log dive) — but a lane body can carry
+    internal topology, so it goes to the log at a bounded width, never the
+    public refusal.
+    """
+    return (body or b"")[:400].decode("utf-8", "replace")
+
+
+def _decoded_headers(start: Mapping[str, Any]) -> dict[str, str]:
+    """An ASGI response-start message's headers as plain ``str`` pairs."""
+    return {
+        name.decode(): value.decode()
+        for name, value in start.get("headers") or []
+    }
+
+
+async def _no_stream_events() -> AsyncIterator[object]:
+    """The refused-stream carrier for a local raw-ASGI dispatch."""
+    return
+    yield
+
+
 class CommandEnvelopeInvalid(ValueError):
     """A command body's §10.3 envelope is absent or incoherent.
 
@@ -236,11 +261,20 @@ class LaneRouter:
                 "reachable; the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
+            # The lane's own failure, unmasked (#2164): the status is in the
+            # refusal below, the body excerpt in the coordinator log.
+            logger.warning(
+                "Lane %s answered %d serving %s; refusal body: %s",
+                clerk_id,
+                result.status_code,
+                operation.operation_id,
+                _refusal_excerpt(result.body),
+            )
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} failed serving {operation.operation_id} "
                 f"with {result.status_code}.",
                 next_step="Retry once the lane recovers from the reported "
-                "server error.",
+                "server error; the lane's own log names the cause.",
             )
         return RoutedDelivery(
             status_code=result.status_code,
@@ -310,11 +344,21 @@ class LaneRouter:
                 "reachable; the transport detail is in the coordinator log.",
             ) from exc
         if result.status_code >= 500:
+            # Same unmasking as deliver_read (#2164): the stream-open refusal
+            # body is the lane's own answer, not an identity question.
+            logger.warning(
+                "Lane %s answered %d opening %s; refusal body: %s",
+                clerk_id,
+                result.status_code,
+                operation.operation_id,
+                _refusal_excerpt(result.error_body),
+            )
             raise ClerkUnreachable(
                 f"Clerk {clerk_id} failed opening {operation.operation_id} "
                 f"with {result.status_code}.",
                 next_step="Retry opening the stream once the lane recovers "
-                "from the reported server error.",
+                "from the reported server error; the lane's own log names "
+                "the cause.",
             )
         return RoutedStream(
             status_code=result.status_code,
@@ -466,9 +510,24 @@ class LaneRouter:
                 correlation_id=receipt.correlation_id,
                 outcome=RoutingReceiptState.OUTCOME_UNKNOWN,
             )
+            # The lane failed after a dispatched command: outcome unknown is
+            # the correct settlement, and the excerpt keeps the lane's own
+            # cause reachable from the coordinator log (#2164).
+            logger.warning(
+                "Lane %s answered %d serving %s after dispatch; refusal "
+                "body: %s",
+                clerk_id,
+                result.status_code,
+                operation.operation_id,
+                _refusal_excerpt(result.body),
+            )
             raise ClerkRoutingOutcomeUnknown(
                 f"Clerk {clerk_id} failed serving {operation.operation_id} "
                 f"with {result.status_code} after the dispatch.",
+                next_step="The command may have been applied. Reconcile by "
+                "the idempotency key with the provider clerk's receipt "
+                "while the lane recovers; the lane's own log names the "
+                "cause.",
             )
         if result.status_code >= 400:
             self._service.settle_routing_attempt(
@@ -831,10 +890,7 @@ class _LocalAsgiHandler:
             )
             return DeliveryResult(
                 status_code=start["status"],
-                headers={
-                    name.decode(): value.decode()
-                    for name, value in start.get("headers") or []
-                },
+                headers=_decoded_headers(start),
                 body=payload,
             )
 
@@ -871,12 +927,28 @@ class _LocalAsgiHandler:
                     task.cancel()
 
         start = await started
+        if start["status"] >= 400:
+            # A refused stream-open is that refusal — the same rule the HTTP
+            # adapter applies: collect the body, deliver no events, and keep
+            # the error page away from the SSE parser. The collected body is
+            # what stream_read's refusal excerpt logs (#2164).
+            refused_body: list[bytes] = []
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                refused_body.append(item)
+            await task
+            connection_open.set()
+            return StreamDeliveryResult(
+                status_code=start["status"],
+                headers=_decoded_headers(start),
+                events=_no_stream_events(),
+                error_body=b"".join(refused_body),
+            )
         return StreamDeliveryResult(
             status_code=start["status"],
-            headers={
-                name.decode(): value.decode()
-                for name, value in start.get("headers") or []
-            },
+            headers=_decoded_headers(start),
             events=iter_sse_events(chunks()),
         )
 

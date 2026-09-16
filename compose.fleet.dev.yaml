@@ -50,6 +50,13 @@ x-alpaca-clerk-agent: &alpaca-clerk-agent
     IBKR_BROKER_ENABLED: "true"
     IBKR_HOST: auto
     IBKR_PORT: "4002"
+    # Data lake catalog — the same URL compose.yaml:171 hands the combined
+    # role. A lane-served read (bot panel, strategy-validation golden
+    # dossiers) resolves lake evidence over asyncpg in the lane process
+    # itself, so a clerk without this 500s on every lake-backed read (#2163).
+    # The lanes sit on app-network with db, so the same templated string
+    # resolves; the password stays a ${} passthrough, never a literal.
+    POSTGRES_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
   depends_on:
     python-service:
       condition: service_healthy

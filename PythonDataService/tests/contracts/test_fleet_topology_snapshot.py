@@ -69,7 +69,7 @@ def test_snapshot_declares_env_file_wiring_for_every_credential_bearing_service(
 
 def test_snapshot_pins_the_clerk_containment_limits() -> None:
     """Both clerks express their cpu/memory limits under `deploy.resources.limits`,
-    not the short top-level `cpus:`/`mem_limit:` syntax. A projection that only
+    not the short top-level `cpus:`/`mem_limit` syntax. A projection that only
     reads the top-level fields records `{}` here regardless of what the overlay
     actually sets -- deleting a limit would then produce no diff, despite the
     renderer claiming to pin containment. `mem_limit` is compose's normalised,
@@ -80,3 +80,20 @@ def test_snapshot_pins_the_clerk_containment_limits() -> None:
         assert containment[lane]["containment"], f"{lane} recorded no containment limits at all"
         assert "cpus" in containment[lane]["containment"]
         assert "mem_limit" in containment[lane]["containment"]
+
+
+def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
+    """#2163: a lane-served read (bot panel, strategy-validation golden
+    dossiers) resolves lake evidence over asyncpg in the lane process itself,
+    so a clerk without ``POSTGRES_URL`` 500s on every lake-backed read --
+    which the coordinator then masked as a lane-identity 409 (#2164). The
+    dev-posture lanes share ``app-network`` with ``db`` and take the same
+    templated URL ``compose.yaml`` hands the combined role. The production
+    ``compose.fleet.yaml`` posture is out of scope here: its clerks sit on
+    ``fleet-private`` alone, so lake access there is a routing decision, not
+    a missing variable."""
+    detail = _snapshot()["service_detail"]
+    for lane in ("alpaca-live-clerk", "alpaca-paper-clerk"):
+        assert "POSTGRES_URL" in detail[lane]["environment_keys"], (
+            f"{lane} has no POSTGRES_URL: every lake-backed lane read 500s (#2163)"
+        )
