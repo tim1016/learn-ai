@@ -120,17 +120,29 @@ export class AlpacaLiveVerdictService {
   start(): void {
     if (this.started) return;
     this.started = true;
-    void this.refresh().finally(() => this.scheduleNextTick());
+    this.runTick();
   }
 
-  /** Arm the next tick at the current (possibly backed-off) interval. A
-   * no-op once `stop()` has run, so a tick already in flight when the
-   * service is destroyed can't resurrect the timer after teardown. */
-  private scheduleNextTick(): void {
+  /** Run one tick and arm the next relative to when THIS tick started, not
+   * when it settled. A slow lane's read (up to `POLL_REQUEST_TIMEOUT_MS`)
+   * would otherwise tack a full `currentIntervalMs` on top of its own delay
+   * before the next tick fires — stalling every other lane's cadence behind
+   * the slowest read, which is exactly the cross-lane leakage FR-093
+   * forbids. */
+  private runTick(): void {
+    const tickStartedAtMs = Date.now();
+    void this.refresh().finally(() => this.scheduleNextTick(tickStartedAtMs));
+  }
+
+  /** Arm the next tick at the current (possibly backed-off) interval, minus
+   * however much of it this tick already spent settling. A no-op once
+   * `stop()` has run, so a tick already in flight when the service is
+   * destroyed can't resurrect the timer after teardown. */
+  private scheduleNextTick(tickStartedAtMs: number): void {
     if (!this.started) return;
-    this.pollTimer = setTimeout(() => {
-      void this.refresh().finally(() => this.scheduleNextTick());
-    }, this.currentIntervalMs);
+    const elapsedMs = Date.now() - tickStartedAtMs;
+    const delayMs = Math.max(0, this.currentIntervalMs - elapsedMs);
+    this.pollTimer = setTimeout(() => this.runTick(), delayMs);
   }
 
   /** This lane's latest state, or the unpolled default if it has never

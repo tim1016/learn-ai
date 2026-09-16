@@ -402,5 +402,39 @@ describe('AlpacaLiveVerdictService', () => {
       expect(svc.stateFor('clrk_bad').verdict).toBeNull();
       expect(svc.stateFor('clrk_bad').lastError).toBeInstanceOf(Error);
     });
+
+    it("arms the next tick from when THIS tick started, not from when a slow sibling's read finally settled", async () => {
+      vi.useFakeTimers();
+      const { svc, brokers } = setup([
+        testLane({ clerk_id: 'clrk_slow', broker: 'alpaca', display_label: 'Slow' }),
+        testLane({ clerk_id: 'clrk_fast', broker: 'alpaca', display_label: 'Fast' }),
+      ]);
+      const verdict = makeVerdict();
+      brokers.readLane.mockImplementation(
+        (clerkId: string) =>
+          new Promise((resolve) => {
+            // The slow lane settles close to the scheduler's 15s request
+            // ceiling; the fast lane settles on the next tick of the clock.
+            setTimeout(() => resolve(verdict), clerkId === 'clrk_slow' ? 14000 : 0);
+          }),
+      );
+
+      svc.start();
+      await flush(); // tick 1 dispatches both reads
+
+      // Tick 1's refresh() can't settle until the slow lane's read does.
+      await vi.advanceTimersByTimeAsync(14000);
+      expect(svc.stateFor('clrk_fast')).toEqual({ verdict, lastError: null });
+
+      // Old, buggy behaviour: `scheduleNextTick()` only runs once `refresh()`
+      // settles, and arms a fresh 5000ms (`POLL_INTERVAL_MS`) gap from THAT
+      // moment — tick 2 wouldn't fire until ~19000ms after tick 1 started.
+      // A further 500ms — nowhere near that 5000ms gap — still proves tick 2
+      // already fired once the next tick is anchored to tick 1's START
+      // instead: the 5000ms cadence had already elapsed by the time the slow
+      // read settled, so the healthy lane isn't held hostage by it.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(brokers.readLane).toHaveBeenCalledTimes(4); // tick 2 already dispatched both lanes
+    });
   });
 });
