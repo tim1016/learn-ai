@@ -32,7 +32,7 @@
       This lane is unavailable. Other healthy lanes remain available.
     </p>
   }
-  <nav class="lane-card__links" aria-label="{{ displayName().name }} surfaces">
+  <nav class="lane-card__links" aria-label="{{ displayNameText() }} surfaces">
     @if (account(); as accountId) {
       @if (isReady() && supports('account_read')) {
         @let accountRoute = ['/brokers', 'alpaca', 'clerks', lane().clerk_id, 'accounts', accountId];

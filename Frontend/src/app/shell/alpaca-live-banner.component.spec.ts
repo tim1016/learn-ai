@@ -265,6 +265,68 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.textContent).toContain('(Paper)');
   });
 
+  // Two lanes sharing a display name are a deliberately supported state
+  // (ADR 0064 Decision 5), not an edge case: without carrying the
+  // disambiguator into `aria-label` too, both badges would announce
+  // identically to a screen reader (WCAG 4.1.2 / axe landmark-unique
+  // territory), even though their visible pills already read differently.
+  it("carries the disambiguator into the paper lane's accessible name, not only its visible pill", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
+
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain(
+      'Strategy lab (Paper)',
+    );
+  });
+
+  it("carries the disambiguator into the live lane's accessible name, not only its visible pill", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(live, { verdict: verdict({ observed_account_id: 'PA9' }), lastError: null }, [
+      paper,
+      live,
+    ]);
+
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain(
+      'strategy lab (Live)',
+    );
+  });
+
+  it('carries the disambiguator into the accessible name on the undetermined path too (not just the verdict path)', async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: null, lastError: new Error('down') }, [paper, live]);
+
+    const name = screen.getByRole('status').getAttribute('aria-label');
+    expect(name).toContain('Strategy lab (Paper)');
+    expect(name).toContain('Assume real money');
+  });
+
   it('never refuses a duplicate name, it only disambiguates', async () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',

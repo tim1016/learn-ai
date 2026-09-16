@@ -6,6 +6,7 @@ import {
   type LaneDescriptor,
   laneConfirmedAccount,
   laneDisplayName,
+  laneDisplayNameText,
   laneIsReady,
 } from '../../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../../services/alpaca-live-verdict.service';
@@ -54,6 +55,11 @@ export class AlpacaLaneCardComponent {
   /** This lane's display name: its account nickname, or its lane label
    * until one is set. */
   protected readonly displayName = computed(() => laneDisplayName(this.lane(), this.allLanes()));
+  /** `displayName` as one accessible-name-safe string — carries the
+   * disambiguator into `aria-label`, not just the visible text (a shared
+   * name is a supported state under ADR 0064 Decision 5, not an edge case
+   * that can skip the accessible name). */
+  protected readonly displayNameText = computed(() => laneDisplayNameText(this.displayName()));
 
   /** True when this lane can serve `surface` at its canonical URL right now. */
   protected servesSurface(surface: LaneSurface): boolean {

@@ -77,7 +77,11 @@ function laneRawDisplayName(lane: LaneDescriptor): string {
  * lane's own volume, so no single writer sees every lane to enforce
  * cross-lane uniqueness (ADR 0064 "Considered options"). Showing each
  * colliding lane's own label beside its name is how the two stay
- * distinguishable instead. */
+ * distinguishable instead.
+ *
+ * The disambiguator is suppressed when it would just repeat `name` (no
+ * nickname set, and the collision is on `display_label` itself) — "Paper
+ * (Paper)" tells the operator nothing "Paper" didn't already. */
 export function laneDisplayName(
   lane: LaneDescriptor,
   allLanes: readonly LaneDescriptor[],
@@ -89,5 +93,22 @@ export function laneDisplayName(
       other.clerk_id !== lane.clerk_id
       && laneRawDisplayName(other).toLowerCase() === normalized,
   );
-  return { name, disambiguator: isShared ? lane.display_label : null };
+  const disambiguator = isShared && name !== lane.display_label ? lane.display_label : null;
+  return { name, disambiguator };
+}
+
+/** `display`'s name and disambiguator combined into one accessible-name-safe
+ * string, in the same "(Label)" parenthetical the visible markup renders —
+ * appended only when a disambiguator is present.
+ *
+ * Two lanes sharing a display name are a deliberately supported state
+ * (ADR 0064 Decision 5), not an edge case: an accessible name built from
+ * `.name` alone leaves both lanes' badges/landmarks announcing identically,
+ * which is exactly the WCAG 4.1.2 / axe landmark-uniqueness gap this
+ * function exists to close. Every accessible name derived from a
+ * `LaneDisplayName` must go through this, not `.name` directly. */
+export function laneDisplayNameText(display: LaneDisplayName): string {
+  return display.disambiguator === null
+    ? display.name
+    : `${display.name} (${display.disambiguator})`;
 }

@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import { laneDisplayName, type LaneDescriptor } from '../fleet/fleet-directory.types';
+import { laneDisplayName, laneDisplayNameText, type LaneDescriptor } from '../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
 
@@ -178,10 +178,15 @@ function verdictBadge(
   disambiguator: string | null,
   v: AlpacaLiveVerdict,
 ): LaneBadge {
+  // A shared display name is a supported state (ADR 0064 Decision 5), not an
+  // edge case — the accessible name must carry the same "(Label)"
+  // disambiguator the visible pill renders, or two colliding lanes announce
+  // identically to a screen reader.
+  const accessibleName = laneDisplayNameText({ name: lane, disambiguator });
   const base = {
     lane,
     disambiguator,
-    ariaLabel: `${lane}: ${v.headline}`,
+    ariaLabel: `${accessibleName}: ${v.headline}`,
     detail: v.detail,
     lossHold: v.loss_hold === 'held',
   };
@@ -245,7 +250,10 @@ function undetermined({
   readonly detail: string;
   readonly refusalCode?: string | null;
 }): LaneBadge {
-  const named = lane === null ? headline : `${lane}: ${headline}`;
+  // Same reasoning as `verdictBadge`: the accessible name carries the
+  // disambiguator too, not just the visible `lane` span.
+  const accessibleName = lane === null ? null : laneDisplayNameText({ name: lane, disambiguator });
+  const named = accessibleName === null ? headline : `${accessibleName}: ${headline}`;
   return {
     tone: 'is-undetermined',
     lane,

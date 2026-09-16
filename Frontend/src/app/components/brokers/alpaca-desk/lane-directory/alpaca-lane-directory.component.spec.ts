@@ -208,6 +208,36 @@ describe('AlpacaLaneDirectoryComponent', () => {
     expect(screen.getAllByText('(Paper)')).toHaveLength(1);
     expect(screen.getAllByText('(Live)')).toHaveLength(1);
   });
+
+  it("carries the disambiguator into each colliding lane's surfaces-nav accessible name, not just its visible text", async () => {
+    // #2182 follow-up: two lanes sharing a display name must not render two
+    // `nav` landmarks with an identical accessible name (axe
+    // landmark-unique-adjacent territory) — `aria-label` has to include the
+    // same disambiguator the visible pill shows.
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await render(AlpacaLaneDirectoryComponent, {
+      providers: [
+        provideRouter([]),
+        provideFleetDirectory({ observed_at_ms: 1, clerks: [paper, live] }),
+      ],
+    });
+
+    expect(
+      screen.getByRole('navigation', { name: 'Strategy lab (Paper) surfaces' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('navigation', { name: 'strategy lab (Live) surfaces' }),
+    ).toBeTruthy();
+  });
 });
 
 describe('verdictModeChip', () => {
