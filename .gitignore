@@ -110,3 +110,5 @@ PythonDataService/var/broker_captures/
 # Playwright local run output (CI uploads these as artifacts).
 Frontend/test-results/
 Frontend/playwright-report/
+
+.zcode/
