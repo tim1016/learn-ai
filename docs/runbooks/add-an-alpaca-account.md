@@ -183,29 +183,91 @@ existing) database, so the general "stop every governed bot first" boundary
 in the subprocedure is trivially satisfied here — there is nothing running
 against this account yet.
 
-### Capture broker evidence
+### Create the runner-artifacts root's `live_state/` directory first
 
-Every step in this ceremony — `cutover-initialize`, the verified backup in
-between, `cutover-plan`, and `cutover-apply` — consumes a JSON evidence file
-proving the account is flat and order-free at the moment it was captured.
-The tool never calls Alpaca itself (it is deliberately broker-free); you
-capture the evidence yourself, straight from Alpaca's REST API, and hand it
-the file:
+Before anything else: `cutover-initialize` calls
+`read_quiescent_alpaca_roster` (`app/engine/live/cutover_roster.py:65`),
+which hard-refuses — as a `CutoverRefused`, propagated straight through
+`cutover.py`'s `_runner_roster_evidence` — if
+`<runner-artifacts-root>/live_state` does not exist as a real directory.
+That refusal is **not** the same thing as the "no bots governed" case this
+runbook otherwise leans on (§6's opening paragraph): the owner-decided
+forgiveness in `_runner_roster_evidence` only covers an *existing*
+`live_state/` that happens to be empty of Alpaca bots, never a missing
+root. A genuinely fresh lane's volume has never had a bot on it, so it has
+no `live_state/` directory at all yet — you will hit this refusal on your
+very first `cutover-initialize` unless you create the directory first. This
+is exactly what `fleet-dev-two-lane-posture.md` § Paper activation
+boundary's step 1 recorded from the real 2026-09-15 run.
+
+In the two-lane posture the lane container has no separate runner-artifacts
+volume — its own writable-root fence keeps every piece of lane state inside
+the one custody volume it does mount (`IBKR_LIVE_RUNS_ROOT`,
+`IBKR_LIVE_BARS_ROOT`, and `BROKER_CAPTURE_DIR` in its compose environment
+all resolve under `/app/artifacts/alpaca_clerk`, the same path
+`--artifacts-root` already points at). Pass that same path as
+`--runner-artifacts-root` below, and create the directory there before the
+first command:
 
 ```bash
-# runs on: host (or wherever the lane's credentials are reachable)
+# runs on: inside alpaca-paper-clerk (or alpaca-live-clerk)
+podman exec alpaca-paper-clerk mkdir -p /app/artifacts/alpaca_clerk/live_state
+```
+
+If you're instead reusing an established runner-artifacts tree that already
+has bots on it (the default combined layout, or a lane that mounts a
+separate runner volume), this directory already exists and the step above
+is a no-op — the check only refuses a *missing* root, never an existing
+one.
+
+### Capture broker evidence — twice, not once
+
+This ceremony needs broker evidence at two separate moments, and they are
+*meant* to be two different captures: once for `cutover-initialize`, and
+again — a genuinely fresh capture — after the verified backup, immediately
+before `cutover-plan`. The subprocedure says this explicitly (["Capture
+fresh broker evidence again after the
+backup"](alpaca-sqlite-clerk-recovery-and-cutover.md#produce-the-read-only-plan)).
+Don't read the rest of this runbook as "one capture for the whole
+ceremony" — it's one capture for `initialize`, then a second capture that
+`plan` and `apply` share (see gotcha 2 below for why that second pair must
+be exact).
+
+The tool never calls Alpaca itself (it is deliberately broker-free); you
+capture the evidence yourself, straight from Alpaca's REST API, using
+whichever credential pair matches the account's real mode — the same slot
+split as §3, not the same variable names for both:
+
+```bash
+# runs on: host — Paper (slot `default`, deploy/fleet/env/paper.env)
 KEY_ID=$(grep ^ALPACA_API_KEY_ID= deploy/fleet/env/paper.env | cut -d= -f2-)
 SECRET_KEY=$(grep ^ALPACA_API_SECRET_KEY= deploy/fleet/env/paper.env | cut -d= -f2-)
-curl -s https://paper-api.alpaca.markets/v2/account \
+BASE_URL=https://paper-api.alpaca.markets
+```
+
+```bash
+# runs on: host — Live (slot `live`, deploy/fleet/env/live.env)
+KEY_ID=$(grep ^ALPACA_CREDENTIAL_LIVE_KEY_ID= deploy/fleet/env/live.env | cut -d= -f2-)
+SECRET_KEY=$(grep ^ALPACA_CREDENTIAL_LIVE_SECRET_KEY= deploy/fleet/env/live.env | cut -d= -f2-)
+BASE_URL=https://api.alpaca.markets
+```
+
+Live's key/secret variables are a genuinely different pair, not the same
+names in a different file — greping `ALPACA_API_KEY_ID` out of `live.env`
+finds nothing there and silently hands `curl` an empty credential. Then,
+with whichever pair applies:
+
+```bash
+# runs on: host
+curl -s "$BASE_URL/v2/account" \
   -H "APCA-API-KEY-ID: $KEY_ID" -H "APCA-API-SECRET-KEY: $SECRET_KEY" \
   > /tmp/alpaca-account.json
-curl -s "https://paper-api.alpaca.markets/v2/orders?status=open" \
+curl -s "$BASE_URL/v2/orders?status=open" \
   -H "APCA-API-KEY-ID: $KEY_ID" -H "APCA-API-SECRET-KEY: $SECRET_KEY" \
   > /tmp/alpaca-open-orders.json
 ```
 
-Use `https://api.alpaca.markets` for Live. Keep both raw responses on the
-volume as the ceremony's retained proof (e.g.
+Keep both raw responses on the volume as the ceremony's retained proof (e.g.
 `accounts/alpaca/<account_id>/broker_captures/cutover-<date>/`), and
 hand-assemble the evidence file the CLI actually reads — the shape is fixed
 by the subprocedure's [§ Broker evidence
@@ -224,11 +286,10 @@ files](alpaca-sqlite-clerk-recovery-and-cutover.md#broker-evidence-files):
 
 `observed_at_ms` is `int64 ms UTC` (per this repo's temporal-rigor rule) —
 the wall-clock instant you captured the two API responses above, not a
-rounded or reformatted value. `account_mode` is the account's real mode
-(`"paper"` or `"live"`), and it must agree with what the lane itself is
-configured for. A genuinely fresh account has no positions and no open
-orders, so `positions: {}` and `open_order_ids: []` are correct as written
-— do not invent a placeholder symbol entry.
+rounded or reformatted value. `account_mode` is `"paper"` or `"live"`,
+matching the account's real mode. A genuinely fresh account has no
+positions and no open orders, so `positions: {}` and `open_order_ids: []`
+are correct as written — do not invent a placeholder symbol entry.
 
 ### Two things that were proven the hard way on 2026-09-15
 
@@ -245,26 +306,33 @@ both will bite you again if you skip this paragraph.
    then close cleanly; SQLite removes the sidecar files itself. Never `rm`
    a `-wal` or `-shm` file by hand.
 2. **`cutover-apply` refuses evidence that differs from the plan's, byte
-   for byte.** Broker evidence is captured once (the curl calls above);
-   `cutover-plan` and `cutover-apply` must both run against that *same*
-   evidence file, and both inside that one capture's
-   `--max-evidence-age-ms` window. Capturing fresh evidence between `plan`
-   and `apply` — even if the account state hasn't actually changed — will
-   make `apply` refuse with a normalized-evidence mismatch. Capture once,
-   run `initialize` → backup → `plan` → `apply` in one sitting, and don't
-   re-curl Alpaca in between.
+   for byte.** `cutover-plan` and `cutover-apply` consume the *same*
+   capture — the second one above, taken after the backup, not the earlier
+   one used for `initialize` — and both calls must land inside that one
+   capture's `--max-evidence-age-ms` window. Capturing a third round of
+   evidence between `plan` and `apply` — even if the account state hasn't
+   actually changed — will make `apply` refuse with a normalized-evidence
+   mismatch, because `observed_at_ms` alone would differ. Run `plan`
+   immediately after the second capture, review its output, then run
+   `apply` with that identical file before the window closes. The
+   subprocedure's own worked examples pass `--max-evidence-age-ms 30000`
+   (30 s), which is tight for a human reading a full plan in between; this
+   runbook's recommendation is closer to `120000` (2 minutes) so a careful
+   review doesn't force a rushed re-capture.
 
 ### Run the ceremony
 
 Follow the subprocedure's [§ Establish the inactive
 generation](alpaca-sqlite-clerk-recovery-and-cutover.md#establish-the-inactive-generation)
-(`cutover-initialize`), then its own instruction to publish a [verified
-online backup](alpaca-sqlite-clerk-recovery-and-cutover.md#verified-online-backup),
-then [§ Produce the read-only
+(`cutover-initialize`, with the *first* evidence capture above), then its
+own instruction to publish a [verified online
+backup](alpaca-sqlite-clerk-recovery-and-cutover.md#verified-online-backup).
+Capture broker evidence again — the *second* capture — then follow [§
+Produce the read-only
 plan](alpaca-sqlite-clerk-recovery-and-cutover.md#produce-the-read-only-plan)
 (`cutover-plan`) and finally `cutover-apply` with the token that command
-prints — using the container form from the top of this section and the one
-evidence file from above throughout. Review every receipt as it's
+prints, reusing that same second evidence file for both. Use the container
+form from the top of this section throughout. Review every receipt as it's
 produced; none of these steps are silent.
 
 ## 7. Verify the account is genuinely live
@@ -279,7 +347,9 @@ Three independent checks, all from the host:
 curl -s localhost:8000/api/broker-clerks \
   -H "X-Data-Plane-Control-Intent: learn-ai-browser-control" \
   -H "X-Data-Plane-Control-Secret: $(grep ^DATA_PLANE_CONTROL_SECRET= .env | cut -d= -f2-)" \
-  | jq '.clerks[] | {clerk_id, lifecycle_state, effective_binding_generation}'
+  | jq '.clerks[] | {clerk_id, lifecycle_state, effective_binding_generation,
+        endpoint_mode: .provider_summary.endpoint_mode,
+        authority_state: .provider_summary.authority_state}'
 ```
 
 `effective_binding_generation` for this lane's `clerk_id` must read `1`
@@ -288,11 +358,13 @@ restarts.
 
 **The lane reports `ready`.** Same output, same command:
 `lifecycle_state` must read `"ready"`, not `"starting"`, `"degraded"`, or
-`"unreachable"`. Its `provider_summary` names the account mode and the
-composed authority kind — `real_paper` for an activated Paper account,
-`real_live` for an activated Live account, or `shadow` if you stopped after
-§4 for a Live account per the asymmetry in §5. Seeing `shadow` here for a
-Paper account is itself a bug report — Paper has no shadow fallback.
+`"unreachable"`. `authority_state` (projected above from
+`provider_summary.authority_state`, which is where the composed authority
+kind actually lives — not a top-level field) names the composed authority:
+`real_paper` for an activated Paper account, `real_live` for an activated
+Live account, or `shadow` if you stopped after §4 for a Live account per
+the asymmetry in §5. Seeing `shadow` here for a Paper account is itself a
+bug report — Paper has no shadow fallback.
 
 **The desk shows it.** Open `http://localhost:4200/brokers/alpaca` — the
 new lane appears in the directory as `ready`, and its account page (via the
@@ -302,10 +374,13 @@ orders, pulled live from Alpaca rather than placeholder data.
 
 If any of the three disagrees with the others — directory says `ready` but
 the desk hasn't updated, or the generation moved but the summary still says
-`shadow` — do not paper over it by re-running the ceremony. Stop and
-compare against the receipts §6 produced; this is exactly the kind of
-divergence `docs/references/reconciliations/` and the `reconcile-backtest`
-skill exist for.
+`shadow` — do not paper over it by re-running the ceremony. Stop, preserve
+the receipts §6 produced (initialization, backup, plan, and apply), and
+treat it as an incident to escalate rather than a transient glitch to
+retry. (This is a fleet-lifecycle disagreement, not a backtest trade-log
+divergence — the `reconcile-backtest` skill and
+`docs/references/reconciliations/` taxonomy are for the latter and don't
+apply here.)
 
 **Activation is not arming.** For Live, reaching `real_live` here makes the
 account's *custody* authority real — it does not by itself let any bot

@@ -15,6 +15,9 @@ the [two-Clerk rollout runbook](fleet-d-two-clerk-rollout.md) (this posture is
 that role split applied to the dev compose project instead of the separate
 `learn-ai-fleet` overlay), and the [provider recovery
 procedure](alpaca-sqlite-clerk-recovery-and-cutover.md) for custody questions.
+For onboarding a new account onto one of these lanes end to end, see
+[`add-an-alpaca-account.md`](add-an-alpaca-account.md), which cross-links the
+provisioning and secrets-layout sections below by name.
 
 ## Why the combined role cannot host a second lane
 

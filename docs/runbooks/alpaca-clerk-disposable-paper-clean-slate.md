@@ -1,5 +1,9 @@
 # Alpaca Clerk disposable paper clean slate
 
+**Parent procedure:** [`add-an-alpaca-account.md`](add-an-alpaca-account.md) § 8 links
+here for restarting a throwaway Paper account partway through onboarding; re-enter that
+runbook at its bind step once this reset completes.
+
 During active development, the sanctioned way to restart a disposable Alpaca
 paper account is **clean-slate + regenerate**. Do not build an import or
 migration path for throwaway paper authority data: it carries stale custody,
