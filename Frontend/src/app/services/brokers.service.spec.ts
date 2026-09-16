@@ -131,6 +131,16 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toMatchObject({ hold: { active: false } });
   });
 
+  it('GETs the lane-scoped live verdict via the catalog-declared operation', async () => {
+    const promise = service.getLiveVerdict(TARGET);
+
+    const req = httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/live-verdict`);
+    expect(req.request.method).toBe('GET');
+    req.flush({ final_verdict: 'paper' });
+
+    await expect(promise).resolves.toMatchObject({ final_verdict: 'paper' });
+  });
+
   it('GETs the custody diagnosis for the named broker', async () => {
     const promise = service.getCustodyDiagnosis(TARGET);
 

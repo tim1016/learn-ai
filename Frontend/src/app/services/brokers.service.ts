@@ -72,7 +72,6 @@ export interface SqliteTimelineQuery {
 export class BrokersService {
   private readonly http = inject(HttpClient);
   private readonly polls = inject(PolledReadScheduler);
-  private readonly base = '/api/brokers';
   private readonly accountReads = new Map<
     string,
     { expiresAtMs: number; promise: Promise<BrokerAccountSnapshot> }
@@ -121,15 +120,18 @@ export class BrokersService {
   }
 
   /**
-   * The server-derived Alpaca live verdict (ADR 0059 D8). Pure on the
-   * server — it never contacts the broker — so it is safe to poll from the
-   * shell. The client renders it and never composes one (ADR 0011 §7).
+   * The server-derived Alpaca live verdict for one lane (ADR 0059 D8; #2110).
+   * Pure on the server — it never contacts the broker — so it is safe to
+   * poll from the shell. Lane-scoped and declared at configuration-access
+   * readiness, so a lane that is up but refusing (e.g. an unactivated paper
+   * lane) still answers with its refusal reason instead of going
+   * unreachable. The client renders it and never composes one (ADR 0011 §7).
    */
-  getLiveVerdict(): Promise<AlpacaLiveVerdict> {
+  getLiveVerdict(target: ResourceTarget): Promise<AlpacaLiveVerdict> {
     // Polled from the shell every 5 s, so it shares the scheduler every
     // polled read goes through (#1912) rather than adding a fifth
     // independent poller to the roster's tick.
-    return this.polls.get<AlpacaLiveVerdict>(`${this.base}/alpaca/live-verdict`);
+    return this.polls.get<AlpacaLiveVerdict>(operationUrl('live_verdict', target));
   }
 
   listPositions(target: ResourceTarget): Promise<BrokerPosition[]> {

@@ -2,7 +2,9 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import { AlpacaLiveVerdictService } from './alpaca-live-verdict.service';
+import { FleetDirectoryService } from '../fleet/fleet-directory.service';
+import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
+import { AlpacaLiveVerdictService, UNPOLLED_LANE_STATE } from './alpaca-live-verdict.service';
 import { BrokersService } from './brokers.service';
 
 class FakeBrokersService {
@@ -31,10 +33,16 @@ function makeVerdict(overrides: Partial<AlpacaLiveVerdict> = {}): AlpacaLiveVerd
   };
 }
 
-function setup() {
+function setup(lanes = [testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]) {
   const brokers = new FakeBrokersService();
-  TestBed.configureTestingModule({ providers: [{ provide: BrokersService, useValue: brokers }] });
-  return { svc: TestBed.inject(AlpacaLiveVerdictService), brokers };
+  const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: lanes });
+  TestBed.configureTestingModule({
+    providers: [
+      { provide: BrokersService, useValue: brokers },
+      { provide: FleetDirectoryService, useValue: directory.useValue },
+    ],
+  });
+  return { svc: TestBed.inject(AlpacaLiveVerdictService), brokers, directory };
 }
 
 afterEach(() => {
@@ -43,13 +51,13 @@ afterEach(() => {
 });
 
 describe('AlpacaLiveVerdictService', () => {
-  it('holds null before the first response', () => {
+  it('holds the unpolled default for a lane before its first response', () => {
     const { svc } = setup();
-    expect(svc.verdict()).toBeNull();
+    expect(svc.stateFor('clrk_a')).toEqual(UNPOLLED_LANE_STATE);
   });
 
-  it('refresh() stores the server verdict verbatim', async () => {
-    const { svc, brokers } = setup();
+  it('refresh() stores the server verdict verbatim under the lane clerk_id', async () => {
+    const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
     const v = makeVerdict({
       final_verdict: 'live-unarmed',
       configured_mode: 'live',
@@ -60,30 +68,51 @@ describe('AlpacaLiveVerdictService', () => {
 
     await svc.refresh();
 
-    expect(svc.verdict()).toEqual(v);
-    expect(svc.lastError()).toBeNull();
+    expect(svc.stateFor('clrk_a')).toEqual({ verdict: v, lastError: null });
   });
 
-  it('refresh() clears the verdict and records the error when the read fails', async () => {
-    const { svc, brokers } = setup();
+  it('refresh() records the error and clears this lane\'s verdict when its read fails', async () => {
+    const { svc, brokers } = setup([testLane({ clerk_id: 'clrk_a', broker: 'alpaca' })]);
     brokers.getLiveVerdict.mockResolvedValue(makeVerdict());
     await svc.refresh();
     brokers.getLiveVerdict.mockRejectedValue(new Error('down'));
 
     await svc.refresh();
 
-    expect(svc.verdict()).toBeNull();
-    expect(svc.lastError()).toBeInstanceOf(Error);
+    const state = svc.stateFor('clrk_a');
+    expect(state.verdict).toBeNull();
+    expect(state.lastError).toBeInstanceOf(Error);
   });
 
-  it('start() is idempotent and refreshes immediately', async () => {
-    const { svc, brokers } = setup();
+  it("one lane's failed read never blanks, delays, or overwrites another lane's state (FR-093)", async () => {
+    const { svc, brokers } = setup([
+      testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_label: 'Paper' }),
+      testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' }),
+    ]);
+    const liveVerdict = makeVerdict({ final_verdict: 'live-armed', configured_mode: 'live' });
+    brokers.getLiveVerdict.mockImplementation(async (target: { clerkId: string }) => {
+      if (target.clerkId === 'clrk_paper') throw new Error('paper lane down');
+      return liveVerdict;
+    });
+
+    await svc.refresh();
+
+    expect(svc.stateFor('clrk_paper').verdict).toBeNull();
+    expect(svc.stateFor('clrk_paper').lastError).toBeInstanceOf(Error);
+    expect(svc.stateFor('clrk_live')).toEqual({ verdict: liveVerdict, lastError: null });
+  });
+
+  it('start() is idempotent and refreshes every known lane immediately', async () => {
+    const { svc, brokers } = setup([
+      testLane({ clerk_id: 'clrk_a', broker: 'alpaca' }),
+      testLane({ clerk_id: 'clrk_b', broker: 'alpaca' }),
+    ]);
     brokers.getLiveVerdict.mockResolvedValue(makeVerdict());
 
     svc.start();
     svc.start();
     await Promise.resolve();
 
-    expect(brokers.getLiveVerdict).toHaveBeenCalledTimes(1);
+    expect(brokers.getLiveVerdict).toHaveBeenCalledTimes(2);
   });
 });

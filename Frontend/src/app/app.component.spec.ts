@@ -7,7 +7,14 @@ import { vi } from 'vitest';
 import axe from 'axe-core';
 import { AppComponent } from './app.component';
 import { BrokerHealthService } from './services/broker-health.service';
-import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
+import {
+  AlpacaLiveVerdictService,
+  UNPOLLED_LANE_STATE,
+  type LaneVerdictState,
+} from './services/alpaca-live-verdict.service';
+import { FleetDirectoryService } from './fleet/fleet-directory.service';
+import { provideFleetDirectory, testLane, TEST_CLERK_ID } from './fleet/fleet-directory-testing';
+import type { AlpacaLiveVerdict } from './api/alpaca.types';
 
 class FakeBrokerHealthService {
   readonly health = signal(null);
@@ -19,11 +26,35 @@ class FakeBrokerHealthService {
 }
 
 class FakeAlpacaLiveVerdictService {
-  verdict = signal<{
-    final_verdict: 'paper' | 'live-unarmed' | 'live-armed' | 'unknown';
-  } | null>(null);
-  lastError = signal(null);
+  private readonly states = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
   start = vi.fn();
+
+  stateFor(clerkId: string): LaneVerdictState {
+    return this.states().get(clerkId) ?? UNPOLLED_LANE_STATE;
+  }
+
+  setState(clerkId: string, state: LaneVerdictState): void {
+    this.states.update((current) => new Map(current).set(clerkId, state));
+  }
+}
+
+function verdictStub(finalVerdict: AlpacaLiveVerdict['final_verdict']): AlpacaLiveVerdict {
+  return {
+    configured_mode: finalVerdict === 'paper' ? 'paper' : 'live',
+    observed_account_id: null,
+    mode_agreement: 'agreed',
+    clerk_authority: 'sqlite',
+    clerk_refusal_reason_code: null,
+    armed_instance_count: 0,
+    envelope_state: 'not_applicable',
+    envelope_agreement: 'not_applicable',
+    shadow_state: 'not_applicable',
+    loss_hold: 'not_applicable',
+    final_verdict: finalVerdict,
+    headline: 'stub verdict',
+    detail: 'stub detail',
+    observed_at_ms: 1_700_000_000_000,
+  };
 }
 
 @Component({ template: '<p>Route body</p>', changeDetection: ChangeDetectionStrategy.OnPush })
@@ -31,9 +62,11 @@ class ShellSmokeRouteComponent {}
 
 describe('AppComponent', () => {
   let fixture: ComponentFixture<AppComponent>;
+  let directory: ReturnType<typeof provideFleetDirectory>;
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
+    directory = provideFleetDirectory();
     await TestBed.configureTestingModule({
       imports: [
         AppComponent,
@@ -51,6 +84,7 @@ describe('AppComponent', () => {
         MessageService,
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         { provide: AlpacaLiveVerdictService, useClass: FakeAlpacaLiveVerdictService },
+        { provide: FleetDirectoryService, useValue: directory.useValue },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(AppComponent);
@@ -79,10 +113,40 @@ describe('AppComponent', () => {
   ] as const)('colors the shell from the server-owned %s verdict', (finalVerdict, expectedClass) => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
 
-    service.verdict.set({ final_verdict: finalVerdict });
+    service.setState(TEST_CLERK_ID, { verdict: verdictStub(finalVerdict), lastError: null });
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains(expectedClass)).toBe(true);
+  });
+
+  it('treats a lane whose mode cannot be determined as live, never as calm-unknown', () => {
+    const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
+
+    service.setState(TEST_CLERK_ID, { verdict: null, lastError: new Error('down') });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
+  });
+
+  it('renders one badge per lane, each labeled with its own lane and isolated from the others', () => {
+    directory.rebind({
+      observed_at_ms: 2,
+      clerks: [
+        testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_label: 'Paper' }),
+        testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' }),
+      ],
+    });
+    const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
+    service.setState('clrk_paper', { verdict: verdictStub('paper'), lastError: null });
+    service.setState('clrk_live', { verdict: null, lastError: new Error('down') });
+    fixture.detectChanges();
+
+    const badges = fixture.nativeElement.querySelectorAll('app-alpaca-live-banner [role="status"]');
+    expect(badges.length).toBe(2);
+    expect(badges[0].textContent).toContain('Paper');
+    expect(badges[0].textContent).not.toContain('assume real money');
+    expect(badges[1].textContent).toContain('Live');
+    expect(badges[1].textContent).toContain('assume real money');
   });
 
   it('sets the browser title from the current menu page title', async () => {
