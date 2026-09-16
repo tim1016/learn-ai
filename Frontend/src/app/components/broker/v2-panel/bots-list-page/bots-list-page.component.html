@@ -4,10 +4,7 @@
       <h1 id="bots-page-title">Alpaca bots</h1>
       @if (routedLane(); as lane) {
         <div class="bots-page__lane">
-          <app-alpaca-live-banner [lane]="lane" />
-          @if (lane.provider_summary?.authority_state; as authority) {
-            <span class="bots-page__authority">Authority: {{ authority | receiptLabel }}</span>
-          }
+          <app-lane-context-strip [lane]="lane" />
         </div>
       }
       <app-account-strip

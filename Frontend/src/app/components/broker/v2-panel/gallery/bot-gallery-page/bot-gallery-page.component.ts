@@ -14,8 +14,6 @@ import { MessageService } from 'primeng/api';
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand } from '../../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../../fleet/fleet-directory.service';
-import { AlpacaLiveBannerComponent } from '../../../../../shell/alpaca-live-banner.component';
-import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import {
   freezeLaneFence,
   laneFenceVerdict,
@@ -23,6 +21,7 @@ import {
 } from '../../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../../fleet/open-lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
+import { LaneContextStripComponent } from '../../lane-context-strip/lane-context-strip.component';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 
@@ -56,7 +55,7 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
 @Component({
   selector: 'app-bot-gallery-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, BotGalleryDockComponent, AlpacaLiveBannerComponent, ReceiptLabelPipe],
+  imports: [RouterLink, BotGalleryDockComponent, LaneContextStripComponent],
   providers: [GalleryLiveStore],
   templateUrl: './bot-gallery-page.component.html',
   styleUrl: './bot-gallery-page.component.scss',

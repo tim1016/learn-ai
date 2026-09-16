@@ -1,0 +1,6 @@
+@if (lane(); as l) {
+  <app-alpaca-live-banner [lane]="l" />
+  @if (l.provider_summary?.authority_state; as authority) {
+    <span class="lane-context-strip__authority">Authority: {{ authority | receiptLabel }}</span>
+  }
+}

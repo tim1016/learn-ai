@@ -16,8 +16,6 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
-import { AlpacaLiveBannerComponent } from '../../../../shell/alpaca-live-banner.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { fmtElapsedSince } from '../../format';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
@@ -27,6 +25,7 @@ import {
   BotsRosterComponent,
   type RosterRowActionEvent,
 } from '../bots-roster/bots-roster.component';
+import { LaneContextStripComponent } from '../lane-context-strip/lane-context-strip.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand, withEntity } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -70,11 +69,10 @@ interface ScopedSnapshot<T> {
   imports: [
     AccountStripComponent,
     AlpacaDeployDrawerComponent,
-    AlpacaLiveBannerComponent,
     CohortArchiveDrawerComponent,
     BotTriageDetailComponent,
     BotsRosterComponent,
-    ReceiptLabelPipe,
+    LaneContextStripComponent,
     RouterLink,
   ],
   templateUrl: './bots-list-page.component.html',

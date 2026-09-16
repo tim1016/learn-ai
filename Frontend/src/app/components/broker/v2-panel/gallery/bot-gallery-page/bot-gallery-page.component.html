@@ -1,10 +1,7 @@
 <main class="gallery-page" aria-label="Bot gallery">
   @if (routedLane(); as lane) {
     <div class="gallery-page__lane">
-      <app-alpaca-live-banner [lane]="lane" />
-      @if (lane.provider_summary?.authority_state; as authority) {
-        <span class="gallery-page__authority">Authority: {{ authority | receiptLabel }}</span>
-      }
+      <app-lane-context-strip [lane]="lane" />
       <a
         class="gallery-page__lane-link"
         [routerLink]="['/brokers', broker(), 'clerks', clerkId(), 'accounts', accountId(), 'bots']"
