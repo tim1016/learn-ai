@@ -1785,6 +1785,7 @@ class FleetControlService:
                         "endpoint_mode": str(reported_summary.endpoint_mode),
                         "authority_state": reported_summary.authority_state,
                         "detail": reported_summary.detail,
+                        "account_nickname": reported_summary.account_nickname,
                     }
                 provider_summary = dict(adapter.provider_summary(observation))
         return ClerkDescriptor(

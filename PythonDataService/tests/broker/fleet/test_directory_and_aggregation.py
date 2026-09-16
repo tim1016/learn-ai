@@ -8,11 +8,14 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet.errors import (
     ClerkUnreachable,
     DataPlaneControlSecretRefused,
     FleetControlPlaneNotInstalled,
 )
+from app.broker.fleet.service import FleetControlService
+from app.broker.fleet.store import FleetRegistryStore
 from app.config import settings
 from app.routers import broker_clerks
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
@@ -21,6 +24,7 @@ from tests.broker.fleet.conftest import (
     FAKE_ALPHA_CAPABILITIES,
     FAKE_BETA_CAPABILITIES,
     FrozenClock,
+    bind_lane,
     provision_lane,
 )
 
@@ -475,3 +479,48 @@ async def test_http_aggregate_directory_503s_when_fleet_service_is_absent_not_50
 
     assert response.status_code == 503
     assert response.json()["reason"] == FleetControlPlaneNotInstalled.reason
+
+
+@pytest.mark.asyncio
+async def test_http_directory_carries_the_alpaca_account_nickname_in_the_provider_summary(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2182: `GET /broker-clerks` is the end-to-end path the frontend reads
+    for one account name everywhere — a confirmed lane's reported nickname
+    must reach the wire inside Alpaca's own provider-authored summary, not
+    just the in-process ``fleet_service.directory()`` projection the other
+    tests in this module use with the fake providers."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", _TEST_SECRET)
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters={"alpaca": AlpacaProviderAdapter()},
+        clock=clock,
+    )
+    try:
+        lane = provision_lane(
+            service, broker="alpaca", label="nickname-lane", tmp_path=control_dir.parent
+        )
+        session, _confirmed = bind_lane(service, lane, account="acct-nickname")
+        service.observe_session(
+            clerk_id=lane.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            reported_summary={
+                "endpoint_mode": "paper",
+                "authority_state": "real_paper",
+                "account_nickname": "Strategy lab",
+            },
+        )
+        app = _coordinator_app(service)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/broker-clerks", headers={CONTROL_SECRET_HEADER: _TEST_SECRET}
+            )
+
+        assert response.status_code == 200
+        entry = response.json()["clerks"][0]
+        assert entry["broker"] == "alpaca"
+        assert entry["provider_summary"]["account_nickname"] == "Strategy lab"
+    finally:
+        service.close()

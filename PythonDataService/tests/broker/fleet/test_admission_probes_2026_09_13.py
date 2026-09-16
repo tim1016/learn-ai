@@ -404,6 +404,83 @@ def test_lane_summaries_are_bounded_typed_observations(
     assert parsed.authority_state == "real_paper"
 
 
+def test_lane_summary_account_nickname_is_bounded_the_same_way_detail_is(
+    control_dir: Path, fleet_service
+) -> None:
+    """#2182: a lane summary may carry an optional ``account_nickname``,
+    validated exactly like ``detail`` already is above — at most 120
+    characters, refused when malformed, and parses fine when absent
+    altogether (the rollout order this field ships under: the coordinator
+    must accept the key before any agent ever sends it)."""
+    lane = provision_lane(fleet_service, broker="fake_alpha", label="nickname", tmp_path=control_dir.parent)
+    session = fleet_service.register_agent_session(
+        fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key
+    )
+
+    # A valid nickname parses and projects through the directory.
+    assert fleet_service.observe_session(
+        clerk_id=lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        reported_summary={
+            "endpoint_mode": "paper",
+            "authority_state": "real_paper",
+            "account_nickname": "Strategy lab",
+        },
+    )
+    entry = next(
+        e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
+    )
+    summary = entry["provider_summary"]
+    assert summary is not None
+    assert summary["reported_summary"]["account_nickname"] == "Strategy lab"
+
+    # No field at all still parses — the pre-existing, absent-key shape.
+    assert fleet_service.observe_session(
+        clerk_id=lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        reported_summary={"endpoint_mode": "paper", "authority_state": "real_paper"},
+    )
+    entry = next(
+        e for e in fleet_service.directory()["clerks"] if e["clerk_id"] == lane.clerk_id
+    )
+    assert entry["provider_summary"]["reported_summary"]["account_nickname"] is None
+
+    # Oversized (121 chars, one past the 120-char bound) refuses.
+    with pytest.raises(ClerkIdentityMismatch):
+        fleet_service.observe_session(
+            clerk_id=lane.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            reported_summary={
+                "endpoint_mode": "paper",
+                "authority_state": "real_paper",
+                "account_nickname": "x" * 121,
+            },
+        )
+
+    # A non-string nickname refuses too.
+    with pytest.raises(ClerkIdentityMismatch):
+        fleet_service.observe_session(
+            clerk_id=lane.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            reported_summary={
+                "endpoint_mode": "paper",
+                "authority_state": "real_paper",
+                "account_nickname": 12345,
+            },
+        )
+
+    # Exactly 120 chars is still admitted — the bound is inclusive.
+    parsed = ProviderSummaryObservation.parse(
+        {
+            "endpoint_mode": "paper",
+            "authority_state": "real_paper",
+            "account_nickname": "x" * 120,
+        }
+    )
+    assert parsed is not None
+    assert parsed.account_nickname == "x" * 120
+
+
 def test_concurrent_confirmations_from_one_session_settle_atomically(
     control_dir: Path, fleet_service
 ) -> None:
