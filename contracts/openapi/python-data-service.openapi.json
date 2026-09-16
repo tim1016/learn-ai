@@ -57122,6 +57122,72 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/live-verdict": {
+      "get": {
+        "description": "Fleet-routed GET /live-verdict (custody_read).",
+        "operationId": "fleet_live_verdict_api_brokers__broker__clerks__clerk_id__live_verdict_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Live Verdict",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
       "get": {
         "description": "Fleet-routed GET /market-status-snapshot (market_status_read).",

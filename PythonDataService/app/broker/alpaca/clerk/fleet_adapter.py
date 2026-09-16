@@ -119,6 +119,23 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.CUSTODY_READ,
             agent_path="/api/brokers/alpaca/clerk/custody-diagnosis",
         ),
+        # Lane-scoped verdict (#2140): the coordinator has no clerk runtime of
+        # its own to answer this from, so it must be routed to a named lane,
+        # never answered in-process. Declared at CONFIGURATION_ACCESS, not
+        # EXECUTION -- see resolve_route's docstring (app/broker/fleet/
+        # service.py). A lane that is up but refusing (an unactivated paper
+        # lane returning ACTIVATION_REQUIRED) must stay readable so the
+        # operator can see exactly that refusal reason; EXECUTION readiness
+        # would refuse the route itself before the refusal reason was ever
+        # reached.
+        _op(
+            "live_verdict",
+            "GET",
+            "/live-verdict",
+            capability=Capability.CUSTODY_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/brokers/alpaca/live-verdict",
+        ),
         _op(
             "market_status_read",
             "GET",
