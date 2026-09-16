@@ -154,6 +154,83 @@ def test_the_composition_registry_maps_alpaca_and_nothing_else() -> None:
     assert adapters["alpaca"].provider_id == "alpaca"
 
 
+def test_live_verdict_declares_configuration_access_not_execution_readiness() -> None:
+    """#2140: EXECUTION readiness would refuse routing to an unactivated lane
+    before its refusal reason was ever reached (see ``resolve_route``'s
+    docstring, ``app/broker/fleet/service.py``). Asserted directly against
+    the declared operation, not indirectly through a request that happens to
+    pass for an already-bound lane -- a passing request for a bound lane
+    would still pass under ``EXECUTION`` too, and could not catch this
+    readiness regressing."""
+    assert _alpaca_operation("live_verdict").readiness is OperationReadiness.CONFIGURATION_ACCESS
+
+
+async def test_live_verdict_stays_routable_for_an_activation_required_lane(
+    control_dir: Path, clock: FrozenClock
+) -> None:
+    """The paper-lane-up-but-unactivated case the bug report names: routing
+    must not refuse before the clerk's own ``ACTIVATION_REQUIRED`` refusal
+    reason is reached (#2140)."""
+    from app.broker.alpaca.clerk.active_authority import (
+        ActiveClerkRuntime,
+        ClerkStartupFailure,
+    )
+    from app.broker.alpaca.config import AlpacaSettings
+    from app.services.alpaca_live_verdict import alpaca_live_verdict
+    from tests.broker.fleet.conftest import provision_lane
+
+    live_verdict = _alpaca_operation("live_verdict")
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        lane = provision_lane(
+            service, broker="alpaca", label="activation-required", tmp_path=control_dir.parent
+        )
+        service.register_agent_session(
+            fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key
+        )
+        # No reservation, no confirmation: the routing-registry analogue of
+        # an unactivated lane -- no confirmed binding exists, exactly what
+        # ACTIVATION_REQUIRED means at the clerk itself.
+        with pytest.raises(ClerkUnreachable):
+            service.resolve_route(broker="alpaca", clerk_id=lane.clerk_id)
+        _clerk, session, assignment = service.resolve_route(
+            broker="alpaca", clerk_id=lane.clerk_id, readiness=live_verdict.readiness,
+        )
+        assert assignment is None
+        assert session.clerk_id == lane.clerk_id
+    finally:
+        service.close()
+
+    # The verdict the now-reachable route would carry: the clerk's own
+    # refusal reason code, not a generic fleet-routing refusal that
+    # swallows it before the agent is ever asked.
+    runtime = ActiveClerkRuntime(
+        authority_kind="unavailable",
+        account_id=None,
+        startup_failure=ClerkStartupFailure(
+            reason_code="ACTIVATION_REQUIRED",
+            account_id=None,
+            scope="ACCOUNT_CLERK",
+            impact="No SQLite Clerk activation record exists.",
+            recovery=(
+                "Complete the supervised SQLite Clerk cutover and activation "
+                "before starting Alpaca custody."
+            ),
+            observed_at_ms=clock(),
+        ),
+    )
+    verdict = alpaca_live_verdict(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        runtime=runtime,
+        now_ms=clock(),
+    )
+    assert verdict.clerk_refusal_reason_code == "ACTIVATION_REQUIRED"
+
+
 # ---------------------------------------------------------------------------
 # Internal fleet surface
 # ---------------------------------------------------------------------------

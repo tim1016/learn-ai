@@ -317,6 +317,11 @@
       "path_template": "/accounts/{account_id}/gallery/stream",
       "requires_account": true
     },
+    "live_verdict": {
+      "method": "GET",
+      "path_template": "/live-verdict",
+      "requires_account": false
+    },
     "manual_order_cancel": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/manual-orders/{order_ref:path}/cancel",

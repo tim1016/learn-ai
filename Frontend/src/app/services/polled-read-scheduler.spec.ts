@@ -126,6 +126,78 @@ describe('PolledReadScheduler', () => {
     expect(http.urls).toEqual(['/api/catalog', '/api/account', '/api/clerk']);
   });
 
+  it('dispatches a concurrent group together, and settles each member on its own', async () => {
+    const { http, scheduler } = setup();
+
+    const [a, b, c] = scheduler.getGroup<number>(['/api/lane-a', '/api/lane-b', '/api/lane-c']);
+    await flush();
+
+    // All three at once. One at a time is what the default does, and it is
+    // what makes one lane's latency another lane's fault (FR-093).
+    expect(http.urls).toEqual(['/api/lane-a', '/api/lane-b', '/api/lane-c']);
+
+    http.settle(1, 2);
+    expect(await b).toBe(2);
+
+    http.fail(0, new Error('lane a down'));
+    await expect(a).rejects.toThrow('lane a down');
+
+    http.settle(2, 3);
+    expect(await c).toBe(3);
+  });
+
+  it('spends one turn in the shared queue for the whole group', async () => {
+    const { http, scheduler } = setup();
+
+    const leading = scheduler.get<number>('/api/catalog');
+    const group = scheduler.getGroup<number>(['/api/lane-a', '/api/lane-b']);
+    const trailing = scheduler.get<number>('/api/account');
+    await flush();
+
+    // The group waits its turn like any other read — it does not jump the
+    // queue, so this is not the five-concurrent-pollers case #1801 measured.
+    expect(http.urls).toEqual(['/api/catalog']);
+
+    http.settle(0, 1);
+    await flush();
+    expect(http.urls).toEqual(['/api/catalog', '/api/lane-a', '/api/lane-b']);
+
+    // And the read behind it waits for the WHOLE group, not its first member.
+    http.settle(1, 2);
+    await flush();
+    expect(http.urls).toEqual(['/api/catalog', '/api/lane-a', '/api/lane-b']);
+
+    http.settle(2, 3);
+    await flush();
+    expect(http.urls).toEqual(['/api/catalog', '/api/lane-a', '/api/lane-b', '/api/account']);
+
+    http.settle(3, 4);
+    expect(await leading).toBe(1);
+    expect(await group[0]).toBe(2);
+    expect(await group[1]).toBe(3);
+    expect(await trailing).toBe(4);
+  });
+
+  it('joins an already-outstanding surface from inside a group instead of re-issuing it', async () => {
+    const { http, scheduler } = setup();
+
+    const solo = scheduler.get<number>('/api/lane-a');
+    const [joined, fresh] = scheduler.getGroup<number>(['/api/lane-a', '/api/lane-b']);
+    await flush();
+
+    expect(http.urls).toEqual(['/api/lane-a']);
+
+    http.settle(0, 7);
+    await flush();
+
+    expect(await solo).toBe(7);
+    expect(await joined).toBe(7);
+    expect(http.urls).toEqual(['/api/lane-a', '/api/lane-b']);
+
+    http.settle(1, 8);
+    expect(await fresh).toBe(8);
+  });
+
   it('does not wedge the queue when a read fails', async () => {
     const { http, scheduler } = setup();
 

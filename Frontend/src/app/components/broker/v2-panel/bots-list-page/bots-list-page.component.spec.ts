@@ -581,6 +581,9 @@ describe('BotsListPageComponent', () => {
       observed_at_ms: 1_757_000_000_001,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
     });
+    // `rebind()` only stages the replacement; `refresh()` promotes it to
+    // what `lanesOf()`/`lane()` report, like the real service's next load.
+    await directory.useValue.refresh?.();
     await view.fixture.whenStable();
     view.fixture.detectChanges();
 

@@ -7,8 +7,9 @@ import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component'
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
 import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
+import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
-import { TopBarComponent } from './shell/top-bar.component';
+import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
@@ -135,7 +136,13 @@ import { CurrentUrlService } from './shell/current-url.service';
             <span>Gallery</span>
           </a>
           <app-broker-banner />
-          <app-alpaca-live-banner />
+          @for (lane of alpacaLanes(); track lane.clerk_id) {
+            <app-alpaca-live-banner [lane]="lane" />
+          } @empty {
+            <!-- Never zero badges. An unresolved roster is itself an
+                 undetermined mode, and the banner says so loudly. -->
+            <app-alpaca-live-banner [lane]="null" />
+          }
         </nav>
       </app-top-bar>
       <main class="main">
@@ -153,15 +160,33 @@ import { CurrentUrlService } from './shell/current-url.service';
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
   private readonly alpacaLive = inject(AlpacaLiveVerdictService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
   protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
-  protected readonly shellAccountMode = computed(() => {
-    const verdict = this.alpacaLive.verdict()?.final_verdict;
-    if (verdict === 'paper') return 'paper';
-    if (verdict === 'live-unarmed' || verdict === 'live-armed') return 'live';
-    return 'unknown';
+  protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
+  // Worst case wins across every lane (#2110 D2): a lane that is armed live,
+  // unarmed live, or cannot be determined at all outranks a confirmed paper
+  // lane, so the shell chrome never reads calmer than its riskiest lane.
+  protected readonly shellAccountMode = computed<ShellAccountMode>(() => {
+    const lanes = this.alpacaLanes();
+    // An empty roster is the least-known state, not a calm one: it is every
+    // boot until the directory resolves, and indefinitely if that load fails.
+    // 'unknown' would paint the neutral default chrome — the exact calm-while-
+    // live-money-trades failure this anchor exists to kill — so it reads live.
+    if (lanes.length === 0) return 'live';
+    const finalVerdicts = lanes.map(
+      (lane) => this.alpacaLive.stateFor(lane.clerk_id).verdict?.final_verdict,
+    );
+    const undeterminedOrLive = finalVerdicts.some(
+      (verdict) =>
+        verdict === undefined ||
+        verdict === 'unknown' ||
+        verdict === 'live-unarmed' ||
+        verdict === 'live-armed',
+    );
+    return undeterminedOrLive ? 'live' : 'paper';
   });
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();
