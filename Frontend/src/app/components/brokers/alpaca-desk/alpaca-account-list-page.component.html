@@ -26,9 +26,11 @@
     </p>
   }
 
-  <ul class="account-list__accounts" aria-label="Alpaca accounts">
-    @for (account of accounts(); track account.clerk_id) {
-      <app-alpaca-lane-card [lane]="account" [deployIntent]="deployIntent()" />
-    }
-  </ul>
+  @if (accounts().length > 0) {
+    <ul class="account-list__accounts" aria-label="Alpaca accounts">
+      @for (account of accounts(); track account.clerk_id) {
+        <app-alpaca-lane-card [lane]="account" [deployIntent]="deployIntent()" />
+      }
+    </ul>
+  }
 </main>

@@ -43,9 +43,7 @@ export class AlpacaAccountListPageComponent {
    * deploy entry point's lane-selection step. */
   protected readonly deployIntent = computed(() => this.queryParams().has('deploy'));
 
-  protected readonly accounts = computed(
-    () => this.fleet.value()?.clerks.filter((lane) => lane.broker === 'alpaca') ?? [],
-  );
+  protected readonly accounts = computed(() => this.fleet.lanesOf('alpaca'));
   protected readonly loading = this.fleet.isLoading;
   protected readonly failed = computed(() => this.fleet.error() !== undefined);
 }

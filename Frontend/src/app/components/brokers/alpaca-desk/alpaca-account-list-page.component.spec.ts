@@ -59,7 +59,7 @@ async function renderList(
   const paramMap = convertToParamMap({});
   return render(AlpacaAccountListPageComponent, {
     providers: [
-      directory === undefined ? provideFleetDirectory() : provideFleetDirectory(directory),
+      provideFleetDirectory(directory),
       provideRouter([]),
       { provide: AlpacaLiveVerdictService, useValue: { stateFor: () => fakeVerdictState('paper') } },
       {
