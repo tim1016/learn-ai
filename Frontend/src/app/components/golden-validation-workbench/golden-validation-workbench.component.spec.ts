@@ -118,8 +118,10 @@ describe("GoldenValidationWorkbenchComponent", () => {
 
     await waitFor(() => expect(service.designate).toHaveBeenCalled());
     expect(service.designate).toHaveBeenCalledWith(expect.objectContaining({ source_run_id: 44 }));
-    expect(await screen.findByText("Frozen validation case")).toBeTruthy();
-    expect(screen.getByText("Computed engine evidence")).toBeTruthy();
+    // #2184: "Frozen validation case" / "Computed engine evidence" eyebrows
+    // retired -- each card's own heading carries the eyebrow look now.
+    expect(await screen.findByRole("heading", { name: "SPY September baseline" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Deviations" })).toBeTruthy();
   });
 
   it("keeps computed deviations visible when a reviewer accepts them", async () => {
@@ -132,7 +134,8 @@ describe("GoldenValidationWorkbenchComponent", () => {
     });
     const user = userEvent.setup();
 
-    expect(await screen.findByText("Computed engine evidence")).toBeTruthy();
+    // #2184: the evidence card's heading is now the state text itself.
+    expect(await screen.findByRole("heading", { name: "Deviations" })).toBeTruthy();
     expect(screen.getByText("Deviations")).toBeTruthy();
     expect(screen.getByText(/minute/i)).toBeTruthy();
     await user.click(screen.getByText("Exact parameters, data, and execution scope"));

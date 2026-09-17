@@ -1,11 +1,13 @@
+@use '../../styles/eyebrow-heading' as *;
+
 :host { display: block; }
 
 .golden-review { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border-light); border-left: 4px solid var(--accent); border-radius: var(--radius-md); background: var(--bg-elevated); }
 .golden-review > header { display: flex; justify-content: space-between; gap: var(--space-4); align-items: start; }
 .golden-review > header > div { display: grid; gap: var(--space-1); }
 .golden-review h3, .golden-review p { margin: 0; }
-.golden-review header p:not(.golden-review__eyebrow) { color: var(--text-secondary); }
-.golden-review__eyebrow { color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: .04em; text-transform: uppercase; }
+.golden-review h3 { @include eyebrow-heading; }
+.golden-review header p { color: var(--text-secondary); }
 .golden-review__state { padding: var(--space-1) var(--space-2); border: 1px solid var(--badge-info-border); border-radius: var(--radius-pill); background: var(--accent-faint); color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); white-space: nowrap; }
 .golden-review form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .golden-review form > label:last-of-type, .golden-review form > button, .golden-review__notice { grid-column: 1 / -1; }
