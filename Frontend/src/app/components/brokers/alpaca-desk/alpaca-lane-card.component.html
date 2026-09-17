@@ -1,7 +1,7 @@
 <li class="lane-card-item">
   <a
     class="lane-card"
-    [class.lane-card--degraded]="!serving()"
+    [class.lane-card--degraded]="state().kind !== 'serving'"
     [routerLink]="openRoute()"
     [queryParams]="openQuery()"
     [queryParamsHandling]="openQueryHandling()"
@@ -13,17 +13,22 @@
       }
     </span>
     <app-alpaca-lane-mode-chip [chip]="modeChip()" />
-    @if (serving()) {
-      <span class="lane-card__facts">
-        <span class="lane-card__equity">{{ equityLine() }}</span>
-        <span class="lane-card__bots">{{ botsLine() }}</span>
-      </span>
-    } @else if (lifecycleState() !== null) {
-      <span class="lane-card__readiness">
-        This lane is {{ lifecycleState() | receiptLabel }}.
-      </span>
-    } @else {
-      <span class="lane-card__readiness">{{ readinessLine() }}</span>
+    @let cardState = state();
+    @switch (cardState.kind) {
+      @case ('serving') {
+        <span class="lane-card__facts">
+          <span class="lane-card__equity">{{ equityLine() }}</span>
+          <span class="lane-card__bots">{{ botsLine() }}</span>
+        </span>
+      }
+      @case ('lifecycle') {
+        <span class="lane-card__readiness">
+          This lane is {{ cardState.lifecycleState | receiptLabel }}.
+        </span>
+      }
+      @case ('unbound') {
+        <span class="lane-card__readiness">{{ readinessLine() }}</span>
+      }
     }
   </a>
 </li>

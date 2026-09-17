@@ -33,6 +33,16 @@ const READINESS_LOADING = 'Reading readiness…';
 const EQUITY_WITHOUT_CAPABILITY = 'No account read on this lane';
 const BOTS_WITHOUT_CAPABILITY = 'No bot roster on this lane';
 
+/** What this card can show for its lane, in the same three terms the
+ * workspace's own not-ready surfaces use: it is serving an account, its lane
+ * is down, or its lane is up with nothing bound to it yet. Exhaustive, so a
+ * fourth state is a compile error here rather than a fourth boolean and a
+ * fourth `@else`. */
+type LaneCardState =
+  | { readonly kind: 'serving'; readonly accountId: string }
+  | { readonly kind: 'lifecycle'; readonly lifecycleState: string }
+  | { readonly kind: 'unbound' };
+
 /**
  * One account's card in the Alpaca account list (ADR 0064 Decision 2).
  *
@@ -84,28 +94,17 @@ export class AlpacaLaneCardComponent {
 
   private readonly account = computed(() => laneConfirmedAccount(this.lane()));
 
-  /** An account this list can show money and bots for: its lane is up *and*
-   * Alpaca has confirmed the account those facts would belong to.
-   *
-   * It gates what this card *reads*, never where it opens. An account whose
+  /** It gates what this card *reads*, never where it opens. An account whose
    * lane has gone unreachable is still that account, and the shell's badge
    * and the workspace's switcher both open it at its own workspace — a card
    * that sent the operator somewhere else would make one account two places
    * depending on which affordance they clicked (ADR 0064 Decision 2). */
-  protected readonly serving = computed(() => laneIsReady(this.lane()) && this.account() !== null);
-
-  /** This lane is down, from the descriptor the directory already carries —
-   * a local fact, never a read. `null` while the lane is up. */
-  protected readonly lifecycleState = computed(() =>
-    laneIsReady(this.lane()) ? null : this.lane().lifecycle_state,
-  );
-
-  /** A lane that is up but has no confirmed account yet: the one not-ready
-   * case whose clerk is answering, so asking it for a readiness headline is
-   * a real read with real activation guidance behind it. */
-  private readonly readyButUnbound = computed(
-    () => laneIsReady(this.lane()) && this.account() === null,
-  );
+  protected readonly state = computed<LaneCardState>(() => {
+    const lane = this.lane();
+    if (!laneIsReady(lane)) return { kind: 'lifecycle', lifecycleState: lane.lifecycle_state };
+    const accountId = this.account();
+    return accountId === null ? { kind: 'unbound' } : { kind: 'serving', accountId };
+  });
 
   /** This lane's display name: its account nickname, or its lane label
    * until one is set. Siblings come from injecting `FleetDirectoryService`
@@ -149,11 +148,11 @@ export class AlpacaLaneCardComponent {
    * while there is no account to read, which `resource()` treats as nothing
    * to load rather than as a failed load. */
   private readonly target = computed<ResourceTarget | undefined>(() => {
+    const state = this.state();
+    if (state.kind !== 'serving') return undefined;
     const lane = this.lane();
-    const accountId = this.account();
-    if (!this.serving() || accountId === null) return undefined;
     return resourceTarget(lane.broker, lane.clerk_id, {
-      accountId,
+      accountId: state.accountId,
       bindingGeneration: lane.effective_binding_generation,
       routingEpoch: lane.routing_epoch,
     });
@@ -177,10 +176,10 @@ export class AlpacaLaneCardComponent {
    * A lane that is *down* is never asked: its clerk is by definition not
    * answering, so the read would fail and the card would report "Readiness
    * unavailable" — a fabricated outage over a known one, the same shape
-   * `targetFor` exists to avoid for an undeclared capability (FR-097).
-   * `lifecycleState` is what such a lane says instead. */
+   * `targetFor` exists to avoid for an undeclared capability (FR-097). The
+   * `lifecycle` state is what such a lane says instead. */
   protected readonly readiness = resource({
-    params: () => (this.readyButUnbound() ? this.lane().clerk_id : undefined),
+    params: () => (this.state().kind === 'unbound' ? this.lane().clerk_id : undefined),
     loader: ({ params }) => this.configuration.readDeskState(params),
   });
 

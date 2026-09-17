@@ -57,6 +57,7 @@ async function renderCard(
   lane: LaneDescriptor = testLane(),
   doubles: CardDoubles = {},
   deployIntent = false,
+  siblings: LaneDescriptor[] = [],
 ) {
   const getAccount = vi.fn(doubles.getAccount ?? (() => Promise.resolve(fakeAccount())));
   const getCatalog = vi.fn(doubles.getCatalog ?? (() => Promise.resolve([fakeCatalogBot()])));
@@ -68,7 +69,7 @@ async function renderCard(
     inputs: { lane, deployIntent },
     providers: [
       provideRouter([]),
-      provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] }),
+      provideFleetDirectory({ observed_at_ms: 1, clerks: [lane, ...siblings] }),
       { provide: AlpacaLiveVerdictService, useValue: { stateFor: () => fakeVerdictState('paper') } },
       { provide: BrokersService, useValue: { getAccount } },
       { provide: BrokerV2PanelService, useValue: { getCatalog } },
@@ -256,20 +257,7 @@ describe('AlpacaLaneCardComponent', () => {
       display_label: 'Live',
       provider_summary: { account_nickname: '  strategy lab  ' },
     });
-    await render(AlpacaLaneCardComponent, {
-      inputs: { lane: paper },
-      providers: [
-        provideRouter([]),
-        provideFleetDirectory({ observed_at_ms: 1, clerks: [paper, live] }),
-        { provide: AlpacaLiveVerdictService, useValue: { stateFor: () => fakeVerdictState('paper') } },
-        { provide: BrokersService, useValue: { getAccount: () => Promise.resolve(fakeAccount()) } },
-        { provide: BrokerV2PanelService, useValue: { getCatalog: () => Promise.resolve([]) } },
-        {
-          provide: BrokerConfigurationService,
-          useValue: { readDeskState: () => new Promise<never>(() => undefined) },
-        },
-      ],
-    });
+    await renderCard(paper, {}, false, [live]);
 
     expect(screen.getByText('Strategy lab')).toBeTruthy();
     // Two accounts sharing a name is supported, not refused (ADR 0064
