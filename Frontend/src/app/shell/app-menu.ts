@@ -1,5 +1,7 @@
 import type { MenuItem } from 'primeng/api';
 
+import { accountWorkspaceLocation } from '../fleet/account-workspace';
+
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
   readonly title: string;
@@ -139,9 +141,27 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
     return nodeForActivePath('/brokers/alpaca/deploy');
   }
 
-  // Clerk-scoped surface URLs — with or without an account segment — map
-  // onto their surface's menu entry, so a clerk-only Bots refusal page
-  // highlights Bots and titles itself Bots, not Accounts.
+  if (
+    queryParams.has('deploy')
+    && /^\/brokers\/alpaca\/clerks\/[^/]+\/accounts\/[^/]+$/.test(path)
+  ) {
+    return nodeForActivePath('/brokers/alpaca/deploy');
+  }
+
+  // Every account-workspace URL is one account's place (ADR 0064), so every
+  // tab of it highlights Accounts — the workspace's own tabs, not the menu,
+  // say which page of that account is open. The workspace's URL shape is
+  // owned by `accountWorkspaceLocation`, not re-expressed here, so the
+  // menubar and the workspace shell cannot drift apart about what counts as
+  // being inside a workspace.
+  if (accountWorkspaceLocation(path) !== null) {
+    const workspaceNode = nodeForActivePath('/brokers/alpaca');
+    if (workspaceNode !== null) return workspaceNode;
+  }
+
+  // Surface URLs that are not (yet) inside a workspace — a bot's own page and
+  // the clerk-only refusal pages — map onto their surface's menu entry, so a
+  // clerk-only Bots refusal page highlights Bots and titles itself Bots.
   const accountScopedBrokerSurface = path.match(
     /^\/brokers\/([^/]+)(?:\/clerks\/[^/]+)?\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
   ) ?? path.match(/^\/brokers\/([^/]+)\/clerks\/[^/]+\/(bots|gallery)(?:\/|$)/);
@@ -149,13 +169,6 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
     const [, broker, surface] = accountScopedBrokerSurface;
     const accountNode = nodeForActivePath(`/brokers/${broker.toLowerCase()}/${surface}`);
     if (accountNode !== null) return accountNode;
-  }
-
-  if (
-    queryParams.has('deploy')
-    && /^\/brokers\/alpaca\/clerks\/[^/]+\/accounts\/[^/]+$/.test(path)
-  ) {
-    return nodeForActivePath('/brokers/alpaca/deploy');
   }
 
   return ACTIVE_MENU_ITEMS.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
