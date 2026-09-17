@@ -5,7 +5,6 @@ import {
   computed,
   inject,
   linkedSignal,
-  resource,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
@@ -14,8 +13,6 @@ import { ActivatedRoute, Router, RouterLink, RouterOutlet } from '@angular/route
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { fmtCurrency } from '../../broker/format';
-import { alpacaClerkMatchesAccount } from '../../../services/alpaca-account-identity';
-import { BrokersService } from '../../../services/brokers.service';
 import {
   ACCOUNT_WORKSPACE_TABS,
   accountWorkspaceLocation,
@@ -83,7 +80,6 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
-  private readonly brokers = inject(BrokersService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
   private readonly currentUrl = inject(CurrentUrlService).url;
@@ -155,31 +151,14 @@ export class AlpacaAccountWorkspaceComponent {
     this.accountData.account.hasValue() ? this.accountData.account.value().equity : null,
   );
 
-  /** The routed lane's Clerk status, read here because the sync indicator is
-   * the only thing on this screen that needs it — the Overview tab's own
-   * hold banner and Operator lens each read the status they need. Confirmed
-   * against the routed account on the same terms as the account read: a
-   * Clerk observing another account is a failed read, never a fact rendered
-   * under this account's name. */
-  private readonly clerkStatus = resource({
-    params: () => this.accountData.target(),
-    loader: async ({ params }) => {
-      if (params === null) {
-        throw new Error('The account route does not name a rendered Alpaca lane.');
-      }
-      const status = await this.brokers.getClerkStatus(params);
-      if (!alpacaClerkMatchesAccount(status, params.accountId ?? '')) {
-        throw new Error('The Clerk is observing an account outside the rendered account route.');
-      }
-      return status;
-    },
-  });
-
   /** The latest Clerk↔broker reconciliation, or `null` when none has been
-   * recorded for this account yet. */
+   * recorded for this account yet. Read through `AlpacaDeskAccountDataService`
+   * — the Overview tab's hold banner names the same fact, so both read the
+   * one shared resource rather than each polling `getClerkStatus` on their
+   * own (#2185). */
   protected readonly reconciliation = computed(() =>
-    this.clerkStatus.hasValue()
-      ? (this.clerkStatus.value().latest_reconciliation ?? null)
+    this.accountData.clerkStatus.hasValue()
+      ? (this.accountData.clerkStatus.value().latest_reconciliation ?? null)
       : null,
   );
 
@@ -187,7 +166,7 @@ export class AlpacaAccountWorkspaceComponent {
    * failing and the account never having been reconciled are different
    * facts, so they read differently. */
   protected readonly syncUnavailable = computed(() =>
-    this.clerkStatus.error() === undefined ? 'Not reconciled' : 'Reconciliation unavailable',
+    this.accountData.clerkStatus.error() === undefined ? 'Not reconciled' : 'Reconciliation unavailable',
   );
 
   protected readonly deployBlockedReason = computed(() => {
@@ -212,7 +191,7 @@ export class AlpacaAccountWorkspaceComponent {
     const accountTimer = setInterval(() => {
       if (this.document.visibilityState !== 'visible') return;
       if (!this.accountData.account.isLoading()) this.accountData.account.reload();
-      if (!this.clerkStatus.isLoading()) this.clerkStatus.reload();
+      if (!this.accountData.clerkStatus.isLoading()) this.accountData.clerkStatus.reload();
     }, ACCOUNT_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(accountTimer));
   }

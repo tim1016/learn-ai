@@ -3,7 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { BrokersService } from '../../../services/brokers.service';
-import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
+import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
@@ -12,7 +12,13 @@ import { resourceTarget } from '../../../fleet/resource-target';
 /** One account read shared by the account workspace's header, its Overview
  * tab's active lens, and the deploy drawer — so the operator's equity, the
  * account the header names, and the account a command is minted against all
- * come from the same confirmed read rather than three of them. */
+ * come from the same confirmed read rather than three of them.
+ *
+ * `clerkStatus` is the same rule applied to the Clerk↔broker reconciliation
+ * read: the workspace's sync indicator and `AlpacaHoldBannerComponent` both
+ * name this account's hold and reconciliation state, so both read the one
+ * resource here rather than each polling `getClerkStatus` on its own (#2185
+ * — the same fact was read three times on one screen). */
 @Injectable()
 export class AlpacaDeskAccountDataService {
   private readonly brokers = inject(BrokersService);
@@ -70,6 +76,24 @@ export class AlpacaDeskAccountDataService {
         throw new Error('The Account Clerk returned an account outside the rendered desk route.');
       }
       return account;
+    },
+  });
+
+  /** This account's Clerk↔broker reconciliation and hold status, confirmed
+   * against the routed account on the same terms as `account`: a Clerk
+   * observing another account is a failed read, never a fact rendered under
+   * this account's name. */
+  readonly clerkStatus = resource({
+    params: () => this.target(),
+    loader: async ({ params }) => {
+      if (params === null) {
+        throw new Error('The desk route does not name a rendered Alpaca lane.');
+      }
+      const status = await this.brokers.getClerkStatus(params);
+      if (!alpacaClerkMatchesAccount(status, params.accountId ?? '')) {
+        throw new Error('The Clerk is observing an account outside the rendered account route.');
+      }
+      return status;
     },
   });
 }

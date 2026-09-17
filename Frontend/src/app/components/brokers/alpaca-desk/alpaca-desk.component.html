@@ -9,7 +9,7 @@
   />
 
   @if (operatingDeskVisible()) {
-    <app-alpaca-hold-banner [target]="target" />
+    <app-alpaca-hold-banner />
 
     @if (orderRouteMismatch(); as mismatch) {
       <p class="order-route-notice" role="alert">{{ mismatch }}</p>
