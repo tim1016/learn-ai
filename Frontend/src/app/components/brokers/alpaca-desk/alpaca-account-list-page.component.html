@@ -1,0 +1,34 @@
+<main class="account-list">
+  <header class="account-list__titlebar">
+    <h1>Alpaca</h1>
+    <span class="account-list__count">{{ accounts().length }} registered</span>
+  </header>
+
+  @if (deployIntent()) {
+    <p class="account-list__state" role="status">
+      Choose a ready Paper or Live account below to deploy a strategy.
+    </p>
+  }
+
+  @if (failed()) {
+    <p class="account-list__state" role="alert">
+      The fleet directory is unavailable. Accounts stay reachable through
+      their canonical clerk routes.
+    </p>
+  } @else if (accounts().length === 0) {
+    <p class="account-list__state">
+      @if (loading()) {
+        Loading the clerk fleet directory…
+      } @else {
+        No Alpaca accounts are registered. Enrol a lane volume with the
+        host ceremony to begin.
+      }
+    </p>
+  }
+
+  <ul class="account-list__accounts" aria-label="Alpaca accounts">
+    @for (account of accounts(); track account.clerk_id) {
+      <app-alpaca-lane-card [lane]="account" [deployIntent]="deployIntent()" />
+    }
+  </ul>
+</main>

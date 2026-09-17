@@ -4,18 +4,30 @@ import { RouterLink } from '@angular/router';
 import {
   accountWorkspaceOriginTabRoute,
   accountWorkspaceTabRoute,
+  type AccountWorkspaceOriginTab,
 } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   laneConfirmedAccount,
   laneIsReady,
 } from '../../../fleet/fleet-directory.types';
+import type { FleetCapability } from '../../../fleet/resource-target';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
-import {
-  SURFACE_CAPABILITY,
-  SURFACE_LABEL,
-  type LaneSurface,
-} from '../alpaca-desk/lane-directory/alpaca-lane-directory.component';
+
+/** The capability a lane must declare before one of these two tabs is served
+ * from it. Provider-declared evidence, never inferred (FR-097). */
+export const SURFACE_CAPABILITY: Record<AccountWorkspaceOriginTab, FleetCapability> = {
+  bots: 'bot_panel_read',
+  gallery: 'gallery_read',
+};
+
+/** How this tab names itself while it is explaining that it cannot open. The
+ * tab strip above names the tab (`accountWorkspaceTabLabel`); this is the
+ * longer form the refusal prose reads with. */
+const SURFACE_LABEL: Record<AccountWorkspaceOriginTab, string> = {
+  bots: 'Bots roster',
+  gallery: 'Gallery',
+};
 
 /** Why one lane cannot serve one surface right now, in the order an operator
  * can act on them. Rendered as prose; the codes inside go through
@@ -55,9 +67,9 @@ export class AlpacaSurfaceNotReadyTabComponent {
   private readonly fleet = inject(FleetDirectoryService);
 
   readonly clerkId = input.required<string>();
-  readonly surface = input.required<LaneSurface>();
+  readonly surface = input.required<AccountWorkspaceOriginTab>();
 
-  protected readonly surfaceName = computed(() => SURFACE_LABEL[this.surface()].long);
+  protected readonly surfaceName = computed(() => SURFACE_LABEL[this.surface()]);
   protected readonly SURFACE_CAPABILITY = SURFACE_CAPABILITY;
 
   private readonly lane = computed(() => this.fleet.lane('alpaca', this.clerkId()) ?? null);
