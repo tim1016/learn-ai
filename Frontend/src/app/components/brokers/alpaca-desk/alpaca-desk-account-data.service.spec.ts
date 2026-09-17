@@ -93,7 +93,7 @@ describe('AlpacaDeskAccountDataService', () => {
     expect(service.clerkStatus.hasValue()).toBe(accepted);
   });
 
-  it('does not re-derive its command fence when the directory refreshes on the same route', () => {
+  it('does not re-derive its command fence when the directory refreshes on the same route', async () => {
     const directory = provideFleetDirectory({
       observed_at_ms: 1_757_000_000_000,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 3, routing_epoch: 4 })],
@@ -118,6 +118,9 @@ describe('AlpacaDeskAccountDataService', () => {
       observed_at_ms: 1_757_000_000_001,
       clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 99, routing_epoch: 55 })],
     });
+    // `rebind()` only stages the replacement; `refresh()` promotes it to
+    // what `lane()` reports, like the real service's next load.
+    await directory.useValue.refresh?.();
     TestBed.tick();
 
     expect(service.fence()).toEqual({ bindingGeneration: 3, routingEpoch: 4 });

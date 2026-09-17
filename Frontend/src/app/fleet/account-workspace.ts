@@ -86,6 +86,12 @@ export type AccountWorkspaceAddress = Pick<
   'broker' | 'clerkId' | 'accountId'
 >;
 
+/** The same address, for a workspace whose account is confirmed — the only
+ * kind a bot's page can have, because a bot runs on an account. */
+export interface BoundAccountWorkspaceAddress extends AccountWorkspaceAddress {
+  readonly accountId: string;
+}
+
 /** A router destination: the commands to navigate with, and the query the
  * destination is opened with. */
 export interface AccountWorkspaceLink {
@@ -191,18 +197,15 @@ export function accountWorkspaceOriginTabRoute(
  * link that carries no stamp — a pasted URL, a bookmark — belongs to Bots.
  */
 export function accountWorkspaceBotRoute(
-  account: { readonly broker: string; readonly clerkId: string; readonly accountId: string },
+  account: BoundAccountWorkspaceAddress,
   sid: string,
   origin: AccountWorkspaceOriginTab,
 ): AccountWorkspaceLink {
   return {
-    commands: [
-      ...laneRoute(account.broker, account.clerkId),
-      'accounts',
-      account.accountId,
-      'bots',
-      sid,
-    ],
+    // A bot's page is the Bots tab's own URL plus the bot. The tab it was
+    // *opened* from is the stamp below, never a second path — which is what
+    // lets a Gallery-opened bot keep Gallery highlighted at a `…/bots/…` URL.
+    commands: [...workspaceRoute(account), 'bots', sid],
     queryParams: { [ORIGIN_TAB_QUERY_PARAM]: origin },
   };
 }
@@ -223,7 +226,7 @@ export function accountWorkspaceBotRoute(
  */
 export function accountWorkspaceSwitchRoute(
   from: AccountWorkspaceLocation,
-  target: { readonly clerkId: string; readonly accountId: string | null },
+  target: Omit<AccountWorkspaceAddress, 'broker'>,
   lens: string | null,
 ): AccountWorkspaceLink {
   const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'bots';
