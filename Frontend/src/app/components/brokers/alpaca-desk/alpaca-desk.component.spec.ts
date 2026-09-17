@@ -12,6 +12,7 @@ import { BrokerConfigurationService } from './configuration/broker-configuration
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { CurrentUrlService } from '../../../shell/current-url.service';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
@@ -189,6 +190,13 @@ async function renderDesk(
           paramMap: of(paramMap),
           snapshot: { queryParamMap, paramMap },
         },
+      },
+      // AlpacaDeskAccountDataService reads its routed accountId from the URL
+      // (accountWorkspaceLocation), not from this ActivatedRoute fake — see
+      // that service's own spec for why. Match the paramMap above.
+      {
+        provide: CurrentUrlService,
+        useValue: { url: () => '/brokers/alpaca/clerks/clrk_spec0000000000000000aa/accounts/PA1' },
       },
       {
         provide: BrokersService,
