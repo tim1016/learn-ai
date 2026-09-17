@@ -249,6 +249,26 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
+  it('says Shadow on an undetermined verdict when the clerk holds the no-submit Shadow authority', async () => {
+    await renderWith(LIVE_LANE, {
+      verdict: verdict({
+        configured_mode: 'live',
+        observed_account_id: null,
+        mode_agreement: 'disagreed',
+        clerk_authority: 'shadow',
+        clerk_refusal_reason_code: 'LIVE_MODE_DISAGREEMENT',
+        final_verdict: 'unknown',
+        headline: 'Live mode configured — account state unknown',
+        detail: 'the configured mode and the observed account disagree',
+      }),
+      lastError: null,
+    });
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-undetermined');
+    expect(status.textContent).toContain('Shadow');
+    expect(status.textContent).toContain('assume real money');
+  });
+
   it('keeps an explicit loud warning on screen when the last read failed, never a grey unknown', async () => {
     await renderWith(PAPER_LANE, { verdict: null, lastError: new Error('down') });
     const status = screen.getByRole('status');
