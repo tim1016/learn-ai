@@ -119,7 +119,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('renders a live-unarmed account loudly with the lane label, account id, and armed count', async () => {
+  it('renders a live-unarmed account loudly with the lane label and armed count, never its account number', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -136,8 +136,54 @@ describe('AlpacaLiveBannerComponent', () => {
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-live-unarmed');
     expect(status.textContent).toContain('Live');
-    expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('0 armed');
+    // The account number names the account but guards nothing here — the lane
+    // label already names it, and the number belongs only on Configuration and
+    // in the confirmation of a consequential action (ADR 0064; #2188).
+    expect(status.textContent).not.toContain('9LIVE0001');
+  });
+
+  it("says Shadow, not an account number, when the clerk holds the no-submit Shadow authority", async () => {
+    await renderWith(LIVE_LANE, {
+      verdict: verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        clerk_authority: 'shadow',
+        envelope_state: 'sealed',
+        envelope_agreement: 'agreed',
+        shadow_state: 'complete',
+        armed_instance_count: 2,
+        final_verdict: 'live-armed',
+        headline: 'LIVE account 9LIVE0001 — 2 instances armed, shadowing',
+        detail: 'The shadow port synthesizes fills and submits nothing.',
+      }),
+      lastError: null,
+    });
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Live');
+    expect(status.textContent).toContain('Shadow');
+    expect(status.textContent).toContain('2 armed');
+    expect(status.textContent).not.toContain('9LIVE0001');
+  });
+
+  it('says nothing about Shadow when the clerk holds ordinary SQLite authority', async () => {
+    await renderWith(LIVE_LANE, {
+      verdict: verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        clerk_authority: 'sqlite',
+        envelope_state: 'configured_unsealed',
+        envelope_agreement: 'unsealed',
+        shadow_state: 'none',
+        final_verdict: 'live-unarmed',
+        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
+        detail: 'Every order path refuses.',
+      }),
+      lastError: null,
+    });
+
+    expect(screen.getByRole('status').textContent).not.toContain('Shadow');
   });
 
   it('shows the loss hold on a live account when held', async () => {
@@ -268,8 +314,8 @@ describe('AlpacaLiveBannerComponent', () => {
     });
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-live-armed');
-    expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('1 armed');
+    expect(status.textContent).not.toContain('9LIVE0001');
   });
 
   it("shows the lane's account nickname instead of its raw label when one is set", async () => {
