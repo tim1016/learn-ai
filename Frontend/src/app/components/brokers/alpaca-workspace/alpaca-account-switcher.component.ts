@@ -114,6 +114,10 @@ export class AlpacaAccountSwitcherComponent {
   }
 
   protected onDocumentClick(event: Event): void {
+    // Every click in the app reaches this handler under zoneless CD, so a
+    // closed list must bail before touching the signal — otherwise every
+    // click anywhere marks this component dirty for no reason.
+    if (!this.open()) return;
     const target = event.target;
     if (target instanceof Node && this.host.nativeElement.contains(target)) return;
     this.open.set(false);

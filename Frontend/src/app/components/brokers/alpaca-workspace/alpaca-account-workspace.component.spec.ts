@@ -502,6 +502,40 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
       await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
     });
+
+    it('does not steal focus when the fleet directory resolves the account after arrival on a lane-scoped tab', async () => {
+      // The directory starts without this clerk's lane at all — the same
+      // "not loaded yet" shape `lane()` reports while `/api/broker-clerks` is
+      // in flight — so the header opens on "Lane unresolved" exactly as it
+      // does while the real request is outstanding.
+      const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [] });
+      const { view } = await renderWorkspace({ url: `${LANE_URL}/configuration`, directory });
+      await screen.findByText('Lane unresolved');
+
+      // The directory now resolves this lane's confirmed account — a tick or
+      // two after first render, never something the operator did. The URL
+      // has not moved, so focus must not either.
+      directory.rebind({ observed_at_ms: 2, clerks: [testLane()] });
+      await directory.useValue.refresh?.();
+      await view.fixture.whenStable();
+      await screen.findByText(/\$15,000\.00/);
+
+      expect(document.activeElement).not.toBe(workspaceBody());
+    });
+
+    it('moves focus when a not-ready tab’s roster link resolves to the real, servable roster', async () => {
+      // The lane's account is already confirmed when this renders — the
+      // mirror-image case: the resolved account id never changes, but the
+      // whole body swaps from the refusal to the real roster, and that swap
+      // is what must move the keyboard.
+      const { view } = await renderWorkspace({ url: `${LANE_URL}/bots` });
+      const rosterLink = await screen.findByRole('link', { name: 'Open the Bots roster' });
+
+      fireEvent.click(rosterLink);
+      await view.fixture.whenStable();
+
+      await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
+    });
   });
 
   it('keeps one workspace — and one account read — across a tab change', async () => {

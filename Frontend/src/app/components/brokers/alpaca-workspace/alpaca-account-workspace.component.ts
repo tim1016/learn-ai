@@ -232,10 +232,20 @@ export class AlpacaAccountWorkspaceComponent {
 
   /** What the tab body is currently showing: the account, the tab, and the
    * bot's page open under it. A change to any of the three replaces the whole
-   * body beneath a header and tab strip that do not move. */
+   * body beneath a header and tab strip that do not move.
+   *
+   * Keyed on `routedLocation` — parsed from the URL — rather than `location`:
+   * `location().accountId` falls back to the lane's confirmed account on the
+   * lane-scoped tabs (Configuration, not-ready Bots/Gallery), which resolves
+   * asynchronously from the fleet directory. Keying on that async value made
+   * this key change on its own, a tick or two after arrival, with no
+   * navigation involved — and stole focus out from under the operator when it
+   * did. `routedLocation`'s `accountId` is `null` on those tabs by
+   * construction (it is parsed straight from the URL), so it only changes
+   * when the URL actually does. */
   private readonly renderedContent = computed(() => {
-    const location = this.location();
-    return [location.clerkId, location.accountId ?? '', location.tab, location.botSid ?? ''].join(
+    const routed = this.routedLocation();
+    return [this.clerkId(), routed?.accountId ?? '', routed?.tab ?? 'overview', routed?.botSid ?? ''].join(
       '::',
     );
   });
