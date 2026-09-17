@@ -18,7 +18,7 @@
  * the component that already holds the directory.
  */
 
-import { LENS_QUERY_PARAM } from '../components/broker/shared/lens/lens';
+import { LENS_QUERY_PARAM } from '../shared/lens/lens';
 
 /** The workspace's four tabs, in the order they are presented. */
 export type AccountWorkspaceTab = 'overview' | 'bots' | 'gallery' | 'configuration';

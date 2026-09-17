@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 
-import { parseLens, type DeskLens } from './lens';
+import { parseLens, type DeskLens } from '../../../../shared/lens/lens';
 
 /**
  * The one canonical lens preference, shared by the routed Alpaca account desk

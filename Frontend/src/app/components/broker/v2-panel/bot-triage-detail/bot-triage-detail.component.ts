@@ -20,7 +20,7 @@ import {
 } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
-import type { DeskLens } from '../../shared/lens/lens';
+import type { DeskLens } from '../../../../shared/lens/lens';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';

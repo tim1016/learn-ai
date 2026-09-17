@@ -251,7 +251,7 @@ Recorded from the lens/Paper-Live UX simplification (task `.agents/tasks/2026-09
 
 ### 9.1 Lens dimension (Trader/Operator)
 
-- One shared lens kernel lives at `Frontend/src/app/components/broker/shared/lens/` (type/parser, accessible tablist, preference service, URL helpers). The Alpaca account desk, the full bot panel, and the triage detail all render it; no host keeps a private copy of the tablist or its keyboard handling.
+- One shared lens kernel: its vocabulary and URL helpers (type/parser, `?lens=` builders) live at `Frontend/src/app/shared/lens/`, app-level so any layer may name a lens without reaching into a feature tree; its rendered parts (accessible tablist, preference service) stay at `Frontend/src/app/components/broker/shared/lens/`. The Alpaca account desk, the full bot panel, and the triage detail all render it; no host keeps a private copy of the tablist or its keyboard handling.
 - The names `Trader` and `Operator` and the URL values `trader` | `operator` are user-facing vocabulary and are not renamed.
 - Exactly one storage key exists: `learn-ai.alpaca-desk.lens`. The routed desk and the full bot panel share it. The triage detail keeps a purely component-local lens and never reads or writes the preference.
 - Precedence is `?lens=` > stored preference > `trader`. Lens switches navigate with `replaceUrl: true` and query-parameter merging so deep links and unrelated parameters survive.

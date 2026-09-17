@@ -17,7 +17,7 @@ import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alp
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
-import { LENS_QUERY_PARAM } from '../../broker/shared/lens/lens';
+import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
 import { fmtCurrency } from '../../broker/format';
 import {
   ACCOUNT_WORKSPACE_TABS,

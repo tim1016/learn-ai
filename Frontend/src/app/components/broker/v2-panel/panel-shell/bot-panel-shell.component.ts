@@ -21,8 +21,8 @@ import type {
 } from '../../../../api/alpaca.types';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
-import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../shared/lens/lens';
-import { lensNavigationExtras } from '../../shared/lens/lens-url';
+import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
+import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {

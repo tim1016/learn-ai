@@ -7,7 +7,7 @@ import {
   viewChildren,
 } from '@angular/core';
 
-import { DESK_LENSES, lensFromKey, lensLabel, type DeskLens } from './lens';
+import { DESK_LENSES, lensFromKey, lensLabel, type DeskLens } from '../../../../shared/lens/lens';
 
 /**
  * The one WAI-ARIA tablist for the Trader/Operator lens (task 2026-09-12,
