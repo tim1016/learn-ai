@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom } from 'rxjs';
 
@@ -19,7 +19,6 @@ import type {
   HistoricalExecutionRecoveryPlan,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
-import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
@@ -63,7 +62,7 @@ import {
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
-import { BotRunTimingComponent } from '../bot-run-history/bot-run-timing.component';
+import { BotBannerComponent } from '../bot-banner/bot-banner.component';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
@@ -100,15 +99,13 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AssetIdentityComponent,
     LensTabsComponent,
     PanelActionReceiptComponent,
-    RouterLink,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
     TraderLensComponent,
     OperatorLensComponent,
-    BotRunTimingComponent,
+    BotBannerComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',

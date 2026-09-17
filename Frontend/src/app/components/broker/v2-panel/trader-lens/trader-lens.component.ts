@@ -10,7 +10,6 @@ import type {
   ChartHistoryTimeframe,
   ChartLiveResolution,
   ChartLiveResponse,
-  PanelActionTrigger,
   ChartHistoryResponse,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
@@ -18,7 +17,6 @@ import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quo
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
-import { TraderBotBannerComponent } from './trader-bot-banner/trader-bot-banner.component';
 import { RecentDecisionsListComponent } from './recent-decisions-list/recent-decisions-list.component';
 
 /**
@@ -39,7 +37,6 @@ import { RecentDecisionsListComponent } from './recent-decisions-list/recent-dec
   imports: [
     DualPaneChartComponent,
     TradesTodayListComponent,
-    TraderBotBannerComponent,
     TraderMetricsComponent,
     RecentDecisionsListComponent,
   ],
@@ -50,8 +47,6 @@ export class TraderLensComponent {
   // ── Inputs ────────────────────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
-  /** The routed Clerk; the panel payload deliberately does not infer it. */
-  readonly clerkId = input('');
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly liveChart = input<ChartLiveResponse | null>(null);
@@ -60,14 +55,12 @@ export class TraderLensComponent {
   readonly histChartLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
-  readonly actionPending = input(false);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
 
   /** User selected a Polygon candle timeframe. */
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
-  readonly actionRequested = output<PanelActionTrigger>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 

@@ -532,6 +532,13 @@ describe('OperatorLensComponent', () => {
   });
 
   it('keeps the promoted lifecycle action out of readiness while retaining its gate', async () => {
+    // The banner rendering this same promoted action lives one level up, at
+    // the shell (bot-panel-shell.component.spec.ts covers that end-to-end
+    // "exactly one button, and it's the banner's" claim); this component's
+    // own responsibility, still fully testable in isolation, is that its
+    // readiness accordion does not grow a second, redundant control for the
+    // operation the banner already promotes — while the gate itself (label,
+    // "Ready" state, explanation) stays visible for inspection.
     const fakeSvc = makeFakePanelService();
     const resumeAction: PanelAction = {
       action_id: 'resume', label: 'Resume', explanation: 'Resume bot.', enabled: true,
@@ -553,8 +560,9 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /Ready Resume/i })).toBeTruthy();
+    expandReadiness('Resume');
+    expect(screen.getByText('Resume bot.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
   it('renders the transaction rail with the station from the panel', async () => {
@@ -837,7 +845,13 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 
-  it('renders the backend-selected recovery-primary action once, in the banner, not the accordion (#1665)', async () => {
+  it('suppresses the recovery-primary action out of the readiness accordion (#1665)', async () => {
+    // The full "exactly one button, and it's the banner's" claim needs the
+    // banner rendered alongside this lens; that end-to-end assembly now
+    // happens one level up, at the shell
+    // (bot-panel-shell.component.spec.ts). What stays this component's own
+    // job is that readiness never re-derives a duplicate control for the
+    // operation the backend already promoted.
     const fakeSvc = makeFakePanelService();
     const actionRequested = vi.fn();
     const recoveryAction: PanelAction = {
@@ -877,10 +891,10 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getAllByRole('button', { name: recoveryAction.label })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: recoveryAction.label }));
-
-    expect(actionRequested).toHaveBeenCalledWith({ action: recoveryAction, reason: null });
+    expandReadiness(recoveryAction.label);
+    expect(screen.getByText(recoveryAction.explanation)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: recoveryAction.label })).toBeNull();
+    expect(actionRequested).not.toHaveBeenCalled();
   });
 
   it('keeps a disabled operator action reason code visible with its current gate', async () => {

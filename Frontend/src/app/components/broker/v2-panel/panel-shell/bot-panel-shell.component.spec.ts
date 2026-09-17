@@ -651,11 +651,11 @@ describe('BotPanelShellComponent', () => {
 
       expect(screen.getByRole('heading', { name: /Ema Crossover/ })).toBeTruthy();
       // Which bot and where it sits come before the choice of view onto it.
-      const identity = container.querySelector('.bot-identity');
+      const banner = container.querySelector('app-bot-banner');
       const lenses = container.querySelector('.lens-navigation');
-      if (identity === null || lenses === null) throw new Error('The bot page is missing a header.');
+      if (banner === null || lenses === null) throw new Error('The bot page is missing a header.');
       expect(
-        identity.compareDocumentPosition(lenses) & Node.DOCUMENT_POSITION_FOLLOWING,
+        banner.compareDocumentPosition(lenses) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     });
   });
@@ -760,6 +760,10 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
+    // The backend policy folds RecoveryCapability.primary into the Operator
+    // reference (ADR 0027 precedence, #1665): the banner renders it once,
+    // and the readiness accordion suppresses its own would-be duplicate row.
+    expect(screen.getAllByRole('button', { name: 'Recover exact execution evidence' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -911,7 +915,7 @@ describe('BotPanelShellComponent', () => {
     })).toBeNull();
   });
 
-  it('keeps lens navigation above the active lens header and run evidence out of Trader', async () => {
+  it('renders the bot banner once above lens navigation, not re-mounted inside a lens, and keeps run evidence out of Trader', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -925,14 +929,18 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     const navigation = container.querySelector('.lens-navigation');
-    const hero = container.querySelector('app-trader-lens app-trader-bot-banner');
+    const banners = container.querySelectorAll('app-bot-banner');
+    const nestedInLens = container.querySelector('app-trader-lens app-bot-banner, app-operator-lens app-bot-banner');
     expect(navigation).not.toBeNull();
-    expect(hero).not.toBeNull();
-    if (navigation === null || hero === null) {
-      throw new Error('Expected lens navigation and active-lens header to render.');
+    expect(banners).toHaveLength(1);
+    expect(nestedInLens).toBeNull();
+    const banner = banners[0];
+    if (navigation === null || banner === undefined) {
+      throw new Error('Expected lens navigation and the bot banner to render.');
     }
+    // Which bot this is comes before the choice of view onto it.
     expect(
-      navigation.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING,
+      banner.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.queryByText('Run evidence')).toBeNull();
     expect(screen.queryByText('Strategy evidence')).toBeNull();
