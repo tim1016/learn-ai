@@ -1,4 +1,5 @@
 @use '../../../../styles/tokens' as *;
+@use '../../../../styles/eyebrow-heading' as *;
 
 :host { display: block; }
 
@@ -21,28 +22,8 @@
 
 .ac-title-wrap { min-width: 0; }
 
-.ac-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: $text-muted;
-  margin-bottom: 4px;
-}
-
-.ac-eyebrow .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: $accent;
-}
-
 .ac-title {
-  font-size: 1.4rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: $text-primary;
+  @include eyebrow-heading;
   margin: 0;
   display: flex;
   align-items: baseline;
