@@ -18,9 +18,6 @@ import { formatErrorDetails } from './error-display';
     @if (info) {
       <section class="page-error" role="alert" aria-live="assertive">
         <header class="page-error-head">
-          @if (eyebrow()) {
-            <span class="page-error-eyebrow">{{ eyebrow() }}</span>
-          }
           <h2 class="page-error-title">{{ info.what }}</h2>
           <p class="page-error-try">{{ info.tryCopy }}</p>
         </header>
@@ -54,7 +51,6 @@ import { formatErrorDetails } from './error-display';
 export class PageErrorComponent {
   readonly error = input<unknown>(null);
   readonly contextWhat = input<string | undefined>(undefined);
-  readonly eyebrow = input<string | undefined>(undefined);
   readonly canRetry = input(true);
   readonly retrying = input(false);
   readonly retry = output();

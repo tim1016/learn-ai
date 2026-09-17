@@ -29,14 +29,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 18px;
+  height: 18px;
   margin-right: var(--space-2);
   background: var(--accent-faint);
   border-radius: var(--radius-md);
   color: var(--accent);
-  font-size: 1rem;
-  vertical-align: -0.2em;
+  font-size: 0.7rem;
+  vertical-align: -0.15em;
 }
 
 .page-header-inner {
@@ -44,20 +44,9 @@
   flex: 1 1 auto;
 }
 
-.eyebrow {
-  @include eyebrow-heading;
-  display: inline-block;
-  margin-bottom: var(--space-1);
-  font-family: $font-mono;
-  line-height: 1;
-}
-
 .page-title {
+  @include eyebrow-heading;
   margin: 0;
-  color: $text-primary;
-  font-size: var(--fs-h1);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-tight);
   line-height: 1.15;
   text-wrap: balance;
 }
@@ -123,9 +112,5 @@
   .page-header {
     flex-direction: column;
     gap: var(--space-3);
-  }
-
-  .page-title {
-    font-size: var(--fs-xl);
   }
 }

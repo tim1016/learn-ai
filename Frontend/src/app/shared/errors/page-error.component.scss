@@ -19,19 +19,9 @@
   margin-bottom: var(--space-4);
 }
 
-.page-error-eyebrow {
-  @include eyebrow-heading;
-  display: inline-block;
-  margin-bottom: var(--space-2);
-  color: $bear;
-  font-family: $font-mono;
-}
-
 .page-error-title {
+  @include eyebrow-heading;
   margin: 0 0 var(--space-2);
-  color: $text-primary;
-  font-size: var(--fs-h2);
-  font-weight: var(--fw-semi);
   line-height: 1.2;
 }
 

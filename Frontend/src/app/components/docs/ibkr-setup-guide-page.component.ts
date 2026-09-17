@@ -16,7 +16,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
   template: `
     <div class="guide-page">
       <app-page-header
-        eyebrow="Runbook"
         title="IBKR Setup Guide"
       >
         <a

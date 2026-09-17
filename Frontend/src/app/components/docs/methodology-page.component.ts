@@ -19,7 +19,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
   template: `
     <div class="methodology-page">
       <app-page-header
-        eyebrow="Reference"
         title="Indicator Reliability — Methodology"
       >
         <a

@@ -1,8 +1,8 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 /**
- * App-wide page header. Standardizes the h1 + optional eyebrow / actions slot
- * so every route renders the same hierarchy and spacing.
+ * App-wide page header. Standardizes the h1 + optional actions slot so every
+ * route renders the same hierarchy and spacing.
  *
  * Slots:
  *   - ``[slot=actions]`` — chips, links, or buttons aligned to the right.
@@ -23,9 +23,6 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
   template: `
     <header class="page-header" [class.page-header--with-tabs]="hasTabs()">
       <div class="page-header-inner">
-        @if (eyebrow()) {
-          <span class="eyebrow">{{ eyebrow() }}</span>
-        }
         <h1 class="page-title">
           @if (icon(); as ic) {
             <i [class]="'pi ' + ic" class="page-title-icon" aria-hidden="true"></i>
@@ -44,7 +41,6 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 })
 export class PageHeaderComponent {
   readonly title = input.required<string>();
-  readonly eyebrow = input<string | undefined>(undefined);
   /** Optional leading PrimeIcons class (without the ``pi-`` prefix —
    *  e.g. ``"pi-bolt"``). Renders in ``--accent`` next to the title. */
   readonly icon = input<string | undefined>(undefined);
