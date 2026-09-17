@@ -182,9 +182,17 @@ describe('routes', () => {
       // Overview is the empty child, so the account's own URL opens it and
       // the canonical URLs are unchanged.
       expect(workspace?.children?.map((child) => child.path)).toEqual(['bots', 'gallery', '']);
-      expect(workspace?.children?.find((child) => child.path === 'gallery')?.data).toMatchObject({
-        fullBleed: true,
-      });
+    });
+
+    it('declares full-bleed once, on the workspace itself, so the header never moves', () => {
+      // The header and tab strip are the workspace's chrome: a per-tab
+      // `fullBleed` gave the shell's page inset to some tabs and not others,
+      // which shifted the header when the operator opened Gallery. One flag
+      // on the parent is what makes the three tabs agree.
+      expect(workspace?.data).toMatchObject({ fullBleed: true });
+      for (const child of workspace?.children ?? []) {
+        expect(child.data?.['fullBleed']).toBeUndefined();
+      }
     });
 
     it.each([

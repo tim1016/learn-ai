@@ -6,11 +6,15 @@
     var(--bg-canvas);
 }
 
+/* Overview is a stack of cards, so it carries the shell's page inset itself.
+   Its workspace is full-bleed (the header and tab strip must sit at the same
+   place on every tab), which means `app-page-body` no longer supplies it. */
 .alpaca-desk {
   display: flex;
   min-height: 100%;
   flex-direction: column;
   gap: var(--space-3);
+  padding: var(--page-pad-y) var(--page-pad-x);
 }
 
 .order-route-notice {

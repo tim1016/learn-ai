@@ -366,8 +366,14 @@ export const routes: Routes = [
     // Declared AFTER `…/bots/:sid` above: a bot's own page is not a
     // workspace tab yet (it moves inside in a later slice), so it must match
     // its own route first.
+    //
+    // Full-bleed on the PARENT, not on one tab: the header and the tab strip
+    // are the workspace's own chrome and must sit at the same place on every
+    // tab. Declaring it per tab gave the shell's page inset to some tabs and
+    // not others, which moved the header ~24px when the operator switched to
+    // Gallery. Each tab now owns whatever inset its own content wants.
     path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
-    data: { broker: 'alpaca' },
+    data: { fullBleed: true, broker: 'alpaca' },
     loadComponent: () =>
       import(
         './components/brokers/alpaca-workspace/alpaca-account-workspace.component'
@@ -381,9 +387,9 @@ export const routes: Routes = [
           ).then((m) => m.BotsListPageComponent),
       },
       {
-        // The wall stays edge to edge under the workspace header.
+        // The wall stays edge to edge under the workspace header — as every
+        // tab now does, from the parent's `fullBleed` above.
         path: 'gallery',
-        data: { fullBleed: true },
         loadComponent: () =>
           import(
             './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
