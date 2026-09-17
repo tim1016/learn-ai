@@ -420,29 +420,27 @@ export const routes: Routes = [
       },
     ],
   },
+  // The broker-wide Bots and Gallery choosers are retired (ADR 0064
+  // Decision 2): a surface belongs to an account, so choosing one is
+  // choosing an account, and the account list is where that happens. Both
+  // bookmarks redirect there rather than 404-ing — including the old
+  // `?surface=` hints, which the guard below still folds onto these two
+  // paths and which therefore land on the list in one further hop.
   {
-    // Read-only lane choosers: every Alpaca lane listed side by side, each
-    // linking to its own canonical operational URL (or its clerk-only
-    // explanation). No lane is ever selected automatically (FR-096).
     path: "brokers/alpaca/bots",
-    data: { broker: "alpaca", surface: "bots" },
-    loadComponent: () =>
-      import("./components/brokers/alpaca-desk/alpaca-surface-chooser.component").then(
-        (m) => m.AlpacaSurfaceChooserComponent,
-      ),
+    redirectTo: "/brokers/alpaca",
+    pathMatch: "full",
   },
   {
     path: "brokers/alpaca/gallery",
-    data: { fullBleed: true, broker: "alpaca", surface: "gallery" },
-    loadComponent: () =>
-      import("./components/brokers/alpaca-desk/alpaca-surface-chooser.component").then(
-        (m) => m.AlpacaSurfaceChooserComponent,
-      ),
+    redirectTo: "/brokers/alpaca",
+    pathMatch: "full",
   },
   {
     // The account list — the only multi-account page (ADR 0064 Decision 2).
-    // Retires the old `?surface=bots|gallery` hint bookmarks by redirecting
-    // them to the real chooser routes above.
+    // The `?deploy` intent is this same route with a query param: the list is
+    // the deploy entry point's account-selection step, never a lane picked
+    // for the operator (FR-096).
     path: "brokers/alpaca",
     canActivate: [alpacaSurfaceRedirectGuard],
     loadComponent: () =>

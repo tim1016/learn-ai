@@ -15,8 +15,8 @@ import { AlpacaAccountWorkspaceComponent } from './components/brokers/alpaca-wor
 import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component';
 import { AlpacaConfigurationPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component';
+import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk/alpaca-account-list-page.component';
 import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
-import { AlpacaSurfaceChooserComponent } from './components/brokers/alpaca-desk/alpaca-surface-chooser.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
 import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
@@ -146,20 +146,48 @@ describe('routes', () => {
     expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
 
-  it('lazily loads the read-only surface choosers with their surface data', async () => {
-    const bots = routes.find((candidate) => candidate.path === 'brokers/alpaca/bots');
-    const gallery = routes.find((candidate) => candidate.path === 'brokers/alpaca/gallery');
+  it('retires the broker-wide surface choosers onto the account list', async () => {
+    // A surface belongs to an account (ADR 0064 Decision 2), so these two
+    // bookmarks have no page of their own any more — they land on the one
+    // page that can name an account, rather than 404-ing.
+    for (const path of ['brokers/alpaca/bots', 'brokers/alpaca/gallery']) {
+      const route = routes.find((candidate) => candidate.path === path);
 
-    expect(await bots?.loadComponent?.()).toBe(AlpacaSurfaceChooserComponent);
-    expect(bots?.data).toMatchObject({ surface: 'bots' });
-    expect(await gallery?.loadComponent?.()).toBe(AlpacaSurfaceChooserComponent);
-    expect(gallery?.data).toMatchObject({ surface: 'gallery', fullBleed: true });
+      expect(route).toMatchObject({ redirectTo: '/brokers/alpaca', pathMatch: 'full' });
+      expect(route?.loadComponent).toBeUndefined();
+    }
   });
 
   it('retires the desk surface hints through the redirect guard', () => {
     const desk = routes.find((candidate) => candidate.path === 'brokers/alpaca');
 
     expect(desk?.canActivate).toContain(alpacaSurfaceRedirectGuard);
+  });
+
+  it('serves the account list — and its ?deploy intent — from the one broker route', async () => {
+    const list = routes.find((candidate) => candidate.path === 'brokers/alpaca');
+
+    // `?deploy` is a query on this same route, not a page of its own: the
+    // list is the deploy hand-off's account-selection step.
+    expect(await list?.loadComponent?.()).toBe(AlpacaAccountListPageComponent);
+    expect(routes.some((candidate) => candidate.path === 'brokers/alpaca?deploy')).toBe(false);
+  });
+
+  it.each([
+    ['/brokers/alpaca?surface=bots'],
+    ['/brokers/alpaca?surface=gallery'],
+    ['/brokers/alpaca/bots'],
+    ['/brokers/alpaca/gallery'],
+  ])('lands %s on the account list, in however many hops it takes', async (path) => {
+    // The guard still folds `?surface=bots` onto `/brokers/alpaca/bots`,
+    // which now redirects back to the list. The chain has to terminate on the
+    // list rather than loop or strand the bookmark.
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(path);
+
+    expect(router.url).toBe('/brokers/alpaca');
   });
 
   describe('the account workspace (ADR 0064)', () => {

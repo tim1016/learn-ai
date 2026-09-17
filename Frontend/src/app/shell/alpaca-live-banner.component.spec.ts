@@ -1,9 +1,11 @@
+import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { Router, provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import axe from 'axe-core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
+import { provideFleetDirectory, testLane, TEST_ACCOUNT_ID } from '../fleet/fleet-directory-testing';
 import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import {
   AlpacaLiveVerdictService,
@@ -34,6 +36,11 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
   };
 }
 
+/** Stands in for whatever page the operator is on: the badge only reads the
+ * URL, never what is rendered under it. */
+@Component({ selector: 'app-anywhere', template: '', changeDetection: ChangeDetectionStrategy.OnPush })
+class AnywhereComponent {}
+
 async function renderWith(
   lane: LaneDescriptor | null,
   state: LaneVerdictState,
@@ -50,9 +57,33 @@ async function renderWith(
       // a test that doesn't care about collisions never accidentally gets
       // one from `provideFleetDirectory()`'s own default fixture lane.
       provideFleetDirectory({ observed_at_ms: 1, clerks: [...siblingLanes] }),
+      // The badge is a link into its account's workspace (#2187); where it
+      // leads depends on the URL the shell is currently on. The catch-all
+      // route exists so a spec can *stand* on a URL — the badge reads the
+      // router's URL, which only moves when a navigation actually matches.
+      provideRouter([{ path: '**', component: AnywhereComponent }]),
     ],
   });
 }
+
+/** Render a badge as if the operator were standing on `url` — the badge reads
+ * the current URL to decide whether it is switching accounts inside a
+ * workspace or opening one from outside. */
+async function renderAt(
+  url: string,
+  lane: LaneDescriptor,
+  state: LaneVerdictState = { verdict: verdict({}), lastError: null },
+) {
+  const view = await renderWith(lane, state);
+  const router = view.fixture.debugElement.injector.get(Router);
+  await router.navigateByUrl(url);
+  await view.fixture.whenStable();
+  return view;
+}
+
+/** Another account's workspace — where a badge is a switch rather than an
+ * opening. */
+const LIVE_WORKSPACE = '/brokers/alpaca/clerks/clrk_live/accounts/LIVE9';
 
 const PAPER_LANE = testLane({ clerk_id: 'clrk_paper', broker: 'alpaca', display_label: 'Paper' });
 const LIVE_LANE = testLane({ clerk_id: 'clrk_live', broker: 'alpaca', display_label: 'Live' });
@@ -345,5 +376,95 @@ describe('AlpacaLiveBannerComponent', () => {
     const status = screen.getByRole('status');
     expect(status.textContent).toContain('Solo');
     expect(status.textContent).not.toContain('(Paper)');
+  });
+
+  describe('as the way to its account (ADR 0064 Decision 3)', () => {
+    it("opens the account's Overview from anywhere outside a workspace", async () => {
+      await renderAt('/data-lab', PAPER_LANE);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
+      );
+    });
+
+    it.each([
+      ['', ''],
+      ['/bots', '/bots'],
+      ['/gallery', '/gallery'],
+    ])('keeps the %s tab when switching from another account inside a workspace', async (
+      tab,
+      expected,
+    ) => {
+      await renderAt(`${LIVE_WORKSPACE}${tab}`, PAPER_LANE);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}${expected}`,
+      );
+    });
+
+    it("lands on the chosen account's Bots from a bot's own page", async () => {
+      // The chosen account need not run that bot, so the bot's page is never
+      // carried across — the same rule the in-workspace switcher follows.
+      await renderAt(`${LIVE_WORKSPACE}/bots/sid-1?from=gallery`, PAPER_LANE);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}/bots`,
+      );
+    });
+
+    it('carries the lens perspective across, exactly as the in-workspace switcher does', async () => {
+      await renderAt(`${LIVE_WORKSPACE}/bots?lens=operator`, PAPER_LANE);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}/bots?lens=operator`,
+      );
+    });
+
+    it('leaves an open Deploy drawer behind rather than retargeting it', async () => {
+      await renderAt(`${LIVE_WORKSPACE}?deploy=`, PAPER_LANE);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
+      );
+    });
+
+    it("opens an unconfirmed account's Configuration, the one tab its lane can serve", async () => {
+      const unbound = testLane({
+        clerk_id: 'clrk_paper',
+        display_label: 'Paper',
+        provider_summary: { ...testLane().provider_summary, confirmed_account_id: null },
+      });
+      await renderAt('/data-lab', unbound);
+
+      expect(screen.getByRole('link').getAttribute('href')).toBe(
+        '/brokers/alpaca/clerks/clrk_paper/configuration',
+      );
+    });
+
+    it('is a link that does not leave the badge — the warning is still the status region', async () => {
+      // The link wraps the live region rather than replacing it: one element
+      // cannot be both, and the real-money assumption has to keep announcing
+      // as a status with its own accessible name (WCAG 1.4.1).
+      await renderAt('/data-lab', PAPER_LANE, { verdict: null, lastError: new Error('down') });
+
+      const status = screen.getByRole('status');
+      expect(status.className).toContain('is-undetermined');
+      expect(status.getAttribute('aria-label')).toContain('Assume real money');
+      expect(screen.getByRole('link').contains(status)).toBe(true);
+      // The link inherits that same accessible name from the region it wraps,
+      // so tabbing onto the badge cannot hear less than reading it does.
+      expect(screen.getByRole('link').getAttribute('aria-label')).toBeNull();
+      expect(screen.getByRole('link', { name: /Assume real money/ })).toBeTruthy();
+
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+    });
+
+    it('is not a link when there is no lane to open, rather than a link to nowhere', async () => {
+      await renderWith(null, UNPOLLED_LANE_STATE);
+
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('Alpaca lanes unknown');
+    });
   });
 });

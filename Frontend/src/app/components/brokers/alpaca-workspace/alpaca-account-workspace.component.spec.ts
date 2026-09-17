@@ -30,7 +30,8 @@ import {
 import { fakeVerdictState } from '../../../testing/alpaca-live-verdict-fixtures';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
-import { AlpacaLaneDirectoryComponent } from '../alpaca-desk/lane-directory/alpaca-lane-directory.component';
+import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-list-page.component';
+import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
 
@@ -100,15 +101,9 @@ const WORKSPACE_ROUTES: Routes = [
       { path: '', redirectTo: 'configuration', pathMatch: 'full' },
     ],
   },
-  // The real account list, so a spec can follow its per-account links into
-  // the workspace instead of only reading their `href`. Its own page supplies
-  // these two inputs in the app; declared here because component input
-  // binding sets every declared input from route data, `undefined` included.
-  {
-    path: 'brokers/alpaca',
-    data: { surface: null, deployIntent: false },
-    component: AlpacaLaneDirectoryComponent,
-  },
+  // The real account list, so a spec can follow one of its account cards into
+  // the workspace instead of only reading the card's `href`.
+  { path: 'brokers/alpaca', component: AlpacaAccountListPageComponent },
 ];
 
 /** A ready lane that Alpaca has not confirmed an account for: it keeps its
@@ -195,7 +190,16 @@ async function renderWorkspace(
               : Promise.resolve(fakeClerkStatus()),
         },
       },
-      { provide: BrokerV2PanelService, useValue: { getDeployView } },
+      // `getCatalog` and `readDeskState` are the account list's cards, not
+      // this workspace's: the account-list route above renders them.
+      {
+        provide: BrokerV2PanelService,
+        useValue: { getDeployView, getCatalog: () => Promise.resolve([]) },
+      },
+      {
+        provide: BrokerConfigurationService,
+        useValue: { readDeskState: () => new Promise<never>(() => undefined) },
+      },
       {
         provide: AlpacaLiveVerdictService,
         useValue: {
@@ -438,15 +442,17 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     await vi.waitFor(() => expect(router.url).not.toContain('deploy'));
   });
 
-  it('opens the drawer when the account list’s own Deploy link is followed', async () => {
+  it('opens the drawer when an account card is chosen under a deploy intent', async () => {
     // The regression this pins: the link's `href` stayed correct while the
-    // destination stopped reading `?deploy`, so every per-account Deploy in
-    // the account list navigated to Overview with nothing open. Asserting the
-    // href alone could not see that — this follows the link and looks at what
-    // the destination actually renders.
-    await renderWorkspace({ url: ACCOUNT_LIST_URL });
+    // destination stopped reading `?deploy`, so choosing an account under a
+    // deploy intent landed on Overview with nothing open. Asserting the href
+    // alone could not see that — this follows the card and looks at what the
+    // destination actually renders. The list has no Deploy link of its own
+    // any more (#2187): the whole card is the click target, and it carries
+    // the intent the hand-off arrived with.
+    await renderWorkspace({ url: `${ACCOUNT_LIST_URL}?deploy=` });
 
-    fireEvent.click(await screen.findByRole('link', { name: 'Deploy' }));
+    fireEvent.click(await screen.findByRole('link', { name: /Paper/ }));
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
   });

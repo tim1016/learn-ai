@@ -168,19 +168,21 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
 
     await page.goto('/brokers/alpaca');
 
-    await expect(page.getByRole('heading', { name: 'Clerk lanes' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
     const paperLane = page.locator('li').filter({ hasText: 'Paper lane' });
     const liveLane = page.locator('li').filter({ hasText: 'Live lane' });
-    await expect(paperLane).toContainText(PAPER_ACCOUNT);
-    await expect(liveLane).toContainText('This lane is unavailable');
-    // The failed lane's surface links never vanish: Bots stays selectable
-    // through the lane's own clerk-only route — never another lane's URL.
-    await expect(liveLane.getByRole('link', { name: 'Bots' })).toHaveAttribute(
+    await expect(paperLane).toContainText('$10,000.00');
+    // The failed lane keeps its card, states the lifecycle the directory
+    // already carries rather than a read its clerk cannot answer, and keeps
+    // its own way in — its own account's workspace, never another lane's URL.
+    await expect(liveLane).toContainText('This lane is Unreachable.');
+    await expect(liveLane.getByRole('link')).toHaveAttribute(
       'href',
-      `/brokers/alpaca/clerks/${LIVE_CLERK}/bots`,
+      `/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}`,
     );
 
-    const deskLink = paperLane.getByRole('link', { name: 'Desk' });
+    // The whole card is the way into the account (#2187).
+    const deskLink = paperLane.getByRole('link');
     await expect(deskLink).toHaveAttribute(
       'href',
       `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
@@ -199,13 +201,17 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     )).toEqual([]);
   });
 
-  test('turns a global Deploy intent into an explicit clerk-lane choice', async ({ page }) => {
+  test('turns a global Deploy intent into an explicit account choice', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
 
     await page.goto('/brokers/alpaca?deploy=');
-    await expect(page.getByText(/choose a ready clerk lane below to deploy/i)).toBeVisible();
-    await page.getByRole('link', { name: 'Deploy' }).click();
+    await expect(
+      page.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
+    ).toBeVisible();
+    // The list has no Deploy link of its own (#2187): choosing the account is
+    // the step the intent was waiting for, and it travels with that choice.
+    await page.locator('li').filter({ hasText: 'Paper lane' }).getByRole('link').click();
 
     await expect(page).toHaveURL(new RegExp(
       `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}\\?deploy=`,
@@ -213,18 +219,21 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect(page.getByRole('heading', { name: 'Deploy a bot' })).toBeVisible();
   });
 
-  test('turns a global Bots intent into an explicit clerk-lane choice', async ({ page }) => {
+  test('turns a global Bots intent into an explicit account choice', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
-    // The retired `?surface=bots` bookmark redirects onto the real chooser
-    // route, which selects nothing by itself.
+    // The retired `?surface=bots` bookmark folds onto `/brokers/alpaca/bots`,
+    // which is a redirect to the account list now (#2187) — a roster belongs
+    // to an account, so reaching one starts by choosing the account.
     await page.goto('/brokers/alpaca?surface=bots');
-    await expect(page).toHaveURL('/brokers/alpaca/bots');
-    await expect(page.getByRole('heading', { name: 'Clerk lanes — Bots roster' })).toBeVisible();
-    await page.locator('li')
-      .filter({ hasText: 'Paper lane' })
-      .getByRole('link', { name: 'Bots' })
-      .click();
+    await expect(page).toHaveURL('/brokers/alpaca');
+    await expect(page.getByRole('heading', { name: 'Alpaca' })).toBeVisible();
+
+    await page.locator('li').filter({ hasText: 'Paper lane' }).getByRole('link').click();
+    await expect(page).toHaveURL(
+      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
+    );
+    await page.getByRole('link', { name: 'Bots', exact: true }).click();
 
     await expect(page).toHaveURL(new RegExp(
       `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/bots$`,
@@ -289,7 +298,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
 
-    // `/brokers/alpaca/bots` is the read-only lane chooser now, so it stays
+    // `/brokers/alpaca/bots` redirects to the account list now, so it stays
     // out of this failure loop; these are the compatibility URLs that still
     // have no lane to resolve to.
     for (const path of [
