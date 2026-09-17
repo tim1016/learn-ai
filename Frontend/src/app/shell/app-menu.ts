@@ -5,12 +5,8 @@ import { accountWorkspaceLocation } from '../fleet/account-workspace';
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
   readonly title: string;
-  /** Router path for navigation. */
+  /** Router path for navigation, and the path the item highlights on. */
   readonly route: string;
-  /** Query parameters required to navigate to this menu item. */
-  readonly queryParams?: Readonly<Record<string, string>>;
-  /** Path used to mark the item active when it differs from its link target. */
-  readonly activePath?: string;
 }
 
 export interface AppMenuGroup {
@@ -81,17 +77,11 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     id: 'alpaca',
     title: 'Alpaca',
     icon: 'pi pi-link',
-    items: [
-      { title: 'Accounts', route: '/brokers/alpaca' },
-      {
-        title: 'Deploy',
-        route: '/brokers/alpaca',
-        queryParams: { deploy: '' },
-        activePath: '/brokers/alpaca/deploy',
-      },
-      { title: 'Bot rosters', route: '/brokers/alpaca/bots' },
-      { title: 'Gallery', route: '/brokers/alpaca/gallery' },
-    ],
+    // One way in (ADR 0064 Decision 2): an account is a place, and Deploy,
+    // the bot roster and the Gallery are things one does *on* an account, so
+    // they are that account's workspace tabs rather than four broker-wide
+    // entries that would each have to ask which account they meant.
+    items: [{ title: 'Accounts', route: '/brokers/alpaca' }],
   },
   {
     id: 'strategy-tools',
@@ -121,31 +111,17 @@ export const APP_MENU: readonly AppMenuGroup[] = [
 ];
 
 const ACTIVE_MENU_ITEMS = APP_MENU.flatMap((group) =>
-  group.items.map((item) => ({
-    group,
-    item,
-    activePath: item.activePath ?? item.route,
-  })),
+  group.items.map((item) => ({ group, item, activePath: item.route })),
 ).sort((left, right) => right.activePath.length - left.activePath.length);
 
 /**
  * Resolves the single active menu node for a URL.
  *
- * It deliberately owns the menubar's longest-match behavior and the
- * account/deploy aliases, so every navigation projection agrees with it.
+ * It deliberately owns the menubar's longest-match behavior and the account
+ * alias, so every navigation projection agrees with it.
  */
 export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
-  const { path, query } = splitUrl(url);
-  const queryParams = new URLSearchParams(query);
-  const workspace = accountWorkspaceLocation(url);
-
-  // `?deploy` is openable from the bare Alpaca broker root or from any tab of
-  // the account's own workspace (fix c6dda7d8 lets the operator open Deploy
-  // from wherever they are standing), so both forms highlight Deploy rather
-  // than falling through to Accounts.
-  if (queryParams.has('deploy') && (path === '/brokers/alpaca' || workspace?.broker === 'alpaca')) {
-    return nodeForActivePath('/brokers/alpaca/deploy');
-  }
+  const path = routePathOf(url);
 
   // Every account-workspace URL is one account's place (ADR 0064), so every
   // tab of it highlights Accounts — the workspace's own tabs, not the menu,
@@ -154,21 +130,13 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   // shape is owned by `accountWorkspaceLocation`, not re-expressed here, so
   // the menubar and the workspace shell cannot drift apart about what counts
   // as being inside a workspace.
-  if (workspace?.broker === 'alpaca') {
+  //
+  // `?deploy` needs no case of its own: Deploy is an account's own action,
+  // opened as a drawer over its workspace, so a `?deploy` URL is either this
+  // workspace or the account list — and both land on Accounts.
+  if (accountWorkspaceLocation(url)?.broker === 'alpaca') {
     const workspaceNode = nodeForActivePath('/brokers/alpaca');
     if (workspaceNode !== null) return workspaceNode;
-  }
-
-  // The clerk-less compatibility surfaces, which the redirect guard resolves
-  // to a lane: they are outside any workspace until it does, so they map onto
-  // their surface's own menu entry meanwhile.
-  const accountScopedBrokerSurface = path.match(
-    /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
-  );
-  if (accountScopedBrokerSurface) {
-    const [, broker, surface] = accountScopedBrokerSurface;
-    const accountNode = nodeForActivePath(`/brokers/${broker.toLowerCase()}/${surface}`);
-    if (accountNode !== null) return accountNode;
   }
 
   return ACTIVE_MENU_ITEMS.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
@@ -195,7 +163,6 @@ export function menuItemsFor(url: string): MenuItem[] {
     items: group.items.map((item) => ({
       label: item.title,
       routerLink: item.route,
-      queryParams: item.queryParams,
       styleClass: item === active?.item ? ACTIVE_ITEM_CLASS : undefined,
     })),
   }));
@@ -205,11 +172,7 @@ function nodeForActivePath(activePath: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find((node) => node.activePath === activePath) ?? null;
 }
 
-function splitUrl(url: string): { path: string; query: string } {
-  const hashIndex = url.indexOf('#');
-  const withoutHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  const queryIndex = withoutHash.indexOf('?');
-  return queryIndex === -1
-    ? { path: withoutHash, query: '' }
-    : { path: withoutHash.slice(0, queryIndex), query: withoutHash.slice(queryIndex + 1) };
+/** `url` without its query string or fragment — what an entry matches on. */
+function routePathOf(url: string): string {
+  return url.split('#')[0].split('?')[0];
 }

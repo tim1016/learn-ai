@@ -31,18 +31,14 @@ describe('app menu projections', () => {
     expect(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS)).toHaveLength(1);
   });
 
-  it('carries the query parameters an entry needs to navigate', () => {
+  it('offers Alpaca as Accounts and nothing else', () => {
+    // ADR 0064 Decision 2: Deploy, the bot roster and the Gallery are things
+    // done *on* an account, so they are that account's workspace tabs — four
+    // broker-wide entries would each have to ask which account they meant.
     const alpaca = menuItemsFor('/data-lab').find((group) => group.label === 'Alpaca');
-    const deploy = alpaca?.items?.find((item) => item.label === 'Deploy');
-    const bots = alpaca?.items?.find((item) => item.label === 'Bot rosters');
-    const gallery = alpaca?.items?.find((item) => item.label === 'Gallery');
 
-    expect(deploy?.routerLink).toBe('/brokers/alpaca');
-    expect(deploy?.queryParams).toEqual({ deploy: '' });
-    expect(bots?.routerLink).toBe('/brokers/alpaca/bots');
-    expect(bots?.queryParams).toBeUndefined();
-    expect(gallery?.routerLink).toBe('/brokers/alpaca/gallery');
-    expect(gallery?.queryParams).toBeUndefined();
+    expect(alpaca?.items?.map((item) => item.label)).toEqual(['Accounts']);
+    expect(alpaca?.items?.[0]?.routerLink).toBe('/brokers/alpaca');
   });
 
   it.each([
@@ -77,37 +73,42 @@ describe('app menu projections', () => {
     expect(node?.item.title).toBe('Accounts');
   });
 
-  it('resolves the deploy query alias to its menu entry', () => {
-    expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.title).toBe('Deploy');
+  it.each([
+    '/brokers/alpaca?deploy=',
+    '/brokers/alpaca?deploy=&strategy=momentum',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?deploy=',
+  ])('keeps Accounts highlighted under a deploy intent at %s', (url) => {
+    // Deploy is an account's own action now (#2187) — a drawer over its
+    // workspace, opened from the account list's own choice — so `?deploy`
+    // needs no menu entry of its own: it is the account list or one account's
+    // workspace, and both are Accounts.
+    expect(activeMenuNodeFor(url)?.group.title).toBe('Alpaca');
+    expect(activeMenuNodeFor(url)?.item.title).toBe('Accounts');
     expect(
-      menuItemsFor('/brokers/alpaca?deploy=').find((group) => group.label === 'Alpaca')?.styleClass,
+      menuItemsFor(url).find((group) => group.label === 'Alpaca')?.styleClass,
     ).toBe(ACTIVE_GROUP_CLASS);
   });
 
   it.each([
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=',
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots?deploy=',
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?deploy=',
-  ])('resolves the deploy query alias to Deploy from any workspace tab %s', (url) => {
-    // Fix c6dda7d8 lets the operator open Deploy from wherever they are
-    // standing in the workspace, so every tab's `?deploy` URL — not just the
-    // Overview tab's bare account root — must resolve to the same entry.
-    expect(activeMenuNodeFor(url)?.item.title).toBe('Deploy');
-  });
-
-  it.each([
-    ['bots', 'Bot rosters'],
-    ['gallery', 'Gallery'],
-  ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {
-    expect(activeMenuNodeFor(`/brokers/alpaca/${surface}`)?.item.title).toBe(title);
-    expect(pageTitleFor(`/brokers/alpaca/${surface}`)).toBe(title);
+    '/brokers/alpaca/bots',
+    '/brokers/alpaca/gallery',
+    '/brokers/alpaca/accounts/PA9/bots',
+    '/brokers/alpaca/accounts/PA9/gallery',
+  ])('keeps Accounts highlighted on the retired broker-wide surface %s', (url) => {
+    // These are redirect-only compatibility URLs now; whatever a bookmark
+    // still points at under `/brokers/alpaca/`, the account list is the only
+    // Alpaca destination the menu names.
+    expect(activeMenuNodeFor(url)?.item.title).toBe('Accounts');
+    expect(pageTitleFor(url)).toBe('Accounts');
   });
 
   it('resolves page titles through the active menu node', () => {
     expect(pageTitleFor('/pricing-lab')).toBe('Pricing Lab');
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Accounts');
-    expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Deploy');
-    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Deploy');
+    expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Accounts');
+    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Accounts');
     expect(pageTitleFor('/jobs-demo')).toBeNull();
   });
 
