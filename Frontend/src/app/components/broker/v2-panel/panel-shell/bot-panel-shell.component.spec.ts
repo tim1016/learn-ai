@@ -594,6 +594,56 @@ describe('BotPanelShellComponent', () => {
     globalThis.EventSource = originalEventSource;
   });
 
+  describe('the workspace tab this page belongs to', () => {
+    // A bot's page sits inside the account workspace, under the tab it was
+    // opened from (ADR 0064 Decision 1). The Gallery tile and the roster's
+    // links stamp that tab on the URL; this is the reading half.
+    async function renderShellWithStamp(query: string) {
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([{ path: '**', children: [] }]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await TestBed.inject(Router).navigateByUrl(
+        `/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001${query}`,
+      );
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return view;
+    }
+
+    it.each([
+      ['?from=gallery', 'Gallery', 'gallery'],
+      ['?from=bots', 'Bots', 'bots'],
+      ['', 'Bots', 'bots'],
+      ['?from=elsewhere', 'Bots', 'bots'],
+    ])('points its way back at %s → %s', async (query, label, segment) => {
+      await renderShellWithStamp(query);
+
+      const back = screen.getByRole('link', { name: label });
+      expect(back.getAttribute('href')).toBe(
+        `/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/${segment}`,
+      );
+    });
+
+    it('names the bot above the Trader/Operator switch', async () => {
+      const { container } = await renderShellWithStamp('?from=bots');
+
+      expect(screen.getByRole('heading', { name: /Ema Crossover/ })).toBeTruthy();
+      // Which bot and where it sits come before the choice of view onto it.
+      const identity = container.querySelector('.bot-identity');
+      const lenses = container.querySelector('.lens-navigation');
+      if (identity === null || lenses === null) throw new Error('The bot page is missing a header.');
+      expect(
+        identity.compareDocumentPosition(lenses) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+  });
+
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },

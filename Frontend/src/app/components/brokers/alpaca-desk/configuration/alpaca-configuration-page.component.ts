@@ -9,7 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -109,7 +109,6 @@ function sameClerkRevisionRef(
     ConfigurationRefusalComponent,
     ConfigurationStatusPanelComponent,
     ConfigurationSwitchGuideComponent,
-    RouterLink,
   ],
   templateUrl: './alpaca-configuration-page.component.html',
   styleUrl: './alpaca-configuration-page.component.scss',

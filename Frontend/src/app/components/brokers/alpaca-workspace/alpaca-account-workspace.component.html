@@ -1,32 +1,33 @@
 <div class="account-workspace">
   <header class="account-workspace__header">
-    @let name = accountName();
-    <h1 class="account-workspace__account">
-      @if (name === null) {
-        Account lane unresolved
-      } @else {
-        {{ name.name }}
-        @if (name.disambiguator; as label) {
-          <span class="account-workspace__lane-label">({{ label }})</span>
-        }
-      }
-    </h1>
+    <app-alpaca-account-switcher [location]="location()" [lens]="lens()" />
 
     <app-alpaca-lane-mode-chip [chip]="modeChip()" />
 
-    <span class="account-workspace__fact">
-      Equity <strong>{{ fmtCurrency(equity()) }}</strong>
-    </span>
+    @if (accountStatus(); as status) {
+      <span class="account-workspace__fact">
+        Status
+        @switch (status.kind) {
+          @case ('lifecycle') { <strong>{{ status.state | receiptLabel }}</strong> }
+          @case ('unbound') { <strong>No confirmed account</strong> }
+          @case ('unresolved') { <strong>Lane unresolved</strong> }
+        }
+      </span>
+    } @else {
+      <span class="account-workspace__fact">
+        Equity <strong>{{ fmtCurrency(equity()) }}</strong>
+      </span>
 
-    <span class="account-workspace__fact">
-      Sync
-      @if (reconciliation(); as sync) {
-        <strong>{{ sync.verdict | receiptLabel }}</strong>
-        <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
-      } @else {
-        <strong>{{ syncUnavailable() }}</strong>
-      }
-    </span>
+      <span class="account-workspace__fact">
+        Sync
+        @if (reconciliation(); as sync) {
+          <strong>{{ sync.verdict | receiptLabel }}</strong>
+          <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
+        } @else {
+          <strong>{{ syncUnavailable() }}</strong>
+        }
+      </span>
+    }
 
     <div class="account-workspace__deploy">
       @if (deployBlockedReason(); as reason) {
@@ -47,16 +48,26 @@
 
   <nav class="account-workspace__tabs" aria-label="Account sections">
     @for (tab of tabs(); track tab.id) {
-      <a
-        class="account-workspace__tab"
-        [class.is-active]="tab.id === activeTab()"
-        [attr.aria-current]="tab.id === activeTab() ? 'page' : null"
-        [routerLink]="tab.route"
-      >{{ tab.label }}</a>
+      @if (tab.route; as route) {
+        <a
+          class="account-workspace__tab"
+          [class.is-active]="tab.id === activeTab()"
+          [attr.aria-current]="tab.id === activeTab() ? 'page' : null"
+          [routerLink]="route"
+        >{{ tab.label }}</a>
+      } @else {
+        <span class="account-workspace__tab account-workspace__tab--unavailable" aria-disabled="true">
+          {{ tab.label }}
+          <span class="account-workspace__sr-only"> — {{ TAB_WITHOUT_ACCOUNT }}</span>
+        </span>
+      }
     }
   </nav>
 
-  <div class="account-workspace__body">
+  <!-- `tabindex="-1"` makes this a landing target, never a tab stop: after a
+       tab change or an account switch the keyboard moves in here, to the
+       content that changed. -->
+  <div #workspaceBody class="account-workspace__body" tabindex="-1">
     <router-outlet />
   </div>
 </div>

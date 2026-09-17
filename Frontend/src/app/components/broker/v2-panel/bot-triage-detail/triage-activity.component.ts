@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
 
 /**
@@ -25,5 +26,8 @@ import type { BotPanelView } from '../lib/broker-v2-panel.types';
 })
 export class TriageActivityComponent {
   readonly view = input.required<BotPanelView>();
-  readonly botLink = input.required<readonly string[]>();
+  /** The roster's own link to this bot's page, origin stamp included — handed
+   * down rather than rebuilt, so both links out of the triage pane belong to
+   * the same tab. */
+  readonly botLink = input.required<AccountWorkspaceLink>();
 }

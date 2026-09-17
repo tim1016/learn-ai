@@ -12,7 +12,6 @@ import type {
   PanelAction,
   PanelActionTrigger,
 } from '../../lib/broker-v2-panel.types';
-import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import type { TickerQuoteView } from '../../../../../shared/ticker-quote/ticker-quote.component';
 import { PanelActionButtonComponent } from '../../panel-action-button/panel-action-button.component';
 import { BotDetailBannerComponent } from '../../bot-detail-banner/bot-detail-banner.component';
@@ -50,28 +49,16 @@ const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
     MissionVerdictStatusComponent,
     PanelActionButtonComponent,
     PanelInstrumentQuoteComponent,
-    ReceiptLabelPipe,
   ],
   templateUrl: './operator-bot-banner.component.html',
   styleUrl: './operator-bot-banner.component.scss',
 })
 export class OperatorBotBannerComponent {
   readonly panel = input.required<BotPanelView>();
-  /** Routed by the enclosing lens; empty only in isolated banner previews. */
-  readonly clerkId = input('');
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
 
-  protected readonly backLink = computed(() => [
-    '/brokers',
-    this.panel().broker,
-    'clerks',
-    this.clerkId(),
-    'accounts',
-    this.panel().account_id,
-    'bots',
-  ]);
   protected readonly primaryAction = computed(() => primaryActionForLens(this.panel(), 'operator'));
   protected readonly primaryActionTone = computed(() => actionTone(this.primaryAction()));
 

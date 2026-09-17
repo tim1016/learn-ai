@@ -20,7 +20,7 @@ import {
 } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
-import type { DeskLens } from '../../shared/lens/lens';
+import type { DeskLens } from '../../../../shared/lens/lens';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
@@ -31,6 +31,7 @@ import { TriageEvidenceComponent } from './triage-evidence.component';
 import { TriageTapeComponent } from './triage-tape.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
+import { accountWorkspaceBotRoute } from '../../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import type {
   BotPanelView,
@@ -273,16 +274,15 @@ export class BotTriageDetailComponent {
     () => this.panel.error() !== undefined && this.view() === null,
   );
 
-  protected readonly botLink = computed(() => [
-    '/brokers',
-    this.broker(),
-    'clerks',
-    this.clerkId(),
-    'accounts',
-    this.accountId(),
-    'bots',
-    this.sid() ?? '',
-  ]);
+  /** The roster's way into one bot's page, stamped so that page keeps Bots
+   * highlighted and its way back returns to this roster. */
+  protected readonly botLink = computed(() =>
+    accountWorkspaceBotRoute(
+      { broker: this.broker(), clerkId: this.clerkId(), accountId: this.accountId() },
+      this.sid() ?? '',
+      'bots',
+    ),
+  );
 
   protected readonly verdictTone = computed<Tone>(() => {
     const state = this.view()?.mission_verdict.state;

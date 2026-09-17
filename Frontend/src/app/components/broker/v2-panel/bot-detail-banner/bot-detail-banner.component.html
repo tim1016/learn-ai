@@ -1,10 +1,5 @@
 <header class="bot-detail-banner">
   <div class="bot-detail-banner__topline">
-    <a class="bot-detail-banner__back" [routerLink]="backLink()">
-      <span aria-hidden="true">←</span>
-      {{ backLabel() }}
-    </a>
-
     <span class="bot-detail-banner__updated">
       Updated <app-timestamp-display [value]="updatedAtMs()" mode="local" />
     </span>

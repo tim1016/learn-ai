@@ -6,7 +6,7 @@
       <app-asset-identity [symbol]="panelView.symbol" size="xs" />
       <span>· market context</span>
     </strong>
-    <a [routerLink]="botLink()">Open chart</a>
+    <a [routerLink]="botLink().commands" [queryParams]="botLink().queryParams">Open chart</a>
   </header>
   <p class="pulse__headline">{{ panelView.market_pulse.headline }}</p>
   <dl class="pulse__facts">

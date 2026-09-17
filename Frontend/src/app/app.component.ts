@@ -11,6 +11,12 @@ import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
+import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
+import {
+  accountWorkspaceLocation,
+  accountWorkspaceTitle,
+} from './fleet/account-workspace';
+import { laneDisplayNameText } from './fleet/fleet-directory.types';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -122,7 +128,35 @@ export class AppComponent {
   private readonly title = inject(Title);
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
-  protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
+  private readonly titleContext = inject(WorkspaceTitleContextService);
+
+  /** Inside an account workspace the window names what is open and the account
+   * it is open on — "Gallery · Paper" (ADR 0064 Decision 6). The account's
+   * *name* is `laneDisplayName`, never its Paper/Live mode: the two are
+   * separate facts that only read alike while a lane has no nickname.
+   *
+   * Everything a workspace title needs is in the URL except the open bot's
+   * label, which only the bot panel holds; it writes that into
+   * `WorkspaceTitleContextService` while its page is open. Reading it only
+   * when the URL names a bot is what keeps a stale label from ever reaching a
+   * tab's title.
+   *
+   * A workflow opened over the workspace — the Deploy drawer's `?deploy` — is
+   * not a tab, so it does not rename the window; the menubar names it. */
+  private readonly workspaceTitle = computed(() => {
+    const location = accountWorkspaceLocation(this.currentUrl());
+    if (location === null) return null;
+    const name = this.fleetDirectory.displayNameOf(location.broker, location.clerkId);
+    return accountWorkspaceTitle(
+      location.tab,
+      name === null ? null : laneDisplayNameText(name),
+      location.botSid === null ? null : this.titleContext.botLabel(),
+    );
+  });
+
+  protected readonly pageTitle = computed(
+    () => this.workspaceTitle() ?? pageTitleFor(this.currentUrl()),
+  );
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();

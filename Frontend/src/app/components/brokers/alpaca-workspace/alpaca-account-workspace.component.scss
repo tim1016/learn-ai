@@ -1,5 +1,3 @@
-@use '../../../styles/eyebrow-heading' as *;
-
 /* The workspace owns the full route surface: its header and tabs stay put
    while the active tab scrolls beneath them, which is what makes the account
    a place rather than a value repeated on three pages. It also gives the
@@ -27,17 +25,6 @@
   align-items: center;
   gap: var(--space-2) var(--space-3);
   padding: var(--space-2) var(--space-4);
-}
-
-.account-workspace__account {
-  @include eyebrow-heading;
-  margin: 0;
-  line-height: 1.4;
-}
-
-.account-workspace__lane-label {
-  font-weight: var(--fw-regular);
-  opacity: 0.7;
 }
 
 .account-workspace__fact {
@@ -133,10 +120,35 @@
   color: var(--text-primary);
 }
 
+/* A tab this lane has no address for — Overview before an account is
+   confirmed. It stays in the strip, greyed and inert, so the workspace still
+   shows what an account has rather than quietly shrinking to what this one
+   can reach. */
+.account-workspace__tab--unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-workspace__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .account-workspace__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+/* The body is where the keyboard lands after a tab change, not something the
+   operator can tab to. A ring around the whole page would be noise on every
+   move; the tab that just appeared under it is the feedback. */
+.account-workspace__body:focus {
+  outline: none;
 }
 
 @media (max-width: 760px) {

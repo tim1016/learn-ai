@@ -12,6 +12,16 @@
   @let panelData = panel()!;
   @let profileData = profile.value()!;
 
+  <div class="bot-identity">
+    <a class="bot-identity__back" [routerLink]="backRoute()">
+      <span aria-hidden="true">←</span> {{ backLabel() }}
+    </a>
+    <h2 class="bot-identity__name">
+      {{ panelData.strategy_label }}
+      <span class="bot-identity__symbol">{{ panelData.symbol }}</span>
+    </h2>
+  </div>
+
   <nav class="lens-navigation" aria-label="Bot detail views">
     <app-lens-tabs
       class="lens-navigation__tabs"

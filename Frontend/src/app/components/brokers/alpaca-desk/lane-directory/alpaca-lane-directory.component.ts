@@ -21,28 +21,6 @@ export const SURFACE_LABEL: Record<LaneSurface, { chooser: string; long: string 
 };
 
 /**
- * The clerk-only in-place route a lane lands on when it cannot serve a
- * surface yet (not ready, unbound, or without the capability). Configuration
- * access needs no binding, so the lane keeps a selectable destination for
- * every surface — a link never vanishes, it explains itself (FR-096).
- */
-export function clerkSurfaceRoute(clerkId: string, surface: LaneSurface): readonly string[] {
-  return ['/brokers', 'alpaca', 'clerks', clerkId, surface];
-}
-
-/** The canonical operational URL for one lane's surface, or null when the
- * lane has no confirmed account to serve it from. */
-export function clerkSurfaceCanonicalRoute(
-  clerkId: string,
-  accountId: string | null,
-  surface: LaneSurface,
-): readonly string[] | null {
-  return accountId === null
-    ? null
-    : ['/brokers', 'alpaca', 'clerks', clerkId, 'accounts', accountId, surface];
-}
-
-/**
  * The broker desk's lane directory (PRD §13): every Alpaca lane — Paper and
  * Live side by side — rendered from the fleet registry projection. Each lane
  * card carries its own lifecycle and provider summary: one failed or

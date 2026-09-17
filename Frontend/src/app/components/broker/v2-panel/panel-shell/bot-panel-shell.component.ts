@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom } from 'rxjs';
 
@@ -21,8 +21,8 @@ import type {
 } from '../../../../api/alpaca.types';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
-import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../shared/lens/lens';
-import { lensNavigationExtras } from '../../shared/lens/lens-url';
+import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
+import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
@@ -35,6 +35,12 @@ import type {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import {
+  ORIGIN_TAB_QUERY_PARAM,
+  accountWorkspaceOriginTab,
+  accountWorkspaceOriginTabRoute,
+  accountWorkspaceTabLabel,
+} from '../../../../fleet/account-workspace';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
@@ -45,6 +51,7 @@ import {
 } from '../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
+import { WorkspaceTitleContextService } from '../../../../shell/workspace-title-context.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
   actionOutcomeToast,
@@ -92,6 +99,7 @@ interface HistoricalExecutionRecoveryDraft {
   imports: [
     LensTabsComponent,
     PanelActionReceiptComponent,
+    RouterLink,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
     TraderLensComponent,
@@ -124,6 +132,7 @@ export class BotPanelShellComponent {
   private readonly messageService = inject(MessageService);
   private readonly lensPreference = inject(LensPreferenceService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly titleContext = inject(WorkspaceTitleContextService);
 
   // ── Active lens ──────────────────────────────────────────────────────────
   // Precedence: the `?lens=` query param, then the stored preference the
@@ -136,6 +145,30 @@ export class BotPanelShellComponent {
   protected readonly activeLens = linkedSignal<PanelLens>(() =>
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
+
+  // ── The workspace tab this page belongs to ───────────────────────────────
+  // A bot's page sits inside the account workspace, under the tab it was
+  // opened from (ADR 0064 Decision 1): the Gallery tile and the roster's links
+  // stamp that tab on the URL, the workspace's tab strip keeps it highlighted
+  // from the same stamp, and the way back below returns there. A URL with no
+  // stamp — pasted, bookmarked — belongs to Bots.
+
+  private readonly originTab = computed(() =>
+    accountWorkspaceOriginTab(this.queryParams().get(ORIGIN_TAB_QUERY_PARAM)),
+  );
+
+  protected readonly backRoute = computed(() =>
+    accountWorkspaceOriginTabRoute(
+      {
+        broker: this.broker(),
+        clerkId: this.clerkId(),
+        accountId: this.accountId(),
+      },
+      this.originTab(),
+    ),
+  );
+
+  protected readonly backLabel = computed(() => accountWorkspaceTabLabel(this.originTab()));
 
   /** The frozen lane context (FR-094): every request and command this shell
    * issues carries broker, clerk and account identity, and commands pin the
@@ -253,7 +286,13 @@ export class BotPanelShellComponent {
         routingEpoch: target.routingEpoch,
       });
     });
+    // The window names a bot's page by the bot (ADR 0064 Decision 6), and the
+    // bot's label is panel data the shell above does not read. This is the one
+    // fact this page publishes upward; it is cleared on the way out so no
+    // other page can inherit it.
+    effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
     this.destroyRef.onDestroy(() => {
+      this.titleContext.setBotLabel(null);
       this.liveStore.stop();
     });
   }

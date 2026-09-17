@@ -60,6 +60,12 @@ describe('app menu projections', () => {
     '/brokers/alpaca/clerks/clrk_spec/accounts/PA9',
     '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots',
     '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery',
+    // A bot's own page and the lane-scoped tabs are inside the workspace too
+    // (#2186), so the menubar names the account list for them as well.
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1',
+    '/brokers/alpaca/clerks/clrk_spec/configuration',
+    '/brokers/alpaca/clerks/clrk_spec/bots',
+    '/brokers/alpaca/clerks/clrk_spec/gallery',
   ])('highlights Accounts on the workspace URL %s', (url) => {
     // ADR 0064: every tab of one account is that account's place, so the
     // menubar names the account list rather than moving between Bots and
@@ -70,27 +76,6 @@ describe('app menu projections', () => {
     expect(node?.group.title).toBe('Alpaca');
     expect(node?.item.title).toBe('Accounts');
   });
-
-  it("maps a bot's own page onto the Bots entry — it is not yet a workspace URL", () => {
-    const node = activeMenuNodeFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1');
-
-    expect(node?.group.title).toBe('Alpaca');
-    expect(node?.item.title).toBe('Bot rosters');
-  });
-
-  it.each([
-    ['bots', 'Bot rosters'],
-    ['gallery', 'Gallery'],
-  ] as const)(
-    'maps a clerk-only %s refusal page (no account segment) onto its stable menu entry',
-    (surface, title) => {
-      const node = activeMenuNodeFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`);
-
-      expect(node?.group.title).toBe('Alpaca');
-      expect(node?.item.title).toBe(title);
-      expect(pageTitleFor(`/brokers/alpaca/clerks/clrk_spec/${surface}`)).toBe(title);
-    },
-  );
 
   it('resolves the deploy query alias to its menu entry', () => {
     expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.title).toBe('Deploy');
