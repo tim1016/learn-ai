@@ -230,9 +230,11 @@ export function accountWorkspaceBotRoute(
  * The account list's cards and the shell's account badges both open an
  * account cold, so both ask this rather than each re-deriving the fallback;
  * `accountWorkspaceSwitchRoute` makes the same substitution for the tab it is
- * carrying across. One account therefore has one front door wherever it is
- * opened from, and a not-ready lane can never be addressed at an Overview it
- * has no account for (FR-092).
+ * carrying across. Every caller passes the lane's confirmed account whenever
+ * it has one, whatever else that lane can report about itself — the
+ * substitution turns on the account alone. One account therefore has one
+ * front door wherever it is opened from, and a lane with no confirmed account
+ * can never be addressed at an Overview it has none for (FR-092).
  */
 export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): readonly string[] {
   return accountWorkspaceTabRoute(address, 'overview') ?? configurationRoute(address);

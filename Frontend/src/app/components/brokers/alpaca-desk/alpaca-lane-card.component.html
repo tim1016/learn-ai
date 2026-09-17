@@ -18,6 +18,10 @@
         <span class="lane-card__equity">{{ equityLine() }}</span>
         <span class="lane-card__bots">{{ botsLine() }}</span>
       </span>
+    } @else if (lifecycleState() !== null) {
+      <span class="lane-card__readiness">
+        This lane is {{ lifecycleState() | receiptLabel }}.
+      </span>
     } @else {
       <span class="lane-card__readiness">{{ readinessLine() }}</span>
     }

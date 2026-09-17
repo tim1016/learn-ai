@@ -22,6 +22,8 @@ import { BrokerConfigurationService } from './configuration/broker-configuration
 
 const WORKSPACE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
 const CONFIGURATION_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/configuration`;
+const OFFLINE_ACCOUNT_ID = 'live-account';
+const OFFLINE_WORKSPACE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${OFFLINE_ACCOUNT_ID}`;
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
   return {
@@ -83,10 +85,12 @@ const UNBOUND_LANE = testLane({
   provider_summary: { ...testLane().provider_summary, confirmed_account_id: null },
 });
 
+/** A lane that is down but still carries the account Alpaca last confirmed
+ * on it — the ordinary clerk-outage shape, not an unbound lane. */
 const OFFLINE_LANE = testLane({
   display_label: 'Live',
   lifecycle_state: 'unreachable',
-  provider_summary: { ...testLane().provider_summary, confirmed_account_id: 'live-account' },
+  provider_summary: { ...testLane().provider_summary, confirmed_account_id: OFFLINE_ACCOUNT_ID },
 });
 
 describe('AlpacaLaneCardComponent', () => {
@@ -138,11 +142,8 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.queryByText('Real Paper')).toBeNull();
   });
 
-  it.each([
-    ['a lane that is not up', OFFLINE_LANE],
-    ['a lane with no confirmed account', UNBOUND_LANE],
-  ])('opens %s on Configuration, with the readiness line the server authored', async (_what, lane) => {
-    await renderCard(lane);
+  it('opens a lane with no confirmed account on Configuration, with the readiness line the server authored', async () => {
+    await renderCard(UNBOUND_LANE);
 
     expect(
       await screen.findByText('Select an Alpaca account to activate this lane'),
@@ -150,6 +151,30 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.getByRole('link').getAttribute('href')).toBe(CONFIGURATION_URL);
     // Money and a bot count belong to an account; this lane has none to read
     // them from, so it states its readiness instead of reporting a failure.
+    expect(screen.queryByText(/bot(s)? running/)).toBeNull();
+    expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
+  it('opens a down lane at its own account, where the shell badge opens it too', async () => {
+    await renderCard(OFFLINE_LANE);
+
+    // An account whose lane has gone unreachable is still that account, and
+    // its workspace explains the outage in place (FR-096). Sending the card
+    // to Configuration instead would make one account two different places
+    // depending on whether it was opened from the list or from the top bar.
+    expect(screen.getByRole('link').getAttribute('href')).toBe(OFFLINE_WORKSPACE_URL);
+  });
+
+  it('states a down lane’s lifecycle rather than asking a clerk that cannot answer', async () => {
+    const { readDeskState } = await renderCard(OFFLINE_LANE);
+
+    expect(await screen.findByText('This lane is Unreachable.')).toBeTruthy();
+    // The directory already carries this fact. Reading a clerk that is by
+    // definition not answering and reporting the refusal would fabricate an
+    // outage over a known one — the same reason an undeclared capability is
+    // never read (FR-097).
+    expect(readDeskState).not.toHaveBeenCalled();
+    expect(screen.queryByText('Readiness unavailable')).toBeNull();
     expect(screen.queryByText(/bot(s)? running/)).toBeNull();
     expect(screen.queryByText(/\$/)).toBeNull();
   });
@@ -193,7 +218,9 @@ describe('AlpacaLaneCardComponent', () => {
   });
 
   it('says a failed readiness read failed, rather than inventing a readiness', async () => {
-    await renderCard(OFFLINE_LANE, {
+    // A lane that is up but unbound is the one the headline is read from —
+    // its clerk is answering, so a failure here is a genuine failed read.
+    await renderCard(UNBOUND_LANE, {
       readDeskState: () => Promise.reject(new Error('desk state unavailable')),
     });
 

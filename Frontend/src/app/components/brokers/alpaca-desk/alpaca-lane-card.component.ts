@@ -12,6 +12,7 @@ import {
 import { resourceTarget, type FleetCapability, type ResourceTarget } from '../../../fleet/resource-target';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { BrokersService } from '../../../services/brokers.service';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtCurrency } from '../../broker/format';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaLaneModeChipComponent } from './alpaca-lane-mode-chip.component';
@@ -60,7 +61,7 @@ const BOTS_WITHOUT_CAPABILITY = 'No bot roster on this lane';
 @Component({
   selector: 'app-alpaca-lane-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, AlpacaLaneModeChipComponent],
+  imports: [RouterLink, ReceiptLabelPipe, AlpacaLaneModeChipComponent],
   templateUrl: './alpaca-lane-card.component.html',
   styleUrl: './alpaca-lane-card.component.scss',
 })
@@ -84,10 +85,27 @@ export class AlpacaLaneCardComponent {
   private readonly account = computed(() => laneConfirmedAccount(this.lane()));
 
   /** An account this list can show money and bots for: its lane is up *and*
-   * Alpaca has confirmed the account those facts would belong to. A lane that
-   * is up but unbound has no account to read, so it reads as not ready here
-   * and opens on Configuration like any other. */
+   * Alpaca has confirmed the account those facts would belong to.
+   *
+   * It gates what this card *reads*, never where it opens. An account whose
+   * lane has gone unreachable is still that account, and the shell's badge
+   * and the workspace's switcher both open it at its own workspace — a card
+   * that sent the operator somewhere else would make one account two places
+   * depending on which affordance they clicked (ADR 0064 Decision 2). */
   protected readonly serving = computed(() => laneIsReady(this.lane()) && this.account() !== null);
+
+  /** This lane is down, from the descriptor the directory already carries —
+   * a local fact, never a read. `null` while the lane is up. */
+  protected readonly lifecycleState = computed(() =>
+    laneIsReady(this.lane()) ? null : this.lane().lifecycle_state,
+  );
+
+  /** A lane that is up but has no confirmed account yet: the one not-ready
+   * case whose clerk is answering, so asking it for a readiness headline is
+   * a real read with real activation guidance behind it. */
+  private readonly readyButUnbound = computed(
+    () => laneIsReady(this.lane()) && this.account() === null,
+  );
 
   /** This lane's display name: its account nickname, or its lane label
    * until one is set. Siblings come from injecting `FleetDirectoryService`
@@ -103,13 +121,15 @@ export class AlpacaLaneCardComponent {
     verdictModeChip(this.liveVerdicts.stateFor(this.lane().clerk_id)),
   );
 
-  /** The card's one destination. */
+  /** The card's one destination: this lane's confirmed account, whatever the
+   * lane can currently report about itself. The resolver substitutes
+   * Configuration only for a lane with no account at all. */
   protected readonly openRoute = computed(() => {
     const lane = this.lane();
     return accountWorkspaceEntryRoute({
       broker: lane.broker,
       clerkId: lane.clerk_id,
-      accountId: this.serving() ? this.account() : null,
+      accountId: this.account(),
     });
   });
 
@@ -149,12 +169,18 @@ export class AlpacaLaneCardComponent {
     loader: ({ params }) => this.panel.getCatalog(params),
   });
 
-  /** The backend-authored readiness sentence a not-ready account shows in
-   * place of its money and bots. Operator prose the server owns, rendered
-   * verbatim — the same `headline` the Configuration tab states, so the list
-   * and the tab cannot describe one lane's readiness differently. */
+  /** The backend-authored readiness sentence a *ready but unbound* account
+   * shows in place of its money and bots. Operator prose the server owns,
+   * rendered verbatim — the same `headline` the Configuration tab states, so
+   * the list and the tab cannot describe one lane's readiness differently.
+   *
+   * A lane that is *down* is never asked: its clerk is by definition not
+   * answering, so the read would fail and the card would report "Readiness
+   * unavailable" — a fabricated outage over a known one, the same shape
+   * `targetFor` exists to avoid for an undeclared capability (FR-097).
+   * `lifecycleState` is what such a lane says instead. */
   protected readonly readiness = resource({
-    params: () => (this.serving() ? undefined : this.lane().clerk_id),
+    params: () => (this.readyButUnbound() ? this.lane().clerk_id : undefined),
     loader: ({ params }) => this.configuration.readDeskState(params),
   });
 

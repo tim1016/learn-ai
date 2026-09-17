@@ -161,13 +161,6 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
 const withoutVerdictPolls = (requests: string[]): string[] =>
   requests.filter((entry) => !entry.includes('/live-verdict'));
 
-/** Drop the readiness read a not-ready account's card makes on the account
- * list. Each card reads the lane it renders, which is exactly the per-lane
- * independence FR-093 asks for; what the assertions below look for is a
- * *workspace* touching an account other than the one it is open on. */
-const withoutReadinessReads = (requests: string[]): string[] =>
-  requests.filter((entry) => !entry.endsWith('/configuration/desk-state'));
-
 test.describe('Alpaca multi-clerk frontend cutover', () => {
   test('keeps a failed lane visible while the healthy lane stays explicitly routable', async ({ page }) => {
     const brokerRequests: string[] = [];
@@ -179,12 +172,13 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     const paperLane = page.locator('li').filter({ hasText: 'Paper lane' });
     const liveLane = page.locator('li').filter({ hasText: 'Live lane' });
     await expect(paperLane).toContainText('$10,000.00');
-    // The failed lane keeps its card and its own way in — the lane-scoped
-    // Configuration its workspace can still serve, never another lane's URL.
-    await expect(liveLane).toContainText('Readiness unavailable');
+    // The failed lane keeps its card, states the lifecycle the directory
+    // already carries rather than a read its clerk cannot answer, and keeps
+    // its own way in — its own account's workspace, never another lane's URL.
+    await expect(liveLane).toContainText('This lane is Unreachable.');
     await expect(liveLane.getByRole('link')).toHaveAttribute(
       'href',
-      `/brokers/alpaca/clerks/${LIVE_CLERK}/configuration`,
+      `/brokers/alpaca/clerks/${LIVE_CLERK}/accounts/${LIVE_ACCOUNT}`,
     );
 
     // The whole card is the way into the account (#2187).
@@ -202,7 +196,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect.poll(() => brokerRequests.some((entry) => entry === `GET ${PAPER_SCOPE}/account`))
       .toBe(true);
 
-    expect(withoutReadinessReads(withoutVerdictPolls(brokerRequests)).filter(
+    expect(withoutVerdictPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
   });
