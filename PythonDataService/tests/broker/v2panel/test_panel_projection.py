@@ -580,7 +580,7 @@ def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_led
         ledger.close()
 
     monkeypatch.setattr(panel_data_source, "live_artifacts_root", lambda: tmp_path)
-    monkeypatch.setattr(panel_data_source, "primary_custody_kind", lambda: "real_live")
+    monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: "real_live")
 
     events = panel_data_source._feed_continuity_events_for(
         SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
@@ -588,6 +588,23 @@ def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_led
 
     assert events is not None
     assert [(event.run_id, event.kind) for event in events] == [("r1", "recovered")]
+
+
+def test_panel_data_source_degrades_continuity_read_when_no_authority_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel read must not crash just because no custody authority is
+    installed; that is a start-time refusal (``bot_binding_authority.
+    primary_custody_kind``), not a read-time one. Regression test for a
+    ``StartAdmissionUnavailable`` that previously escaped ``get_panel``.
+    """
+    monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: None)
+
+    events = panel_data_source._feed_continuity_events_for(
+        SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
+    )
+
+    assert events is None
 
 
 def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:

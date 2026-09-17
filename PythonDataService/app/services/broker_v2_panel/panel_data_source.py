@@ -20,7 +20,10 @@ from typing import Literal, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import evidence_account_id_for
-from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
+from app.broker.alpaca.clerk.active_authority import (
+    active_program_leg_policy,
+    primary_custody_world,
+)
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     EffectOperationState,
@@ -48,7 +51,6 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
-from app.services.bot_binding_authority import primary_custody_kind
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -202,12 +204,24 @@ def _feed_continuity_events_for(
     """Read this binding's durable current-run continuity facts.
 
     ``None`` is an explicit unavailable state (mode retains no source bars,
-    ledger absent, or ledger unreadable). An empty list means the run's ledger
-    exists and has recorded no interruptions.
+    ledger absent, ledger unreadable, or no primary custody authority
+    installed to resolve the evidence namespace from). An empty list means
+    the run's ledger exists and has recorded no interruptions.
+
+    This is a read path, not a start path: unlike
+    ``bot_binding_authority.primary_custody_kind`` (which refuses a *start*
+    when no authority is installed), a panel read degrades to the
+    documented ``None`` instead of raising ``StartAdmissionUnavailable`` —
+    a missing authority must not take down an otherwise-servable panel.
     """
     if binding.mode not in {"dry_run", "trade"}:
         return None
-    custody_kind = "synthetic" if binding.mode == "dry_run" else primary_custody_kind()
+    if binding.mode == "dry_run":
+        custody_kind = "synthetic"
+    else:
+        custody_kind = primary_custody_world()
+        if custody_kind is None:
+            return None
     evidence_account_id = evidence_account_id_for(
         mode=binding.mode,
         strategy_instance_id=binding.strategy_instance_id,
