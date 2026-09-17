@@ -30,11 +30,9 @@ from app.broker.alpaca.clerk.sqlite.catalog_quarantine import (
 )
 from app.broker.alpaca.clerk.sqlite.cutover import (
     BrokerCutoverEvidence,
-    CutoverInitializationEvidence,
     CutoverPlan,
-    LegacyArtifactEvidence,
-    RunnerBotEvidence,
     apply_cutover,
+    decode_cutover_plan,
     initialize_cutover_authority,
     plan_cutover,
 )
@@ -354,44 +352,7 @@ def _require_process_stop_evidence(path: Path | None, account_id: str) -> Proces
 
 
 def _read_plan(path: Path) -> CutoverPlan:
-    payload = _read_json_object(path)
-    required = {
-        "schema_version",
-        "plan_id",
-        "confirmation_token",
-        "account_id",
-        "created_at_ms",
-        "expires_at_ms",
-        "initialization",
-        "database",
-        "broker_evidence",
-        "runner_roster",
-        "legacy_artifacts",
-    }
-    if set(payload) != required or payload.get("schema_version") != 3:
-        raise ValueError("cutover plan fields do not match schema version 3")
-    return CutoverPlan(
-        schema_version=payload["schema_version"],
-        plan_id=payload["plan_id"],
-        confirmation_token=payload["confirmation_token"],
-        account_id=payload["account_id"],
-        created_at_ms=payload["created_at_ms"],
-        expires_at_ms=payload["expires_at_ms"],
-        initialization=CutoverInitializationEvidence(**payload["initialization"]),
-        database=DatabaseVerification(**payload["database"]),
-        broker_evidence=BrokerCutoverEvidence(
-            **{
-                **payload["broker_evidence"],
-                "open_order_ids": tuple(payload["broker_evidence"]["open_order_ids"]),
-            }
-        ),
-        runner_roster=tuple(
-            RunnerBotEvidence(**item) for item in payload["runner_roster"]
-        ),
-        legacy_artifacts=tuple(
-            LegacyArtifactEvidence(**item) for item in payload["legacy_artifacts"]
-        ),
-    )
+    return decode_cutover_plan(_read_json_object(path))
 
 
 def _read_catalog_quarantine_plan(path: Path) -> CatalogQuarantinePlan:

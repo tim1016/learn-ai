@@ -88,6 +88,34 @@ describe('LiveGraduationComponent', () => {
     expect(await screen.findByText(/Restarting the clerk safely/)).toBeTruthy();
   });
 
+  it('refuses loudly, not silently, when the review expired since the last render', async () => {
+    // reviewExpired() reads Date.now() directly rather than a signal, so a
+    // zoneless OnPush pass will not have re-rendered the disabled/expired
+    // state purely because wall-clock time passed with no other
+    // interaction. Only Date.now is mocked (not the whole clock), so the
+    // DOM's [disabled] binding stays exactly as stale as production would
+    // leave it, while confirm() must still refuse out loud on click.
+    const dateSpy = vi.spyOn(Date, 'now');
+    try {
+      const { fixture, service } = await renderGraduation();
+      fireEvent.click(await screen.findByRole('button', { name: 'Review Live graduation' }));
+      await fixture.whenStable();
+      expect(await screen.findByText('Evidence is ready')).toBeTruthy();
+      fireEvent.click(screen.getByRole('checkbox'));
+
+      dateSpy.mockReturnValue(PLAN.expires_at_ms + 1_000);
+
+      const confirm = screen.getByRole('button', { name: 'Graduate to Live and restart' });
+      expect((confirm as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(confirm);
+
+      expect(service.apply).not.toHaveBeenCalled();
+      expect(await screen.findByText(/review expired/i)).toBeTruthy();
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
   it('has no detectable accessibility violations in the review state', async () => {
     const { fixture } = await renderGraduation();
     fireEvent.click(await screen.findByRole('button', { name: 'Review Live graduation' }));

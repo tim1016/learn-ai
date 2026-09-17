@@ -24,16 +24,11 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     BrokerCutoverEvidence,
     CutoverPlan,
     CutoverRefused,
-    LegacyArtifactEvidence,
-    RunnerBotEvidence,
     apply_cutover,
+    decode_cutover_plan,
     initialize_cutover_authority,
     plan_cutover,
 )
-from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
-    CutoverInitializationEvidence,
-)
-from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
     relative_reference,
@@ -402,7 +397,7 @@ class AlpacaLiveGraduationService:
         payload = json.loads(plan_path.read_text(encoding="utf-8"))
         if set(payload) != {"schema_version", "plan", "backup_reference"} or payload["schema_version"] != 1:
             raise ValueError("graduation plan record fields do not match schema version 1")
-        plan = self._decode_plan(payload["plan"])
+        plan = decode_cutover_plan(payload["plan"])
         backup_reference = payload["backup_reference"]
         if not isinstance(backup_reference, str) or not backup_reference:
             raise ValueError("graduation plan backup reference is invalid")
@@ -412,34 +407,6 @@ class AlpacaLiveGraduationService:
         except ValueError as exc:
             raise ValueError("graduation plan backup escapes the clerk root") from exc
         return plan, backup_path
-
-    @staticmethod
-    def _decode_plan(payload: dict[str, Any]) -> CutoverPlan:
-        required = {
-            "schema_version", "plan_id", "confirmation_token", "account_id",
-            "created_at_ms", "expires_at_ms", "initialization", "database",
-            "broker_evidence", "runner_roster", "legacy_artifacts",
-        }
-        if not isinstance(payload, dict) or set(payload) != required or payload.get("schema_version") != 3:
-            raise ValueError("cutover plan fields do not match schema version 3")
-        broker = payload["broker_evidence"]
-        return CutoverPlan(
-            schema_version=payload["schema_version"],
-            plan_id=payload["plan_id"],
-            confirmation_token=payload["confirmation_token"],
-            account_id=payload["account_id"],
-            created_at_ms=payload["created_at_ms"],
-            expires_at_ms=payload["expires_at_ms"],
-            initialization=CutoverInitializationEvidence(**payload["initialization"]),
-            database=DatabaseVerification(**payload["database"]),
-            broker_evidence=BrokerCutoverEvidence(
-                **{**broker, "open_order_ids": tuple(broker["open_order_ids"])}
-            ),
-            runner_roster=tuple(RunnerBotEvidence(**item) for item in payload["runner_roster"]),
-            legacy_artifacts=tuple(
-                LegacyArtifactEvidence(**item) for item in payload["legacy_artifacts"]
-            ),
-        )
 
     @staticmethod
     def _wrong_account(account_id: str) -> LiveGraduationRefused:

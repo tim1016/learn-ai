@@ -100,7 +100,15 @@ export class LiveGraduationComponent {
 
   protected confirm(): void {
     const plan = this.plan();
-    if (plan === null || !this.acknowledged() || this.reviewExpired() || this.busy()) return;
+    if (plan === null || !this.acknowledged() || this.busy()) return;
+    if (this.reviewExpired()) {
+      // reviewExpired() reads Date.now(), not a signal, so a zoneless OnPush
+      // pass may not have re-rendered the disabled/expired state yet if time
+      // passed with no other interaction — surface the refusal rather than
+      // silently dropping this click.
+      this.refusal.set('This review expired. Refresh evidence before graduating.');
+      return;
+    }
     const target = this.commandTarget();
     this.phase.set('applying');
     this.refusal.set(null);
