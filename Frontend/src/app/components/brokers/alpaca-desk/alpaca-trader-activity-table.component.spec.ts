@@ -18,6 +18,10 @@ describe('AlpacaTraderActivityTableComponent', () => {
     }
     expect(screen.getAllByTitle('NVDA').length).toBeGreaterThan(0);
     expect(screen.getAllByTitle('SPY').length).toBeGreaterThan(0);
+    // #2183: "Activity" carries the eyebrow look itself now; the separate
+    // "Today" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    expect(screen.queryByText('Today')).toBeNull();
   });
 
   it('searches client-side and keeps technical references behind row details', async () => {

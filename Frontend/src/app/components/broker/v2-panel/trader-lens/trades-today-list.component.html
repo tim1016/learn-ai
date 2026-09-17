@@ -1,9 +1,6 @@
 <section class="trades-today" aria-labelledby="fills-today-title">
   <header class="trades-header">
-    <div>
-      <span class="trades-kicker">Execution</span>
-      <h3 id="fills-today-title" class="trades-title">Fills today</h3>
-    </div>
+    <h3 id="fills-today-title" class="trades-title">Fills today</h3>
     @if (tradingDateMs()) {
       <app-timestamp-display
         [value]="tradingDateMs()"
@@ -43,10 +40,7 @@
 >
   <ng-template #header>
     <div class="fills-drawer__header">
-      <div>
-        <span>Execution</span>
-        <h2>All fills today</h2>
-      </div>
+      <h2>All fills today</h2>
       <button type="button" aria-label="Close all fills" (click)="closeAllFills()">×</button>
     </div>
   </ng-template>

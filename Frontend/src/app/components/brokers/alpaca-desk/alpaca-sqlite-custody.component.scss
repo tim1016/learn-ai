@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 .sqlite-custody {
   display: grid;
   gap: 1rem;
@@ -26,10 +28,13 @@
   margin: 0;
 }
 
-.sqlite-custody__eyebrow,
 .sqlite-custody small,
 .sqlite-custody__state {
   color: var(--text-color-secondary);
+}
+
+.sqlite-custody h2 {
+  @include eyebrow-heading;
 }
 
 .sqlite-custody__health {

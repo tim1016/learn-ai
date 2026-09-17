@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 .reconciliation-proof {
   display: grid;
   gap: var(--space-3);
@@ -23,8 +25,7 @@
 }
 
 .reconciliation-proof header h2 {
-  color: var(--text-primary);
-  font-size: var(--fs-lg);
+  @include eyebrow-heading;
 }
 
 .reconciliation-proof header > p:last-child,
@@ -33,14 +34,6 @@
 .calculation-details p {
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-}
-
-.eyebrow {
-  color: var(--text-muted) !important;
-  font-size: var(--fs-xxs) !important;
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .proof {

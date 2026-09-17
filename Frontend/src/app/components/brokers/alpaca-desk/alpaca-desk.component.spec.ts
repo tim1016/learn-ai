@@ -233,6 +233,10 @@ describe('AlpacaDeskComponent', () => {
     expect((await screen.findByRole('tab', { name: 'Trader' })).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Operator desk' })).toBeNull();
+    // #2183: the "Broker desk" eyebrow line above the page heading is
+    // retired — the single "Alpaca" heading carries the eyebrow look itself.
+    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
+    expect(screen.queryByText('Broker desk')).toBeNull();
     expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
     expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
     expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();

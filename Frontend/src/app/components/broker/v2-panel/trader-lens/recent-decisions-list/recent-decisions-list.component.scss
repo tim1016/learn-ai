@@ -1,3 +1,5 @@
+@use '../../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -19,17 +21,10 @@
   border-bottom: 1px solid var(--surface-border, #374151);
 }
 
-.recent-decisions__title,
-.recent-decisions__kicker { margin: 0; }
-
-.recent-decisions__kicker {
-  font-size: 0.75rem;
-  color: var(--accent-text);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+.recent-decisions__title {
+  @include eyebrow-heading;
+  margin: 0;
 }
-
-.recent-decisions__title { margin-top: 0.1rem; color: var(--text-primary); font-size: var(--fs-md); }
 
 .recent-decisions__table {
   width: 100%;

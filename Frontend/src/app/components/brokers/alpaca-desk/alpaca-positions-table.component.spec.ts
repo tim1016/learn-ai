@@ -50,6 +50,10 @@ describe('AlpacaPositionsTableComponent', () => {
     expect(screen.getByText('Price')).toBeTruthy();
     expect(screen.getByText('Market value')).toBeTruthy();
     expect(screen.getByText('Open P&L')).toBeTruthy();
+    // #2183: "Current positions" carries the eyebrow look itself now; the
+    // separate "Portfolio" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Current positions' })).toBeTruthy();
+    expect(screen.queryByText('Portfolio')).toBeNull();
   });
 
   it('searches positions client-side and reveals technical details on demand', async () => {

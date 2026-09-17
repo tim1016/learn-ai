@@ -1,0 +1,24 @@
+// #2183 — one shared section-heading style for the Alpaca account pages.
+//
+// Many sections used to stack a small uppercase eyebrow label above a
+// second, larger heading ("BROKER DESK" / "Alpaca", "EXECUTION" / "Fills
+// today") — two headings for one thing, and a fresh ad hoc `.eyebrow` class
+// per component. This mixin puts the eyebrow *look* (small, uppercase,
+// letter-spaced, muted) directly on the retained semantic heading element
+// instead, so the separate label line can be deleted without losing the
+// visual language. Sources the same tokens the retired per-component
+// `.eyebrow` labels drew from — `--fs-xxs` / `--fw-semi` / `--ls-caps` —
+// rather than inventing new ones. Color is `--text-subtle` (5.2:1 AA at
+// normal text size), not `--text-muted` (3.1:1, AA-large only) — this
+// heading renders at `--fs-xxs`, which is normal-size text under WCAG.
+//
+// Usage: apply to the heading selector itself (h1/h2/h3 — whatever level is
+// already correct for that section), keep the element's own margin/spacing
+// rules untouched.
+@mixin eyebrow-heading {
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}

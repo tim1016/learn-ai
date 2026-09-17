@@ -178,6 +178,10 @@ describe('AlpacaOperatorLensComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Clerk reconciliation required' })).toBeTruthy();
+    // #2183: "Operator desk" carries the eyebrow look itself now; the
+    // separate "Account operations" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
+    expect(screen.queryByText('Account operations')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery' }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy());

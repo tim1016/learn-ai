@@ -11,6 +11,9 @@ describe('ConfigurationSwitchGuideComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Switch between Paper and Live' })).toBeTruthy();
+    // #2183: the heading itself carries the eyebrow look; the separate
+    // "Every account switch" label above it is retired.
+    expect(screen.queryByText('Every account switch')).toBeNull();
     expect(screen.getAllByRole('listitem')).toHaveLength(4);
     expect(screen.getByText(/Refreshing or reopening the browser does not apply/)).toBeTruthy();
     expect(screen.getByText(/never retargets, arms, or launches an existing bot/)).toBeTruthy();

@@ -235,6 +235,13 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findAllByTitle('SPY')).not.toHaveLength(0);
     expect(screen.getByRole('heading', { name: 'Current positions' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
+    // #2183: no eyebrow-plus-heading pair remains — the retired labels sat
+    // above these headings. ("Today" is exercised in
+    // AlpacaTraderActivityTableComponent's own spec — here it also names a
+    // legitimate scope-control button, so it isn't a safe absence check.)
+    expect(screen.queryByText('Account outcomes')).toBeNull();
+    expect(screen.queryByText('Portfolio')).toBeNull();
     expect(screen.getByRole('table', { name: 'Current positions' })).toBeTruthy();
     expect(screen.getByRole('table', { name: "Today's account activity" })).toBeTruthy();
     expect(screen.getByRole('searchbox', { name: 'Search current positions' })).toBeTruthy();
