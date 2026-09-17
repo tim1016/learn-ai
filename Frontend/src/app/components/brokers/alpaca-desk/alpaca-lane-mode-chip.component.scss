@@ -1,0 +1,38 @@
+:host {
+  display: contents;
+}
+
+.lane-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.5rem;
+  padding: 0 0.6rem;
+  border: 1px solid rgba(178, 181, 190, 0.45);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  white-space: nowrap;
+  color: var(--text-color, #ddd);
+}
+
+.lane-mode-chip--paper {
+  color: #b9edff;
+  border-color: #45b9e1;
+}
+
+.lane-mode-chip--live {
+  color: #ffd0cf;
+  border-color: #f06b68;
+}
+
+.lane-mode-chip--undetermined {
+  color: #fff;
+  border-color: #ffb020;
+  background: rgba(122, 61, 0, 0.85);
+}
+
+.lane-mode-chip__detail {
+  font-weight: var(--fw-regular);
+  opacity: 0.86;
+}

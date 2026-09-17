@@ -12,21 +12,7 @@
       }
     </h1>
 
-    @let mode = modeChip();
-    <span
-      class="account-workspace__mode"
-      [class.is-paper]="mode.tone === 'paper'"
-      [class.is-live]="mode.tone === 'live'"
-      [class.is-undetermined]="mode.tone === 'undetermined'"
-    >
-      {{ mode.mode }}
-      @if (mode.shadow) {
-        <span class="account-workspace__mode-detail">· Shadow</span>
-      }
-      @if (mode.armedCount !== null) {
-        <span class="account-workspace__mode-detail">· {{ mode.armedCount }} armed</span>
-      }
-    </span>
+    <app-alpaca-lane-mode-chip [chip]="modeChip()" />
 
     <span class="account-workspace__fact">
       Equity <strong>{{ fmtCurrency(equity()) }}</strong>

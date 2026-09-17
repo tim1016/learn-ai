@@ -40,42 +40,6 @@
   opacity: 0.7;
 }
 
-.account-workspace__mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 1.5rem;
-  padding: 0 0.6rem;
-  border: 1px solid rgba(178, 181, 190, 0.45);
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  white-space: nowrap;
-}
-
-/* Same treatment vocabulary as the shell's account badge, so one lane reads
-   the same colour wherever it is named (ADR 0059 D8). */
-.account-workspace__mode.is-paper {
-  border-color: #45b9e1;
-  color: #b9edff;
-}
-
-.account-workspace__mode.is-live {
-  border-color: #f06b68;
-  color: #ffd0cf;
-}
-
-.account-workspace__mode.is-undetermined {
-  border-color: #ffb020;
-  background: rgba(122, 61, 0, 0.85);
-  color: #fff;
-}
-
-.account-workspace__mode-detail {
-  font-weight: var(--fw-regular);
-  opacity: 0.86;
-}
-
 .account-workspace__fact {
   display: inline-flex;
   align-items: center;

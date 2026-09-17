@@ -12,6 +12,7 @@ import { ActivatedRoute, Router, RouterLink, RouterOutlet } from '@angular/route
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
+import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
 import { fmtCurrency } from '../../broker/format';
 import {
   ACCOUNT_WORKSPACE_TABS,
@@ -67,6 +68,7 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaDeployDrawerComponent,
+    AlpacaLaneModeChipComponent,
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,

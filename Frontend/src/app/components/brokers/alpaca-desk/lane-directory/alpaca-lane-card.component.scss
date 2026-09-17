@@ -30,34 +30,6 @@
   gap: 0.4rem;
 }
 
-/* Same tone vocabulary as the shell's live-verdict pills (ADR 0059 D8):
-   undetermined is loud amber, never grey — an unread lane is assumed live. */
-.lane-mode-chip {
-  font-size: 0.6875rem;
-  font-weight: 650;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  border: 1px solid rgba(178, 181, 190, 0.45);
-  color: var(--text-color, #ddd);
-  white-space: nowrap;
-}
-
-.lane-mode-chip--paper {
-  color: #b9edff;
-  border-color: #45b9e1;
-}
-
-.lane-mode-chip--live {
-  color: #ffd0cf;
-  border-color: #f06b68;
-}
-
-.lane-mode-chip--undetermined {
-  color: #fff;
-  border-color: #ffb020;
-  background: rgba(122, 61, 0, 0.85);
-}
-
 .lane-card__label {
   font-weight: 600;
   font-size: 0.875rem;

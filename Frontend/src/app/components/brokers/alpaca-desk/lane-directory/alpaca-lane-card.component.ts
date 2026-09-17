@@ -12,6 +12,7 @@ import {
 } from '../../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { AlpacaLaneModeChipComponent } from '../alpaca-lane-mode-chip.component';
 import {
   clerkSurfaceCanonicalRoute,
   clerkSurfaceRoute,
@@ -36,7 +37,7 @@ import {
 @Component({
   selector: 'app-alpaca-lane-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReceiptLabelPipe],
+  imports: [RouterLink, ReceiptLabelPipe, AlpacaLaneModeChipComponent],
   templateUrl: './alpaca-lane-card.component.html',
   styleUrl: './alpaca-lane-card.component.scss',
 })

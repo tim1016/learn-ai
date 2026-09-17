@@ -5,7 +5,7 @@
       <span class="lane-card__disambiguator">({{ disambiguator }})</span>
     }
     <span class="lane-card__badges">
-      <span class="lane-mode-chip lane-mode-chip--{{ modeChip().tone }}">{{ modeChip().mode }}</span>
+      <app-alpaca-lane-mode-chip [chip]="modeChip()" />
       <span class="lane-card__lifecycle">{{ lane().lifecycle_state | receiptLabel }}</span>
     </span>
   </div>
