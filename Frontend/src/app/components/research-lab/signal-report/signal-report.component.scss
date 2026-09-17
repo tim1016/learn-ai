@@ -1,4 +1,5 @@
 @use '../../../styles/tokens' as *;
+@use '../../../styles/eyebrow-heading' as *;
 
 :host {
   display: block;
@@ -570,22 +571,18 @@
   gap: 0.25rem;
   margin-bottom: 0.75rem;
 
-  span {
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: $text-muted;
+  h5 {
+    @include eyebrow-heading;
+  }
 
-    &.eyebrow-hint {
-      font-size: 0.75rem;
-      font-weight: 400;
-      text-transform: none;
-      letter-spacing: 0;
-      color: $text-secondary;
-      line-height: 1.5;
-      sub { font-size: 0.6875rem; }
-    }
+  .eyebrow-hint {
+    font-size: 0.75rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: $text-secondary;
+    line-height: 1.5;
+    sub { font-size: 0.6875rem; }
   }
 }
 
@@ -893,11 +890,7 @@
 }
 
 .exec-eyebrow {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: $text-muted;
+  @include eyebrow-heading;
 }
 
 .exec-desc {
@@ -933,11 +926,7 @@
 }
 
 .exec-col-eyebrow {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: $text-muted;
+  @include eyebrow-heading;
   margin-bottom: 10px;
 }
 
@@ -1012,10 +1001,7 @@
 }
 
 .exec-caveats-eyebrow {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  @include eyebrow-heading;
   color: $warn;
 }
 

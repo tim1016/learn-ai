@@ -259,10 +259,6 @@
 
           <!-- Verdict copy -->
           <div class="hero-copy">
-            <div class="eyebrow">
-              Verdict · {{ res.display_name }} on <app-asset-identity [symbol]="res.ticker" size="sm" />
-              <app-info-icon refKey="verdictBucket" />
-            </div>
             <h2 class="hero-headline">
               <span [style.color]="getConfidenceColor()">{{ getVerdictVerb() }}</span>
               <span class="text-slate-400"> at </span>

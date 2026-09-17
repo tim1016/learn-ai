@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
   min-width: 0;
@@ -29,18 +31,8 @@
 }
 
 .comparison__header h2 {
+  @include eyebrow-heading;
   margin-top: var(--space-1);
-  font-size: var(--fs-xl);
-  letter-spacing: var(--ls-tight);
-}
-
-.comparison__eyebrow {
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
 }
 
 .comparison__legend {
