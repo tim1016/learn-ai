@@ -1,6 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import {
+  accountWorkspaceOriginTabRoute,
+  accountWorkspaceTabRoute,
+} from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   laneConfirmedAccount,
@@ -8,7 +12,6 @@ import {
 } from '../../../fleet/fleet-directory.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import {
-  clerkSurfaceCanonicalRoute,
   SURFACE_CAPABILITY,
   SURFACE_LABEL,
   type LaneSurface,
@@ -57,11 +60,7 @@ export class AlpacaSurfaceNotReadyTabComponent {
   protected readonly surfaceName = computed(() => SURFACE_LABEL[this.surface()].long);
   protected readonly SURFACE_CAPABILITY = SURFACE_CAPABILITY;
 
-  private readonly lane = computed(() =>
-    this.fleet.value()?.clerks.find(
-      (lane) => lane.broker === 'alpaca' && lane.clerk_id === this.clerkId(),
-    ) ?? null,
-  );
+  private readonly lane = computed(() => this.fleet.lane('alpaca', this.clerkId()) ?? null);
 
   protected readonly loading = computed(
     () => this.fleet.isLoading() && this.fleet.value() === undefined,
@@ -86,13 +85,19 @@ export class AlpacaSurfaceNotReadyTabComponent {
   protected readonly canonicalRoute = computed(() => {
     const lane = this.lane();
     if (lane === null || this.refusal() !== null) return null;
-    return clerkSurfaceCanonicalRoute(lane.clerk_id, laneConfirmedAccount(lane), this.surface());
+    return accountWorkspaceOriginTabRoute(
+      { broker: lane.broker, clerkId: lane.clerk_id, accountId: laneConfirmedAccount(lane) },
+      this.surface(),
+    );
   });
 
   protected readonly configurationRoute = computed(() => {
     const lane = this.lane();
     return lane !== null && lane.capabilities.includes('configuration_manage')
-      ? ['/brokers', 'alpaca', 'clerks', lane.clerk_id, 'configuration']
+      ? accountWorkspaceTabRoute(
+          { broker: lane.broker, clerkId: lane.clerk_id, accountId: null },
+          'configuration',
+        )
       : null;
   });
 

@@ -232,8 +232,7 @@ export function accountWorkspaceSwitchRoute(
     clerkId: target.clerkId,
     accountId: target.accountId,
   };
-  const commands = accountWorkspaceTabRoute(destination, tab)
-    ?? [...laneRoute(from.broker, target.clerkId), 'configuration'];
+  const commands = accountWorkspaceTabRoute(destination, tab) ?? configurationRoute(destination);
   return { commands, queryParams: lens === null ? {} : { [LENS_QUERY_PARAM]: lens } };
 }
 

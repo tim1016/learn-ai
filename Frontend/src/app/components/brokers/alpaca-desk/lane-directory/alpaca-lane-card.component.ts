@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { accountWorkspaceOriginTabRoute } from '../../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import type { FleetCapability } from '../../../../fleet/resource-target';
 import {
@@ -13,12 +14,7 @@ import {
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AlpacaLaneModeChipComponent } from '../alpaca-lane-mode-chip.component';
-import {
-  clerkSurfaceCanonicalRoute,
-  clerkSurfaceRoute,
-  SURFACE_CAPABILITY,
-  type LaneSurface,
-} from './alpaca-lane-directory.component';
+import { SURFACE_CAPABILITY, type LaneSurface } from './alpaca-lane-directory.component';
 
 /**
  * One lane's directory card: its stable label, lifecycle, mode chip (from
@@ -80,12 +76,14 @@ export class AlpacaLaneCardComponent {
    * that explains why it cannot — never another lane's URL.
    */
   protected surfaceRoute(surface: LaneSurface): readonly string[] {
-    if (!this.servesSurface(surface)) {
-      return clerkSurfaceRoute(this.lane().clerk_id, surface);
-    }
-    return (
-      clerkSurfaceCanonicalRoute(this.lane().clerk_id, this.account(), surface)
-      ?? clerkSurfaceRoute(this.lane().clerk_id, surface)
+    const lane = this.lane();
+    return accountWorkspaceOriginTabRoute(
+      {
+        broker: lane.broker,
+        clerkId: lane.clerk_id,
+        accountId: this.servesSurface(surface) ? this.account() : null,
+      },
+      surface,
     );
   }
 
