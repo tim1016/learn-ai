@@ -110,6 +110,18 @@ export function feedContinuityFor(panel: BotPanelView): FeedContinuityView {
 
 export type BotRunView = components['schemas']['BotRunView'];
 export type BotRunHistoryPage = components['schemas']['BotRunHistoryPage'];
+export interface CurrentRunState {
+  readonly run: BotRunView | null;
+  readonly loading: boolean;
+  readonly failed: boolean;
+}
+
+export const EMPTY_CURRENT_RUN_STATE: CurrentRunState = Object.freeze({
+  run: null,
+  loading: false,
+  failed: false,
+});
+
 export type RunHistoryMode = 'current' | 'history';
 export type RunHistoryNavigation =
   | 'current'

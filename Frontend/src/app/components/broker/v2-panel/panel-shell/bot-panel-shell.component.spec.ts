@@ -14,6 +14,7 @@ import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import { MarketDataService } from '../../../../services/market-data.service';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -681,6 +682,10 @@ describe('BotPanelShellComponent', () => {
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
+    const timing = within(screen.getByRole('region', { name: 'Latest run timing' }));
+    expect(timing.getByText(formatTimestampDisplay(makeRun().started_at_ms))).toBeTruthy();
+    expect(timing.queryByText('Last decision')).toBeNull();
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
@@ -972,6 +977,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    const timing = within(screen.getByRole('region', { name: 'Latest run timing' }));
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
@@ -991,6 +997,10 @@ describe('BotPanelShellComponent', () => {
       undefined,
     );
     expect(screen.getByText('run-previous')).toBeTruthy();
+    expect(timing.getByText(formatTimestampDisplay(makeRun().started_at_ms))).toBeTruthy();
+    expect(timing.queryByText(formatTimestampDisplay(1_753_700_000_000))).toBeNull();
+    expect(timing.getByText('Last decision')).toBeTruthy();
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
@@ -1232,7 +1242,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(0);
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();

@@ -29,6 +29,7 @@ import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed
 import type {
   ChartHistoryTimeframe,
   ChartLiveResolution,
+  CurrentRunState,
   PanelAction,
   PanelActionResult,
   PanelActionTrigger,
@@ -62,6 +63,7 @@ import {
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
+import { BotRunTimingComponent } from '../bot-run-history/bot-run-timing.component';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
@@ -106,6 +108,7 @@ interface HistoricalExecutionRecoveryDraft {
     TypedHaltConfirmComponent,
     TraderLensComponent,
     OperatorLensComponent,
+    BotRunTimingComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
@@ -222,6 +225,25 @@ export class BotPanelShellComponent {
   });
   protected readonly liveStreamStatus = this.liveStore.status;
 
+  private readonly runLifecycle = computed(() => {
+    const health = this.panel()?.health;
+    return health === undefined ? null
+      : `${health.running}:${health.duty_outcome?.recorded_at_ms ?? ''}`;
+  });
+
+  protected readonly currentRun = resource({
+    params: () => this.runLifecycle() === null ? undefined : {
+      target: this.target(), sid: this.sid(), lifecycle: this.runLifecycle(),
+    },
+    loader: ({ params }) => this.panelSvc.getCurrentRun(params.target, params.sid),
+  });
+
+  protected readonly currentRunState = computed<CurrentRunState>(() => ({
+    run: this.currentRun.hasValue() ? this.currentRun.value() : null,
+    loading: this.currentRun.isLoading(),
+    failed: this.currentRun.error() !== undefined,
+  }));
+
   protected readonly profile = resource({
     params: () => this.broker(),
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
@@ -279,6 +301,12 @@ export class BotPanelShellComponent {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   constructor() {
+    const runPollTimer = setInterval(() => {
+      if (this.panel()?.health.running && !this.currentRun.isLoading()) {
+        this.currentRun.reload();
+      }
+    }, 5_000);
+    this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
     effect(() => {
       const target = this.target();
       void this.liveStore.start({

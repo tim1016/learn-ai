@@ -617,3 +617,22 @@ re-arms the server-authored timeframe auto-correct, and numeric
   compliant supported ceremony yet. Operators can stop and preserve a lane
   using [the account runbook](runbooks/add-an-alpaca-account.md#6-removal).
   Do not substitute direct registry edits or the old published proof token.
+
+## Live EMA replay evidence — verified 2026-09-17
+
+- **P2: retrospective replay can classify a legitimate pre-launch warmup
+  signal as a missing live decision.** For `live-ema-spy-0917`, run
+  `126c2688f51348619ad0f86d011a64bc`, the saved replay receipt reports
+  `MISSING_LIVE_RECORD` for the 10:00 ET ENTER, although launch was
+  10:01:28.134 ET. Replaying with the empty captured history present at fresh
+  launch reproduces all 24 live no-action trace digests exactly. Supplying
+  the later captured decisions recreates a false `crash_recovered` candidate
+  at 10:00. The nonempty-history condition in
+  `PythonDataService/app/services/bot_trade_strategy_warmup.py:165` does not
+  distinguish pre-launch history from the crash-recovery window when used
+  retrospectively by `run_replay_proof.py`. Correct the retrospective
+  eligibility boundary without enabling historical orders or weakening real
+  crash recovery. The same saved receipt also reports an uninvestigated
+  engine-parity sequence-exhaustion failure; resolving the false missing-row
+  classification alone does not establish an overall parity pass. Evidence:
+  [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md).

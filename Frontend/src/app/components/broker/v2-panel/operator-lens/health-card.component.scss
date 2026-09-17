@@ -61,20 +61,6 @@
   color: var(--text-secondary);
 }
 
-.health-card__stale {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.3rem;
-  background: var(--warn-soft);
-  color: #92400e;
-  border-radius: 3px;
-  font-weight: 600;
-}
-
-.health-card__none {
-  color: var(--text-secondary);
-  font-style: italic;
-}
-
 .health-card__actions {
   display: flex;
   flex-direction: column;

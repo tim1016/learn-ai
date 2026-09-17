@@ -1,0 +1,52 @@
+<section class="run-timing" aria-label="Latest run timing">
+  <header>
+    <h2>{{ operator() ? 'Latest run & bot activity' : 'Latest run' }}</h2>
+    <span>Times in your local timezone</span>
+  </header>
+  @let run = state().run;
+  <dl [class.run-timing__operator]="operator()">
+    <div>
+      <dt>Started</dt>
+      <dd>
+        @if (run) {
+          <app-timestamp-display [value]="run.started_at_ms" mode="local" />
+        } @else {
+          {{ state().loading ? 'Loading…' : 'Unavailable' }}
+        }
+      </dd>
+    </div>
+    <div>
+      <dt>End recorded</dt>
+      <dd>
+        @if (run?.terminal_outcome; as outcome) {
+          <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" />
+        } @else if (run) {
+          {{ run.process?.state === 'RUNNING' ? 'Still running' : 'No end recorded' }}
+        } @else {
+          {{ state().loading ? 'Loading…' : 'Unavailable' }}
+        }
+      </dd>
+    </div>
+    @if (operator()) {
+      <div>
+        <dt>Last strategy bar</dt>
+        <dd><app-timestamp-display [value]="health().last_bar_at_ms" mode="local" fallback="None recorded" /></dd>
+      </div>
+      <div>
+        <dt>Last decision</dt>
+        <dd>
+          <app-timestamp-display [value]="health().last_decision_at_ms" mode="local" fallback="None recorded" />
+          @if (health().last_decision_at_ms !== null && health().decision_stale) {
+            <small>Stale</small>
+          }
+        </dd>
+      </div>
+    }
+  </dl>
+  @if (state().failed) {
+    <p role="status">
+      {{ run ? 'Run timing could not be refreshed.' : 'Run timing could not be loaded.' }}
+      <button type="button" (click)="retryRequested.emit()">Retry run timing</button>
+    </p>
+  }
+</section>

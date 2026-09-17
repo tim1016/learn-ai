@@ -20,17 +20,6 @@
       <dd>{{ health().running ? 'Running' : 'Not running' }}</dd>
     </div>
 
-    <div>
-      <dt>Last bar</dt>
-      <dd>
-        @if (health().last_bar_at_ms) {
-          <app-timestamp-display [value]="health().last_bar_at_ms" mode="local" />
-        } @else {
-          <span class="health-card__none">None</span>
-        }
-      </dd>
-    </div>
-
     <div class="health-card__fact--wide">
       <dt>Resume custody</dt>
       <dd>
@@ -64,19 +53,6 @@
       </div>
     }
 
-    <div class="health-card__fact--wide">
-      <dt>Last decision</dt>
-      <dd>
-        @if (health().last_decision_at_ms) {
-          <app-timestamp-display [value]="health().last_decision_at_ms" mode="local" />
-          @if (health().decision_stale) {
-            <span class="health-card__stale" role="status" aria-label="Decision data is stale">stale</span>
-          }
-        } @else {
-          <span class="health-card__none">None recorded</span>
-        }
-      </dd>
-    </div>
   </dl>
 
   @if (exitActions().length) {

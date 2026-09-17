@@ -16,8 +16,8 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
 /**
  * Bot health card (spec §7.2).
  *
- * Phase, desired state, duty outcome (kind + backend reason), decision-receipt
- * freshness, last bar seen, and the terminal Retire action.
+ * Phase, desired state, duty outcome (kind + backend reason), and the terminal
+ * Retire action. Activity clocks are promoted into the shared run-timing strip.
  *
  */
 @Component({

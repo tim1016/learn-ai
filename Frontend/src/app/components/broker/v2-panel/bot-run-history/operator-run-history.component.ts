@@ -1,20 +1,22 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
   computed,
   inject,
   input,
+  output,
   linkedSignal,
   resource,
   signal,
 } from '@angular/core';
 import type {
+  CurrentRunState,
   FeedContinuityView,
   RunHistoryMode,
   RunHistoryNavigation,
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
+import { EMPTY_CURRENT_RUN_STATE } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -27,7 +29,7 @@ interface RunHistoryLocation {
   readonly newerCursors: readonly (string | null)[];
 }
 
-/** Operator-only owner for run-evidence loading, polling, and navigation. */
+/** Previous-run loading and navigation; latest-run evidence is shared by both lenses. */
 @Component({
   selector: 'app-operator-run-history',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -37,13 +39,14 @@ interface RunHistoryLocation {
 export class OperatorRunHistoryComponent {
   private readonly panelSvc = inject(BrokerV2PanelService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
-  private readonly destroyRef = inject(DestroyRef);
 
   readonly broker = input.required<string>();
   readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
   readonly botRunning = input.required<boolean>();
+  readonly currentRunState = input<CurrentRunState>(EMPTY_CURRENT_RUN_STATE);
+  readonly runRefreshRequested = output();
   readonly feedContinuity = input.required<FeedContinuityView>();
   protected readonly expanded = signal(false);
   private readonly activated = signal(false);
@@ -64,13 +67,6 @@ export class OperatorRunHistoryComponent {
     computation: () => ({ mode: 'current', cursor: null, newerCursors: [] }),
   });
 
-  private readonly currentRun = resource({
-    params: () => this.activated()
-      ? { target: this.target(), sid: this.sid(), running: this.botRunning() }
-      : undefined,
-    loader: ({ params }) => this.panelSvc.getCurrentRun(params.target, params.sid),
-  });
-
   private readonly previousRun = resource({
     params: () => {
       const location = this.location();
@@ -84,28 +80,19 @@ export class OperatorRunHistoryComponent {
 
   protected readonly state = computed<RunHistoryState>(() => {
     const location = this.location();
-    const current = this.currentRun.hasValue() ? this.currentRun.value() : null;
+    const { run: current, loading, failed } = this.currentRunState();
     const history = this.previousRun.hasValue() ? this.previousRun.value() : null;
     return {
       mode: location.mode,
       current,
       history,
-      currentLoading: current === null && this.currentRun.isLoading(),
+      currentLoading: current === null && loading,
       historyLoading: history === null && this.previousRun.isLoading(),
-      currentFailed: current === null && this.currentRun.error() !== undefined,
+      currentFailed: current === null && failed,
       historyFailed: history === null && this.previousRun.error() !== undefined,
       canViewNewer: location.newerCursors.length > 0,
     };
   });
-
-  constructor() {
-    const pollTimer = setInterval(() => {
-      if (this.expanded() && this.botRunning() && !this.currentRun.isLoading()) {
-        this.currentRun.reload();
-      }
-    }, 5_000);
-    this.destroyRef.onDestroy(() => clearInterval(pollTimer));
-  }
 
   protected onExpandedChange(expanded: boolean): void {
     if (expanded) this.activated.set(true);
@@ -116,7 +103,7 @@ export class OperatorRunHistoryComponent {
     const location = this.location();
     if (destination === 'current') {
       if (location.mode === 'current') {
-        if (this.currentRun.error() !== undefined) this.currentRun.reload();
+        if (this.currentRunState().failed) this.runRefreshRequested.emit();
         return;
       }
       this.location.update((current) => ({ ...current, mode: 'current' }));

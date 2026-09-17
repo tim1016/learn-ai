@@ -10,12 +10,13 @@ import {
 } from '@angular/core';
 import type {
   BotPanelView,
+  CurrentRunState,
   FeedContinuityView,
   PanelAction,
   PanelActionTrigger,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
-import { feedContinuityFor } from '../lib/broker-v2-panel.types';
+import { EMPTY_CURRENT_RUN_STATE, feedContinuityFor } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
@@ -74,6 +75,8 @@ export class OperatorLensComponent {
   // ── Shell-provided data ───────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
+  readonly currentRunState = input<CurrentRunState>(EMPTY_CURRENT_RUN_STATE);
+  readonly runRefreshRequested = output();
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly actionPending = input(false);

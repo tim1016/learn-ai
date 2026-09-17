@@ -31,6 +31,14 @@
     />
   </nav>
 
+  <app-bot-run-timing
+    class="run-timing-strip"
+    [state]="currentRunState()"
+    [health]="panelData.health"
+    [operator]="activeLens() === 'operator'"
+    (retryRequested)="currentRun.reload()"
+  />
+
   @if (actionReceipt(); as receipt) {
     <div class="panel-feedback">
       <app-panel-action-receipt
@@ -78,6 +86,8 @@
           [clerkId]="clerkId()"
           [accountId]="accountId()"
           [sid]="sid()"
+          [currentRunState]="currentRunState()"
+          (runRefreshRequested)="currentRun.reload()"
           (transactionSelected)="onTransactionSelected($event)"
           (actionRequested)="onActionRequested($event)"
         />
