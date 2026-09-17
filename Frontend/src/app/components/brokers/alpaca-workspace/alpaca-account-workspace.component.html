@@ -47,12 +47,19 @@
 
   <nav class="account-workspace__tabs" aria-label="Account sections">
     @for (tab of tabs(); track tab.id) {
-      <a
-        class="account-workspace__tab"
-        [class.is-active]="tab.id === activeTab()"
-        [attr.aria-current]="tab.id === activeTab() ? 'page' : null"
-        [routerLink]="tab.route"
-      >{{ tab.label }}</a>
+      @if (tab.route; as route) {
+        <a
+          class="account-workspace__tab"
+          [class.is-active]="tab.id === activeTab()"
+          [attr.aria-current]="tab.id === activeTab() ? 'page' : null"
+          [routerLink]="route"
+        >{{ tab.label }}</a>
+      } @else {
+        <span class="account-workspace__tab account-workspace__tab--unavailable" aria-disabled="true">
+          {{ tab.label }}
+          <span class="account-workspace__sr-only"> — {{ TAB_WITHOUT_ACCOUNT }}</span>
+        </span>
+      }
     }
   </nav>
 

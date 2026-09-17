@@ -41,6 +41,10 @@ const DEPLOY_WITHOUT_LANE = 'This account’s lane has not resolved, so Deploy h
 const DEPLOY_WITHOUT_CAPABILITY = 'This clerk does not declare Deploy capability.';
 const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 
+/** Why the Overview tab is not offered on a lane with no confirmed account:
+ * it is that account's own page, and there is no account. */
+const TAB_WITHOUT_ACCOUNT = 'Opens once Alpaca confirms this lane’s account.';
+
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
  * Overview, Bots, Gallery and Configuration tabs.
@@ -100,12 +104,15 @@ export class AlpacaAccountWorkspaceComponent {
    * `AlpacaDeskAccountDataService` takes, so the header and the tab below it
    * can never disagree about which account they serve. */
   private readonly clerkId = computed(() => this.routeParams().get('clerkId') ?? '');
-  private readonly accountId = computed(() => this.routeParams().get('accountId') ?? '');
+  private readonly accountId = computed(() => this.routeParams().get('accountId'));
 
-  /** Which tab the URL has open. Resolved by the shared pure function, the
-   * same one the menubar asks whether a URL is inside a workspace at all. */
+  /** Which tab the URL has open, and the bot's page open under it. Resolved by
+   * the shared pure function, the same one the menubar asks whether a URL is
+   * inside a workspace at all. */
+  private readonly routedLocation = computed(() => accountWorkspaceLocation(this.currentUrl()));
+
   protected readonly activeTab = computed<AccountWorkspaceTab>(
-    () => accountWorkspaceLocation(this.currentUrl())?.tab ?? 'overview',
+    () => this.routedLocation()?.tab ?? 'overview',
   );
 
   private readonly location = computed<AccountWorkspaceLocation>(() => ({
@@ -113,17 +120,24 @@ export class AlpacaAccountWorkspaceComponent {
     clerkId: this.clerkId(),
     accountId: this.accountId(),
     tab: this.activeTab(),
+    botSid: this.routedLocation()?.botSid ?? null,
   }));
 
-  /** The four tabs with the route each one links to. Built once per location
-   * rather than per render, so a tab's `routerLink` is not handed a freshly
-   * allocated array on every change-detection pass. */
+  /** The four tabs with the route each one links to, or `null` for a tab this
+   * workspace has no address for. Built once per location rather than per
+   * render, so a tab's `routerLink` is not handed a freshly allocated array on
+   * every change-detection pass. */
   protected readonly tabs = computed(() =>
     ACCOUNT_WORKSPACE_TABS.map((tab) => ({
       ...tab,
       route: accountWorkspaceTabRoute(this.location(), tab.id),
     })),
   );
+
+  /** Why a tab has no address here. Overview is the account's own page, so a
+   * lane with no confirmed account has none to open — and substituting another
+   * lane's is exactly what FR-096 forbids. */
+  protected readonly TAB_WITHOUT_ACCOUNT = TAB_WITHOUT_ACCOUNT;
 
   /** This workspace's lane, or `null` while the directory has not resolved
    * one for the routed clerk — a bad deep link fails in place here (FR-096),

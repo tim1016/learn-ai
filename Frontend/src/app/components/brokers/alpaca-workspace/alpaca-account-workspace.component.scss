@@ -133,6 +133,24 @@
   color: var(--text-primary);
 }
 
+/* A tab this lane has no address for — Overview before an account is
+   confirmed. It stays in the strip, greyed and inert, so the workspace still
+   shows what an account has rather than quietly shrinking to what this one
+   can reach. */
+.account-workspace__tab--unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-workspace__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .account-workspace__body {
   flex: 1 1 auto;
   min-height: 0;

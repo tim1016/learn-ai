@@ -149,21 +149,22 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
 
   // Every account-workspace URL is one account's place (ADR 0064), so every
   // tab of it highlights Accounts — the workspace's own tabs, not the menu,
-  // say which page of that account is open. The workspace's URL shape is
-  // owned by `accountWorkspaceLocation`, not re-expressed here, so the
-  // menubar and the workspace shell cannot drift apart about what counts as
-  // being inside a workspace.
+  // say which page of that account is open. Its Configuration and not-ready
+  // tabs and a bot's own page are inside it too (#2186). The workspace's URL
+  // shape is owned by `accountWorkspaceLocation`, not re-expressed here, so
+  // the menubar and the workspace shell cannot drift apart about what counts
+  // as being inside a workspace.
   if (workspace !== null) {
     const workspaceNode = nodeForActivePath('/brokers/alpaca');
     if (workspaceNode !== null) return workspaceNode;
   }
 
-  // Surface URLs that are not (yet) inside a workspace — a bot's own page and
-  // the clerk-only refusal pages — map onto their surface's menu entry, so a
-  // clerk-only Bots refusal page highlights Bots and titles itself Bots.
+  // The clerk-less compatibility surfaces, which the redirect guard resolves
+  // to a lane: they are outside any workspace until it does, so they map onto
+  // their surface's own menu entry meanwhile.
   const accountScopedBrokerSurface = path.match(
-    /^\/brokers\/([^/]+)(?:\/clerks\/[^/]+)?\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
-  ) ?? path.match(/^\/brokers\/([^/]+)\/clerks\/[^/]+\/(bots|gallery)(?:\/|$)/);
+    /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(bots|gallery)(?:\/|$)/,
+  );
   if (accountScopedBrokerSurface) {
     const [, broker, surface] = accountScopedBrokerSurface;
     const accountNode = nodeForActivePath(`/brokers/${broker.toLowerCase()}/${surface}`);
