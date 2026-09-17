@@ -355,29 +355,49 @@ export const routes: Routes = [
       ).then((m) => m.BotPanelShellComponent),
   },
   {
-    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots",
+    // ── The account workspace (ADR 0064 Decision 1) ─────────────────────────
+    // One account is one place: the account header and its tabs are this
+    // parent, and each tab is a child, so moving between them never
+    // re-creates the header or the shared account read. The canonical URLs
+    // are unchanged — Overview is still the bare account URL (FR-092) — and
+    // `:clerkId`/`:accountId` reach every child through the router's
+    // `paramsInheritanceStrategy: 'always'` (see `app.config.ts`).
+    //
+    // Declared AFTER `…/bots/:sid` above: a bot's own page is not a
+    // workspace tab yet (it moves inside in a later slice), so it must match
+    // its own route first.
+    path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
     data: { broker: 'alpaca' },
     loadComponent: () =>
       import(
-        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
-      ).then((m) => m.BotsListPageComponent),
-  },
-  {
-    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery",
-    data: { fullBleed: true, broker: 'alpaca' },
-    loadComponent: () =>
-      import(
-        './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
-      ).then((m) => m.BotGalleryPageComponent),
-  },
-  {
-    // The operating desk is addressed by a fully explicit lane and account.
-    // `/brokers/alpaca` remains the broker directory/root surface.
-    path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
-    loadComponent: () =>
-      import('./components/brokers/alpaca-desk/alpaca-desk.component').then(
-        (m) => m.AlpacaDeskComponent,
-      ),
+        './components/brokers/alpaca-workspace/alpaca-account-workspace.component'
+      ).then((m) => m.AlpacaAccountWorkspaceComponent),
+    children: [
+      {
+        path: 'bots',
+        loadComponent: () =>
+          import(
+            './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+          ).then((m) => m.BotsListPageComponent),
+      },
+      {
+        // The wall stays edge to edge under the workspace header.
+        path: 'gallery',
+        data: { fullBleed: true },
+        loadComponent: () =>
+          import(
+            './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
+          ).then((m) => m.BotGalleryPageComponent),
+      },
+      {
+        // Overview — the empty child, so the account's own URL opens it.
+        path: '',
+        loadComponent: () =>
+          import('./components/brokers/alpaca-desk/alpaca-desk.component').then(
+            (m) => m.AlpacaDeskComponent,
+          ),
+      },
+    ],
   },
   {
     // Read-only lane choosers: every Alpaca lane listed side by side, each
@@ -399,14 +419,14 @@ export const routes: Routes = [
       ),
   },
   {
-    // Broker System v2 read-only desk — separate from every v1 broker page.
+    // The account list — the only multi-account page (ADR 0064 Decision 2).
     // Retires the old `?surface=bots|gallery` hint bookmarks by redirecting
     // them to the real chooser routes above.
     path: "brokers/alpaca",
     canActivate: [alpacaSurfaceRedirectGuard],
     loadComponent: () =>
-      import("./components/brokers/alpaca-desk/alpaca-desk.component").then(
-        (m) => m.AlpacaDeskComponent,
+      import("./components/brokers/alpaca-desk/alpaca-account-list-page.component").then(
+        (m) => m.AlpacaAccountListPageComponent,
       ),
   },
   {

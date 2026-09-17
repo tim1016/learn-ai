@@ -9,8 +9,9 @@ import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
-import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
+import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
@@ -171,19 +172,16 @@ async function renderDesk(
   brokers = brokerService(),
   deskState: AlpacaDeskState = accountActivation,
   fleetDirectory = provideFleetDirectory(),
-  /** Render the broker-root desk (`/brokers/alpaca`) instead of the
-   * clerk-scoped one: no clerk or account in the route, so the directory
-   * is the whole surface. */
-  rootDesk = false,
 ) {
   const queryParamMap = convertToParamMap(query);
-  const paramMap = convertToParamMap(
-    rootDesk ? {} : { clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA1' },
-  );
+  const paramMap = convertToParamMap({ clerkId: 'clrk_spec0000000000000000aa', accountId: 'PA1' });
   const view = await render(AlpacaDeskComponent, {
     providers: [
       fleetDirectory,
       provideRouter([]),
+      // Provided by the account workspace in the app; the Overview tab is
+      // rendered alone here, so the spec stands in for that parent.
+      AlpacaDeskAccountDataService,
       {
         provide: ActivatedRoute,
         useValue: {
@@ -233,10 +231,10 @@ describe('AlpacaDeskComponent', () => {
     expect((await screen.findByRole('tab', { name: 'Trader' })).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Operator desk' })).toBeNull();
-    // #2183: the "Broker desk" eyebrow line above the page heading is
-    // retired — the single "Alpaca" heading carries the eyebrow look itself.
-    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
-    expect(screen.queryByText('Broker desk')).toBeNull();
+    // #2185: the account name, its mode, equity and Deploy are the account
+    // workspace's header — the Overview tab renders none of them itself.
+    expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Alpaca clerk lanes' })).toBeNull();
     expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
     expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
     expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
@@ -280,7 +278,6 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('heading', { name: accountActivation.headline })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
 
     await fireEvent.click(screen.getByRole('radio', { name: /Strategy lab · PA-123/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Select Paper account' }));
@@ -294,23 +291,7 @@ describe('AlpacaDeskComponent', () => {
     await renderDesk({}, brokerService(), accountActivation);
 
     expect(await screen.findByRole('tab', { name: 'Trader' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
-  });
-
-  it('keeps Deploy visible but unavailable when the clerk does not declare that capability', async () => {
-    const fleetDirectory = provideFleetDirectory({
-      observed_at_ms: 1,
-      clerks: [testLane({ capabilities: ['account_read'] })],
-    });
-    const { router } = await renderDesk({}, brokerService(), accountActivation, fleetDirectory);
-    const deploy = await screen.findByRole('button', { name: 'Deploy strategy' });
-
-    expect(deploy.hasAttribute('disabled')).toBe(true);
-    fireEvent.click(deploy);
-
-    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
-    expect(router.url).not.toContain('deploy');
   });
 
   it('keeps the connectivity failure distinct when activation guidance is unavailable', async () => {
@@ -327,7 +308,6 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByText(/Strategy lab · PA-123.*Paper.*Revision 3/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Review account configuration' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Deploy strategy' })).toBeNull();
   });
 
   it('fails closed when the Account Clerk returns a different account than the route', async () => {
@@ -376,52 +356,11 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByText(pending.headline)).toBeTruthy();
     expect(screen.getByText(pending.consequence)).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Trader' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Deploy strategy' })).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: pending.action.label }));
     expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
       queryParams: { profileId: 'live-profile', revision: 1 },
     });
-  });
-
-  it('opens Deploy strategy from the desk and closes back to the visible desk', async () => {
-    const { router } = await renderDesk();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Deploy strategy' }));
-
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-    await vi.waitFor(() => expect(router.url).toContain('deploy='));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close deploy a bot' }));
-
-    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
-    await vi.waitFor(() => expect(router.url).not.toContain('deploy'));
-  });
-
-  it('opens the Deploy drawer from a query deep link', async () => {
-    await renderDesk({ deploy: '' });
-
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-  });
-
-  it('makes a broker-wide deploy intent an explicit lane choice at the root desk', async () => {
-    await renderDesk({ deploy: '' }, undefined, undefined, undefined, true);
-
-    expect(
-      screen.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
-    ).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Alpaca clerk lanes' })).toBeTruthy();
-  });
-
-  it('retires the surface hints — a ?surface query renders the plain directory', async () => {
-    // The surface hints moved to real chooser routes (`/brokers/alpaca/bots`
-    // and `/gallery`); a stale `?surface=` query on the desk itself renders
-    // the plain directory rather than annotating it.
-    await renderDesk({ surface: 'bots' }, undefined, undefined, undefined, true);
-
-    expect(screen.getByRole('heading', { name: 'Choose an account' })).toBeTruthy();
-    expect(screen.queryByText(/choose a ready Paper or Live account below to open its bots roster/i)).toBeNull();
   });
 
   it('blocks a matching manual-order deep link when SQLite authority is unavailable', async () => {

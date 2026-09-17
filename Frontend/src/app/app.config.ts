@@ -4,6 +4,7 @@ import {
   withComponentInputBinding,
   withExperimentalAutoCleanupInjectors,
   withInMemoryScrolling,
+  withRouterConfig,
 } from "@angular/router";
 import { provideHttpClient, withInterceptors, withXhr } from "@angular/common/http";
 import { providePrimeNG } from "primeng/config";
@@ -49,6 +50,12 @@ export const appConfig: ApplicationConfig = {
     provideRouter(
       routes,
       withComponentInputBinding(),
+      // The account workspace addresses broker, clerk and account on its
+      // parent route and renders each tab as a child (ADR 0064). Angular's
+      // default only passes a parent's params down to an empty-path child,
+      // which would leave the Bots and Gallery tabs without the very lane
+      // identity their canonical URL carries (FR-092).
+      withRouterConfig({ paramsInheritanceStrategy: 'always' }),
       withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' }),
       withExperimentalAutoCleanupInjectors(),
     ),

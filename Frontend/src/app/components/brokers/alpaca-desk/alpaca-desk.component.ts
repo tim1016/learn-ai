@@ -9,10 +9,9 @@ import {
   signal,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { DialogModule } from 'primeng/dialog';
 
-import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import type { AlpacaDeskSelectionSummary } from '../../../api/alpaca.types';
 import { LensPreferenceService } from '../../broker/shared/lens/lens-preference.service';
 import { LensTabsComponent } from '../../broker/shared/lens/lens-tabs.component';
@@ -27,9 +26,7 @@ import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { BrokerConfigurationService } from './configuration/broker-configuration.service';
-import { AlpacaLaneDirectoryComponent } from './lane-directory/alpaca-lane-directory.component';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
-import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   BrokersService,
   type SqliteTimelineQuery,
@@ -54,15 +51,20 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
 }
 
 /**
- * Alpaca broker desk (Broker System v2) — the `/brokers/alpaca` route target.
- * The shell owns the persona choice; each lens owns its own data and content.
+ * One account's Overview tab — the account workspace's empty child
+ * (ADR 0064 Decision 1). It owns the persona choice (Trader / Operator) and
+ * each lens owns its own data and content.
+ *
+ * The account header, the tabs, the Deploy action and the list of every
+ * account are the workspace's, not this tab's: an operator sees each of them
+ * once, above whichever tab is open, rather than once per page. The shared
+ * account read comes from the workspace's `AlpacaDeskAccountDataService`,
+ * which is why this component no longer provides one.
  */
 @Component({
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AlpacaLaneDirectoryComponent,
-    AlpacaDeployDrawerComponent,
     AlpacaCustodyResolutionComponent,
     AlpacaDeskAccountStateComponent,
     AlpacaHoldBannerComponent,
@@ -71,18 +73,16 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
     AlpacaTraderLensComponent,
     DialogModule,
     LensTabsComponent,
-    RouterLink,
   ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
-  providers: [AlpacaDeskAccountDataService, AlpacaOperatorLensDataService],
+  providers: [AlpacaOperatorLensDataService],
 })
 export class AlpacaDeskComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly operatorData = inject(AlpacaOperatorLensDataService);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
-  private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly brokers = inject(BrokersService);
   private readonly configuration = inject(BrokerConfigurationService);
   private readonly lensPreference = inject(LensPreferenceService);
@@ -90,13 +90,9 @@ export class AlpacaDeskComponent {
     initialValue: this.route.snapshot.queryParamMap,
   });
 
-  /** Null at `/brokers/alpaca`: that root is the directory only. */
+  /** Null while the routed lane has not resolved in the directory; the
+   * workspace header above says so, and this tab renders nothing. */
   protected readonly contextTarget = this.accountData.target;
-  /** A broker-wide `?deploy` intent at the root desk: the directory's lane
-   * list is the deploy entry point's lane-selection step. */
-  protected readonly deployIntent = computed(
-    () => this.deployOpen() && this.contextTarget() === null,
-  );
   /** The frozen command fence order entry must mint against — never the live
    * directory (#2106). See `AlpacaDeskAccountDataService.fence`. */
   protected readonly contextFence = this.accountData.fence;
@@ -115,7 +111,6 @@ export class AlpacaDeskComponent {
   protected readonly lens = linkedSignal<DeskLens>(() =>
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
-  protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
   protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
   private readonly routedOrderPrefill = computed(() =>
     parseManualOrderTicketQuery(this.queryParams()),
@@ -129,13 +124,6 @@ export class AlpacaDeskComponent {
   protected readonly operatingDeskVisible = computed(() =>
     this.contextTarget() !== null && this.accountData.account.hasValue(),
   );
-  protected readonly deployAvailable = computed(() => {
-    const target = this.contextTarget();
-    if (target === null || !this.operatingDeskVisible()) return false;
-    return this.fleetDirectory
-      .lane(target.broker, target.clerkId)
-      ?.capabilities.includes('deploy') === true;
-  });
   protected readonly accountFailed = computed(
     () => this.accountData.account.error() !== undefined,
   );
@@ -198,26 +186,6 @@ export class AlpacaDeskComponent {
     });
   }
 
-  protected openDeploy(): void {
-    if (!this.deployAvailable()) return;
-    this.deployOpen.set(true);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams: { deploy: '' },
-      queryParamsHandling: 'merge',
-    });
-  }
-
-  protected closeDeploy(): void {
-    this.deployOpen.set(false);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      // `deployLens` is still nulled so an old bookmarked URL cleans itself up.
-      queryParams: { deploy: null, deployLens: null },
-      queryParamsHandling: 'merge',
-    });
-  }
-
   protected refreshDesk(): void {
     this.historyRefreshVersion.update((version) => version + 1);
   }
@@ -233,10 +201,5 @@ export class AlpacaDeskComponent {
     void this.router.navigate(commands, {
       queryParams: { profileId: choice.profile_id, revision: choice.revision },
     });
-  }
-
-  protected configurationRoute(): readonly string[] | null {
-    const target = this.contextTarget();
-    return target === null ? null : ['/brokers', 'alpaca', 'clerks', target.clerkId, 'configuration'];
   }
 }

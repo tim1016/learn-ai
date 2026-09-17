@@ -1,25 +1,4 @@
 <main class="alpaca-desk">
-  <header class="desk-titlebar">
-    <h1>Alpaca</h1>
-    @if (configurationRoute(); as configurationRoute) {
-      <a class="configuration-link" [routerLink]="configurationRoute">Configuration</a>
-    }
-    @if (operatingDeskVisible()) {
-      <button
-        type="button"
-        class="deploy-button"
-        [disabled]="!deployAvailable()"
-        [attr.title]="deployAvailable() ? null : 'This clerk does not declare Deploy capability.'"
-        (click)="openDeploy()"
-      >
-        <span aria-hidden="true">＋</span>
-        Deploy strategy
-      </button>
-    }
-  </header>
-
-  <app-alpaca-lane-directory [deployIntent]="deployIntent()" />
-
   @if (contextTarget(); as target) {
   <app-alpaca-desk-account-state
     [state]="deskState()"
@@ -58,10 +37,6 @@
   }
   }
 </main>
-
-@if (deployAvailable()) {
-  <app-alpaca-deploy-drawer [target]="contextTarget()" [visible]="deployOpen()" (closed)="closeDeploy()" />
-}
 
 @if (operatingDeskVisible()) {
   <p-dialog

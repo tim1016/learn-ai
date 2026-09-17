@@ -9,7 +9,10 @@ import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
 import { resourceTarget } from '../../../fleet/resource-target';
 
-/** One account read shared by the desk header and its active lens. */
+/** One account read shared by the account workspace's header, its Overview
+ * tab's active lens, and the deploy drawer — so the operator's equity, the
+ * account the header names, and the account a command is minted against all
+ * come from the same confirmed read rather than three of them. */
 @Injectable()
 export class AlpacaDeskAccountDataService {
   private readonly brokers = inject(BrokersService);
