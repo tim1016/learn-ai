@@ -1,8 +1,6 @@
 <dialog #drawer class="receipt-drawer" aria-labelledby="receiptDrawerTitle" (close)="onNativeClosed()" (cancel)="close()">
   <header class="receipt-drawer__header">
-    <div>
-      <h2 id="receiptDrawerTitle">Custody receipt</h2>
-    </div>
+    <h2 id="receiptDrawerTitle">Custody receipt</h2>
     <button type="button" class="receipt-drawer__close" aria-label="Close receipt drawer" (click)="close()">×</button>
   </header>
   @if (loading()) {

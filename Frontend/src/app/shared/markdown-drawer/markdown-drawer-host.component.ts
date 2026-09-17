@@ -44,7 +44,7 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
       >
         <ng-template #header>
           <div class="drawer-header">
-            <h3 class="drawer-title">{{ d.title }}</h3>
+            <h3 class="drawer-title eyebrow-heading">{{ d.title }}</h3>
             <div class="drawer-actions">
               <a
                 class="drawer-link"
@@ -86,11 +86,6 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
       .drawer-title {
         grid-area: title;
         margin: 0;
-        color: var(--text-subtle);
-        font-size: var(--fs-xxs);
-        font-weight: var(--fw-semi);
-        letter-spacing: var(--ls-caps);
-        text-transform: uppercase;
       }
       .drawer-actions {
         grid-area: actions;

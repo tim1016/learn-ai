@@ -13,10 +13,13 @@
  * `ALLOWED` below for the specific reason on each) — but even those fold
  * onto one canonical look rather than a second hand-rolled one.
  *
- * This spec is the guard: no template may reintroduce a bespoke
- * eyebrow/kicker-named *or* Tailwind-`uppercase`-styled element sitting
- * directly above a heading — the exact shape the sweep eliminated — without
- * a named, justified entry here.
+ * This spec is the guard: no template may reintroduce a *class-named*
+ * eyebrow/kicker element, or a Tailwind-`uppercase`-styled element, sitting
+ * directly above a heading — without a named, justified entry here. That is
+ * narrower than "no eyebrow shape can return": a class-less element styled
+ * by a descendant selector in the component's own SCSS is a third shape the
+ * sweep found and fixed by hand, and this guard cannot see it (see "Known
+ * limitation" below).
  *
  * Falsifiability: temporarily reinstate
  * `<p class="foo-eyebrow">Label</p>` (or `<p class="uppercase text-xs">Label</p>`)
@@ -40,6 +43,23 @@
  * keeps it from flagging those; a manual audit of every `uppercase` use in
  * the tree at the time this spec was written found exactly four genuine
  * pairs (all fixed) and zero other matches.
+ *
+ * Bigger gap: this guard only recognizes two of the three eyebrow shapes the
+ * #2184 sweep actually found. `EYEBROW_LOOK_PATTERN` requires a literal
+ * `class="…"` attribute carrying an eyebrow/kicker name or `uppercase` — it
+ * cannot see a class-less element styled by a descendant element selector in
+ * the component's own SCSS (e.g. a bare `<span>` above an `<h2>`, styled via
+ * `.parent span { text-transform: uppercase; … }`). That third shape has a
+ * live, undetected instance today:
+ * `components/broker/v2-panel/cohort-archive/cohort-archive-drawer.component.html`
+ * (a class-less `<span>Roster · …</span>` immediately above `<h2>Archive
+ * finished bots</h2>`). It is not in `ALLOWED` below and this spec passes
+ * green on it — recorded here so the gap is documented rather than a silent
+ * pass. It is deliberately **not** added to `ALLOWED` itself: `ALLOWED` is
+ * matched exactly against `offenders` below, and this shape can never
+ * appear in `offenders`, so adding it there would only make the exact-set
+ * assertion lie about what got detected. Whether to sweep this specific
+ * site is a separate, already-disclosed decision and out of scope here.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -141,6 +161,6 @@ describe('the eyebrow-plus-heading pair is retired, not reintroduced', () => {
         }
       }
     }
-    expect([...offenders].filter((p) => !ALLOWED.has(p))).toEqual([]);
+    expect([...offenders].sort()).toEqual([...ALLOWED].sort());
   });
 });
