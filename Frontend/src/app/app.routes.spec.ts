@@ -206,10 +206,10 @@ describe('routes', () => {
     });
 
     it.each([
-      ['configuration', AlpacaConfigurationPageComponent, 'the lane configuration'],
-      ['bots', AlpacaSurfaceNotReadyTabComponent, 'the not-ready Bots tab'],
-      ['gallery', AlpacaSurfaceNotReadyTabComponent, 'the not-ready Gallery tab'],
-    ])('loads the lane-scoped %s tab (%#)', async (path, expectedComponent, _label) => {
+      ['configuration', AlpacaConfigurationPageComponent],
+      ['bots', AlpacaSurfaceNotReadyTabComponent],
+      ['gallery', AlpacaSurfaceNotReadyTabComponent],
+    ])('loads the lane-scoped %s tab', async (path, expectedComponent) => {
       const route = workspace?.children?.find((candidate) => candidate.path === path);
       if (route === undefined) throw new Error(`Workspace tab ${path} is missing.`);
 

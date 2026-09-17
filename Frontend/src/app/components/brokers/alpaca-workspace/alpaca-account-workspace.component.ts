@@ -125,22 +125,31 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly clerkId = computed(() => this.routeParams().get('clerkId') ?? '');
   private readonly accountId = this.accountData.accountId;
 
-  /** Which tab the URL has open, and the bot's page open under it. Resolved by
-   * the shared pure function, the same one the menubar asks whether a URL is
-   * inside a workspace at all. */
+  /** Where the URL says we are: which account, which tab, and the bot's page
+   * open under it. The only place a workspace URL is parsed here — everything
+   * below derives from this one read rather than asking the router again, so
+   * no two members of this shell can answer "where am I?" differently.
+   * Resolved by the shared pure function, the same one the menubar asks
+   * whether a URL is inside a workspace at all. */
   private readonly routedLocation = computed(() => accountWorkspaceLocation(this.currentUrl()));
 
-  protected readonly activeTab = computed<AccountWorkspaceTab>(
-    () => this.routedLocation()?.tab ?? 'overview',
-  );
+  /** The routed location plus the one fact the URL cannot carry: on the
+   * lane-scoped tabs it names no account and the lane's confirmed binding is
+   * the answer (FR-092). */
+  protected readonly location = computed<AccountWorkspaceLocation>(() => {
+    const routed = this.routedLocation();
+    return routed === null
+      ? {
+          broker: 'alpaca',
+          clerkId: this.clerkId(),
+          accountId: this.accountId(),
+          tab: 'overview',
+          botSid: null,
+        }
+      : { ...routed, accountId: routed.accountId ?? this.accountId() };
+  });
 
-  protected readonly location = computed<AccountWorkspaceLocation>(() => ({
-    broker: 'alpaca',
-    clerkId: this.clerkId(),
-    accountId: this.accountId(),
-    tab: this.activeTab(),
-    botSid: this.routedLocation()?.botSid ?? null,
-  }));
+  protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
 
   /** The four tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per
@@ -228,7 +237,7 @@ export class AlpacaAccountWorkspaceComponent {
    * two commands below keep the URL saying what is open. */
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
 
-  private readonly workspaceBody = viewChild<ElementRef<HTMLElement>>('workspaceBody');
+  private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
 
   /** What the tab body is currently showing: the account, the tab, and the
    * bot's page open under it. A change to any of the three replaces the whole
@@ -242,12 +251,17 @@ export class AlpacaAccountWorkspaceComponent {
    * navigation involved — and stole focus out from under the operator when it
    * did. `routedLocation`'s `accountId` is `null` on those tabs by
    * construction (it is parsed straight from the URL), so it only changes
-   * when the URL actually does. */
+   * when the URL actually does.
+   *
+   * `null` when the URL is not a workspace URL at all — which no route that
+   * renders this shell produces. It is reported rather than papered over with
+   * an invented Overview, which would key indistinguishably from a real
+   * account-less Overview on the same lane. */
   private readonly renderedContent = computed(() => {
     const routed = this.routedLocation();
-    return [this.clerkId(), routed?.accountId ?? '', routed?.tab ?? 'overview', routed?.botSid ?? ''].join(
-      '::',
-    );
+    return routed === null
+      ? null
+      : [routed.clerkId, routed.accountId ?? '', routed.tab, routed.botSid ?? ''].join('::');
   });
 
   constructor() {
@@ -262,11 +276,15 @@ export class AlpacaAccountWorkspaceComponent {
     let rendered: string | null = null;
     effect(() => {
       const next = this.renderedContent();
+      // A URL outside the workspace names no body to land in, and is not a
+      // change of body either — it is left out of the record entirely so the
+      // tab that was open stays the thing the next key is compared against.
+      if (next === null) return;
       const previous = rendered;
       rendered = next;
       if (previous === null || previous === next) return;
       // After this pass has rendered the new body, not during it.
-      queueMicrotask(() => this.workspaceBody()?.nativeElement.focus());
+      queueMicrotask(() => this.workspaceBody().nativeElement.focus());
     });
 
     // Equity and the reconciliation verdict both move while the operator

@@ -294,6 +294,18 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(screen.getByRole('link', { name: 'Configuration' })).toBeTruthy();
     });
 
+    it('has no detectable accessibility violations with no account to offer', async () => {
+      // The bound render above never emits the inert Overview tab, so this is
+      // the only pass that grades it — and the unoffered tab is exactly the
+      // markup an operator is most likely to meet with a screen reader.
+      await renderWorkspace({ url: `${LANE_URL}/configuration`, directory: unboundDirectory() });
+      await screen.findByRole('heading', { name: 'Unbound' });
+
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+
+      expect(results.violations).toEqual([]);
+    });
+
     it.each([
       ['bots', 'Bots roster'],
       ['gallery', 'Gallery'],
