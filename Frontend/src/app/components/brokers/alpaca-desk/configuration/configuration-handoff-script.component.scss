@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -24,22 +26,12 @@
   max-width: 48rem;
 }
 
-.handoff__eyebrow {
-  margin: 0 0 var(--space-1);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .handoff h2 {
+  @include eyebrow-heading;
   margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-md);
 }
 
-.handoff__header p:not(.handoff__eyebrow),
+.handoff__header p,
 .handoff__warning,
 .handoff__command-unknown,
 .handoff__error,

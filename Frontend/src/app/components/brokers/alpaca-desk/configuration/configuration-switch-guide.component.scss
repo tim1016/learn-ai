@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -16,19 +18,9 @@
   max-width: 52rem;
 }
 
-.switch-guide__eyebrow {
-  margin: 0 0 var(--space-1);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-bold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .switch-guide h2 {
+  @include eyebrow-heading;
   margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-md);
 }
 
 .switch-guide header > p:last-child,

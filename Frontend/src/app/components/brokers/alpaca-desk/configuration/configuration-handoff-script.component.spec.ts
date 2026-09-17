@@ -31,6 +31,10 @@ describe('ConfigurationHandoffScriptComponent', () => {
     await renderScript('podman compose restart alpaca-paper-clerk');
 
     expect(screen.getByRole('button', { name: 'Copy Paper-to-Live handoff script' })).toBeTruthy();
+    // #2183: "Paper → Live handoff script" carries the eyebrow look itself
+    // now; the separate "Local operator tool" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Paper → Live handoff script' })).toBeTruthy();
+    expect(screen.queryByText('Local operator tool')).toBeNull();
     expect(document.querySelector('.handoff__source code')?.textContent).toBe(
       '#!/usr/bin/env bash\n'
       + 'set -euo pipefail\n'
