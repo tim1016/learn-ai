@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
   min-width: 0;
@@ -29,21 +31,12 @@
 }
 
 .positions-panel__header h2 {
-  color: var(--text-primary);
-  font-size: var(--fs-lg);
+  @include eyebrow-heading;
 }
 
 .positions-panel__header div > p:last-child {
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-}
-
-.eyebrow {
-  color: var(--text-muted) !important;
-  font-size: var(--fs-xxs) !important;
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .table-search,

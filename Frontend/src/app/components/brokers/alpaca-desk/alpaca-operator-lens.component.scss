@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -23,8 +25,7 @@
 }
 
 .operator-lens__heading h2 {
-  color: var(--text-primary);
-  font-size: var(--fs-xl);
+  @include eyebrow-heading;
 }
 
 .operator-lens__heading > p {
@@ -32,14 +33,6 @@
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   text-align: right;
-}
-
-.operator-lens__eyebrow {
-  color: var(--text-muted);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .operator-lens__fallback,

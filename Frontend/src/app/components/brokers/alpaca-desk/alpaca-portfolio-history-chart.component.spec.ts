@@ -48,6 +48,10 @@ describe('AlpacaPortfolioHistoryChartComponent', () => {
     });
 
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
+    // #2183: "30D equity curve" carries the eyebrow look itself now; the
+    // separate "Broker portfolio history" label above it is retired.
+    expect(screen.getByRole('heading', { name: '30D equity curve' })).toBeTruthy();
+    expect(screen.queryByText('Broker portfolio history')).toBeNull();
     await view.fixture.whenStable();
     await waitFor(() =>
       expect(series.setData).toHaveBeenLastCalledWith([

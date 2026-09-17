@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host { display: block; }
 
 .operator-posture {
@@ -16,20 +18,10 @@
 .operator-posture--caution { border-left-color: var(--warn); }
 .operator-posture--blocked { border-left-color: var(--bear); }
 
-.operator-posture__eyebrow,
 .operator-posture__detail,
 .operator-posture__status { margin: 0; }
 
-.operator-posture__eyebrow {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-
-h2 { margin: .15rem 0; color: var(--text-primary); font-size: var(--fs-xl); }
+h2 { @include eyebrow-heading; margin: 0; }
 .operator-posture__detail { color: var(--text-secondary); }
 
 button {

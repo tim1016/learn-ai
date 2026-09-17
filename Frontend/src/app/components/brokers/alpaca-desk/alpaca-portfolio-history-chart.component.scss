@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 .portfolio-history {
   display: grid;
   gap: var(--space-3);
@@ -18,6 +20,10 @@
 .portfolio-history__header p,
 .state {
   margin: 0;
+}
+
+.portfolio-history__header h2 {
+  @include eyebrow-heading;
 }
 
 .portfolio-history__header > p,

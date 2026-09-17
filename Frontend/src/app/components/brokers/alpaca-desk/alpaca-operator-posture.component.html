@@ -7,7 +7,6 @@
     aria-labelledby="operator-posture-title"
   >
     <div>
-      <p class="operator-posture__eyebrow">Account status</p>
       <h2 id="operator-posture-title">{{ current.headline }}</h2>
       @if (current.detail) {
         <p class="operator-posture__detail">{{ current.detail }}</p>
@@ -32,7 +31,6 @@
   </section>
 } @else {
   <section class="operator-posture operator-posture--unknown" role="status">
-    <p class="operator-posture__eyebrow">Account status</p>
     <h2>Account status unavailable</h2>
     <p class="operator-posture__detail">The current account posture could not be read.</p>
   </section>

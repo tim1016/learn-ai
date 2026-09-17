@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -24,16 +26,7 @@
 
 .trader-lens__header h2,
 .history-placeholder h2 {
-  color: var(--text-primary);
-  font-size: var(--fs-xl);
-}
-
-.eyebrow {
-  color: var(--text-muted);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
+  @include eyebrow-heading;
 }
 
 .trader-lens__intro,

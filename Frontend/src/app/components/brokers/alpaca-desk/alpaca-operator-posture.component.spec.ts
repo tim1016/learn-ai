@@ -37,6 +37,9 @@ describe('AlpacaOperatorPostureComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'Account Clerk custody is healthy' })).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+    // #2183: the heading itself carries the eyebrow look; the separate
+    // "Account status" label above it is retired.
+    expect(screen.queryByText('Account status')).toBeNull();
   });
 
   it('fails closed to an explicit unavailable state when posture has not loaded', async () => {
@@ -46,6 +49,7 @@ describe('AlpacaOperatorPostureComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'Account status unavailable' })).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByText('Account status')).toBeNull();
   });
 
   it('renders the account_desk projection verbatim, not the fleet_roster projection', async () => {

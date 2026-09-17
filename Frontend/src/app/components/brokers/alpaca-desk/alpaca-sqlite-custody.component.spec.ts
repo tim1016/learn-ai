@@ -195,6 +195,10 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
 
     expect(await screen.findByText('Durable Clerk state has no unresolved uncertainty.')).toBeTruthy();
+    // #2183: "Custody and recovery" carries the eyebrow look itself now; the
+    // separate "Order record" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Custody and recovery' })).toBeTruthy();
+    expect(screen.queryByText('Order record')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
     expect((await screen.findAllByText('effect:enter:12')).length).toBeGreaterThan(0);
