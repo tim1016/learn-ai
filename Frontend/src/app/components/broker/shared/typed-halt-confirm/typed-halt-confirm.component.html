@@ -17,6 +17,9 @@
   >
     <header>
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
+      @if (accountId(); as account) {
+        <p class="account">Account <strong>{{ account }}</strong></p>
+      }
     </header>
     <div class="message">
       @if (assetSymbol(); as symbol) {

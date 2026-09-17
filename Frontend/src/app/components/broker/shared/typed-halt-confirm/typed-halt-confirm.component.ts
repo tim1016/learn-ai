@@ -36,6 +36,17 @@ export class TypedHaltConfirmComponent {
   readonly message = input.required<string>();
   /** Optional tradeable instrument rendered through the shared identity control. */
   readonly assetSymbol = input<string | null>(null);
+  /** Optional account this action acts on, shown as its number (ADR 0064;
+   * #2188). A confirmation is one of the two surfaces where the number earns
+   * its place, so a host that knows which account a consequential action will
+   * hit threads it in here.
+   *
+   * Optional, and on the same footing as `assetSymbol` above: a *structured
+   * identity fact* the host supplies beside the backend-authored prose, never
+   * prose this component composes. Hosts whose backend copy already names the
+   * account in its body — the `flatten_stop` / `retire` / `archive` family —
+   * leave it unset rather than printing the number twice. */
+  readonly accountId = input<string | null>(null);
   /** Explicit consequence copy authored by the backend. */
   readonly consequence = input.required<string>();
   /** Token the operator must type to enable the confirm button. An empty

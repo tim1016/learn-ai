@@ -239,6 +239,7 @@
     <app-typed-halt-confirm
       [open]="true"
       [heading]="confirmation.title"
+      [accountId]="accountId()"
       [message]="action.explanation"
       [consequence]="confirmation.explanation"
       requiredToken=""
