@@ -1,10 +1,24 @@
+import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
+import {
+  accountWorkspaceBadgeRoute,
+  accountWorkspaceLens,
+  accountWorkspaceLocation,
+  type AccountWorkspaceLink,
+} from '../fleet/account-workspace';
 import { FleetDirectoryService } from '../fleet/fleet-directory.service';
-import { laneDisplayName, laneDisplayNameText, type LaneDescriptor } from '../fleet/fleet-directory.types';
+import {
+  laneConfirmedAccount,
+  laneDisplayName,
+  laneDisplayNameText,
+  type LaneDescriptor,
+} from '../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
+import { CurrentUrlService } from './current-url.service';
 
 /**
  * The standing assumption an undetermined badge carries. It is in the badge's
@@ -53,6 +67,12 @@ interface LaneBadge {
  * The server verdict remains the only truth source. Live mode keeps the
  * account id and armed count visible even in the dense global header.
  *
+ * **It is also the way to that account** (ADR 0064 Decision 3): the whole
+ * badge is a link into its workspace, on the tab the operator is already
+ * standing on. The link wraps the status region rather than replacing it —
+ * one element cannot be both a live region and a link, and the warning below
+ * is why the live region is the part that must not move.
+ *
  * **It never renders nothing.** Four distinct things leave a mode
  * undetermined, and all four render the same LOUD amber warning rather than
  * the banned grey "not configured" styling and rather than silence:
@@ -82,9 +102,15 @@ interface LaneBadge {
 @Component({
   selector: 'app-alpaca-live-banner',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe],
+  imports: [NgTemplateOutlet, ReceiptLabelPipe, RouterLink],
   styles: [`
     :host { display: contents; }
+    .alpaca-banner__link {
+      display: inline-flex; text-decoration: none; border-radius: var(--radius-pill);
+    }
+    .alpaca-banner__link:focus-visible {
+      outline: 2px solid var(--p-primary-color, #6da2ff); outline-offset: 2px;
+    }
     .alpaca-banner {
       display: inline-flex; min-height: 30px; align-items: center; gap: 0.35rem;
       padding: 0 0.65rem; border-radius: var(--radius-pill);
@@ -104,40 +130,80 @@ interface LaneBadge {
   `],
   template: `
     @let b = badge();
-    <div
-      class="alpaca-banner"
-      [class]="b.tone"
-      role="status"
-      [attr.aria-label]="b.ariaLabel"
-      [attr.title]="b.detail"
-    >
-      @if (b.lane) {
-        <span class="alpaca-banner__lane">{{ b.lane }}</span>
-        @if (b.disambiguator; as disambiguator) {
-          <span class="alpaca-banner__disambiguator">({{ disambiguator }})</span>
+    <ng-template #chip>
+      <div
+        class="alpaca-banner"
+        [class]="b.tone"
+        role="status"
+        [attr.aria-label]="b.ariaLabel"
+        [attr.title]="b.detail"
+      >
+        @if (b.lane) {
+          <span class="alpaca-banner__lane">{{ b.lane }}</span>
+          @if (b.disambiguator; as disambiguator) {
+            <span class="alpaca-banner__disambiguator">({{ disambiguator }})</span>
+          }
         }
-      }
-      <span class="alpaca-banner__mode">{{ b.mode }}</span>
-      @if (b.account) {
-        <span class="alpaca-banner__detail">· {{ b.account }}</span>
-        <span class="alpaca-banner__detail">· {{ b.armedCount }} armed</span>
-      }
-      @if (b.lossHold) {
-        <span class="alpaca-banner__hold">· loss hold</span>
-      }
-      @if (b.refusalCode) {
-        <span>· {{ b.refusalCode | receiptLabel }}</span>
-      }
-    </div>
+        <span class="alpaca-banner__mode">{{ b.mode }}</span>
+        @if (b.account) {
+          <span class="alpaca-banner__detail">· {{ b.account }}</span>
+          <span class="alpaca-banner__detail">· {{ b.armedCount }} armed</span>
+        }
+        @if (b.lossHold) {
+          <span class="alpaca-banner__hold">· loss hold</span>
+        }
+        @if (b.refusalCode) {
+          <span>· {{ b.refusalCode | receiptLabel }}</span>
+        }
+      </div>
+    </ng-template>
+
+    @if (destination(); as link) {
+      <a
+        class="alpaca-banner__link"
+        [routerLink]="link.commands"
+        [queryParams]="link.queryParams"
+      >
+        <ng-container [ngTemplateOutlet]="chip" />
+      </a>
+    } @else {
+      <ng-container [ngTemplateOutlet]="chip" />
+    }
   `,
 })
 export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly currentUrl = inject(CurrentUrlService).url;
 
   /** The lane this badge speaks for, or `null` when the directory has not
    * produced one. `null` is a rendered state, not an absent input. */
   readonly lane = input.required<LaneDescriptor | null>();
+
+  /**
+   * Where this badge leads (ADR 0064 Decision 3): this account, on the tab
+   * the operator is already standing on when they are inside a workspace,
+   * otherwise its Overview. The resolver decides — a badge and the
+   * workspace's own account switcher are the same move made from two places,
+   * so they cannot land differently.
+   *
+   * `null` only for the roster-unknown badge: there is no lane to open, and a
+   * link to nowhere would be worse than the warning standing on its own.
+   */
+  protected readonly destination = computed<AccountWorkspaceLink | null>(() => {
+    const lane = this.lane();
+    if (lane === null) return null;
+    const url = this.currentUrl();
+    return accountWorkspaceBadgeRoute(
+      accountWorkspaceLocation(url),
+      {
+        broker: lane.broker,
+        clerkId: lane.clerk_id,
+        accountId: laneConfirmedAccount(lane),
+      },
+      accountWorkspaceLens(url),
+    );
+  });
 
   protected readonly badge = computed<LaneBadge>(() => {
     const lane = this.lane();
