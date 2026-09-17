@@ -78,6 +78,14 @@ export interface AccountWorkspaceLocation {
   readonly botSid: string | null;
 }
 
+/** The account — or the account-less lane — a route is built for. A route
+ * depends on that identity alone, never on which tab is currently open, so a
+ * caller that only knows where it is going does not have to invent one. */
+export type AccountWorkspaceAddress = Pick<
+  AccountWorkspaceLocation,
+  'broker' | 'clerkId' | 'accountId'
+>;
+
 /** A router destination: the commands to navigate with, and the query the
  * destination is opened with. */
 export interface AccountWorkspaceLink {
@@ -151,14 +159,28 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
  * none, so it is the one tab an accountless workspace cannot offer.
  */
 export function accountWorkspaceTabRoute(
-  location: AccountWorkspaceLocation,
+  address: AccountWorkspaceAddress,
   tab: AccountWorkspaceTab,
 ): readonly string[] | null {
-  const lane = laneRoute(location.broker, location.clerkId);
-  if (tab === 'configuration') return [...lane, 'configuration'];
-  if (location.accountId === null) return tab === 'overview' ? null : [...lane, tab];
-  const account = [...lane, 'accounts', location.accountId];
-  return tab === 'overview' ? account : [...account, tab];
+  if (tab === 'configuration') return configurationRoute(address);
+  if (tab !== 'overview') return accountWorkspaceOriginTabRoute(address, tab);
+  return address.accountId === null ? null : workspaceRoute(address);
+}
+
+/**
+ * The same tab route, narrowed to the two tabs a bot's page can be opened
+ * from.
+ *
+ * Both of those tabs have an address whether or not the workspace has a
+ * confirmed account — the lane-scoped one explains in place why it cannot open
+ * (FR-096) — so this route always resolves, and a caller that only ever asks
+ * for an origin tab needs no null guard for a case it cannot reach.
+ */
+export function accountWorkspaceOriginTabRoute(
+  address: AccountWorkspaceAddress,
+  origin: AccountWorkspaceOriginTab,
+): readonly string[] {
+  return [...workspaceRoute(address), origin];
 }
 
 /**
@@ -205,12 +227,10 @@ export function accountWorkspaceSwitchRoute(
   lens: string | null,
 ): AccountWorkspaceLink {
   const tab: AccountWorkspaceTab = from.botSid === null ? from.tab : 'bots';
-  const destination: AccountWorkspaceLocation = {
+  const destination: AccountWorkspaceAddress = {
     broker: from.broker,
     clerkId: target.clerkId,
     accountId: target.accountId,
-    tab,
-    botSid: null,
   };
   const commands = accountWorkspaceTabRoute(destination, tab)
     ?? [...laneRoute(from.broker, target.clerkId), 'configuration'];
@@ -238,6 +258,20 @@ export function accountWorkspaceTitle(
 /** Every workspace URL's first four segments. */
 function laneRoute(broker: string, clerkId: string): string[] {
   return ['/brokers', broker, 'clerks', clerkId];
+}
+
+/** The workspace's own URL, which every tab but Configuration extends: the
+ * account's page where the workspace has a confirmed account, the lane's where
+ * it does not (FR-092). */
+function workspaceRoute(address: AccountWorkspaceAddress): string[] {
+  const lane = laneRoute(address.broker, address.clerkId);
+  return address.accountId === null ? lane : [...lane, 'accounts', address.accountId];
+}
+
+/** Configuration's URL — lane-scoped wherever it is opened from (FR-092), so
+ * it is the one tab an address can always offer. */
+function configurationRoute(address: AccountWorkspaceAddress): string[] {
+  return [...laneRoute(address.broker, address.clerkId), 'configuration'];
 }
 
 /** The tab one URL segment names; the absent segment is Overview. */

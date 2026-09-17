@@ -13,11 +13,9 @@
   @let profileData = profile.value()!;
 
   <div class="bot-identity">
-    @if (backRoute(); as back) {
-      <a class="bot-identity__back" [routerLink]="back">
-        <span aria-hidden="true">←</span> {{ backLabel() }}
-      </a>
-    }
+    <a class="bot-identity__back" [routerLink]="backRoute()">
+      <span aria-hidden="true">←</span> {{ backLabel() }}
+    </a>
     <h2 class="bot-identity__name">
       {{ panelData.strategy_label }}
       <span class="bot-identity__symbol">{{ panelData.symbol }}</span>

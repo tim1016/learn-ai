@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accountWorkspaceBotRoute,
   accountWorkspaceLocation,
+  accountWorkspaceOriginTabRoute,
   accountWorkspaceSwitchRoute,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
@@ -121,6 +122,22 @@ describe('accountWorkspaceTabRoute', () => {
     for (const tab of ['bots', 'gallery', 'configuration'] as const) {
       const url = accountWorkspaceTabRoute(LANE_ONLY, tab)?.join('/') ?? '';
       expect(accountWorkspaceLocation(url)).toEqual({ ...LANE_ONLY, tab });
+    }
+  });
+});
+
+describe('accountWorkspaceOriginTabRoute', () => {
+  it.each([
+    ['a bound account', LOCATION],
+    ['a lane with no account', LANE_ONLY],
+  ] as const)('resolves both origin tabs of %s without a null to guard', (_what, address) => {
+    // The narrowed sibling exists so a bot's page, which can only ever have
+    // come from Bots or Gallery, does not carry Overview's `null` into its
+    // template. It must never disagree with the general route.
+    for (const origin of ['bots', 'gallery'] as const) {
+      expect(accountWorkspaceOriginTabRoute(address, origin)).toEqual(
+        accountWorkspaceTabRoute(address, origin),
+      );
     }
   });
 });

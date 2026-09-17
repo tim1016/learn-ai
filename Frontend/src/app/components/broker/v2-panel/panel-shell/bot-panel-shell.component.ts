@@ -38,8 +38,8 @@ import { BrokersService } from '../../../../services/brokers.service';
 import {
   ORIGIN_TAB_QUERY_PARAM,
   accountWorkspaceOriginTab,
+  accountWorkspaceOriginTabRoute,
   accountWorkspaceTabLabel,
-  accountWorkspaceTabRoute,
 } from '../../../../fleet/account-workspace';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -158,13 +158,11 @@ export class BotPanelShellComponent {
   );
 
   protected readonly backRoute = computed(() =>
-    accountWorkspaceTabRoute(
+    accountWorkspaceOriginTabRoute(
       {
         broker: this.broker(),
         clerkId: this.clerkId(),
         accountId: this.accountId(),
-        tab: this.originTab(),
-        botSid: this.sid(),
       },
       this.originTab(),
     ),
