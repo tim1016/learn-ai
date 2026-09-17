@@ -457,6 +457,53 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     });
   });
 
+  describe('where the keyboard goes', () => {
+    function workspaceBody(): HTMLElement {
+      const body = document.querySelector<HTMLElement>('.account-workspace__body');
+      if (body === null) throw new Error('The workspace body is not rendered.');
+      return body;
+    }
+
+    it('does not take focus on arrival', async () => {
+      // The operator may already be somewhere — the address bar, a link they
+      // opened this page from. Rendering is not a reason to move them.
+      await renderWorkspace();
+      await screen.findByRole('heading', { name: 'Paper' });
+
+      expect(document.activeElement).not.toBe(workspaceBody());
+    });
+
+    it.each([
+      [`${WORKSPACE_URL}/gallery`, 'a tab change'],
+      [`${WORKSPACE_URL}/bots/sid-1`, "a bot's page opening"],
+    ])('moves into the tab body after %s', async (url) => {
+      // The header and tab strip do not move, so without this the keyboard
+      // stays on the link just followed while everything below it changed.
+      const { view, router } = await renderWorkspace();
+      await screen.findByRole('heading', { name: 'Paper' });
+
+      await router.navigateByUrl(url);
+      await view.fixture.whenStable();
+
+      await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
+    });
+
+    it('moves into the tab body after an account switch', async () => {
+      const { view, router } = await renderWorkspace({
+        directory: provideFleetDirectory({
+          observed_at_ms: 1,
+          clerks: [testLane(), testLane({ clerk_id: 'clrk_live', display_label: 'Live' })],
+        }),
+      });
+      await screen.findByRole('heading', { name: 'Paper' });
+
+      await router.navigateByUrl('/brokers/alpaca/clerks/clrk_live/configuration');
+      await view.fixture.whenStable();
+
+      await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
+    });
+  });
+
   it('keeps one workspace — and one account read — across a tab change', async () => {
     const { view, router, getAccount } = await renderWorkspace();
     const headerBefore = await screen.findByRole('heading', { name: 'Paper' });

@@ -144,6 +144,13 @@
   overflow: auto;
 }
 
+/* The body is where the keyboard lands after a tab change, not something the
+   operator can tab to. A ring around the whole page would be noise on every
+   move; the tab that just appeared under it is the feedback. */
+.account-workspace__body:focus {
+  outline: none;
+}
+
 @media (max-width: 760px) {
   .account-workspace__header {
     padding: var(--space-2);

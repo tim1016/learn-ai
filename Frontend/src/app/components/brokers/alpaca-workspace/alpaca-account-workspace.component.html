@@ -64,7 +64,10 @@
     }
   </nav>
 
-  <div class="account-workspace__body">
+  <!-- `tabindex="-1"` makes this a landing target, never a tab stop: after a
+       tab change or an account switch the keyboard moves in here, to the
+       content that changed. -->
+  <div #workspaceBody class="account-workspace__body" tabindex="-1">
     <router-outlet />
   </div>
 </div>

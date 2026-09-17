@@ -2,9 +2,12 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
   computed,
+  effect,
   inject,
   linkedSignal,
+  viewChild,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
@@ -225,7 +228,37 @@ export class AlpacaAccountWorkspaceComponent {
    * two commands below keep the URL saying what is open. */
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
 
+  private readonly workspaceBody = viewChild<ElementRef<HTMLElement>>('workspaceBody');
+
+  /** What the tab body is currently showing: the account, the tab, and the
+   * bot's page open under it. A change to any of the three replaces the whole
+   * body beneath a header and tab strip that do not move. */
+  private readonly renderedContent = computed(() => {
+    const location = this.location();
+    return [location.clerkId, location.accountId ?? '', location.tab, location.botSid ?? ''].join(
+      '::',
+    );
+  });
+
   constructor() {
+    // Focus follows a tab change and an account switch. The router replaces
+    // the body without moving the keyboard, which leaves a keyboard or
+    // screen-reader operator standing on the link they just followed while
+    // everything below it has changed — so the keyboard is moved into the
+    // body, the ARIA tabs practice of landing in the panel that was revealed.
+    //
+    // The first render is deliberately excluded: arriving on a page must not
+    // take focus away from wherever the operator already is.
+    let rendered: string | null = null;
+    effect(() => {
+      const next = this.renderedContent();
+      const previous = rendered;
+      rendered = next;
+      if (previous === null || previous === next) return;
+      // After this pass has rendered the new body, not during it.
+      queueMicrotask(() => this.workspaceBody()?.nativeElement.focus());
+    });
+
     // Equity and the reconciliation verdict both move while the operator
     // stays on one tab. Paused while the tab is hidden, as every other poll
     // on this surface is.
