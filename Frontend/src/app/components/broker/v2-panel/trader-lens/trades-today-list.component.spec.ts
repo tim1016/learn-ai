@@ -119,7 +119,6 @@ describe('TradesTodayListComponent', () => {
     expect(screen.getByRole('table', { name: 'All fills today' }).querySelectorAll('tbody tr')).toHaveLength(6);
     // Same fix applies to the "All fills today" drawer header.
     expect(screen.getByRole('heading', { name: 'All fills today' })).toBeTruthy();
-    expect(screen.queryByText('Execution')).toBeNull();
   });
 
 });

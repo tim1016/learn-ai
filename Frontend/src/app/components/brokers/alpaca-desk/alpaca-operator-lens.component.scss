@@ -28,7 +28,7 @@
   @include eyebrow-heading;
 }
 
-.operator-lens__heading > p {
+.operator-lens__heading p {
   max-width: 48rem;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
@@ -175,7 +175,7 @@
     flex-direction: column;
   }
 
-  .operator-lens__heading > p {
+  .operator-lens__heading p {
     text-align: left;
   }
 
