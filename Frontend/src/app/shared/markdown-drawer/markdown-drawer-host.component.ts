@@ -44,7 +44,6 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
       >
         <ng-template #header>
           <div class="drawer-header">
-            <span class="drawer-eyebrow mono">{{ d.eyebrow }}</span>
             <h3 class="drawer-title">{{ d.title }}</h3>
             <div class="drawer-actions">
               <a
@@ -76,31 +75,20 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
   `,
   styles: [
     `
+      @use '../../styles/eyebrow-heading' as *;
+
       .drawer-header {
         display: grid;
         grid-template-columns: 1fr auto;
-        grid-template-areas:
-          'eyebrow actions'
-          'title   actions';
+        grid-template-areas: 'title actions';
         gap: 4px 12px;
         align-items: center;
         width: 100%;
       }
-      .drawer-eyebrow {
-        grid-area: eyebrow;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: var(--text-muted);
-      }
       .drawer-title {
         grid-area: title;
         margin: 0;
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        letter-spacing: -0.01em;
+        @include eyebrow-heading;
       }
       .drawer-actions {
         grid-area: actions;

@@ -49,31 +49,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
         margin: 0 auto;
       }
 
-    .page-header {
-      margin-bottom: 24px;
-      padding-bottom: 20px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .page-eyebrow {
-      display: inline-block;
-      font-size: 0.68rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--text-muted);
-      margin-bottom: 8px;
-    }
-    .page-title {
-      margin: 0 0 8px;
-      font-size: 1.75rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--text-primary);
-    }
-    .page-actions {
-      margin-top: 14px;
-    }
     .page-link {
       display: inline-flex;
       align-items: center;
