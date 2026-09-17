@@ -1,9 +1,11 @@
+@use '../../styles/eyebrow-heading' as *;
+
 :host { display: block; }
 .result { display: grid; gap: var(--space-3); }
 .result__header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
 .result__header h2 { margin: var(--space-1) 0 0; }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
-.eyebrow { margin: 0; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
+.eyebrow { @include eyebrow-heading; margin: 0; }
 .status { display: flex; align-items: center; gap: var(--space-2); }
 .tag { border: 1px solid var(--border-light); border-radius: 999px; padding: 0 var(--space-2); font-size: var(--fs-xs); }
 .tag--warn { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); color: var(--danger); }

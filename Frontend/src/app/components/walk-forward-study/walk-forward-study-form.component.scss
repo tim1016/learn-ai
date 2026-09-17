@@ -1,7 +1,8 @@
+@use '../../styles/eyebrow-heading' as *;
+
 :host { display: block; }
 .form { display: grid; gap: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); padding: var(--space-4); }
-.form__header h2 { margin: 0; }
-.eyebrow { margin: 0; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
+.form__header h2 { @include eyebrow-heading; margin: 0; }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); }
 .form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
 .months { border-top: 1px solid var(--border-light); padding-top: var(--space-3); }
