@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  accountWorkspaceBadgeRoute,
   accountWorkspaceBotRoute,
+  accountWorkspaceEntryRoute,
   accountWorkspaceLocation,
   accountWorkspaceOriginTabRoute,
   accountWorkspaceSwitchRoute,
@@ -206,6 +208,103 @@ describe('accountWorkspaceSwitchRoute', () => {
     // stamp are all `?`-addressed workspace state. The switch builds its query
     // rather than merging, so none of them can retarget at the other account.
     expect(accountWorkspaceSwitchRoute(LOCATION, target, null).queryParams).toEqual({});
+  });
+});
+
+describe('accountWorkspaceEntryRoute', () => {
+  it("opens a confirmed account on its own Overview page", () => {
+    expect(accountWorkspaceEntryRoute(LOCATION)).toEqual([
+      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9',
+    ]);
+  });
+
+  it('opens a lane with no confirmed account on Configuration, the one tab it can serve', () => {
+    expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId: null })).toEqual([
+      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'configuration',
+    ]);
+  });
+
+  it('always resolves, so no caller has to invent a destination for a lane', () => {
+    // The whole point of the fallback: a card or a badge is one click target,
+    // and a lane that cannot offer Overview must still be openable in place
+    // rather than be rendered inert (FR-096).
+    for (const accountId of ['PA9', null]) {
+      expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId })).not.toHaveLength(0);
+    }
+  });
+});
+
+describe('accountWorkspaceBadgeRoute', () => {
+  const target = { broker: 'alpaca', clerkId: 'clrk_live', accountId: 'PA_LIVE' };
+
+  it.each([
+    ['overview' as const],
+    ['bots' as const],
+    ['gallery' as const],
+    ['configuration' as const],
+  ])('keeps the %s tab when the badge is clicked from inside a workspace', (tab) => {
+    const from: AccountWorkspaceLocation = { ...LOCATION, tab };
+
+    // A badge is the account switcher reached from the top bar: identical
+    // behaviour, not a second answer to the same question.
+    expect(accountWorkspaceBadgeRoute(from, target, null)).toEqual(
+      accountWorkspaceSwitchRoute(from, target, null),
+    );
+  });
+
+  it('carries the lens across a switch made from a badge, exactly as the switcher does', () => {
+    expect(accountWorkspaceBadgeRoute(LOCATION, target, 'operator').queryParams).toEqual({
+      lens: 'operator',
+    });
+  });
+
+  it('strips whatever was open over the workspace, the same as the switcher', () => {
+    // `?deploy`/`?deployLens` are workspace state addressed in the query. The
+    // destination's query is built from the lens alone, so an open Deploy
+    // drawer closes on a badge click rather than retargeting at this account.
+    const from: AccountWorkspaceLocation = { ...LOCATION, tab: 'bots' };
+
+    expect(accountWorkspaceBadgeRoute(from, target, null).queryParams).toEqual({});
+  });
+
+  it("lands on the chosen account's Overview from outside any workspace", () => {
+    expect(accountWorkspaceBadgeRoute(null, target, null)).toEqual({
+      commands: ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE'],
+      queryParams: {},
+    });
+  });
+
+  it('lands on Configuration from outside a workspace when the account is unconfirmed', () => {
+    expect(
+      accountWorkspaceBadgeRoute(null, { ...target, accountId: null }, null).commands,
+    ).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_live', 'configuration']);
+  });
+
+  it("opens another broker's account at its own front door, never under the broker being left", () => {
+    // `accountWorkspaceSwitchRoute` builds its destination under `from.broker`
+    // — right for a move between accounts, wrong for a move between brokers.
+    const link = accountWorkspaceBadgeRoute(
+      LOCATION,
+      { broker: 'webull', clerkId: 'clrk_wb', accountId: 'WB1' },
+      'operator',
+    );
+
+    expect(link.commands).toEqual([
+      '/brokers', 'webull', 'clerks', 'clrk_wb', 'accounts', 'WB1',
+    ]);
+    expect(link.queryParams).toEqual({ lens: 'operator' });
+  });
+
+  it('round-trips a badge destination back into the workspace it addresses', () => {
+    const url = accountWorkspaceBadgeRoute(null, target, null).commands.join('/');
+
+    expect(accountWorkspaceLocation(url)).toEqual({
+      broker: 'alpaca',
+      clerkId: 'clrk_live',
+      accountId: 'PA_LIVE',
+      tab: 'overview',
+      botSid: null,
+    });
   });
 });
 

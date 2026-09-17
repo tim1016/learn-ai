@@ -155,6 +155,18 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
 }
 
 /**
+ * The lens perspective `url` names, or `null` when it names none.
+ *
+ * Read from the URL rather than from a stored preference: only a perspective
+ * the operator addressed is one to keep across a move. Lives here so the one
+ * place that knows how to read a workspace URL is also the one place that
+ * knows how to write the lens back into the next one.
+ */
+export function accountWorkspaceLens(url: string): string | null {
+  return queryOf(url).get(LENS_QUERY_PARAM);
+}
+
+/**
  * One tab's router commands for a workspace, or `null` when this workspace has
  * no address for that tab.
  *
@@ -211,6 +223,48 @@ export function accountWorkspaceBotRoute(
 }
 
 /**
+ * Where opening an account from *outside* any workspace lands: its Overview,
+ * the account's own page — or Configuration, the one tab a lane with no
+ * confirmed account can serve, which is where binding it happens anyway.
+ *
+ * The account list's cards and the shell's account badges both open an
+ * account cold, so both ask this rather than each re-deriving the fallback;
+ * `accountWorkspaceSwitchRoute` makes the same substitution for the tab it is
+ * carrying across. One account therefore has one front door wherever it is
+ * opened from, and a not-ready lane can never be addressed at an Overview it
+ * has no account for (FR-092).
+ */
+export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): readonly string[] {
+  return accountWorkspaceTabRoute(address, 'overview') ?? configurationRoute(address);
+}
+
+/**
+ * Where a shell account badge lands (ADR 0064 Decisions 3/4).
+ *
+ * A badge is the account switcher reached from the top bar instead of the
+ * workspace header, so inside a workspace it behaves identically: the same
+ * tab on the chosen account, keeping the lens, dropping whatever was open
+ * over it. Outside one — any other page in the app — there is no tab to keep,
+ * so the badge opens that account's front door.
+ *
+ * `from` is the workspace the operator is standing in, or `null` when they
+ * are not in one. A badge for a *different* broker than the workspace they
+ * are in is a move between brokers rather than between accounts: it has no
+ * tab to carry, and `accountWorkspaceSwitchRoute` would build the
+ * destination under the broker being left, so it takes the front door too.
+ */
+export function accountWorkspaceBadgeRoute(
+  from: AccountWorkspaceLocation | null,
+  target: AccountWorkspaceAddress,
+  lens: string | null,
+): AccountWorkspaceLink {
+  if (from !== null && from.broker === target.broker) {
+    return accountWorkspaceSwitchRoute(from, target, lens);
+  }
+  return { commands: accountWorkspaceEntryRoute(target), queryParams: lensQuery(lens) };
+}
+
+/**
  * Where the account switcher lands (ADR 0064 Decision 4): the same tab on the
  * chosen account, keeping the operator's lens perspective.
  *
@@ -236,7 +290,7 @@ export function accountWorkspaceSwitchRoute(
     accountId: target.accountId,
   };
   const commands = accountWorkspaceTabRoute(destination, tab) ?? configurationRoute(destination);
-  return { commands, queryParams: lens === null ? {} : { [LENS_QUERY_PARAM]: lens } };
+  return { commands, queryParams: lensQuery(lens) };
 }
 
 /**
@@ -274,6 +328,12 @@ function workspaceRoute(address: AccountWorkspaceAddress): string[] {
  * it is the one tab an address can always offer. */
 function configurationRoute(address: AccountWorkspaceAddress): string[] {
   return [...laneRoute(address.broker, address.clerkId), 'configuration'];
+}
+
+/** The destination's query, built from the lens alone — never merged from the
+ * URL being left, so nothing open *over* a workspace travels with a move. */
+function lensQuery(lens: string | null): Readonly<Record<string, string>> {
+  return lens === null ? {} : { [LENS_QUERY_PARAM]: lens };
 }
 
 /** The tab one URL segment names; the absent segment is Overview. */
