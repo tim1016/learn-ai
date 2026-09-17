@@ -241,24 +241,48 @@ describe('AlpacaLaneDirectoryComponent', () => {
 });
 
 describe('verdictModeChip', () => {
+  const UNDETERMINED = {
+    tone: 'undetermined',
+    mode: 'Mode unknown — assume real money',
+    armedCount: null,
+    shadow: false,
+  };
+
   it('reads the verdict through the shared pill vocabulary', () => {
-    expect(verdictModeChip(fakeVerdictState('paper'))).toEqual({ tone: 'paper', mode: 'Paper money' });
-    expect(verdictModeChip(fakeVerdictState('live-unarmed'))).toEqual({ tone: 'live', mode: 'Live' });
-    expect(verdictModeChip(fakeVerdictState('live-armed'))).toEqual({ tone: 'live', mode: 'Live' });
+    expect(verdictModeChip(fakeVerdictState('paper'))).toEqual({
+      tone: 'paper',
+      mode: 'Paper money',
+      armedCount: null,
+      shadow: false,
+    });
+    expect(verdictModeChip(fakeVerdictState('live-unarmed'))).toEqual({
+      tone: 'live',
+      mode: 'Live',
+      armedCount: 0,
+      shadow: false,
+    });
+    expect(verdictModeChip(fakeVerdictState('live-armed', { armed_instance_count: 3 }))).toEqual({
+      tone: 'live',
+      mode: 'Live',
+      armedCount: 3,
+      shadow: false,
+    });
+  });
+
+  it('carries the server-declared Shadow authority beside the mode, never instead of it', () => {
+    // ADR 0059 D2: a shadowing lane still reads the live account, so it is
+    // not a third mode — it is a live lane whose submissions go nowhere.
+    expect(verdictModeChip(fakeVerdictState('live-unarmed', { clerk_authority: 'shadow' }))).toEqual({
+      tone: 'live',
+      mode: 'Live',
+      armedCount: 0,
+      shadow: true,
+    });
   });
 
   it('renders unread, failed, and server-unknown modes as the loud undetermined chip', () => {
-    expect(verdictModeChip(UNPOLLED_LANE_STATE)).toEqual({
-      tone: 'undetermined',
-      mode: 'Mode unknown — assume real money',
-    });
-    expect(verdictModeChip({ verdict: null, lastError: new Error('down') })).toEqual({
-      tone: 'undetermined',
-      mode: 'Mode unknown — assume real money',
-    });
-    expect(verdictModeChip(fakeVerdictState('unknown'))).toEqual({
-      tone: 'undetermined',
-      mode: 'Mode unknown — assume real money',
-    });
+    expect(verdictModeChip(UNPOLLED_LANE_STATE)).toEqual(UNDETERMINED);
+    expect(verdictModeChip({ verdict: null, lastError: new Error('down') })).toEqual(UNDETERMINED);
+    expect(verdictModeChip(fakeVerdictState('unknown'))).toEqual(UNDETERMINED);
   });
 });

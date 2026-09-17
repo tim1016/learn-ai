@@ -56,6 +56,16 @@ interface RosterResult {
 export interface LaneModeChip {
   readonly tone: 'paper' | 'live' | 'undetermined';
   readonly mode: string;
+  /** How many sealed instances are armed for real-money submission, or
+   * `null` when the verdict is not a live one — there is no armed count to
+   * show for a paper or undetermined lane, which is not the same fact as
+   * "zero are armed". */
+  readonly armedCount: number | null;
+  /** True when the clerk holds the no-submit Shadow authority (ADR 0059 D2):
+   * the real live read ports bound to a port that synthesizes fills and
+   * submits nothing. Carried beside `mode` rather than replacing it, because
+   * a shadowing lane is still reading the live account. */
+  readonly shadow: boolean;
 }
 
 /** Project one lane's verdict state into its compact chip form.
@@ -65,16 +75,24 @@ export interface LaneModeChip {
  * text* (decision D2, #2110/#2139 — the same fail-closed stance as the
  * pills; grey or neutral "not configured" wording is banned). The verdict
  * stays the only truth source; the chip never guesses a mode from
- * account-id shape or env (ADR 0011 §7). */
+ * account-id shape or env (ADR 0011 §7), and `shadow` is read from the
+ * server's own `clerk_authority` rather than inferred from the account. */
 export function verdictModeChip(state: LaneVerdictState): LaneModeChip {
-  switch (state.verdict?.final_verdict) {
+  const verdict = state.verdict;
+  const shadow = verdict?.clerk_authority === 'shadow';
+  switch (verdict?.final_verdict) {
     case 'paper':
-      return { tone: 'paper', mode: 'Paper money' };
+      return { tone: 'paper', mode: 'Paper money', armedCount: null, shadow };
     case 'live-unarmed':
     case 'live-armed':
-      return { tone: 'live', mode: 'Live' };
+      return { tone: 'live', mode: 'Live', armedCount: verdict.armed_instance_count, shadow };
     default:
-      return { tone: 'undetermined', mode: 'Mode unknown — assume real money' };
+      return {
+        tone: 'undetermined',
+        mode: 'Mode unknown — assume real money',
+        armedCount: null,
+        shadow,
+      };
   }
 }
 

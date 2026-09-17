@@ -2,10 +2,12 @@ import type { AlpacaLiveVerdict } from '../api/alpaca.types';
 import type { LaneVerdictState } from '../services/alpaca-live-verdict.service';
 
 /** One server-shaped verdict for any final verdict value. The fields are
- * inert fixture values; only `final_verdict` varies because that is the
- * field every consumer branches on. */
+ * inert fixture values; `final_verdict` varies because that is the field
+ * every consumer branches on, and `overrides` names the few others a
+ * particular consumer reads (armed count, shadow authority). */
 export function fakeAlpacaLiveVerdict(
   finalVerdict: AlpacaLiveVerdict['final_verdict'],
+  overrides: Partial<AlpacaLiveVerdict> = {},
 ): AlpacaLiveVerdict {
   return {
     configured_mode: finalVerdict === 'paper' ? 'paper' : 'live',
@@ -22,6 +24,7 @@ export function fakeAlpacaLiveVerdict(
     headline: 'fixture verdict',
     detail: 'fixture detail',
     observed_at_ms: 1_700_000_000_000,
+    ...overrides,
   };
 }
 
@@ -29,6 +32,7 @@ export function fakeAlpacaLiveVerdict(
  * successful read holding that verdict. */
 export function fakeVerdictState(
   finalVerdict: AlpacaLiveVerdict['final_verdict'],
+  overrides: Partial<AlpacaLiveVerdict> = {},
 ): LaneVerdictState {
-  return { verdict: fakeAlpacaLiveVerdict(finalVerdict), lastError: null };
+  return { verdict: fakeAlpacaLiveVerdict(finalVerdict, overrides), lastError: null };
 }
