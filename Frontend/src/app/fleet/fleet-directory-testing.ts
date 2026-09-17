@@ -5,6 +5,7 @@
  * (backend `ClerkDescriptor.public_fields()`). */
 import { signal } from '@angular/core';
 import { FleetDirectoryService } from './fleet-directory.service';
+import { laneDisplayName } from './fleet-directory.types';
 import type { FleetDirectoryResponse, LaneDescriptor } from './fleet-directory.types';
 
 export const TEST_CLERK_ID = 'clrk_spec0000000000000000aa';
@@ -86,6 +87,14 @@ export function provideFleetDirectory(
         visible().clerks.find(
           (candidate) => candidate.broker === broker && candidate.clerk_id === clerkId,
         ),
+      displayNameOf: (broker: string, clerkId: string) => {
+        // Through the real `laneDisplayName`, against the real sibling set: a
+        // double that returned `lane.display_label` would hide every
+        // nickname-and-collision case the surfaces above it exist to render.
+        const lanes = visible().clerks.filter((candidate) => candidate.broker === broker);
+        const lane = lanes.find((candidate) => candidate.clerk_id === clerkId);
+        return lane === undefined ? null : laneDisplayName(lane, lanes);
+      },
       laneForAccount: (broker: string, accountId: string) =>
         visible().clerks.find(
           (candidate) =>

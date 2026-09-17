@@ -16,7 +16,7 @@ import {
   accountWorkspaceLocation,
   accountWorkspaceTitle,
 } from './fleet/account-workspace';
-import { laneDisplayName, laneDisplayNameText } from './fleet/fleet-directory.types';
+import { laneDisplayNameText } from './fleet/fleet-directory.types';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -146,11 +146,10 @@ export class AppComponent {
   private readonly workspaceTitle = computed(() => {
     const location = accountWorkspaceLocation(this.currentUrl());
     if (location === null) return null;
-    const lanes = this.fleetDirectory.lanesOf(location.broker);
-    const lane = lanes.find((candidate) => candidate.clerk_id === location.clerkId);
+    const name = this.fleetDirectory.displayNameOf(location.broker, location.clerkId);
     return accountWorkspaceTitle(
       location.tab,
-      lane === undefined ? null : laneDisplayNameText(laneDisplayName(lane, lanes)),
+      name === null ? null : laneDisplayNameText(name),
       location.botSid === null ? null : this.titleContext.botLabel(),
     );
   });

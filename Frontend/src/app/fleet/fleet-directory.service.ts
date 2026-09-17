@@ -14,7 +14,9 @@ import { firstValueFrom } from 'rxjs';
 import {
   FleetDirectoryResponse,
   LaneDescriptor,
+  LaneDisplayName,
   laneConfirmedAccount,
+  laneDisplayName,
 } from './fleet-directory.types';
 
 @Injectable({ providedIn: 'root' })
@@ -60,6 +62,19 @@ export class FleetDirectoryService {
     return this.lanesOf(broker).find(
       (lane) => laneConfirmedAccount(lane)?.toLowerCase() === canonical,
     );
+  }
+
+  /** The name one clerk's lane is shown by, or `null` while the directory has
+   * not resolved that clerk — a bad deep link fails in place (FR-096) rather
+   * than borrowing a sibling's name.
+   *
+   * `laneDisplayName` needs the lane *and* its siblings, because a shared name
+   * is disambiguated against them (ADR 0064 Decision 5). Pairing the two here
+   * is what keeps every surface that titles itself by a clerk id — the window
+   * title, the account switcher — from re-deriving the same two-step lookup. */
+  displayNameOf(broker: string, clerkId: string): LaneDisplayName | null {
+    const lane = this.lane(broker, clerkId);
+    return lane === undefined ? null : laneDisplayName(lane, this.lanesOf(broker));
   }
 
   refresh(): Promise<FleetDirectoryResponse> {

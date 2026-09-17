@@ -3,11 +3,13 @@ import {
   Component,
   ElementRef,
   computed,
+  effect,
   inject,
   input,
   signal,
   viewChild,
 } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
 import {
@@ -44,11 +46,11 @@ import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chi
   styleUrl: './alpaca-account-switcher.component.scss',
   host: {
     class: 'account-switcher',
-    // A click anywhere else dismisses the list, and Escape does from anywhere
-    // inside it — on the host, so the handler does not depend on which of the
-    // trigger or the options has the keyboard. Declared here rather than
-    // through `@HostListener`, per this app's Angular conventions.
-    '(document:click)': 'onDocumentClick($event)',
+    // Escape dismisses from anywhere inside the switcher — on the host, so the
+    // handler does not depend on which of the trigger or the options has the
+    // keyboard. Declared here rather than through `@HostListener`, per this
+    // app's Angular conventions. The click-outside listener is not a host
+    // binding; see the constructor for why.
     '(keydown.escape)': 'dismiss()',
   },
 })
@@ -56,6 +58,7 @@ export class AlpacaAccountSwitcherComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
   private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly document = inject(DOCUMENT);
 
   /** The workspace the operator is standing in: where a choice leaves from,
    * and which tab it keeps. */
@@ -72,11 +75,9 @@ export class AlpacaAccountSwitcherComponent {
 
   /** The name of the account this workspace is, or `null` while the directory
    * has not resolved its lane — a bad deep link fails in place (FR-096). */
-  protected readonly currentName = computed(() => {
-    const lanes = this.lanes();
-    const lane = lanes.find((candidate) => candidate.clerk_id === this.location().clerkId);
-    return lane === undefined ? null : laneDisplayName(lane, lanes);
-  });
+  protected readonly currentName = computed(() =>
+    this.fleetDirectory.displayNameOf('alpaca', this.location().clerkId),
+  );
 
   protected readonly options = computed(() => {
     const lanes = this.lanes();
@@ -94,6 +95,25 @@ export class AlpacaAccountSwitcherComponent {
       isCurrent: lane.clerk_id === location.clerkId,
     }));
   });
+
+  constructor() {
+    // A click anywhere else dismisses the list. The listener exists only while
+    // the list is open: this switcher sits in the header of every workspace
+    // page, so a permanent `(document:click)` host binding would run — and
+    // mark this component for traversal — on every click anywhere in the app,
+    // for the overwhelming majority of the time the list is shut. Angular
+    // removes it again through the effect's cleanup, including on destroy.
+    effect((onCleanup) => {
+      if (!this.open()) return;
+      const dismissOnOutsideClick = (event: Event): void => {
+        const target = event.target;
+        if (target instanceof Node && this.host.nativeElement.contains(target)) return;
+        this.open.set(false);
+      };
+      this.document.addEventListener('click', dismissOnOutsideClick);
+      onCleanup(() => this.document.removeEventListener('click', dismissOnOutsideClick));
+    });
+  }
 
   protected toggle(): void {
     this.open.update((open) => !open);
@@ -113,13 +133,4 @@ export class AlpacaAccountSwitcherComponent {
     this.open.set(false);
   }
 
-  protected onDocumentClick(event: Event): void {
-    // Every click in the app reaches this handler under zoneless CD, so a
-    // closed list must bail before touching the signal — otherwise every
-    // click anywhere marks this component dirty for no reason.
-    if (!this.open()) return;
-    const target = event.target;
-    if (target instanceof Node && this.host.nativeElement.contains(target)) return;
-    this.open.set(false);
-  }
 }

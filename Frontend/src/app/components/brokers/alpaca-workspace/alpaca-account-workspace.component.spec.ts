@@ -664,6 +664,19 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(document.activeElement).toBe(trigger);
     });
 
+    it('closes on a click outside it', async () => {
+      // The click-outside listener is attached while the list is open and torn
+      // down with it, rather than sitting on the host for the whole session —
+      // this pins that the dismissal still works from that shorter life.
+      await openSwitcher(WORKSPACE_URL);
+      const trigger = screen.getByRole('button', { name: /Paper/ });
+      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('true'));
+
+      fireEvent.click(document.body);
+
+      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+    });
+
     it('has no detectable accessibility violations while open', async () => {
       await openSwitcher(WORKSPACE_URL);
 
