@@ -559,7 +559,8 @@ so they survive a broker change.
 **Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The shape of the live-instances operator console. Its live successor surfaces are
-the Broker Desk, the bot panel, and the Bot Gallery.
+the account overview (then called the Broker Desk), the bot panel, and the Bot
+Gallery.
 
 - **Bot Cockpit** — the trader-facing name for the live-instances
   deployed-strategy operator console (`cockpit-v2` in implementation docs). The
@@ -1824,54 +1825,57 @@ are counted in. The units differ deliberately and must not be summed together.
   that is genuinely identical in each lens; differing guidance is two blockers
   sharing one condition identity. Presentational routing only — never an
   authorization decision.
-- **Broker Desk** — the account-scoped surface for one broker account, carrying
-  both lenses. Distinct from the **bot panel**, the instance-scoped surface for
-  one bot, which carries its own lens pair.
-  _Avoid_: account monitor, account page, Bot Cockpit (the retiring
-  live-instances console).
+- **Account overview** — the **account workspace**'s first tab for one broker
+  account, carrying both lenses. Distinct from the **bot panel**, the
+  instance-scoped surface for one bot, which carries its own lens pair.
+  Formerly the Broker Desk (renamed 2026-09-16; older ADRs keep that name).
+  _Avoid_: Broker Desk (it now reads as the whole workspace), account monitor,
+  account page, Bot Cockpit (the retiring live-instances console).
 - **Evidence drawer** — the shared, on-demand reader for one immutable projected
   Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
   never re-derives one.
   _Avoid_: evidence modal, receipt viewer.
 - **Deploy drawer** — the slide-over that hosts the deploy workflow over the
-  Broker Desk, so deploying is an action taken *at* an account rather than a
-  separate destination.
+  account workspace, opened from its header on any tab, so deploying is an
+  action taken *at* an account rather than a separate destination.
 - **Asset identity** — the canonical rendering of one tradeable instrument:
   its symbol with the recognisable mark that goes with it. One renderer owns
   symbol presentation; feature surfaces do not re-derive logos or fallbacks.
 
-## Market Scope shell (resolved 2026-08-13)
+## App shell (resolved 2026-08-13; revised 2026-09-16)
 
 **Lineage: neutral.**
 
 The application chrome every route is rendered inside. Broker-independent except
-for the two broker status zones it hosts.
+for the account badges it hosts.
 
-- **Market Scope** — the product name for this platform, used in the wordmark,
+- **Botasur** — the product name for this platform, used in the wordmark,
   the window title, and any user-facing reference to the application itself.
-  _Avoid_: quant lab, quant/lab.
+  _Avoid_: Market Scope (the earlier name), quant lab, quant/lab.
 - **App menu** — the single canonical statement of the application's information
   architecture: ordered groups, each with ordered items, the first of which is
   the group's default. Every navigation surface projects from it; there is no
-  second navigation structure.
+  second navigation structure. It names places, never individual accounts: an
+  account is reached through the **account list**, an **account badge** or the
+  **account switcher**.
   _Avoid_: nav config, route list, sitemap.
-- **Rail** — the full-height left navigation strip. Slim by default with one
-  icon per group and a hover flyout; pinned, it expands and reserves layout
-  width. Distinct from the **transaction rail**, the per-transaction station
-  pipeline in the bot panel's operator lens — two different objects, one word.
+- **Menubar** — the top-bar navigation row projected from the app menu. Group
+  labels open their items and never navigate themselves. It replaced the left
+  **rail** (retired), and is distinct from the **transaction rail**, the
+  per-transaction station pipeline in the bot panel's operator lens.
 - **Active menu node** — the single app-menu node one URL resolves to, by longest
-  match. It is the sole resolver behind rail highlighting, page title, and
-  breadcrumbs, which is why those three can never disagree.
-- **Breadcrumb trail** — a pure projection of the active menu node. It is derived
-  from a URL and the app menu alone, never registered per route, and it stops at
-  the deepest menu node: entity identity belongs in the page header, never in a
-  crumb.
-- **Contextual account cluster** — the account-scoped status zone in the top bar:
-  which broker, paper or live, and how that account is doing right now. Present
-  only on account-scoped routes. The account number is never rendered.
-- **Global connection zone** — the always-present status zone for the market-data
-  connection, independent of which account is on screen. It reports feed health,
-  which is why it belongs on every route (see **Market-data bridge**).
+  match. It is the sole resolver behind menubar highlighting and, outside an
+  account workspace, the window title, which is why those two can never
+  disagree. Inside a workspace the menubar highlights Accounts and the title is
+  the workspace tab — or the bot's name on a bot's page — followed by the
+  account name ("Gallery · Paper"), so two windows on different accounts are
+  told apart.
+- **Account badge** — one per account, in the top bar on every route: the
+  account's name and its server-authored Paper/Live mode, loud when the mode
+  cannot be determined. It is the account-mode trust anchor, and it also opens
+  that account's workspace. It never renders as nothing.
+  _Avoid_: contextual account cluster and breadcrumb trail (both retired from
+  the top bar), live pill as a user-facing name.
 - **Full-bleed route** — a route that declares it owns its own edges, so the
   shell adds no inner page padding. Declared by the route, never guessed by the
   page.
@@ -2150,3 +2154,20 @@ Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-
 - **Session segments** — the full-24h drill-down of one day's move: overnight gap, pre-market, morning (open → 12:00 ET), afternoon (12:00 ET → scheduled close), after-hours. Half-days segment against their scheduled close, never a 16:00 literal. A segment with no traded bars reports "no data", never zero.
 - **Basket** — one histogram bin of daily returns (fixed width, 0 on an edge), including the two open edge bins ("worse than −span", "span or better") that keep crash and gap days visible instead of clipped. The word is the study's own; it is not the Strategy Lab's basket notion.
 - **Historical VaR-95 / CVaR-95 (one day)** — read straight off the empirical distribution: the 5th percentile of daily returns, and the average of the returns at or below it. Descriptive statistics of captured history, not a forecast and not the LEAN parametric VaR of portfolio statistics.
+
+## Account workspace (resolved 2026-09-16)
+
+**Lineage: live.**
+
+How an operator moves around one broker account's pages. The account, not the page kind, is the place the operator is in.
+
+- **Account workspace** — the place an operator works in for one broker account: every page about that account sits under one account header, so moving between them never loses the account. The account is chosen once, on entry, rather than again for each page.
+  _Avoid_: surface chooser, lane chooser, per-surface account picker.
+- **Account switcher** — the account header's control for moving to another account while staying on the same tab (a bot's page, which the other account does not have, lands on that account's Bots tab). It is navigation only, never command authority: a command still carries the account it was prepared against.
+- **Account name** — the one name an account is shown by wherever it appears: its **account nickname**, or the lane's label until a nickname is set. A name is not guaranteed unique: when two accounts share one, each is shown with its lane's label beside it, and nothing refuses the duplicate. The account number is identity, not a name: it is shown only on the account's configuration page and in the confirmation of a consequential action. The Paper/Live mode is always shown beside the name, never folded into it.
+  _Avoid_: using the profile name or the lane label as the account's name once a nickname exists.
+- **Bot roster** — the account workspace's Bots tab: every bot on one account listed beside the selected bot's detail. The tab is labelled "Bots".
+  _Avoid_: Bots roster, Bot rosters, Alpaca bots, bots list, fleet (the **fleet** is the set of lanes, not one account's bots).
+- **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under the tab it was opened from (Bots or Gallery), and its way back returns to that tab. With no origin it belongs to Bots.
+- **Account list** — the broker's entry page and the only page that shows every account at once: each account by name, mode, readiness, equity and running-bot count, opening into that account's workspace. An account that is not ready still appears, says why, and opens with only its configuration usable. Lane mechanics (authority, binding generation, endpoint) are not shown here.
+  _Avoid_: lane directory (the **fleet directory** is the underlying listing, not this page), surface chooser, account selection (that is the configuration act of choosing, staging and applying which account a lane serves — opening an account from this list selects nothing).

@@ -85,6 +85,16 @@ class SummaryEndpointMode(StrEnum):
 
 _AUTHORITY_STATE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _DETAIL_MAX_CHARS = 200
+#: PRD #2182: the account nickname an agent may report alongside its lane
+#: summary, bounded the same way ``detail`` is — a short string, refused when
+#: oversized or not a string at all. Must equal ``NicknamePutRequest``'s
+#: ``max_length`` (``app/schemas/broker_configuration.py``) — the writer's own
+#: bound on what a nickname can be set to. Not derived from one shared
+#: constant (the two modules sit on either side of a boundary this package
+#: does not import across); ``test_account_nickname_bound_matches_the_writers_own_bound``
+#: (test_admission_probes_2026_09_13.py) pins the two together instead. Raise
+#: both together, never just one.
+_ACCOUNT_NICKNAME_MAX_CHARS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,13 +104,19 @@ class ProviderSummaryObservation:
     Provider-authored, but never arbitrary agent JSON (audit 2026-09-13,
     finding 6): the endpoint mode comes from a closed vocabulary, the
     authority state matches a bounded snake-case pattern, and the detail line
-    is length-capped prose. The provider adapter authors the public
-    ``provider_summary`` projection from this observation plus registry facts.
+    and account nickname are length-capped prose. The provider adapter
+    authors the public ``provider_summary`` projection from this observation
+    plus registry facts.
     """
 
     endpoint_mode: SummaryEndpointMode
     authority_state: str
     detail: str | None = None
+    #: The confirmed account's nickname, when the agent's lane has one set
+    #: (ADR 0064 Decision 5). Optional and rollout-safe: the coordinator
+    #: accepts this key before any agent sends it, and an absent key parses
+    #: exactly as it did before this field existed.
+    account_nickname: str | None = None
 
     def to_json(self) -> str:
         """The strict storage encoding for the session row."""
@@ -110,6 +126,8 @@ class ProviderSummaryObservation:
         }
         if self.detail is not None:
             payload["detail"] = self.detail
+        if self.account_nickname is not None:
+            payload["account_nickname"] = self.account_nickname
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     @classmethod
@@ -131,8 +149,11 @@ class ProviderSummaryObservation:
             payload = dict(raw)
         else:
             raise ValueError("a lane summary must be a JSON object")
-        if set(payload) - {"endpoint_mode", "authority_state", "detail"}:
-            raise ValueError("a lane summary carries only endpoint_mode, authority_state and detail")
+        if set(payload) - {"endpoint_mode", "authority_state", "detail", "account_nickname"}:
+            raise ValueError(
+                "a lane summary carries only endpoint_mode, authority_state, "
+                "detail and account_nickname"
+            )
         mode = payload.get("endpoint_mode")
         if mode not in tuple(item.value for item in SummaryEndpointMode):
             raise ValueError(f"unknown endpoint_mode {mode!r}")
@@ -144,10 +165,17 @@ class ProviderSummaryObservation:
             not isinstance(detail, str) or len(detail) > _DETAIL_MAX_CHARS
         ):
             raise ValueError("summary detail must be a short string")
+        account_nickname = payload.get("account_nickname")
+        if account_nickname is not None and (
+            not isinstance(account_nickname, str)
+            or len(account_nickname) > _ACCOUNT_NICKNAME_MAX_CHARS
+        ):
+            raise ValueError("summary account_nickname must be a short string")
         return cls(
             endpoint_mode=SummaryEndpointMode(mode),
             authority_state=authority,
             detail=detail,
+            account_nickname=account_nickname,
         )
 
 

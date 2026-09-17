@@ -435,6 +435,11 @@ class NicknameListResponse(_Response):
 
 
 class NicknamePutRequest(_ClosedRequest):
+    # This field's max_length (120, via `_NAME`) must equal
+    # `app/broker/fleet/records.py`'s `_ACCOUNT_NICKNAME_MAX_CHARS` — the
+    # fleet lane summary's reader-side bound on the same value. Pinned by
+    # test_account_nickname_bound_matches_the_writers_own_bound
+    # (test_admission_probes_2026_09_13.py); raise both together.
     nickname: str = _NAME
 
 

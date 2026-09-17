@@ -700,7 +700,8 @@ class FleetControlService:
                     f"Clerk {clerk_id} reported a lane summary that is not a "
                     f"bounded typed observation: {exc}",
                     next_step="The lane summary vocabulary is endpoint_mode, "
-                    "authority_state and a short detail line.",
+                    "authority_state, a short detail line and an optional "
+                    "account nickname.",
                 ) from exc
         touched = False
         with self._store.transaction() as conn:
@@ -1785,6 +1786,7 @@ class FleetControlService:
                         "endpoint_mode": str(reported_summary.endpoint_mode),
                         "authority_state": reported_summary.authority_state,
                         "detail": reported_summary.detail,
+                        "account_nickname": reported_summary.account_nickname,
                     }
                 provider_summary = dict(adapter.provider_summary(observation))
         return ClerkDescriptor(

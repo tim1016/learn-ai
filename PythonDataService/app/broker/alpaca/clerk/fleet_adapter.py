@@ -23,7 +23,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.5"
+_ADAPTER_VERSION = "alpaca-fleet.6"
 
 
 def _op(
@@ -746,7 +746,8 @@ class AlpacaProviderAdapter:
         """Project the lane's provider-authored directory summary.
 
         The agent's bounded typed observation (endpoint mode, authority
-        state) is carried through with the registry's confirmed facts; no
+        state, and — when the confirmed account has one set — its nickname,
+        PRD #2182) is carried through with the registry's confirmed facts; no
         financial quantity is computed or combined here (FR-034).
         """
         reported = observation.get("reported_summary")
@@ -763,6 +764,8 @@ class AlpacaProviderAdapter:
             summary["authority_state"] = reported.get("authority_state")
             if reported.get("detail") is not None:
                 summary["detail"] = reported.get("detail")
+            if reported.get("account_nickname") is not None:
+                summary["account_nickname"] = reported.get("account_nickname")
         return summary
 
     def validate_served_context(self, context: ServedContext) -> None:

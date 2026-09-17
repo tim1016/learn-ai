@@ -81,7 +81,7 @@ from app.broker.fleet.presence import (
     SessionInfo,
 )
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
-from app.broker.fleet.records import AccountAssignmentRecord
+from app.broker.fleet.records import _ACCOUNT_NICKNAME_MAX_CHARS, AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService, FleetRegistryStore
 from app.config import FleetSettings
 from app.utils.timestamps import now_ms_utc
@@ -453,6 +453,92 @@ def offline_boot_matches(
     )
 
 
+def _live_account_nickname(account_id: str | None) -> str | None:
+    """The account's nickname, read fresh from the profiles store.
+
+    Deliberately not cached anywhere on ``FleetLaneBoot``: called from every
+    beat (``_beat``, below) so a rename via ``PUT /account-nicknames/
+    {account_id}`` reaches this lane's heartbeat on the next beat rather than
+    waiting for this process to restart. The import stays local to this
+    function — the established pattern at this module boundary (see
+    ``main.py``'s own local import of the same accessor) rather than a
+    module-level one.
+    """
+    if account_id is None:
+        return None
+    from app.broker_configuration.runtime import get_broker_configuration_service
+
+    return get_broker_configuration_service().nickname_for(account_id)
+
+
+async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> str | None:
+    """``_live_account_nickname``, made safe for the heartbeat's fatal path.
+
+    A cosmetic display name must never be able to end the beat or block the
+    event loop, so this wraps the raw read with the two guards it needs:
+
+    - **Off the loop.** ``_live_account_nickname`` goes through
+      ``ProfilesStore._query_one``, which takes the same ``RLock`` a write
+      ``transaction()`` (``BEGIN IMMEDIATE`` included) holds for its whole
+      duration. Every other async caller of the profiles service already
+      wraps it in ``asyncio.to_thread`` (see
+      ``routers/broker_configuration.py``); this is that same pattern applied
+      here.
+    - **Never fatal.** ``get_broker_configuration_service()`` can raise
+      ``ProfilesDatabaseUnavailable`` on first use (filesystem check,
+      cross-process advisory lock, schema migration), and the query itself
+      can raise a raw ``sqlite3.OperationalError`` — neither may reach
+      ``_beat``'s own broad ``except Exception`` (that one ends the lane's
+      presence until the process restarts). A failed read is logged and
+      treated as "no nickname to report this beat", the same outcome as one
+      simply not being set.
+
+    A nickname longer than the coordinator's own bound
+    (``records.py``'s ``_ACCOUNT_NICKNAME_MAX_CHARS``) is dropped the same
+    way, rather than trusting that constant to still agree with whatever
+    wrote this value — a mismatch there would otherwise refuse every beat
+    from this lane as an identity mismatch, re-registering (and climbing the
+    routing epoch) on every single one.
+    """
+    if account_id is None:
+        return None
+    try:
+        nickname = await asyncio.to_thread(_live_account_nickname, account_id)
+    except Exception:
+        logger.warning(
+            "Account nickname read failed; omitting from this beat",
+            extra={"clerk_id": clerk_id, "action": "nickname_read_failed"},
+        )
+        return None
+    if nickname is not None and len(nickname) > _ACCOUNT_NICKNAME_MAX_CHARS:
+        logger.warning(
+            "Account nickname exceeds the coordinator's bound; omitting from this beat",
+            extra={"clerk_id": clerk_id, "action": "nickname_too_long"},
+        )
+        return None
+    return nickname
+
+
+def _summary_with_live_nickname(
+    summary: object, nickname: str | None
+) -> Mapping[str, object] | None:
+    """``summary`` with its ``account_nickname`` replaced by a fresh read.
+
+    Everything else in the bounded summary (``endpoint_mode``,
+    ``authority_state``, ``detail``) is confirm-time state that only changes
+    on a rebind, so only this one key gets touched here — the rest is
+    whatever ``heartbeat_facts`` last computed at confirm/boot.
+    """
+    if not isinstance(summary, Mapping):
+        return None
+    refreshed = dict(summary)
+    if nickname is not None:
+        refreshed["account_nickname"] = nickname
+    else:
+        refreshed.pop("account_nickname", None)
+    return refreshed
+
+
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     """Observe on a cadence; a refused beat repairs the lane.
 
@@ -461,6 +547,17 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     that installs later changes what the lane says without restarting the
     task that says it. The task is stored on ``boot.heartbeat`` so
     ``close_fleet_lane`` ends the beat with the lane.
+
+    The confirmed account's nickname gets the same treatment, one level
+    deeper: ``boot.reported_facts`` itself only changes when ``confirm_and_
+    report`` runs (a rebind), but a Configuration rename between rebinds must
+    still reach the wire (PRD #2182 — "one account name everywhere" is not
+    true if the badge and card can go stale for the lane's whole remaining
+    lifetime). So every beat re-reads the nickname fresh from the profiles
+    store, off the loop and guarded against ever ending the beat
+    (``_guarded_live_nickname``), and folds it into the summary this
+    particular send carries, without mutating the stored snapshot — the same
+    "no restart required" property, applied one field further down.
 
     An observation itself never confirms anything. The refusal path is the
     exception, and it is repair rather than protocol: a beat that re-registers
@@ -481,6 +578,14 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 summary = reported.get("reported_summary")
                 if boot.session is None:
                     continue
+                account_id = reported.get("reported_account_id")
+                live_summary = _summary_with_live_nickname(
+                    summary,
+                    await _guarded_live_nickname(
+                        clerk_id=boot.clerk_id,
+                        account_id=account_id if isinstance(account_id, str) else None,
+                    ),
+                )
                 try:
                     await boot.presence.observe(
                         clerk_id=boot.clerk_id,
@@ -488,7 +593,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         reported_binding_generation=reported.get("reported_binding_generation"),
                         reported_account_id=reported.get("reported_account_id"),
                         reported_state=reported.get("reported_state"),
-                        reported_summary=dict(summary) if isinstance(summary, Mapping) else None,
+                        reported_summary=live_summary,
                     )
                 except FleetControlError as exc:
                     logger.warning(
@@ -610,7 +715,10 @@ def heartbeat_facts(
     cannot parse is refused as an identity mismatch, and ``start_heartbeat``
     answers a refusal by registering a fresh session, so one free-form key
     here would climb the routing epoch on every beat instead of failing once
-    and visibly.
+    and visibly. The account's nickname (PRD #2182) is not part of this
+    confirm-time snapshot — it is folded in fresh, per beat, by
+    ``start_heartbeat`` (see its docstring), which is the only place that
+    ever writes ``account_nickname`` onto the outgoing summary.
 
     An unbound lane reports ``binding_pending`` with no generation: it is
     saying "I am here, I am not bound", which projects ``starting`` rather

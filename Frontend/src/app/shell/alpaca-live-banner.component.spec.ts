@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import axe from 'axe-core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import { testLane } from '../fleet/fleet-directory-testing';
+import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
 import type { LaneDescriptor } from '../fleet/fleet-directory.types';
 import {
   AlpacaLiveVerdictService,
@@ -34,12 +34,23 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
   };
 }
 
-async function renderWith(lane: LaneDescriptor | null, state: LaneVerdictState) {
+async function renderWith(
+  lane: LaneDescriptor | null,
+  state: LaneVerdictState,
+  siblingLanes: readonly LaneDescriptor[] = [],
+) {
   const stateFor = (clerkId: string): LaneVerdictState =>
     clerkId === lane?.clerk_id ? state : UNPOLLED_LANE_STATE;
   return render(AlpacaLiveBannerComponent, {
     inputs: { lane },
-    providers: [{ provide: AlpacaLiveVerdictService, useValue: { stateFor } }],
+    providers: [
+      { provide: AlpacaLiveVerdictService, useValue: { stateFor } },
+      // Siblings for disambiguation now come from `FleetDirectoryService`
+      // (`lanesOf`), not a prop — an explicit, empty-by-default directory so
+      // a test that doesn't care about collisions never accidentally gets
+      // one from `provideFleetDirectory()`'s own default fixture lane.
+      provideFleetDirectory({ observed_at_ms: 1, clerks: [...siblingLanes] }),
+    ],
   });
 }
 
@@ -228,5 +239,111 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-live-armed');
     expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('1 armed');
+  });
+
+  it("shows the lane's account nickname instead of its raw label when one is set", async () => {
+    const named = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    await renderWith(named, { verdict: verdict({}), lastError: null });
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Strategy lab');
+    expect(status.querySelector('.alpaca-banner__lane')?.textContent).toBe('Strategy lab');
+  });
+
+  it("shows this lane's own label beside its name when another lane shares it (ADR 0064 Decision 5)", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Strategy lab');
+    expect(status.textContent).toContain('(Paper)');
+  });
+
+  // Two lanes sharing a display name are a deliberately supported state
+  // (ADR 0064 Decision 5), not an edge case: without carrying the
+  // disambiguator into `aria-label` too, both badges would announce
+  // identically to a screen reader (WCAG 4.1.2 / axe landmark-unique
+  // territory), even though their visible pills already read differently.
+  it("carries the disambiguator into the paper lane's accessible name, not only its visible pill", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
+
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain(
+      'Strategy lab (Paper)',
+    );
+  });
+
+  it("carries the disambiguator into the live lane's accessible name, not only its visible pill", async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(live, { verdict: verdict({ observed_account_id: 'PA9' }), lastError: null }, [
+      paper,
+      live,
+    ]);
+
+    expect(screen.getByRole('status').getAttribute('aria-label')).toContain(
+      'strategy lab (Live)',
+    );
+  });
+
+  it('carries the disambiguator into the accessible name on the undetermined path too (not just the verdict path)', async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Strategy lab' },
+    });
+    const live = testLane({
+      clerk_id: 'clrk_live',
+      display_label: 'Live',
+      provider_summary: { account_nickname: '  strategy lab  ' },
+    });
+    await renderWith(paper, { verdict: null, lastError: new Error('down') }, [paper, live]);
+
+    const name = screen.getByRole('status').getAttribute('aria-label');
+    expect(name).toContain('Strategy lab (Paper)');
+    expect(name).toContain('Assume real money');
+  });
+
+  it('never refuses a duplicate name, it only disambiguates', async () => {
+    const paper = testLane({
+      clerk_id: 'clrk_paper',
+      display_label: 'Paper',
+      provider_summary: { account_nickname: 'Solo' },
+    });
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper]);
+
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Solo');
+    expect(status.textContent).not.toContain('(Paper)');
   });
 });

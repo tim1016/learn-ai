@@ -55,6 +55,32 @@ def test_renaming_the_owner_keeps_the_owner_id(service: BrokerConfigurationServi
     assert service.owner().display_label == "Desk operator"
 
 
+def test_nickname_for_returns_the_set_nickname(service: BrokerConfigurationService) -> None:
+    """#2182: the single-key read the fleet lane's per-beat path calls
+    (``fleet_boot.py``'s ``_live_account_nickname``) agrees with
+    ``list_nicknames()`` without materializing the whole table for one key.
+    """
+    service.set_nickname("PA000PAPER", nickname="Strategy lab")
+
+    assert service.nickname_for("PA000PAPER") == "Strategy lab"
+
+
+def test_nickname_for_returns_none_when_unset(service: BrokerConfigurationService) -> None:
+    assert service.nickname_for("PA000PAPER") is None
+
+
+def test_nickname_for_reflects_a_rename_immediately(service: BrokerConfigurationService) -> None:
+    """The write path Configuration uses (``set_nickname``) and the read path
+    a beat uses (``nickname_for``) share one store — no caching layer sits
+    between them for either side to go stale against."""
+    service.set_nickname("PA000PAPER", nickname="Old name")
+    assert service.nickname_for("PA000PAPER") == "Old name"
+
+    service.set_nickname("PA000PAPER", nickname="New name")
+
+    assert service.nickname_for("PA000PAPER") == "New name"
+
+
 def test_creating_a_profile_creates_revision_one(service: BrokerConfigurationService) -> None:
     created = paper_profile(service)
 

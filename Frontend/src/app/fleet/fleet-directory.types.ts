@@ -13,6 +13,10 @@ export interface LaneProviderSummary {
   endpoint_mode?: string | null;
   authority_state?: string | null;
   detail?: unknown;
+  /** The confirmed account's nickname (ADR 0064 Decision 5), when its lane
+   * has one set. Operator prose, not a backend identifier — same footing as
+   * `display_label` below, never piped through `receiptLabel`. */
+  account_nickname?: string | null;
 }
 
 export interface LaneDescriptor {
@@ -45,4 +49,77 @@ export function laneIsReady(lane: LaneDescriptor): boolean {
 export function laneConfirmedAccount(lane: LaneDescriptor): string | null {
   const accountId = lane.provider_summary?.confirmed_account_id;
   return typeof accountId === 'string' && accountId.length > 0 ? accountId : null;
+}
+
+/** One lane's resolved display name (ADR 0064 Decision 5): its own nickname,
+ * or its lane label until one is set. `disambiguator` is this lane's own
+ * `display_label`, present only when `name` collides — trimmed and
+ * case-insensitively — with another lane's in `allLanes`; otherwise `null`. */
+export interface LaneDisplayName {
+  readonly name: string;
+  readonly disambiguator: string | null;
+}
+
+/** The raw name one lane would show before duplicate checking: its trimmed
+ * nickname when it has a non-blank one, otherwise its lane label. */
+function laneRawDisplayName(lane: LaneDescriptor): string {
+  const nickname = lane.provider_summary?.account_nickname;
+  return typeof nickname === 'string' && nickname.trim().length > 0
+    ? nickname.trim()
+    : lane.display_label;
+}
+
+/** Trimmed and case-folded, for name *comparisons* only — never rendered.
+ * Every place two display names are compared (the collision check and the
+ * disambiguator-suppression guard below) goes through this one function, so
+ * the two can't drift into comparing by different rules. */
+function normalizedForComparison(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** A lane's display name, plus its own label to show beside it when that
+ * name is shared with another lane in the directory.
+ *
+ * Names are compared trimmed and case-insensitively across every lane in
+ * `allLanes`. Nothing here refuses a duplicate — nicknames live on each
+ * lane's own volume, so no single writer sees every lane to enforce
+ * cross-lane uniqueness (ADR 0064 "Considered options"). Showing each
+ * colliding lane's own label beside its name is how the two stay
+ * distinguishable instead.
+ *
+ * The disambiguator is suppressed when it would just repeat `name` (no
+ * nickname set, and the collision is on `display_label` itself) — "Paper
+ * (Paper)" tells the operator nothing "Paper" didn't already. */
+export function laneDisplayName(
+  lane: LaneDescriptor,
+  allLanes: readonly LaneDescriptor[],
+): LaneDisplayName {
+  const name = laneRawDisplayName(lane);
+  const normalizedName = normalizedForComparison(name);
+  const isShared = allLanes.some(
+    (other) =>
+      other.clerk_id !== lane.clerk_id
+      && normalizedForComparison(laneRawDisplayName(other)) === normalizedName,
+  );
+  const disambiguator =
+    isShared && normalizedName !== normalizedForComparison(lane.display_label)
+      ? lane.display_label
+      : null;
+  return { name, disambiguator };
+}
+
+/** `display`'s name and disambiguator combined into one accessible-name-safe
+ * string, in the same "(Label)" parenthetical the visible markup renders —
+ * appended only when a disambiguator is present.
+ *
+ * Two lanes sharing a display name are a deliberately supported state
+ * (ADR 0064 Decision 5), not an edge case: an accessible name built from
+ * `.name` alone leaves both lanes' badges/landmarks announcing identically,
+ * which is exactly the WCAG 4.1.2 / axe landmark-uniqueness gap this
+ * function exists to close. Every accessible name derived from a
+ * `LaneDisplayName` must go through this, not `.name` directly. */
+export function laneDisplayNameText(display: LaneDisplayName): string {
+  return display.disambiguator === null
+    ? display.name
+    : `${display.name} (${display.disambiguator})`;
 }

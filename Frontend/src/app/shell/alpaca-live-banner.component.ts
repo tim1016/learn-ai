@@ -1,7 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 
 import type { AlpacaLiveVerdict } from '../api/alpaca.types';
-import type { LaneDescriptor } from '../fleet/fleet-directory.types';
+import { FleetDirectoryService } from '../fleet/fleet-directory.service';
+import { laneDisplayName, laneDisplayNameText, type LaneDescriptor } from '../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
 
@@ -27,9 +28,13 @@ type BadgeTone = 'is-paper' | 'is-live-unarmed' | 'is-live-armed' | 'is-undeterm
  */
 interface LaneBadge {
   readonly tone: BadgeTone;
-  /** The lane's own label, or null when no lane can be named because the
-   * directory itself has not resolved. */
+  /** The lane's display name (nickname, or its label until one is set), or
+   * null when no lane can be named because the directory itself has not
+   * resolved. */
   readonly lane: string | null;
+  /** This lane's own label, shown beside `lane` only when that display name
+   * is shared with another lane in the directory (ADR 0064 Decision 5). */
+  readonly disambiguator: string | null;
   readonly mode: string;
   readonly ariaLabel: string;
   readonly detail: string;
@@ -63,11 +68,16 @@ interface LaneBadge {
  * An undeterminable lane could be real money, so the badge says so in its own
  * text and in its accessible name, not only through colour (WCAG 1.4.1).
  *
- * Note: `display_label` is set once at clerk enrolment via `provision --label`
- * or `migrate-existing --label`. Two lanes can be given the same label at
- * enrolment time, and their badges become ambiguous. The label is operator
- * prose, not a backend identifier, so it deliberately does not go through
- * `receiptLabel`; disambiguating duplicates belongs to whatever assigns them.
+ * Note: the badge's own name is `laneDisplayName` (fleet-directory.types) —
+ * the lane's account nickname, or its `display_label` (set once at clerk
+ * enrolment via `provision --label` / `migrate-existing --label`) until one
+ * is set. Both are operator prose, not backend identifiers, so neither goes
+ * through `receiptLabel`. A name shared with another lane of the same broker
+ * shows that lane's own label beside it (ADR 0064 Decision 5); nothing here
+ * refuses the duplicate. Siblings come from injecting `FleetDirectoryService`
+ * directly (`lanesOf(lane.broker)`), not a prop the caller must remember to
+ * pass — a `LaneContextStripComponent` mounted deep in the Bots/Gallery pages
+ * gets correct disambiguation for free, the same as the shell header.
  */
 @Component({
   selector: 'app-alpaca-live-banner',
@@ -87,6 +97,7 @@ interface LaneBadge {
     .alpaca-banner.is-live-armed { color: #fff; border-color: #ff8b88; background: rgba(90, 12, 20, 0.72); font-weight: 750; }
     .alpaca-banner.is-undetermined { color: #fff; border-color: #ffb020; background: rgba(122, 61, 0, 0.85); font-weight: 750; }
     .alpaca-banner__lane { font-weight: 750; opacity: 0.8; }
+    .alpaca-banner__disambiguator { font-weight: 500; opacity: 0.65; }
     .alpaca-banner__mode { font-weight: 750; }
     .alpaca-banner__detail { opacity: 0.86; }
     .alpaca-banner__hold { font-weight: 750; color: #ffaaa8; }
@@ -102,6 +113,9 @@ interface LaneBadge {
     >
       @if (b.lane) {
         <span class="alpaca-banner__lane">{{ b.lane }}</span>
+        @if (b.disambiguator; as disambiguator) {
+          <span class="alpaca-banner__disambiguator">({{ disambiguator }})</span>
+        }
       }
       <span class="alpaca-banner__mode">{{ b.mode }}</span>
       @if (b.account) {
@@ -119,6 +133,7 @@ interface LaneBadge {
 })
 export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
+  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   /** The lane this badge speaks for, or `null` when the directory has not
    * produced one. `null` is a rendered state, not an absent input. */
@@ -135,19 +150,21 @@ export class AlpacaLiveBannerComponent {
       });
     }
 
-    const label = lane.display_label;
+    const { name, disambiguator } = laneDisplayName(lane, this.fleetDirectory.lanesOf(lane.broker));
     const { verdict, lastError } = this.service.stateFor(lane.clerk_id);
-    if (verdict !== null) return verdictBadge(label, verdict);
+    if (verdict !== null) return verdictBadge(name, disambiguator, verdict);
     if (lastError !== null) {
       return undetermined({
-        lane: label,
+        lane: name,
+        disambiguator,
         mode: 'Mode unavailable — assume real money',
         headline: 'Account verdict unavailable — the last read failed',
         detail: `The shell could not read this lane's Alpaca live verdict. ${ASSUME_REAL_MONEY}`,
       });
     }
     return undetermined({
-      lane: label,
+      lane: name,
+      disambiguator,
       mode: 'Mode not yet read — assume real money',
       headline: 'Account verdict not yet read for this lane',
       detail: `No live-verdict read has completed for this lane yet. ${ASSUME_REAL_MONEY}`,
@@ -155,10 +172,20 @@ export class AlpacaLiveBannerComponent {
   });
 }
 
-function verdictBadge(lane: string, v: AlpacaLiveVerdict): LaneBadge {
+function verdictBadge(
+  lane: string,
+  disambiguator: string | null,
+  v: AlpacaLiveVerdict,
+): LaneBadge {
+  // A shared display name is a supported state (ADR 0064 Decision 5), not an
+  // edge case — the accessible name must carry the same "(Label)"
+  // disambiguator the visible pill renders, or two colliding lanes announce
+  // identically to a screen reader.
+  const accessibleName = laneDisplayNameText({ name: lane, disambiguator });
   const base = {
     lane,
-    ariaLabel: `${lane}: ${v.headline}`,
+    disambiguator,
+    ariaLabel: `${accessibleName}: ${v.headline}`,
     detail: v.detail,
     lossHold: v.loss_hold === 'held',
   };
@@ -186,6 +213,7 @@ function verdictBadge(lane: string, v: AlpacaLiveVerdict): LaneBadge {
       return {
         ...undetermined({
           lane,
+          disambiguator,
           mode: 'Mode unknown — assume real money',
           // The server's own sentence survives in the accessible name and the
           // tooltip; the closed `mode` copy above is what the chip shows.
@@ -203,6 +231,7 @@ function verdictBadge(lane: string, v: AlpacaLiveVerdict): LaneBadge {
  * carrying that assumption do not. */
 function undetermined({
   lane,
+  disambiguator = null,
   mode,
   headline,
   detail,
@@ -210,6 +239,8 @@ function undetermined({
 }: {
   /** Null only when the roster itself is the undetermined thing. */
   readonly lane: string | null;
+  /** This lane's own label, shown beside `lane` only when the name is shared. */
+  readonly disambiguator?: string | null;
   /** The chip's own visible sentence. */
   readonly mode: string;
   /** What the accessible name says happened. */
@@ -218,10 +249,14 @@ function undetermined({
   readonly detail: string;
   readonly refusalCode?: string | null;
 }): LaneBadge {
-  const named = lane === null ? headline : `${lane}: ${headline}`;
+  // Same reasoning as `verdictBadge`: the accessible name carries the
+  // disambiguator too, not just the visible `lane` span.
+  const accessibleName = lane === null ? null : laneDisplayNameText({ name: lane, disambiguator });
+  const named = accessibleName === null ? headline : `${accessibleName}: ${headline}`;
   return {
     tone: 'is-undetermined',
     lane,
+    disambiguator,
     mode,
     ariaLabel: `${named}. ${ASSUME_REAL_MONEY}`,
     detail,
