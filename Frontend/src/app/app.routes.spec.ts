@@ -17,6 +17,7 @@ import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-w
 import { AlpacaConfigurationPageComponent } from './components/brokers/alpaca-desk/configuration/alpaca-configuration-page.component';
 import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
 import { AlpacaSurfaceChooserComponent } from './components/brokers/alpaca-desk/alpaca-surface-chooser.component';
+import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
 import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
 import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
@@ -176,8 +177,12 @@ describe('routes', () => {
         'configuration', 'bots', 'gallery', 'accounts/:accountId', '',
       ]);
       // Overview is the account's empty child, so the account's own URL opens
-      // it and the canonical URLs are unchanged.
-      expect(account?.children?.map((child) => child.path)).toEqual(['bots', 'gallery', '']);
+      // it and the canonical URLs are unchanged. `bots/:sid` is declared
+      // before the `bots` tab it nests under, so the longer path matches
+      // without relying on the router backtracking between siblings.
+      expect(account?.children?.map((child) => child.path)).toEqual([
+        'bots/:sid', 'bots', 'gallery', '',
+      ]);
     });
 
     it('declares full-bleed once, on the workspace itself, so the header never moves', () => {
@@ -278,19 +283,35 @@ describe('routes', () => {
       expect(route.params['accountId']).toBeUndefined();
     });
 
-    it("keeps a bot's own page matching before the workspace prefix", async () => {
-      // It moves inside in a later slice; until then its own route must match
-      // before the workspace's prefix would swallow it.
-      const panelIndex = routes.findIndex(
-        (candidate) =>
-          candidate.path === 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
-      );
-      const workspaceIndex = routes.findIndex(
-        (candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId',
-      );
+    it("puts a bot's own page inside the workspace, not beside it", async () => {
+      // It used to be a top-level route declared before the workspace so the
+      // deeper URL would win the match. Inside, it is the account's own child
+      // and the workspace header and tab strip stay above it.
+      expect(
+        routes.some(
+          (candidate) =>
+            candidate.path === 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
+        ),
+      ).toBe(false);
+      const panel = account?.children?.find((child) => child.path === 'bots/:sid');
 
-      expect(panelIndex).toBeGreaterThanOrEqual(0);
-      expect(panelIndex).toBeLessThan(workspaceIndex);
+      expect(await panel?.loadComponent?.()).toBe(BotPanelShellComponent);
+    });
+
+    it.each([
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'bots/:sid'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'bots'],
+    ])('resolves %s to the %s child', async (url, path) => {
+      // The two siblings differ by one segment, so this pins that both still
+      // resolve — the Bots tab and one bot's page, in the app's own table.
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(url);
+
+      let route = router.routerState.snapshot.root;
+      while (route.firstChild !== null) route = route.firstChild;
+      expect(route.routeConfig?.path).toBe(path);
     });
   });
 });

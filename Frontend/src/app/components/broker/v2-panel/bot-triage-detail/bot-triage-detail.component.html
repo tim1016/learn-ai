@@ -24,7 +24,7 @@
       Revision {{ panelView.revision }} · observed
       <app-timestamp-display [value]="panelView.updated_at_ms" mode="local" />
       ·
-      <a [routerLink]="botLink()">Open full page</a>
+      <a [routerLink]="botLink().commands" [queryParams]="botLink().queryParams">Open full page</a>
     </p>
   </div>
 

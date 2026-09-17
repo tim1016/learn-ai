@@ -1,11 +1,11 @@
 <app-bot-detail-banner
-  [backLink]="backLink()"
-  [backLabel]="(panel().broker | receiptLabel) + ' bots'"
   [updatedAtMs]="panel().updated_at_ms"
   [snapshotStatus]="'Revision ' + panel().revision + (panel().health.running ? ' running' : ' stopped')"
 >
+  <!-- Which bot this is, and the way back, sit above the Trader/Operator
+       switch (ADR 0064 Decision 1) — they apply to both lenses, so neither
+       lens repeats them. What stays here is this bot's own instance id. -->
   <div botBannerIdentity class="trader-bot-banner__identity">
-    <h1 class="trader-bot-banner__strategy">{{ panel().strategy_label }}</h1>
     <code>{{ panel().strategy_instance_id }}</code>
   </div>
 

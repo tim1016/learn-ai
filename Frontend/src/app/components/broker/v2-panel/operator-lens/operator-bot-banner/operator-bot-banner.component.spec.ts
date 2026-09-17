@@ -56,15 +56,15 @@ describe('OperatorBotBannerComponent', () => {
     await render(OperatorBotBannerComponent, {
       inputs: {
         panel: PANEL,
-        clerkId: 'clrk_spec',
         tickerQuote: { ticker: 'SPY', price: 512.3, changePercent: 0.6 },
       },
       providers: [provideRouter([])],
     });
 
-    const back = screen.getByRole('link', { name: /alpaca bots/i }) as HTMLAnchorElement;
-    expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/acc-1/bots');
-    expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
+    // As on the trader banner: the bot's name and the way back are the
+    // workspace's, one level up, shared by both lenses (ADR 0064 Decision 1).
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'EMA crossover' })).toBeNull();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Mission working' })).toBeTruthy();

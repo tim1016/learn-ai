@@ -16,24 +16,11 @@
 .bot-detail-banner__topline {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
-}
-
-.bot-detail-banner__back {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--accent-text);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  text-decoration: none;
-
-  &:hover { color: var(--text-primary); }
-  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius); }
 }
 
 .bot-detail-banner__updated {

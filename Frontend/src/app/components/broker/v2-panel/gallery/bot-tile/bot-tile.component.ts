@@ -27,6 +27,7 @@ import { toCandle } from '../../lib/chart-bar-mapping';
 import { fmtInteger, fmtNumber, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
 import { formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
+import { accountWorkspaceBotRoute } from '../../../../../fleet/account-workspace';
 
 type SignTone = 'positive' | 'negative' | 'neutral';
 
@@ -190,10 +191,14 @@ export class BotTileComponent {
   }
 
   protected onBodyClick(): void {
-    void this.router.navigate([
-      '/brokers', this.broker(), 'clerks', this.clerkId(), 'accounts', this.accountId(), 'bots',
+    // Stamped with the tab it was opened from, so the bot's page keeps Gallery
+    // highlighted and its way back returns here rather than to the roster.
+    const link = accountWorkspaceBotRoute(
+      { broker: this.broker(), clerkId: this.clerkId(), accountId: this.accountId() },
       this.bot().sid,
-    ]);
+      'gallery',
+    );
+    void this.router.navigate([...link.commands], { queryParams: link.queryParams });
   }
 
   protected onBodySpaceKey(event: Event): void {

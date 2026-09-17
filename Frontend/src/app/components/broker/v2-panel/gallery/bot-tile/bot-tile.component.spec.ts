@@ -491,9 +491,13 @@ describe('BotTileComponent', () => {
     expect(chartRegion).not.toBeNull();
     fireEvent.click(chartRegion as Element);
 
-    expect(navigate).toHaveBeenCalledWith([
-      '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA3', 'bots', 'sid-1',
-    ]);
+    // Stamped with the tab it was opened from: the bot's page sits inside the
+    // workspace under Gallery, and its way back returns to the wall rather
+    // than to the roster (ADR 0064 Decision 1).
+    expect(navigate).toHaveBeenCalledWith(
+      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA3', 'bots', 'sid-1'],
+      { queryParams: { from: 'gallery' } },
+    );
   });
 
   it('does not navigate when the quick action is clicked', async () => {

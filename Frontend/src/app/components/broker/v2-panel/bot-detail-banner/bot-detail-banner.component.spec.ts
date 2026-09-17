@@ -9,12 +9,7 @@ import { BotDetailBannerComponent } from './bot-detail-banner.component';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [BotDetailBannerComponent],
   template: `
-    <app-bot-detail-banner
-      [backLink]="backLink"
-      backLabel="alpaca bots"
-      [updatedAtMs]="updatedAtMs"
-      snapshotStatus="Revision 42 stopped"
-    >
+    <app-bot-detail-banner [updatedAtMs]="updatedAtMs" snapshotStatus="Revision 42 stopped">
       <span botBannerIdentity>EMA crossover · sid-001</span>
       <span botBannerQuote>SPY $625.10</span>
       <span botBannerStatus>Working</span>
@@ -24,17 +19,18 @@ import { BotDetailBannerComponent } from './bot-detail-banner.component';
   `,
 })
 class BotDetailBannerHarnessComponent {
-  readonly backLink = ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'acc-1', 'bots'];
   readonly updatedAtMs = 1_753_800_000_000;
 }
 
 describe('BotDetailBannerComponent', () => {
-  it('renders shared navigation and freshness with lens-specific projected content', async () => {
+  it('renders shared freshness with lens-specific projected content', async () => {
     await render(BotDetailBannerHarnessComponent, {
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('link', { name: /alpaca bots/i })).toBeTruthy();
+    // The way back belongs to the workspace this bot's page sits in
+    // (ADR 0064 Decision 1), not to each lens's banner.
+    expect(screen.queryAllByRole('link')).toEqual([]);
     expect(screen.getByText('EMA crossover · sid-001')).toBeTruthy();
     expect(screen.getByText('SPY $625.10')).toBeTruthy();
     expect(screen.getByText('Working')).toBeTruthy();

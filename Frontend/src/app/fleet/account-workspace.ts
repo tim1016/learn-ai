@@ -50,6 +50,18 @@ export const ACCOUNT_WORKSPACE_TABS: readonly AccountWorkspaceTabDescriptor[] = 
  * Written by the Gallery tiles and the roster's links, read back here. */
 export const ORIGIN_TAB_QUERY_PARAM = 'from';
 
+/** One tab's operator-facing name. */
+export function accountWorkspaceTabLabel(tab: AccountWorkspaceTab): string {
+  return ACCOUNT_WORKSPACE_TAB_LABELS[tab];
+}
+
+/** The tab a bot's page was opened from, from the stamp its link carried.
+ * Anything the URL does not name — a pasted link, a bookmark, an unknown
+ * value — belongs to Bots. */
+export function accountWorkspaceOriginTab(stamp: string | null): AccountWorkspaceOriginTab {
+  return stamp === 'gallery' ? 'gallery' : 'bots';
+}
+
 /** Which account a URL is inside, which of its tabs is open, and whether a
  * bot's own page is open under that tab. */
 export interface AccountWorkspaceLocation {
@@ -108,7 +120,10 @@ export function accountWorkspaceLocation(url: string): AccountWorkspaceLocation 
       broker: decodeURIComponent(broker),
       clerkId: decodeURIComponent(clerkId),
       accountId: decodeURIComponent(accountId),
-      tab: sid === undefined ? tabOfSegment(surface) : originTabOf(url),
+      tab:
+        sid === undefined
+          ? tabOfSegment(surface)
+          : accountWorkspaceOriginTab(queryOf(url).get(ORIGIN_TAB_QUERY_PARAM)),
       botSid: sid === undefined ? null : decodeURIComponent(sid),
     };
   }
@@ -216,7 +231,7 @@ export function accountWorkspaceTitle(
   accountName: string | null,
   botLabel: string | null,
 ): string {
-  const subject = botLabel ?? ACCOUNT_WORKSPACE_TAB_LABELS[tab];
+  const subject = botLabel ?? accountWorkspaceTabLabel(tab);
   return accountName === null ? subject : `${subject} · ${accountName}`;
 }
 
@@ -231,12 +246,6 @@ function tabOfSegment(segment: string | undefined): AccountWorkspaceTab {
   if (segment === 'gallery') return 'gallery';
   if (segment === 'configuration') return 'configuration';
   return 'overview';
-}
-
-/** The tab a bot's page was opened from. Anything the URL does not name — a
- * missing stamp, an unknown value — belongs to Bots. */
-function originTabOf(url: string): AccountWorkspaceOriginTab {
-  return queryOf(url).get(ORIGIN_TAB_QUERY_PARAM) === 'gallery' ? 'gallery' : 'bots';
 }
 
 /** `url`'s query parameters, empty when it carries none. */

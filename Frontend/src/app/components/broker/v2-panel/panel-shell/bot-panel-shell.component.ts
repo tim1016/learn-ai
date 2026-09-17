@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom } from 'rxjs';
 
@@ -35,6 +35,12 @@ import type {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import {
+  ORIGIN_TAB_QUERY_PARAM,
+  accountWorkspaceOriginTab,
+  accountWorkspaceTabLabel,
+  accountWorkspaceTabRoute,
+} from '../../../../fleet/account-workspace';
 import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
@@ -92,6 +98,7 @@ interface HistoricalExecutionRecoveryDraft {
   imports: [
     LensTabsComponent,
     PanelActionReceiptComponent,
+    RouterLink,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
     TraderLensComponent,
@@ -136,6 +143,32 @@ export class BotPanelShellComponent {
   protected readonly activeLens = linkedSignal<PanelLens>(() =>
     parseLens(this.queryParams().get(LENS_QUERY_PARAM)) ?? this.lensPreference.read() ?? 'trader',
   );
+
+  // ── The workspace tab this page belongs to ───────────────────────────────
+  // A bot's page sits inside the account workspace, under the tab it was
+  // opened from (ADR 0064 Decision 1): the Gallery tile and the roster's links
+  // stamp that tab on the URL, the workspace's tab strip keeps it highlighted
+  // from the same stamp, and the way back below returns there. A URL with no
+  // stamp — pasted, bookmarked — belongs to Bots.
+
+  private readonly originTab = computed(() =>
+    accountWorkspaceOriginTab(this.queryParams().get(ORIGIN_TAB_QUERY_PARAM)),
+  );
+
+  protected readonly backRoute = computed(() =>
+    accountWorkspaceTabRoute(
+      {
+        broker: this.broker(),
+        clerkId: this.clerkId(),
+        accountId: this.accountId(),
+        tab: this.originTab(),
+        botSid: this.sid(),
+      },
+      this.originTab(),
+    ),
+  );
+
+  protected readonly backLabel = computed(() => accountWorkspaceTabLabel(this.originTab()));
 
   /** The frozen lane context (FR-094): every request and command this shell
    * issues carries broker, clerk and account identity, and commands pin the

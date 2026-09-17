@@ -68,6 +68,9 @@ class GalleryStubComponent {}
 })
 class ConfigurationStubComponent {}
 
+@Component({ selector: 'app-bot-stub', template: '<main aria-label="Bot">Bot page</main>' })
+class BotStubComponent {}
+
 // The same shape as `app.routes.ts`: one shell at the clerk level, the
 // lane-scoped tabs directly under it, and the account-scoped tabs under a
 // componentless `accounts/:accountId`. The not-ready tab is the REAL
@@ -88,6 +91,7 @@ const WORKSPACE_ROUTES: Routes = [
       {
         path: 'accounts/:accountId',
         children: [
+          { path: 'bots/:sid', component: BotStubComponent },
           { path: 'bots', component: BotsStubComponent },
           { path: 'gallery', component: GalleryStubComponent },
           { path: '', component: OverviewStubComponent },
@@ -433,6 +437,24 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     fireEvent.click(await screen.findByRole('link', { name: 'Deploy' }));
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+  });
+
+  describe("a bot's own page", () => {
+    it.each([
+      ['?from=gallery', 'Gallery', 'the Gallery it was opened from'],
+      ['?from=bots', 'Bots', 'the roster it was opened from'],
+      ['', 'Bots', 'Bots, because a pasted URL carries no stamp'],
+      ['?from=elsewhere', 'Bots', 'Bots, because the stamp is not a tab'],
+    ])('renders inside the workspace and highlights %s → %s', async (query, tab) => {
+      await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1${query}` });
+
+      expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
+      expect(screen.getByText('Bot page')).toBeTruthy();
+      expect(screen.getByRole('link', { name: tab }).getAttribute('aria-current')).toBe('page');
+      expect(
+        screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page'),
+      ).toHaveLength(1);
+    });
   });
 
   it('keeps one workspace — and one account read — across a tab change', async () => {

@@ -308,20 +308,6 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // The bot panel, addressed by broker + clerk + account + bot identity.
-    //
-    // Declared BEFORE the workspace below: a bot's own page is not one of its
-    // children yet (it moves inside in a later slice), and Angular commits to
-    // a matched parent branch rather than backtracking to a later top-level
-    // route, so the deeper URL must reach its own route first.
-    path: "brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid",
-    data: { fullBleed: true, broker: 'alpaca' },
-    loadComponent: () =>
-      import(
-        "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"
-      ).then((m) => m.BotPanelShellComponent),
-  },
-  {
     // ── The account workspace (ADR 0064 Decision 1, PRD §13/FR-092) ─────────
     // One account is one place: the account header and its tabs are this
     // parent, and each tab is a child, so moving between them never
@@ -386,6 +372,19 @@ export const routes: Routes = [
         // identity to the URL, not a second shell under the first.
         path: 'accounts/:accountId',
         children: [
+          {
+            // One bot's own page — inside the workspace, under the tab it was
+            // opened from (ADR 0064 Decision 1). Declared BEFORE the Bots tab
+            // it nests under: `bots` would otherwise match first and leave the
+            // bot identity unconsumed, and relying on the router backtracking
+            // between siblings is not worth the doubt when declaring the
+            // longer path first settles it.
+            path: 'bots/:sid',
+            loadComponent: () =>
+              import(
+                './components/broker/v2-panel/panel-shell/bot-panel-shell.component'
+              ).then((m) => m.BotPanelShellComponent),
+          },
           {
             path: 'bots',
             loadComponent: () =>

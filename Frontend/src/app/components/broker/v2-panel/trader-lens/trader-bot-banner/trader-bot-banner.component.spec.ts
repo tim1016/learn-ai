@@ -66,9 +66,11 @@ describe('TraderBotBannerComponent', () => {
       providers: [provideRouter([])],
     });
 
-    const back = screen.getByRole('link', { name: /alpaca bots/i }) as HTMLAnchorElement;
-    expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/acc-1/bots');
-    expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
+    // Which bot this is, and the way back, sit above the Trader/Operator
+    // switch (ADR 0064 Decision 1): both lenses share them, so this banner
+    // carries neither. Its own contribution to identity is the instance id.
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'EMA crossover' })).toBeNull();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Mission blocked' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
