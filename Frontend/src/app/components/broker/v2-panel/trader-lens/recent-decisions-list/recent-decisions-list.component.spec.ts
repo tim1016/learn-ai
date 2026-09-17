@@ -26,6 +26,10 @@ describe('RecentDecisionsListComponent', () => {
     expect(screen.getByText('Entered')).toBeTruthy();
     expect(screen.getByText('Cross Up')).toBeTruthy();
     expect(screen.getByText('Synthetic')).toBeTruthy();
+    // #2183: "Recent decisions" carries the eyebrow look itself now; the
+    // separate "Simulation" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Recent decisions' })).toBeTruthy();
+    expect(screen.queryByText('Simulation')).toBeNull();
   });
 
   it('renders the honest empty state when there is no simulated activity yet', async () => {

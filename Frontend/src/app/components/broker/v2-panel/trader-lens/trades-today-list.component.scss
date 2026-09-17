@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -19,17 +21,10 @@
   border-bottom: 1px solid var(--surface-border, #374151);
 }
 
-.trades-title,
-.trades-kicker { margin: 0; }
-
-.trades-kicker {
-  font-size: 0.75rem;
-  color: var(--accent-text);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+.trades-title {
+  @include eyebrow-heading;
+  margin: 0;
 }
-
-.trades-title { margin-top: 0.1rem; color: var(--text-primary); font-size: var(--fs-md); }
 
 .trading-date,
 .session-policy {
@@ -82,16 +77,10 @@
   justify-content: space-between;
   gap: var(--space-3);
 
-  span {
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: var(--fs-xxs);
-    font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
+  h2 {
+    @include eyebrow-heading;
+    margin: 0;
   }
-
-  h2 { margin: var(--space-1) 0 0; color: var(--text-primary); font-size: var(--fs-lg); }
 
   button {
     display: grid;

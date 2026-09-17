@@ -110,9 +110,16 @@ describe('TradesTodayListComponent', () => {
     expect(inlineTable.textContent).not.toContain('$501.00');
     expect(inlineTable.textContent).toContain('$502.00');
     expect(inlineTable.textContent).toContain('$505.00');
+    // #2183: "Fills today" carries the eyebrow look itself now; the
+    // separate "Execution" label above it is retired.
+    expect(screen.getByRole('heading', { name: 'Fills today' })).toBeTruthy();
+    expect(screen.queryByText('Execution')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'View all 6 fills' }));
     expect(await screen.findByRole('table', { name: 'All fills today' })).toBeTruthy();
     expect(screen.getByRole('table', { name: 'All fills today' }).querySelectorAll('tbody tr')).toHaveLength(6);
+    // Same fix applies to the "All fills today" drawer header.
+    expect(screen.getByRole('heading', { name: 'All fills today' })).toBeTruthy();
+    expect(screen.queryByText('Execution')).toBeNull();
   });
 
 });
