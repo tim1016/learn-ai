@@ -13,6 +13,8 @@ import { ActivatedRoute, Router, RouterLink, RouterOutlet } from '@angular/route
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
+import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
+import { LENS_QUERY_PARAM } from '../../broker/shared/lens/lens';
 import { fmtCurrency } from '../../broker/format';
 import {
   ACCOUNT_WORKSPACE_TABS,
@@ -22,7 +24,7 @@ import {
   type AccountWorkspaceTab,
 } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
-import { laneDisplayName, laneIsReady } from '../../../fleet/fleet-directory.types';
+import { laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -80,6 +82,7 @@ type WorkspaceAccountStatus =
   selector: 'app-alpaca-account-workspace',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AlpacaAccountSwitcherComponent,
     AlpacaDeployDrawerComponent,
     AlpacaLaneModeChipComponent,
     ReceiptLabelPipe,
@@ -128,7 +131,7 @@ export class AlpacaAccountWorkspaceComponent {
     () => this.routedLocation()?.tab ?? 'overview',
   );
 
-  private readonly location = computed<AccountWorkspaceLocation>(() => ({
+  protected readonly location = computed<AccountWorkspaceLocation>(() => ({
     broker: 'alpaca',
     clerkId: this.clerkId(),
     accountId: this.accountId(),
@@ -159,13 +162,10 @@ export class AlpacaAccountWorkspaceComponent {
     () => this.fleetDirectory.lane('alpaca', this.clerkId()) ?? null,
   );
 
-  /** The account's name: its nickname, or the lane label until one is set
-   * (ADR 0064 Decision 5). Siblings come from injecting the directory
-   * directly, not from a prop a caller must remember to pass. */
-  protected readonly accountName = computed(() => {
-    const lane = this.lane();
-    return lane === null ? null : laneDisplayName(lane, this.fleetDirectory.lanesOf(lane.broker));
-  });
+  /** The lens perspective the switcher carries to the chosen account. Read
+   * from the URL, not from the stored preference: only a perspective the
+   * operator addressed is one to keep across a move. */
+  protected readonly lens = computed(() => this.queryParams().get(LENS_QUERY_PARAM));
 
   /** The mode chip, from the same server-owned verdict the shell's account
    * badge renders — including the Shadow authority and, on a live lane, how

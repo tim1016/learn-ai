@@ -473,6 +473,115 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(getAccount).toHaveBeenCalledTimes(1);
   });
 
+  describe('the account switcher', () => {
+    const LIVE_CLERK_ID = 'clrk_live';
+    const LIVE_ACCOUNT_ID = 'acct-live';
+    const LIVE_URL = `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/accounts/${LIVE_ACCOUNT_ID}`;
+
+    /** Paper and Live side by side — the fleet an operator actually switches
+     * between. */
+    function twoLaneDirectory() {
+      return provideFleetDirectory({
+        observed_at_ms: 1,
+        clerks: [
+          testLane(),
+          testLane({
+            clerk_id: LIVE_CLERK_ID,
+            display_label: 'Live',
+            provider_summary: {
+              ...testLane().provider_summary,
+              confirmed_account_id: LIVE_ACCOUNT_ID,
+            },
+          }),
+        ],
+      });
+    }
+
+    async function openSwitcher(url: string) {
+      const rendered = await renderWorkspace({ url, directory: twoLaneDirectory() });
+      fireEvent.click(await screen.findByRole('button', { name: /Paper/ }));
+      return rendered;
+    }
+
+    it('lists every Alpaca account by name, with its mode beside the name', async () => {
+      await openSwitcher(WORKSPACE_URL);
+
+      // ADR 0064 Decision 5: the name and the Paper/Live mode are two facts,
+      // never folded into one string.
+      const live = screen.getByRole('link', { name: /^Live/ });
+      expect(live.textContent).toContain('Live');
+      expect(live.textContent).toContain('Paper money');
+      expect(screen.getByRole('link', { name: /^Paper/ }).getAttribute('aria-current')).toBe('true');
+    });
+
+    it.each([
+      [WORKSPACE_URL, LIVE_URL, 'Overview'],
+      [`${WORKSPACE_URL}/bots`, `${LIVE_URL}/bots`, 'Bots'],
+      [`${WORKSPACE_URL}/gallery`, `${LIVE_URL}/gallery`, 'Gallery'],
+      [`${LANE_URL}/configuration`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/configuration`, 'Configuration'],
+    ])('lands on the same tab of the chosen account, from %s', async (url, expected) => {
+      await openSwitcher(url);
+
+      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(expected);
+    });
+
+    it("lands on the chosen account's Bots from a bot's page", async () => {
+      // The chosen account need not run this bot, so the bot's page itself is
+      // never carried across (ADR 0064 Decision 4).
+      await openSwitcher(`${WORKSPACE_URL}/bots/sid-1?from=gallery`);
+
+      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
+        `${LIVE_URL}/bots`,
+      );
+    });
+
+    it('carries the lens perspective across', async () => {
+      await openSwitcher(`${WORKSPACE_URL}/bots?lens=operator`);
+
+      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
+        `${LIVE_URL}/bots?lens=operator`,
+      );
+    });
+
+    it('closes an open Deploy drawer rather than retargeting it at the other account', async () => {
+      const { router } = await renderWorkspace({
+        url: ACCOUNT_LIST_URL,
+        directory: twoLaneDirectory(),
+      });
+      await router.navigateByUrl(`${WORKSPACE_URL}?deploy=`);
+      expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: /Paper/ }));
+      fireEvent.click(screen.getByRole('link', { name: /^Live/ }));
+
+      await vi.waitFor(() => expect(router.url).toBe(LIVE_URL));
+      await vi.waitFor(() =>
+        expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull(),
+      );
+    });
+
+    it('is keyboard operable, and hands the keyboard back when dismissed', async () => {
+      await openSwitcher(WORKSPACE_URL);
+      const trigger = screen.getByRole('button', { name: /Paper/ });
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+      fireEvent.keyDown(screen.getByRole('link', { name: /^Live/ }), { key: 'Escape' });
+
+      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    it('has no detectable accessibility violations while open', async () => {
+      await openSwitcher(WORKSPACE_URL);
+
+      const results = await axe.run(document.body, {
+        rules: { 'color-contrast': { enabled: false } },
+      });
+
+      expect(results.violations).toEqual([]);
+    });
+  });
+
   it('shows the lane label beside an account name another lane shares', async () => {
     // ADR 0064 Decision 5: nothing refuses the duplicate; each colliding lane
     // is shown with its own label so the two stay distinguishable.

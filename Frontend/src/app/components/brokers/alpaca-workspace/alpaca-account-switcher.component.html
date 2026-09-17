@@ -1,0 +1,45 @@
+<h1 class="account-switcher__heading">
+  <button
+    #trigger
+    type="button"
+    class="account-switcher__trigger"
+    [attr.aria-expanded]="open()"
+    [attr.aria-controls]="open() ? 'account-switcher-list' : null"
+    (click)="toggle()"
+  >
+    @if (currentName(); as name) {
+      {{ name.name }}
+      @if (name.disambiguator; as label) {
+        <span class="account-switcher__lane-label">({{ label }})</span>
+      }
+    } @else {
+      Account lane unresolved
+    }
+    <span class="account-switcher__caret" aria-hidden="true">▾</span>
+  </button>
+</h1>
+
+@if (open()) {
+  <ul id="account-switcher-list" class="account-switcher__list" aria-label="Switch account">
+    @for (option of options(); track option.clerkId) {
+      <li>
+        <a
+          class="account-switcher__option"
+          [class.is-current]="option.isCurrent"
+          [attr.aria-current]="option.isCurrent ? 'true' : null"
+          [routerLink]="option.link.commands"
+          [queryParams]="option.link.queryParams"
+          (click)="onChoice()"
+        >
+          <span class="account-switcher__option-name">
+            {{ option.name.name }}
+            @if (option.name.disambiguator; as label) {
+              <span class="account-switcher__lane-label">({{ label }})</span>
+            }
+          </span>
+          <app-alpaca-lane-mode-chip [chip]="option.chip" />
+        </a>
+      </li>
+    }
+  </ul>
+}

@@ -1,16 +1,6 @@
 <div class="account-workspace">
   <header class="account-workspace__header">
-    @let name = accountName();
-    <h1 class="account-workspace__account">
-      @if (name === null) {
-        Account lane unresolved
-      } @else {
-        {{ name.name }}
-        @if (name.disambiguator; as label) {
-          <span class="account-workspace__lane-label">({{ label }})</span>
-        }
-      }
-    </h1>
+    <app-alpaca-account-switcher [location]="location()" [lens]="lens()" />
 
     <app-alpaca-lane-mode-chip [chip]="modeChip()" />
 
