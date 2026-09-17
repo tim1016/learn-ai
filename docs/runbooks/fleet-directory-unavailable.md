@@ -6,7 +6,7 @@
 
 ## What the message means
 
-The banner renders from `Frontend/src/app/components/brokers/alpaca-desk/lane-directory/alpaca-lane-directory.component.html` when `FleetDirectoryService`'s single `GET /api/broker-clerks` request fails (any non-2xx or network error). It is **not** GraphQL and **not** the .NET backend: the directory is a REST route served by the **Python fleet coordinator surface**, which mounts only when `FLEET_CONTROL_DIR` is set on a `combined` or `fleet_coordinator` role process (`PythonDataService/app/main.py`, `_FLEET_COORDINATOR_SURFACE`).
+The banner renders from `Frontend/src/app/components/brokers/alpaca-desk/alpaca-account-list-page.component.html` when `FleetDirectoryService`'s single `GET /api/broker-clerks` request fails (any non-2xx or network error). It is **not** GraphQL and **not** the .NET backend: the directory is a REST route served by the **Python fleet coordinator surface**, which mounts only when `FLEET_CONTROL_DIR` is set on a `combined` or `fleet_coordinator` role process (`PythonDataService/app/main.py`, `_FLEET_COORDINATOR_SURFACE`).
 
 Two distinct states are easy to confuse:
 
