@@ -1,6 +1,8 @@
 // Live admission for a deployment. Emulated encapsulation means these styles
 // must live with the markup they select, not in the workflow that hosts it.
 
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: flex;
   min-width: 0;
@@ -52,12 +54,8 @@
 .deploy-admission__head--blocked strong { color: var(--warn); }
 
 .deploy-admission__eyebrow {
+  @include eyebrow-heading;
   display: block;
-  color: var(--text-subtle);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .deploy-admission__recovery {
