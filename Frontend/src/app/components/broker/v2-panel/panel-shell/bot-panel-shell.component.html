@@ -18,7 +18,7 @@
     </a>
     <h2 class="bot-identity__name">
       {{ panelData.strategy_label }}
-      <span class="bot-identity__symbol">{{ panelData.symbol }}</span>
+      <app-asset-identity class="bot-identity__symbol" [symbol]="panelData.symbol" size="sm" />
     </h2>
   </div>
 

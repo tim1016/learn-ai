@@ -19,6 +19,7 @@ import type {
   HistoricalExecutionRecoveryPlan,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
@@ -97,6 +98,7 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AssetIdentityComponent,
     LensTabsComponent,
     PanelActionReceiptComponent,
     RouterLink,

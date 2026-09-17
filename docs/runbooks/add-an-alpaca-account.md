@@ -47,7 +47,7 @@ procedure governed by [ADR 0059](../architecture/adrs/0059-real-money-live-behin
    entitlement. If using a different Gateway/TWS session, change `IBKR_MODE`
    and its matching port together; never bypass the account sentinel.
 2. Open the app at <http://localhost:4200/brokers/alpaca>. Select the intended
-   account card. Use **Bot roster** on that card to open its roster.
+   account card to open its workspace, then the **Bots** tab for its roster.
 3. In a terminal, run the checks for the lane you intend to use:
 
    ```bash
@@ -77,27 +77,32 @@ for the new worker to confirm its binding, then run the checks again.
 
 ### Find the roster, account details, and transactions in the menu
 
-Open **Alpaca** in the top navigation bar. Its **Accounts** and **Bot rosters** items
-both ask you to choose an account; they do not automatically choose Paper or
-Live for you.
+Open **Alpaca** in the top navigation bar and choose **Accounts** — the one
+Alpaca menu item (ADR 0064 Decision 2); it lists every registered account and
+does not automatically choose Paper or Live for you. Selecting an account card
+opens that account's workspace: one account header over **Overview**, **Bots**,
+**Gallery**, and **Configuration** tabs.
 
 | What you want to see | Click path |
 |---|---|
-| Paper bot roster | **Alpaca → Bot rosters → Paper card → Bot roster** |
-| Live account bot roster (including Shadow bots) | **Alpaca → Bot rosters → card marked Live → Bot roster** |
-| Account balances and details | **Alpaca → Accounts → intended account card → Account details**; expand **Account details** below the balances |
-| Current holdings and today's buys/sells | On that **Account details** page, scroll below the account cards and choose **Trader → Today**; read **Current positions** and **Activity** |
-| Orders, executions, and their status | On that **Account details** page, choose **Operator → Transaction history**; select **Today**, **30D**, or **60D**, then **View details** on a row |
-| Longer account history | On that **Account details** page, choose **Trader → 30D** or **60D** for the portfolio chart and **Transaction history** |
-| Connection or order-recovery evidence | On that **Account details** page, choose **Operator**, then expand **Broker connection** or **Order custody & recovery** |
-| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Configuration** |
+| Paper bot roster | **Alpaca → Accounts → Paper card → Bots tab** |
+| Live account bot roster (including Shadow bots) | **Alpaca → Accounts → card marked Live → Bots tab** |
+| Account balances and details | **Alpaca → Accounts → intended account card**; opens on the **Overview** tab |
+| Current holdings and today's buys/sells | On that account's **Overview** tab, the **Trader / Operator** switch defaults to **Trader**; read **Current positions** and **Activity** |
+| Orders, executions, and their status | On that account's **Overview** tab, switch to **Operator**, then **Transaction history**; select **Today**, **30D**, or **60D**, then **View details** on a row |
+| Longer account history | On that account's **Overview** tab, **Trader**, choose **30D** or **60D** for the portfolio chart and **Transaction history** |
+| Connection or order-recovery evidence | On that account's **Overview** tab, switch to **Operator**, then expand **Broker connection** or **Order custody & recovery** |
+| Strategy gallery and deploy targets | **Alpaca → Accounts → intended account card → Gallery tab** |
+| Saved credentials and account configuration | **Alpaca → Accounts → intended account card → Configuration tab** |
 
-Each account card also has direct **Trader view**, **Operator view**, and
-**Transaction history** links. **Trader** and **Operator** remain tabs inside
-the account-details page. **Activity** reports broker events;
-**Transaction history** includes order status and execution evidence so you can
-distinguish a requested buy/sell from a completed fill. A strategy decision that
-never created an order belongs in that bot's own panel, reached from **Bot roster**.
+The account workspace opens on **Overview**, whose **Trader / Operator** switch
+covers that account's own positions, activity, and transaction history. Each
+bot has its own page too, reached from the **Bots** or **Gallery** tab, with the
+same **Trader / Operator** switch scoped to that bot. **Activity** reports
+broker events; **Transaction history** includes order status and execution
+evidence so you can distinguish a requested buy/sell from a completed fill. A
+strategy decision that never created an order belongs in that bot's own page,
+reached from the **Bots** tab.
 
 The **Live** badge identifies the real-money account endpoint. Check its
 **Authority** as well: **Shadow** means simulated fills and no real orders from
