@@ -353,8 +353,10 @@ function queryOf(url: string): URLSearchParams {
   return new URLSearchParams(queryIndex === -1 ? '' : withoutHash.slice(queryIndex + 1));
 }
 
-/** `url` without its query string, fragment, or trailing slash. */
-function routePathOf(url: string): string {
+/** `url` without its query string, fragment, or trailing slash — the part a
+ * route pattern matches on. Shared with `app-menu`, which matches its entries
+ * against the same path this module parses workspace URLs out of. */
+export function routePathOf(url: string): string {
   const path = url.split('#')[0].split('?')[0];
   return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
 }

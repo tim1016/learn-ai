@@ -1,6 +1,6 @@
 import type { MenuItem } from 'primeng/api';
 
-import { accountWorkspaceLocation } from '../fleet/account-workspace';
+import { accountWorkspaceLocation, routePathOf } from '../fleet/account-workspace';
 
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
@@ -170,9 +170,4 @@ export function menuItemsFor(url: string): MenuItem[] {
 
 function nodeForActivePath(activePath: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find((node) => node.activePath === activePath) ?? null;
-}
-
-/** `url` without its query string or fragment — what an entry matches on. */
-function routePathOf(url: string): string {
-  return url.split('#')[0].split('?')[0];
 }

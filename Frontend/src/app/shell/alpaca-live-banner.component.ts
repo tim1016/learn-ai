@@ -194,14 +194,17 @@ export class AlpacaLiveBannerComponent {
     const lane = this.lane();
     if (lane === null) return null;
     const url = this.currentUrl();
+    const from = accountWorkspaceLocation(url);
     return accountWorkspaceBadgeRoute(
-      accountWorkspaceLocation(url),
+      from,
       {
         broker: lane.broker,
         clerkId: lane.clerk_id,
         accountId: laneConfirmedAccount(lane),
       },
-      accountWorkspaceLens(url),
+      // A lens is a workspace's own perspective: outside one there is none to
+      // keep, so a stray `?lens=` on some other page never rides along.
+      from === null ? null : accountWorkspaceLens(url),
     );
   });
 

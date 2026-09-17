@@ -16,7 +16,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 /** The capability a lane must declare before one of these two tabs is served
  * from it. Provider-declared evidence, never inferred (FR-097). */
-export const SURFACE_CAPABILITY: Record<AccountWorkspaceOriginTab, FleetCapability> = {
+const SURFACE_CAPABILITY: Record<AccountWorkspaceOriginTab, FleetCapability> = {
   bots: 'bot_panel_read',
   gallery: 'gallery_read',
 };
