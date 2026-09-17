@@ -79,6 +79,7 @@ from app.schemas.run_admission import (
 from app.schemas.run_replay import RunReplayReceipt
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
+from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import BindingAuthoritySelector
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -460,7 +461,9 @@ class BotTaskRegistry:
             strategy_params=strategy_params,
             strategy_param_origins=strategy_param_origins,
         )
-        async with self._operation_lock(strategy_instance_id):
+        # Graduation re-observes the complete stopped roster and appends the
+        # boot-selection fence. No deploy may cross that exact interval.
+        async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
             try:
                 return await self._start_admission.start(request)
             except StartAdmissionDenied as exc:
@@ -558,7 +561,7 @@ class BotTaskRegistry:
         strategy_instance_id: str,
     ) -> AdmittedBotResume:
         """Create a new run using the same policy exposed by preview."""
-        async with self._operation_lock(strategy_instance_id):
+        async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
             try:
                 return await self._resume_admission.resume(

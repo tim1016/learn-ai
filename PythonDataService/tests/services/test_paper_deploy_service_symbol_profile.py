@@ -92,7 +92,7 @@ def test_seal_parameters_match_validated_settings_true_under_symbol_profile_tier
         {},
         # The registered golden settings, but sourced from a symbol profile
         # rather than falling out of the schema's own defaults.
-        symbol_profile={"gap": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
+        symbol_profile={"gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0},
     )
     binding = _binding(strategy_params=resolved.effective, origins=resolved.origins)
 
@@ -108,7 +108,7 @@ def test_seal_parameters_match_validated_settings_false_under_symbol_profile_tie
         _STRATEGY_KEY,
         _SYMBOL,
         {},
-        symbol_profile={"gap": 0.35, "rsi_min": 50.0, "rsi_max": 70.0},
+        symbol_profile={"gap": 0.0, "gap_bps": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
     )
     binding = _binding(strategy_params=resolved.effective, origins=resolved.origins)
 

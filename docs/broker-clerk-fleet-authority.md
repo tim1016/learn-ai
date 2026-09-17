@@ -97,7 +97,7 @@ The cost is that the *selection* has moved into deployment topology. See §4.
 
 ## 3. The request path
 
-1. **Operation catalog** — 77 typed provider-owned declarations (method, public and agent path
+1. **Operation catalog** — 80 typed provider-owned declarations (method, public and agent path
    templates, capability, readiness, account requirement, idempotency kind, stream kind). It is
    the single source for the coordinator's forwarding allowlist, the agent's mounts, the exported
    OpenAPI and the generated frontend builders.
@@ -117,6 +117,13 @@ The cost is that the *selection* has moved into deployment topology. See §4.
 **Readiness** is either `configuration_access` (routable for an unbound lane, so its configuration
 can be repaired) or `execution` (requires the confirmed binding). §7 records a defect in which the
 first of those becomes unreachable exactly when it is needed.
+
+The three account-scoped Live-graduation operations are intentionally separate from
+configuration Apply: status reads the boot-selected authority; plan captures lane-owned
+broker evidence and publishes a verified backup; apply confirms the content-addressed plan,
+then returns a durable activation receipt before the clerk's supervised restart. They deploy
+and arm no strategy. ADR 0059's 2026-09-17 amendment owns the decision and the focused cutover
+runbook owns the procedure.
 
 ## 4. The fences — what actually keeps lanes apart
 
@@ -276,7 +283,7 @@ Resolution is acceptable; leaving it is not.
 Full catalogue: [#2057](https://github.com/tim1016/learn-ai/issues/2057).
 
 **The surface is asymmetric.** The *request* path is rigorously modelled — 13-member capability
-vocabulary, 77-operation typed catalogue, per-command generation fence, pre-dispatch routing
+vocabulary, 80-operation typed catalogue, per-command generation fence, pre-dispatch routing
 receipt. The *failure and evidence* path stops at the Python boundary.
 
 The gap list is deliberately kept as **two halves that are never merged**, because they are

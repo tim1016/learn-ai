@@ -20,6 +20,13 @@ const PANEL: BotPanelView = {
     headline: 'Market data live', explanation: 'Current.', next_step: null,
     attention_required: false, observed_at_ms: 1_753_800_001_000,
   },
+  feed_continuity: {
+    provider_label: 'IBKR market data', run_id: 'run-1', state: 'continuous',
+    state_label: 'Continuous', explanation: 'No IBKR delivery interruptions were recorded.',
+    interruption_count: 0, recovery_count: 0, unresolved_count: 0, decision_impact_count: 0,
+    last_interruption_at_ms: null, last_recovery_at_ms: null,
+    latest_bar_at_ms: 1_753_800_000_000, events: [],
+  },
   mission_verdict: {
     state: 'working', label: 'Mission working', explanation: 'Current.',
     next_action: 'Monitor.', evaluated_at_ms: 1_753_800_001_000,

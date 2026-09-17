@@ -37,6 +37,7 @@ import { ConfigurationProfileListComponent } from './configuration-profile-list.
 import { ConfigurationRefusalComponent } from './configuration-refusal.component';
 import { ConfigurationStatusPanelComponent } from './configuration-status-panel.component';
 import { ConfigurationSwitchGuideComponent } from './configuration-switch-guide.component';
+import { LiveGraduationComponent } from './live-graduation.component';
 
 /** The `(profile, revision)` pair one side of the selection names, if it names one. */
 interface RevisionRef {
@@ -93,9 +94,9 @@ function sameClerkRevisionRef(
  *   tab wrote first and nothing here was overwritten; the surface says so and
  *   offers a reload, which is the only correct next move.
  *
- * Nothing on this page restarts a worker, arms a live limit, or asks for a
- * credential. Applying records an intent; a controlled restart on the host is
- * what makes it effective.
+ * Profile Apply records an intent and never restarts a worker. The separate
+ * Live graduation ceremony may request one controlled restart only after its
+ * custody activation receipt is durable; it never deploys or arms a strategy.
  */
 @Component({
   selector: 'app-alpaca-configuration-page',
@@ -109,6 +110,7 @@ function sameClerkRevisionRef(
     ConfigurationRefusalComponent,
     ConfigurationStatusPanelComponent,
     ConfigurationSwitchGuideComponent,
+    LiveGraduationComponent,
   ],
   templateUrl: './alpaca-configuration-page.component.html',
   styleUrl: './alpaca-configuration-page.component.scss',

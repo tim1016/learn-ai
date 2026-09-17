@@ -5,7 +5,11 @@ import {
   computed,
   input,
 } from '@angular/core';
-import type { BotPanelView } from '../lib/broker-v2-panel.types';
+import type {
+  BotPanelView,
+  FeedContinuityView,
+} from '../lib/broker-v2-panel.types';
+import { feedContinuityFor } from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 
 @Component({
@@ -18,4 +22,12 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 export class TraderMetricsComponent {
   readonly panel = input.required<BotPanelView>();
   protected readonly exposure = computed(() => Object.entries(this.panel().exposure));
+  protected readonly feedContinuity = computed<FeedContinuityView>(() =>
+    feedContinuityFor(this.panel()),
+  );
+  protected readonly feedAttention = computed(
+    () => this.panel().market_pulse.attention_required
+      || this.feedContinuity().state === 'interrupted'
+      || this.feedContinuity().state === 'compromised',
+  );
 }

@@ -5,7 +5,7 @@
     "PythonDataService/app/broker/fleet_composition.py (production_provider_adapters)",
     "PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py (ALPACA_OPERATIONS)"
   ],
-  "adapter_version": "alpaca-fleet.6",
+  "adapter_version": "alpaca-fleet.7",
   "operations": {
     "account_read": {
       "method": "GET",
@@ -315,6 +315,21 @@
     "gallery_stream": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/gallery/stream",
+      "requires_account": true
+    },
+    "live_graduation_apply": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/live-graduation/apply",
+      "requires_account": true
+    },
+    "live_graduation_plan": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/live-graduation/plan",
+      "requires_account": true
+    },
+    "live_graduation_status": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/live-graduation",
       "requires_account": true
     },
     "live_verdict": {

@@ -227,11 +227,58 @@ class ChannelHealthView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     stream: Literal["market_data", "execution"]
+    name: str
     state: ChannelState
     label: str
     explanation: str
     reason: str
     observed_at_ms: int
+
+
+FeedContinuityState = Literal[
+    "continuous",
+    "interrupted",
+    "recovered",
+    "compromised",
+    "not_recorded",
+]
+
+
+class FeedContinuityEventView(BaseModel):
+    """One durable, run-scoped market-data continuity fact."""
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_seq: int
+    kind: Literal["interruption", "recovered", "gap", "substituted", "refused"]
+    occurred_at_ms: int
+    label: str
+    explanation: str
+    cause: str | None
+    duration_ms: int | None
+    duration_label: str | None
+    window_start_ms: int | None
+    window_end_ms: int | None
+
+
+class FeedContinuityView(BaseModel):
+    """Current-run IBKR continuity summary and its newest durable facts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider_label: str
+    run_id: str | None
+    state: FeedContinuityState
+    state_label: str
+    explanation: str
+    interruption_count: int
+    recovery_count: int
+    unresolved_count: int
+    decision_impact_count: int
+    last_interruption_at_ms: int | None
+    last_recovery_at_ms: int | None
+    latest_bar_at_ms: int | None
+    events: list[FeedContinuityEventView]
 
 
 class ClerkCard(BaseModel):
@@ -512,6 +559,7 @@ class BotPanelView(BaseModel):
     updated_at_ms: int
     revision: int
     market_pulse: MarketPulseView
+    feed_continuity: FeedContinuityView
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard

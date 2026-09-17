@@ -3,10 +3,52 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   BotRunView,
+  FeedContinuityView,
   RunHistoryNavigation,
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BotRunHistoryComponent } from './bot-run-history.component';
+
+const CONTINUITY: FeedContinuityView = {
+  provider_label: 'IBKR market data',
+  state: 'recovered',
+  state_label: 'Recovered',
+  explanation: 'IBKR market data recovered after 1 interruption in this run.',
+  run_id: 'run-current',
+  interruption_count: 1,
+  recovery_count: 1,
+  unresolved_count: 0,
+  decision_impact_count: 0,
+  last_interruption_at_ms: 1_753_800_000_000,
+  last_recovery_at_ms: 1_753_800_022_000,
+  latest_bar_at_ms: 1_753_800_010_000,
+  events: [
+    {
+      evidence_seq: 2,
+      kind: 'recovered',
+      occurred_at_ms: 1_753_800_022_000,
+      label: 'Feed recovered',
+      explanation: 'IBKR market data resumed.',
+      cause: null,
+      duration_ms: 22_000,
+      duration_label: '22 seconds',
+      window_start_ms: null,
+      window_end_ms: null,
+    },
+    {
+      evidence_seq: 1,
+      kind: 'interruption',
+      occurred_at_ms: 1_753_800_000_000,
+      label: 'Feed interrupted',
+      explanation: 'The IBKR stream stopped delivering usable bars.',
+      cause: 'stall',
+      duration_ms: 22_000,
+      duration_label: '22 seconds',
+      window_start_ms: null,
+      window_end_ms: null,
+    },
+  ],
+};
 
 const CURRENT_RUN: BotRunView = {
   strategy_instance_id: 'sid-001',
@@ -43,7 +85,11 @@ function state(overrides: Partial<RunHistoryState> = {}): RunHistoryState {
 describe('BotRunHistoryComponent', () => {
   it('shows the backend-owned current process evidence without inferring terminal state', async () => {
     await render(BotRunHistoryComponent, {
-      inputs: { state: state(), botRunning: true },
+      inputs: {
+        state: state(),
+        botRunning: true,
+        feedContinuity: CONTINUITY,
+      },
     });
 
     expect(screen.getByText('run-current')).toBeTruthy();
@@ -62,6 +108,7 @@ describe('BotRunHistoryComponent', () => {
       inputs: {
         state: state({ currentLoading: true }),
         botRunning: false,
+        feedContinuity: CONTINUITY,
       },
     });
 
@@ -91,6 +138,7 @@ describe('BotRunHistoryComponent', () => {
           mode: 'history',
           history: { runs: [previousRun], next_cursor: null },
         }),
+        feedContinuity: CONTINUITY,
       },
     });
 
@@ -103,7 +151,7 @@ describe('BotRunHistoryComponent', () => {
 
   it('emits navigation requests without owning command state', async () => {
     const { fixture } = await render(BotRunHistoryComponent, {
-      inputs: { state: state() },
+      inputs: { state: state(), feedContinuity: CONTINUITY },
     });
     const requests: RunHistoryNavigation[] = [];
     fixture.componentInstance.navigationRequested.subscribe((request) =>
@@ -123,6 +171,7 @@ describe('BotRunHistoryComponent', () => {
           historyFailed: true,
           canViewNewer: true,
         }),
+        feedContinuity: CONTINUITY,
       },
     });
     const requests: RunHistoryNavigation[] = [];
@@ -135,5 +184,38 @@ describe('BotRunHistoryComponent', () => {
     fireEvent.click(newerRun);
 
     expect(requests).toEqual(['newer']);
+  });
+
+  it('shows current-run IBKR interruption and recovery evidence', async () => {
+    await render(BotRunHistoryComponent, {
+      inputs: { state: state(), feedContinuity: CONTINUITY },
+    });
+
+    expect(screen.getByText('IBKR market-data continuity')).toBeTruthy();
+    expect(screen.getByText('Feed interrupted')).toBeTruthy();
+    expect(screen.getByText('Feed recovered')).toBeTruthy();
+    expect(screen.getAllByText('Duration 22 seconds')).toHaveLength(2);
+  });
+
+  it('does not turn unavailable continuity evidence into zero incidents', async () => {
+    await render(BotRunHistoryComponent, {
+      inputs: {
+        state: state(),
+        feedContinuity: {
+          ...CONTINUITY,
+          state: 'not_recorded',
+          state_label: 'Continuity not recorded',
+          explanation: 'Run-scoped continuity evidence is unavailable.',
+          interruption_count: 0,
+          recovery_count: 0,
+          decision_impact_count: 0,
+          events: [],
+        },
+      },
+    });
+
+    expect(screen.getAllByText('—')).toHaveLength(3);
+    expect(screen.getByText('No run-scoped continuity evidence is available yet.')).toBeTruthy();
+    expect(screen.queryByText('No feed interruptions have been recorded in this run.')).toBeNull();
   });
 });

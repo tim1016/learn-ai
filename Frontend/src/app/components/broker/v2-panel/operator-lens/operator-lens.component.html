@@ -17,6 +17,7 @@
 
       <app-clerk-card
         [clerk]="clerk()"
+        [feedContinuity]="feedContinuity()"
         [reconcileAction]="null"
         [clearHoldAction]="null"
         [actionPending]="actionPending()"
@@ -100,6 +101,7 @@
         [accountId]="accountId()"
         [sid]="sid()"
         [botRunning]="health().running"
+        [feedContinuity]="feedContinuity()"
       />
     </div>
   </div>

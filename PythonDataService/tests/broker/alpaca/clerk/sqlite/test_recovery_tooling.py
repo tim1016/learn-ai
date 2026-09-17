@@ -172,6 +172,27 @@ def test_interrupted_backup_keeps_previous_verified_publication(tmp_path: Path) 
     assert any(path.name.startswith(".incomplete-") for path in first.bundle_path.parent.iterdir())
 
 
+def test_immutable_source_backup_preserves_checkpointed_cutover_state(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.close()
+    assert not Path(f"{repo.db_path}-wal").exists()
+    assert not Path(f"{repo.db_path}-shm").exists()
+
+    backup = create_verified_backup(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock,
+        source_immutable=True,
+    )
+
+    assert not Path(f"{repo.db_path}-wal").exists()
+    assert not Path(f"{repo.db_path}-shm").exists()
+    assert not Path(f"{backup.snapshot_path}-wal").exists()
+    assert not Path(f"{backup.snapshot_path}-shm").exists()
+
+
 def test_verify_authority_head_matches_database_and_finalized_mirror(
     tmp_path: Path,
 ) -> None:

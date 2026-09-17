@@ -53,6 +53,20 @@
         <th scope="row">Orders</th>
         <td>{{ panel().working_orders.length }} working · {{ panel().clerk.outstanding_intents }} unresolved</td>
       </tr>
+      <tr [class.feed-status--attention]="feedAttention()">
+        <th scope="row">Market feed</th>
+        <td>
+          <strong>{{ panel().market_pulse.headline }}</strong>
+          <small>{{ panel().market_pulse.explanation }}</small>
+        </td>
+      </tr>
+      <tr [class.feed-status--attention]="feedAttention()">
+        <th scope="row">Run continuity</th>
+        <td>
+          <strong>{{ feedContinuity().state_label }}</strong>
+          <small>{{ feedContinuity().explanation }}</small>
+        </td>
+      </tr>
       <tr>
         <th scope="row">Last decision</th>
         <td>
@@ -67,7 +81,7 @@
         </td>
       </tr>
       <tr>
-        <th scope="row">Last bar</th>
+        <th scope="row">Last strategy bar</th>
         <td>
           @if (panel().health.last_bar_at_ms !== null) {
             <app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" />

@@ -22,7 +22,15 @@ R1): one primary authority per process. On a live-mode boot,
 `ActivationStore` (`accounts/alpaca/`) for a record naming the observed
 account. Present, `live_authority.select_live_clerk_runtime` composes the live
 authority; absent, the Shadow Account Authority is composed exactly as slice 4
-built it. Graduation is therefore the live cutover:
+built it. Graduation is therefore the live cutover. Its normal operator surface
+is the account's **Configuration → Graduate Shadow to Live** ceremony. The lane
+captures broker evidence itself, verifies the flat/order-free account and stopped
+roster, publishes a verified backup, shows the exact short-lived plan, and only
+after explicit confirmation appends activation and gracefully restarts under the
+deployment supervisor. No browser field supplies a path, mode, evidence file, or
+force option.
+
+The equivalent CLI remains the recovery/fallback interface:
 
 ```bash
 cd PythonDataService

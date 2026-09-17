@@ -10,10 +10,12 @@ import {
 } from '@angular/core';
 import type {
   BotPanelView,
+  FeedContinuityView,
   PanelAction,
   PanelActionTrigger,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
+import { feedContinuityFor } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
@@ -129,6 +131,9 @@ export class OperatorLensComponent {
   protected readonly health = computed(() => this.panel().health);
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
+  protected readonly feedContinuity = computed<FeedContinuityView>(() =>
+    feedContinuityFor(this.panel()),
+  );
   protected readonly primaryAction = computed<PanelAction | null>(() =>
     primaryActionForLens(this.panel(), 'operator'),
   );

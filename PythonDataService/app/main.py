@@ -40,6 +40,7 @@ from app.routers import (
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
+    alpaca_live_graduation,
     backtest_runs,
     baselines,
     broker,
@@ -1200,6 +1201,14 @@ if _ROLE_RUNS_CLERK:
 if _ROLE_RUNS_CLERK:
     app.include_router(
         broker_v2_panel.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
+# Shadow-to-Live graduation is a clerk-local custody ceremony. The coordinator
+# reaches it only through the provider operation catalog; the lane owns the
+# broker observation, verified backup, activation receipt, and restart.
+if _ROLE_RUNS_CLERK:
+    app.include_router(
+        alpaca_live_graduation.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
 # Aggregated bot gallery wall (S4 — snapshot + SSE stream across every

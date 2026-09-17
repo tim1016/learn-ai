@@ -1,0 +1,134 @@
+<section class="graduation" aria-labelledby="live-graduation-title">
+  <header class="graduation__header">
+    <div>
+      <p class="graduation__eyebrow">Real-money custody</p>
+      <h2 id="live-graduation-title">Graduate Shadow to Live</h2>
+      <p>
+        Graduation changes the account authority. It does not deploy a strategy,
+        arm an instance, or submit an order.
+      </p>
+    </div>
+    <span class="graduation__account">Account {{ accountId() }}</span>
+  </header>
+
+  <ol class="authority-rail" aria-label="Graduation sequence">
+    <li class="authority-rail__step authority-rail__step--complete">
+      <span class="authority-rail__number">1</span>
+      <span><strong>Shadow</strong><small>Isolated custody</small></span>
+    </li>
+    <li class="authority-rail__line" aria-hidden="true"></li>
+    <li
+      class="authority-rail__step"
+      [class.authority-rail__step--current]="status.hasValue() && status.value().state === 'review_available'"
+      [class.authority-rail__step--complete]="status.hasValue() && status.value().state === 'graduated'">
+      <span class="authority-rail__number">2</span>
+      <span><strong>Review</strong><small>Fresh, sealed evidence</small></span>
+    </li>
+    <li class="authority-rail__line" aria-hidden="true"></li>
+    <li
+      class="authority-rail__step"
+      [class.authority-rail__step--complete]="status.hasValue() && status.value().state === 'graduated'">
+      <span class="authority-rail__number">3</span>
+      <span><strong>Live</strong><small>Boot-selected authority</small></span>
+    </li>
+  </ol>
+
+  @if (refusal(); as message) {
+    <p class="graduation__refusal" role="alert">{{ message }}</p>
+  }
+
+  @if (phase() === 'restarting') {
+    <div class="graduation__restart" role="status">
+      <span class="graduation__pulse" aria-hidden="true"></span>
+      <div>
+        <strong>Activation is durable. Restarting the clerk safely…</strong>
+        <p>The page may briefly lose contact while the Live authority takes custody.</p>
+      </div>
+    </div>
+  } @else if (status.error()) {
+    <div class="graduation__state graduation__state--blocked" role="alert">
+      <strong>Graduation status is unavailable</strong>
+      <p>No authority change was inferred from a failed read.</p>
+      <button type="button" class="button button--secondary" (click)="refresh()">Retry</button>
+    </div>
+  } @else if (status.hasValue()) {
+    <div
+      class="graduation__state"
+      [class.graduation__state--live]="status.value().state === 'graduated'"
+      [class.graduation__state--blocked]="status.value().state === 'blocked'">
+      <strong>{{ status.value().headline }}</strong>
+      <p>{{ status.value().detail }}</p>
+      @if (status.value().next_action; as nextAction) {
+        <p class="graduation__next">{{ nextAction }}</p>
+      }
+    </div>
+
+    @if (status.value().state === 'review_available' && plan() === null) {
+      <button
+        type="button"
+        class="button button--primary"
+        [disabled]="busy()"
+        (click)="prepareReview()">
+        {{ phase() === 'planning' ? 'Gathering fresh evidence…' : 'Review Live graduation' }}
+      </button>
+    }
+  } @else {
+    <p class="graduation__loading" role="status">Reading the account authority…</p>
+  }
+
+  @if (plan(); as review) {
+    <div class="graduation__review" aria-label="Live graduation evidence">
+      <div class="graduation__review-head">
+        <div>
+          <p class="graduation__eyebrow">Exact review · expires {{ review.expires_at_ms | date:'mediumTime' }}</p>
+          <h3>Evidence is ready</h3>
+        </div>
+        @if (reviewExpired()) {
+          <span class="graduation__expired">Expired — prepare again</span>
+        }
+      </div>
+
+      <dl class="graduation__facts">
+        <div><dt>Broker account</dt><dd>{{ review.account_id }}</dd></div>
+        <div><dt>Open positions</dt><dd>{{ review.position_count }} · flat</dd></div>
+        <div><dt>Open orders</dt><dd>{{ review.open_order_count }} · clear</dd></div>
+        <div><dt>Stopped bots</dt><dd>{{ review.stopped_bot_ids.length }}</dd></div>
+        <div><dt>Daily loss limits</dt><dd>{{ review.daily_loss_fraction | percent }} or {{ review.daily_loss_usd | currency }}</dd></div>
+        <div><dt>Arming lapse</dt><dd>{{ review.arming_max_sessions }} session</dd></div>
+        <div><dt>Extended-hours allowance</dt><dd>{{ review.extended_hours_entry_bps }} / {{ review.extended_hours_exit_bps }} bps</dd></div>
+        <div><dt>Verified backup</dt><dd>Complete</dd></div>
+      </dl>
+
+      @if (review.stopped_bot_ids.length > 0) {
+        <p class="graduation__bots">
+          Stopped roster: {{ review.stopped_bot_ids.join(', ') }}
+        </p>
+      }
+
+      <p class="graduation__consequence">{{ review.consequence }}</p>
+      <label class="graduation__acknowledgement">
+        <input
+          type="checkbox"
+          [checked]="acknowledged()"
+          [disabled]="busy() || reviewExpired()"
+          (change)="acknowledged.set(!acknowledged())" />
+        <span>
+          I understand this irreversibly graduates account {{ review.account_id }} to
+          real-money custody, while every strategy remains stopped and unarmed.
+        </span>
+      </label>
+      <div class="graduation__actions">
+        <button
+          type="button"
+          class="button button--danger"
+          [disabled]="!acknowledged() || busy() || reviewExpired()"
+          (click)="confirm()">
+          {{ phase() === 'applying' ? 'Activating Live authority…' : 'Graduate to Live and restart' }}
+        </button>
+        <button type="button" class="button button--secondary" [disabled]="busy()" (click)="prepareReview()">
+          Refresh evidence
+        </button>
+      </div>
+    </div>
+  }
+</section>

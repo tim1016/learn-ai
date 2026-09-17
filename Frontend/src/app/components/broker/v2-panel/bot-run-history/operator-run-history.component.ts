@@ -10,6 +10,7 @@ import {
   signal,
 } from '@angular/core';
 import type {
+  FeedContinuityView,
   RunHistoryMode,
   RunHistoryNavigation,
   RunHistoryState,
@@ -43,6 +44,7 @@ export class OperatorRunHistoryComponent {
   readonly accountId = input.required<string>();
   readonly sid = input.required<string>();
   readonly botRunning = input.required<boolean>();
+  readonly feedContinuity = input.required<FeedContinuityView>();
   protected readonly expanded = signal(false);
   private readonly activated = signal(false);
 

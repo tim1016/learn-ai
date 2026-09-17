@@ -58,7 +58,26 @@ function makeClerk(): ClerkCard {
     reconciliation_verdict_label: null,
     last_sweep_at_ms: null,
     outstanding_intents: 0,
-    channels: [],
+    channels: [
+      {
+        stream: 'market_data',
+        name: 'IBKR market data',
+        state: 'healthy',
+        label: 'Healthy',
+        explanation: 'The channel is connected and current.',
+        reason: 'Current IBKR bars are arriving.',
+        observed_at_ms: 1_700_000_001_000,
+      },
+      {
+        stream: 'execution',
+        name: 'Alpaca execution',
+        state: 'healthy',
+        label: 'Healthy',
+        explanation: 'The channel is connected and current.',
+        reason: 'Alpaca execution reports are current.',
+        observed_at_ms: 1_700_000_001_000,
+      },
+    ],
   };
 }
 
@@ -114,6 +133,46 @@ function makePanel(): BotPanelView {
       next_step: null,
       attention_required: false,
       observed_at_ms: 1_700_000_001_000,
+    },
+    feed_continuity: {
+      provider_label: 'IBKR market data',
+      run_id: 'run-1',
+      state: 'recovered',
+      state_label: 'Recovered',
+      explanation: 'Every recorded IBKR interruption recovered within this run.',
+      interruption_count: 1,
+      recovery_count: 1,
+      unresolved_count: 0,
+      decision_impact_count: 0,
+      last_interruption_at_ms: 1_700_000_000_000,
+      last_recovery_at_ms: 1_700_000_022_000,
+      latest_bar_at_ms: 1_700_000_060_000,
+      events: [
+        {
+          evidence_seq: 1,
+          kind: 'interruption',
+          occurred_at_ms: 1_700_000_000_000,
+          label: 'Feed interrupted',
+          explanation: 'The IBKR socket disconnected. Same-run recovery began.',
+          cause: 'socket_down',
+          duration_ms: null,
+          duration_label: null,
+          window_start_ms: null,
+          window_end_ms: null,
+        },
+        {
+          evidence_seq: 2,
+          kind: 'recovered',
+          occurred_at_ms: 1_700_000_022_000,
+          label: 'Feed recovered',
+          explanation: 'IBKR delivery resumed under the run continuity rules.',
+          cause: null,
+          duration_ms: 22_000,
+          duration_label: '22 seconds',
+          window_start_ms: null,
+          window_end_ms: null,
+        },
+      ],
     },
     mission_verdict: {
       state: 'working',
@@ -287,6 +346,34 @@ describe('OperatorLensComponent', () => {
     });
 
     expect(within(screen.getByLabelText('Bot health')).getByText('Live')).toBeTruthy();
+  });
+
+  it('names both providers and shows current-run IBKR continuity counts', async () => {
+    await renderLens(makePanel());
+
+    const custody = screen.getByLabelText('Account and clerk status');
+    expect(within(custody).getByText('IBKR market data')).toBeTruthy();
+    expect(within(custody).getByText('Alpaca execution')).toBeTruthy();
+    expect(within(custody).getByText('Recovered')).toBeTruthy();
+    expect(within(custody).getByText('Interruptions')).toBeTruthy();
+    expect(within(custody).getByText('Recoveries')).toBeTruthy();
+    expect(within(custody).getByText('Decision impacts')).toBeTruthy();
+  });
+
+  it('keeps provider identity and unknown continuity truthful during a rolling clerk upgrade', async () => {
+    const panel = makePanel();
+    delete (panel as Partial<BotPanelView>).feed_continuity;
+    for (const channel of panel.clerk.channels) {
+      delete (channel as Partial<typeof channel>).name;
+    }
+
+    await renderLens(panel);
+
+    const custody = screen.getByLabelText('Account and clerk status');
+    expect(within(custody).getByText('IBKR market data')).toBeTruthy();
+    expect(within(custody).getByText('Alpaca execution')).toBeTruthy();
+    expect(within(custody).getByText('Continuity not recorded')).toBeTruthy();
+    expect(within(custody).getAllByText('—')).toHaveLength(3);
   });
 
   it('renders run evidence as the final operator section', async () => {

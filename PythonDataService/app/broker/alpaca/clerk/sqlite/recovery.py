@@ -221,8 +221,14 @@ def create_verified_backup(
     artifacts_root: Path,
     clock: Clock = now_ms_utc,
     progress: Callable[[int, int, int], None] | None = None,
+    source_immutable: bool = False,
 ) -> BackupPublication:
-    """Publish a WAL-safe online-backup bundle after complete verification."""
+    """Publish a WAL-safe online-backup bundle after complete verification.
+
+    ``source_immutable`` is reserved for an authority already proven inactive
+    and checkpointed. It keeps a review-only backup from recreating SQLite WAL
+    sidecars that would invalidate the subsequent cutover recheck.
+    """
     with startup_recovery_fence(
         artifacts_root=artifacts_root,
         account_id=account_id,
@@ -232,6 +238,7 @@ def create_verified_backup(
             artifacts_root=artifacts_root,
             clock=clock,
             progress=progress,
+            source_immutable=source_immutable,
         )
 
 
@@ -241,6 +248,7 @@ def _create_verified_backup_fenced(
     artifacts_root: Path,
     clock: Clock,
     progress: Callable[[int, int, int], None] | None,
+    source_immutable: bool,
 ) -> BackupPublication:
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     established = _require_established(accounts_root, account_id)
@@ -250,6 +258,7 @@ def _create_verified_backup_fenced(
         expected_account_id=account_id,
         expected_generation=established.authority_generation,
         expected_db_identity=established.db_identity_token,
+        immutable=source_immutable,
     )
     backup_root = account_dir / BACKUP_DIRECTORY
     if backup_root.is_symlink():
@@ -259,12 +268,18 @@ def _create_verified_backup_fenced(
     candidate = Path(tempfile.mkdtemp(prefix=".incomplete-", dir=backup_root))
     snapshot = candidate / DB_FILENAME
     try:
-        _online_backup(db_path, snapshot, progress=progress)
+        _online_backup(
+            db_path,
+            snapshot,
+            progress=progress,
+            source_immutable=source_immutable,
+        )
         verification = verify_database(
             snapshot,
             expected_account_id=account_id,
             expected_generation=source_verification.authority_generation,
             expected_db_identity=source_verification.db_identity_token,
+            immutable=True,
         )
         if verification != source_verification:
             raise RecoveryRefused(
@@ -862,11 +877,16 @@ def _online_backup(
     destination_path: Path,
     *,
     progress: Callable[[int, int, int], None] | None,
+    source_immutable: bool = False,
 ) -> None:
     source: sqlite3.Connection | None = None
     destination: sqlite3.Connection | None = None
     try:
-        source = sqlite3.connect(f"{source_path.resolve().as_uri()}?mode=ro", uri=True)
+        immutable_option = "&immutable=1" if source_immutable else ""
+        source = sqlite3.connect(
+            f"{source_path.resolve().as_uri()}?mode=ro{immutable_option}",
+            uri=True,
+        )
         destination = sqlite3.connect(destination_path)
         source.backup(destination, pages=64, progress=progress)
         destination.commit()

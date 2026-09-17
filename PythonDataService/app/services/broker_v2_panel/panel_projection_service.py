@@ -14,6 +14,8 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
@@ -33,6 +35,8 @@ from app.schemas.broker_v2_panel import (
     ChannelHealthView,
     ClerkCard,
     DutyOutcomeView,
+    FeedContinuityEventView,
+    FeedContinuityView,
     MarketPulseView,
     MissionVerdictView,
     PanelAction,
@@ -66,6 +70,7 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
+from app.services.source_bar_ledger import RetainedContinuityEvent
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -202,6 +207,7 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
         views.append(
             ChannelHealthView(
                 stream=health.stream,
+                name=("IBKR market data" if health.stream == "market_data" else "Alpaca execution"),
                 state=state,
                 label=copy.label,
                 explanation=copy.explanation,
@@ -210,6 +216,168 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
             )
         )
     return views
+
+
+_CONTINUITY_EVENT_COPY: dict[str, tuple[str, str]] = {
+    "interruption": (
+        "Feed interrupted",
+        "IBKR delivery stopped and same-run recovery began.",
+    ),
+    "recovered": (
+        "Feed recovered",
+        "IBKR delivery resumed under the run's continuity rules.",
+    ),
+    "gap": (
+        "Non-decision gap recorded",
+        "An unprovable data window outside the strategy's decision session was omitted.",
+    ),
+    "substituted": (
+        "Gap substituted",
+        "Authorized historical evidence replaced a missing live-data window.",
+    ),
+    "refused": (
+        "Continuity refused",
+        "A strategy decision window could not be proven, so further decisions were refused.",
+    ),
+}
+
+_CONTINUITY_CAUSE_COPY: dict[str, str] = {
+    "socket_down": "The IBKR socket disconnected.",
+    "soft_loss_1100": "IBKR reported connectivity loss while the socket remained open.",
+    "stall": "The IBKR real-time bar subscription stopped advancing.",
+    "generation_changed": "The IBKR connection was replaced while this stream was active.",
+}
+
+
+def _duration_label(duration_ms: int) -> str:
+    seconds = max(0, duration_ms) // 1_000
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes, remaining_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return (
+            f"{minutes} minute{'s' if minutes != 1 else ''}"
+            if remaining_seconds == 0
+            else f"{minutes}m {remaining_seconds}s"
+        )
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes}m" if remaining_minutes else f"{hours}h"
+
+
+def build_feed_continuity(
+    events: Sequence[RetainedContinuityEvent] | None,
+    *,
+    run_id: str | None,
+    latest_bar_at_ms: int | None,
+    now_ms: int,
+) -> FeedContinuityView:
+    """Project durable source-stream facts into one current-run operator view."""
+    if events is None:
+        return FeedContinuityView(
+            provider_label="IBKR market data",
+            run_id=run_id,
+            state="not_recorded",
+            state_label="Continuity not recorded",
+            explanation="Run-scoped IBKR continuity evidence is not available for this bot.",
+            interruption_count=0,
+            recovery_count=0,
+            unresolved_count=0,
+            decision_impact_count=0,
+            last_interruption_at_ms=None,
+            last_recovery_at_ms=None,
+            latest_bar_at_ms=latest_bar_at_ms,
+            events=[],
+        )
+
+    interruption_count = sum(event.kind == "interruption" for event in events)
+    recovery_count = sum(event.kind == "recovered" for event in events)
+    decision_impact_count = sum(event.kind == "refused" for event in events)
+    unresolved_count = max(0, interruption_count - recovery_count)
+    last_interruption_at_ms = next(
+        (event.observed_at_ms for event in reversed(events) if event.kind == "interruption"),
+        None,
+    )
+    last_recovery_at_ms = next(
+        (event.observed_at_ms for event in reversed(events) if event.kind == "recovered"),
+        None,
+    )
+
+    if unresolved_count:
+        state = "interrupted"
+        state_label = "Interrupted"
+        explanation = "IBKR delivery is interrupted and same-run recovery is in progress."
+    elif decision_impact_count:
+        state = "compromised"
+        state_label = "Continuity refused"
+        explanation = "One or more strategy decision windows could not be proven from live data."
+    elif interruption_count:
+        state = "recovered"
+        state_label = "Recovered"
+        explanation = "Every recorded IBKR interruption recovered within this run's continuity rules."
+    else:
+        state = "continuous"
+        state_label = "Continuous"
+        explanation = "No IBKR delivery interruptions have been recorded in this run."
+
+    pending_interruptions: list[int] = []
+    event_views: list[FeedContinuityEventView] = []
+    for event in events:
+        duration_ms: int | None = None
+        if event.kind == "interruption":
+            pending_interruptions.append(event.observed_at_ms)
+        elif event.kind == "recovered" and pending_interruptions:
+            duration_ms = max(0, event.observed_at_ms - pending_interruptions.pop())
+        label, base_explanation = _CONTINUITY_EVENT_COPY[event.kind]
+        cause_copy = _CONTINUITY_CAUSE_COPY.get(event.cause or "")
+        event_views.append(
+            FeedContinuityEventView(
+                evidence_seq=event.evidence_seq,
+                kind=event.kind,
+                occurred_at_ms=event.observed_at_ms,
+                label=label,
+                explanation=(
+                    f"{cause_copy} Same-run recovery began."
+                    if event.kind == "interruption" and cause_copy is not None
+                    else base_explanation
+                ),
+                cause=event.cause,
+                duration_ms=duration_ms,
+                duration_label=(_duration_label(duration_ms) if duration_ms is not None else None),
+                window_start_ms=event.window_start_ms,
+                window_end_ms=event.window_end_ms,
+            )
+        )
+
+    if unresolved_count and pending_interruptions:
+        newest_opened_at_ms = pending_interruptions[-1]
+        for index in range(len(event_views) - 1, -1, -1):
+            view = event_views[index]
+            if view.kind != "interruption" or view.occurred_at_ms != newest_opened_at_ms:
+                continue
+            active_duration_ms = max(0, now_ms - newest_opened_at_ms)
+            event_views[index] = view.model_copy(
+                update={
+                    "duration_ms": active_duration_ms,
+                    "duration_label": _duration_label(active_duration_ms),
+                }
+            )
+            break
+
+    return FeedContinuityView(
+        provider_label="IBKR market data",
+        run_id=run_id,
+        state=state,
+        state_label=state_label,
+        explanation=explanation,
+        interruption_count=interruption_count,
+        recovery_count=recovery_count,
+        unresolved_count=unresolved_count,
+        decision_impact_count=decision_impact_count,
+        last_interruption_at_ms=last_interruption_at_ms,
+        last_recovery_at_ms=last_recovery_at_ms,
+        latest_bar_at_ms=latest_bar_at_ms,
+        events=event_views[-12:],
+    )
 
 
 def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
@@ -775,6 +943,8 @@ def build_panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
+    feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
+    feed_continuity_run_id: str | None = None,
     symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
@@ -902,6 +1072,16 @@ def build_panel(
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,
+        feed_continuity=build_feed_continuity(
+            feed_continuity_events,
+            run_id=(
+                feed_continuity_run_id
+                or status.active_run_id
+                or (status.duty_outcome.run_id if status.duty_outcome is not None else None)
+            ),
+            latest_bar_at_ms=market_pulse.latest_bar_at_ms,
+            now_ms=now_ms,
+        ),
         mission_verdict=_mission_verdict(
             status,
             clerk,
