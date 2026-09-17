@@ -11,7 +11,9 @@
       @if (effective.revision !== null) {
         <span class="identity-strip__revision">Revision {{ effective.revision }}</span>
       }
-      <span class="identity-strip__account">{{ effective.accountLabel }}</span>
+      @if (effective.accountLabel; as accountLabel) {
+        <span class="identity-strip__account">{{ accountLabel }}</span>
+      }
       <span
         class="identity-strip__mode"
         [class.identity-strip__mode--live]="effective.endpointMode === 'live'"

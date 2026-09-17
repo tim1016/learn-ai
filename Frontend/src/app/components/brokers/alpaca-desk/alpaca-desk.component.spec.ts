@@ -238,13 +238,20 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
     expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
     expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
+
+    // #2188: the account number guards nothing on a tab the header already
+    // names the account on. It used to reach this page twice — the identity
+    // strip's observed-account fallback and the summary card.
+    await screen.findByLabelText('Alpaca account summary');
+    expect(screen.queryAllByText('PA1')).toHaveLength(0);
   });
 
   it('switches instantly, updates the query parameter, persists, and lazy-loads operator data', async () => {
     const { brokers, router } = await renderDesk();
-    // PA1 reaches the desk twice while no effective choice exists: the
-    // identity strip's observed-account fallback and the account card.
-    await screen.findAllByText('PA1');
+    // Wait for the account read to land before switching lenses. Keyed on the
+    // card's own landmark rather than the account number, which the desk no
+    // longer prints anywhere (#2188).
+    await screen.findByLabelText('Alpaca account summary');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 

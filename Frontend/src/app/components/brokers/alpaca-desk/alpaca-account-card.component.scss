@@ -27,7 +27,6 @@
   min-width: 0;
 }
 
-.account-identity__label,
 .headline-metrics dt,
 .detail-metrics dt {
   color: var(--text-muted);
@@ -37,20 +36,9 @@
   text-transform: uppercase;
 }
 
-.account-identity__id {
-  display: block;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .account-identity__badges {
   display: flex;
   gap: var(--space-1);
-  margin-top: var(--space-2);
 }
 
 .headline-metrics,

@@ -45,8 +45,7 @@ describe('AlpacaAccountCardComponent', () => {
   it('renders account figures and a paper badge when loaded', async () => {
     await renderCard(() => Promise.resolve(fakeAccount({ account_id: 'PA9', buying_power: 300 })));
 
-    expect(await screen.findByText('PA9')).toBeTruthy();
-    expect(screen.getByText('Paper')).toBeTruthy();
+    expect(await screen.findByText('Paper')).toBeTruthy();
     expect(screen.getByText('Equity')).toBeTruthy();
     expect(screen.getByText('Cash')).toBeTruthy();
     expect(screen.getByText('Buying power')).toBeTruthy();
@@ -73,10 +72,26 @@ describe('AlpacaAccountCardComponent', () => {
   it('tags a live account as Live with danger severity, never a hardcoded Paper', async () => {
     await renderCard(() => Promise.resolve(fakeAccount({ account_id: '9LIVE0001', account_mode: 'live' })));
 
-    expect(await screen.findByText('9LIVE0001')).toBeTruthy();
-    expect(screen.getByText('Live')).toBeTruthy();
+    expect(await screen.findByText('Live')).toBeTruthy();
     expect(screen.queryByText('Paper')).toBeNull();
   });
+
+  it.each([
+    ['paper', 'PA9'],
+    ['live', '9LIVE0001'],
+  ] as const)(
+    'never names the %s account by its number — the workspace header above already names it (#2188)',
+    async (accountMode, accountId) => {
+      await renderCard(() =>
+        Promise.resolve(fakeAccount({ account_id: accountId, account_mode: accountMode })),
+      );
+
+      // Wait for the loaded render before asserting an absence, or this would
+      // pass against the loading state and prove nothing.
+      expect(await screen.findByText('Equity')).toBeTruthy();
+      expect(screen.queryByText(accountId)).toBeNull();
+    },
+  );
 
   it('renders the margin facts read-only, with a dash for an unknown value', async () => {
     await renderCard(() =>

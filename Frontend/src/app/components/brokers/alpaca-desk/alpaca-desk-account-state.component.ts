@@ -1,10 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output } from '@angular/core';
 
 import type {
   AlpacaDeskSelectionSummary,
   AlpacaDeskState,
   BrokerAccountSnapshot,
 } from '../../../api/alpaca.types';
+import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
+import { laneDisplayNameText } from '../../../fleet/fleet-directory.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { AlpacaAccountActivationComponent } from './alpaca-account-activation.component';
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
@@ -13,7 +15,12 @@ import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
 interface EffectiveIdentity {
   readonly profileLabel: string;
   readonly revision: number | null;
-  readonly accountLabel: string;
+  /** How this account is *named*, never its number (ADR 0064; #2188) —
+   * the backend-composed friendly label when a choice is effective, and the
+   * lane's own display name when none is. `null` only when no lane can be
+   * named because the directory has not resolved this account; the strip
+   * then omits the name rather than falling back to the number. */
+  readonly accountLabel: string | null;
   /** Rendered through the shared receipt-label path; `paper`/`live` are code-like values. */
   readonly endpointMode: string;
   readonly source: 'effective_choice' | 'snapshot-fallback';
@@ -32,8 +39,12 @@ interface EffectiveIdentity {
  * - When `effective_choice` exists, profile, revision, account label, and
  *   endpoint mode come only from it.
  * - Only when it is absent may the generation-zero `BrokerAccountSnapshot`
- *   supply an *observed* account id and mode — and never a revision, because
- *   the snapshot has none to give.
+ *   supply an *observed* account and mode — and never a revision, because
+ *   the snapshot has none to give. That observed account is *named*, through
+ *   its lane's display name, never printed as a number: the effective-choice
+ *   branch's own `account_label` is a friendly backend-composed name, and the
+ *   fallback must not silently degrade the same line into an identifier
+ *   (ADR 0064; #2188).
  * - If an independently reported account id disagrees with the effective
  *   choice's, the strip says so and gates the identity-dependent review action
  *   rather than silently merging the two records.
@@ -46,6 +57,8 @@ interface EffectiveIdentity {
   styleUrl: './alpaca-desk-account-state.component.scss',
 })
 export class AlpacaDeskAccountStateComponent {
+  private readonly fleetDirectory = inject(FleetDirectoryService);
+
   readonly state = input<AlpacaDeskState | null>(null);
   readonly accountAvailable = input.required<boolean>();
   readonly accountFailed = input.required<boolean>();
@@ -70,11 +83,26 @@ export class AlpacaDeskAccountStateComponent {
     return {
       profileLabel: 'Unconfigured worker account',
       revision: null,
-      accountLabel: observed.account_id,
+      accountLabel: this.laneName(observed.account_id),
       endpointMode: observed.account_mode,
       source: 'snapshot-fallback',
     };
   });
+
+  /** The display name of the lane whose confirmed binding serves this
+   * account, resolved through the directory's own canonical helpers so this
+   * strip names an account exactly as the workspace header, the account
+   * switcher, and the shell badge do — including the "(Label)" disambiguator
+   * a name shared with a sibling lane carries (ADR 0064 Decision 5).
+   *
+   * `null` when the directory cannot name it. The number is not a fallback:
+   * showing it here is the leak this replaced. */
+  private laneName(accountId: string): string | null {
+    const lane = this.fleetDirectory.laneForAccount('alpaca', accountId);
+    if (lane === undefined) return null;
+    const display = this.fleetDirectory.displayNameOf('alpaca', lane.clerk_id);
+    return display === null ? null : laneDisplayNameText(display);
+  }
 
   /**
    * The effective choice and the live account read name different accounts.
