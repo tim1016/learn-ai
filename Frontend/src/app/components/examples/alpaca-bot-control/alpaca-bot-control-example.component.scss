@@ -1,12 +1,13 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host { display: block; min-height: 100%; }
 
 .gallery { max-width: 84rem; margin: 0 auto; color: var(--text-primary); }
 .gallery__header, .scenario-picker, .lens-tabs { display: flex; gap: 1rem; align-items: center; }
 .gallery__header { justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 1.25rem; }
 h1, p { margin: 0; }
-h1 { font-size: 1.65rem; letter-spacing: var(--ls-tight); }
+.gallery__header h1 { @include eyebrow-heading; }
 .gallery__header p { color: var(--text-secondary); margin-top: .35rem; }
-.eyebrow { color: var(--accent); font-size: .75rem; font-weight: var(--fw-bold); letter-spacing: var(--ls-caps); text-transform: uppercase; }
 .static-badge { border: 1px solid var(--badge-info-border); border-radius: 999px; color: var(--badge-info-text); font-size: .8rem; padding: .35rem .6rem; white-space: nowrap; }
 .scenario-picker { align-items: flex-start; flex-wrap: wrap; margin: 1.25rem 0 .75rem; }
 .scenario-picker label { font-weight: var(--fw-semi); }

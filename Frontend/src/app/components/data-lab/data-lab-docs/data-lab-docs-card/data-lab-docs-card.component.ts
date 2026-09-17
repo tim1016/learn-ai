@@ -65,12 +65,6 @@ export class DataLabDocsCardComponent {
     this.indicator().panelType === 'overlay' ? 'Overlay' : 'Sub-panel'
   );
 
-  protected breadcrumb = computed(() => {
-    const ind = this.indicator();
-    const kind = ind.panelType === 'overlay' ? 'Overlay' : 'Sub-panel';
-    return `Docs \u203A ${kind} \u203A ${ind.displayName}`;
-  });
-
   protected colCountLabel = computed(() => {
     const n = this.indicator().outputColumns.length;
     return n === 1 ? '1 column' : `${n} columns`;

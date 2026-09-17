@@ -1,4 +1,5 @@
 @use '../../../styles/tokens' as *;
+@use '../../../styles/eyebrow-heading' as *;
 
 :host {
   display: block;
@@ -31,18 +32,8 @@
   }
 
   h2 {
-    color: $text-primary;
-    font-size: 1rem;
+    @include eyebrow-heading;
   }
-}
-
-.lean-source__eyebrow {
-  margin-bottom: 0.2rem !important;
-  color: $accent-text;
-  font-family: $font-mono;
-  font-size: 0.65rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .lean-source__runtime {

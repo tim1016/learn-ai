@@ -1,11 +1,13 @@
+@use '../../styles/eyebrow-heading' as *;
+
 :host { display: block; min-width: 0; }
 
 .golden-workbench { display: grid; gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius-lg); background: var(--bg-surface); box-shadow: var(--shadow-card); }
 .golden-workbench__header { display: flex; justify-content: space-between; gap: var(--space-4); align-items: start; }
 .golden-workbench__header > div { display: grid; gap: var(--space-1); }
 .golden-workbench h2, .golden-workbench h3, .golden-workbench p { margin: 0; }
-.golden-workbench__eyebrow { color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: .04em; text-transform: uppercase; }
-.golden-workbench__header p:not(.golden-workbench__eyebrow) { color: var(--text-secondary); }
+.golden-workbench__header h2 { @include eyebrow-heading; }
+.golden-workbench__header p { color: var(--text-secondary); }
 .golden-workbench__run { padding: var(--space-1) var(--space-2); border: 1px solid var(--badge-info-border); border-radius: var(--radius-pill); background: var(--accent-faint); color: var(--accent); font-size: var(--fs-xs); font-weight: var(--fw-bold); white-space: nowrap; }
 .golden-workbench__layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .golden-workbench__form, .golden-workbench__notice, .golden-workbench__error { padding: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius-md); background: var(--bg-elevated); }

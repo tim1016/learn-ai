@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host { display: block; }
 
 .metric-entry {
@@ -11,7 +13,7 @@
 
 .metric-entry__header { display: flex; align-items: start; justify-content: space-between; gap: var(--space-3); }
 .metric-entry__header h2, .metric-entry p { margin: 0; }
-.metric-entry__eyebrow { color: var(--text-muted); font: 700 var(--fs-xxs)/1 var(--font-mono); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+.metric-entry__eyebrow { @include eyebrow-heading; font-family: var(--font-mono); line-height: 1; }
 .metric-entry__producer { padding: 4px 8px; border-radius: var(--radius-sm); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font: 700 var(--fs-xxs)/1 var(--font-mono); text-transform: capitalize; white-space: nowrap; }
 .metric-entry__compare, .metric-entry__back { color: var(--accent); font-weight: 700; }
 .metric-entry__actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); }

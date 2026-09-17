@@ -1,6 +1,8 @@
 // Past-chain inspector card — D10a card-on-config-row layout.
 // Per docs/architecture/options-ux-design-prompt.md (pruned 2026-09-12, git history) UX-Q3.
 
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -30,11 +32,8 @@
 }
 
 .eyebrow {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #94a3b8;
+  @include eyebrow-heading;
+  margin: 0;
 }
 
 .card-subtitle {

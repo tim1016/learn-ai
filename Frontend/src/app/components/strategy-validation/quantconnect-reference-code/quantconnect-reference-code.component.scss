@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 .qc-reference {
   display: grid;
   gap: var(--space-4);
@@ -16,25 +18,12 @@
   align-items: start;
 }
 
-.qc-reference__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-1);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-bold);
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
 .qc-reference h3 {
+  @include eyebrow-heading;
   margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-lg);
 }
 
-.qc-reference__header p:not(.qc-reference__eyebrow) {
+.qc-reference__header p {
   max-width: 54rem;
   margin: var(--space-2) 0 0;
   color: var(--text-secondary);

@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host { display: block; min-width: 0; }
 
 .run-card { margin-top: var(--space-3); }
@@ -12,11 +14,7 @@
 .run-card__badge,
 .run-card__evidence span,
 .run-card dt {
-  color: var(--text-subtle);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
+  @include eyebrow-heading;
 }
 
 h3 { margin: var(--space-2) 0 0; font-size: var(--fs-md); }

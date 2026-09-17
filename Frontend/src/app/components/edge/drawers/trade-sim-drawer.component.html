@@ -3,7 +3,7 @@
   <aside class="tsd" role="dialog" aria-label="Trade Simulator">
     <header class="tsd-header">
       <div>
-        <div class="tsd-eyebrow">TRADE SIMULATOR · PESSIMISTIC FILL</div>
+        <h2 class="tsd-eyebrow">TRADE SIMULATOR · PESSIMISTIC FILL</h2>
         <div class="tsd-title">
           VRP signals · SPY · {{ data().trades.length }} trades · {{ tradableCount() }} tradable
         </div>
@@ -14,7 +14,7 @@
     <div class="tsd-body">
       <section class="tsd-section">
         <div class="tsd-row-between tsd-mb6">
-          <span class="tsd-eyebrow">EQUITY · NET OF COSTS</span>
+          <h3 class="tsd-eyebrow">EQUITY · NET OF COSTS</h3>
           <span class="tsd-equity-pct">{{ fmtSign(equityFinal(), 2) }}%</span>
         </div>
         <div class="tsd-equity-wrap">
@@ -24,7 +24,7 @@
       </section>
 
       <section class="tsd-section">
-        <div class="tsd-eyebrow tsd-mb8">COST ATTRIBUTION</div>
+        <h3 class="tsd-eyebrow tsd-mb8">COST ATTRIBUTION</h3>
         <div class="tsd-cost-grid">
           @for (row of costRows(); track row.k) {
             <span class="tsd-cost-key" [class.bold]="row.bold">{{ row.k }}</span>
@@ -48,7 +48,7 @@
       </section>
 
       <section class="tsd-section">
-        <div class="tsd-eyebrow tsd-mb6">TRADE LEDGER · {{ data().trades.length }} POSITIONS</div>
+        <h3 class="tsd-eyebrow tsd-mb6">TRADE LEDGER · {{ data().trades.length }} POSITIONS</h3>
         <div class="tsd-ledger" role="table">
           <div class="tsd-ledger-row tsd-ledger-head" role="row">
             <span>#</span><span>date</span><span>side</span>

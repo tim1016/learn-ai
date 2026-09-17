@@ -57,7 +57,7 @@
   <!-- Execution panel — timing diagram + assumptions + caveats -->
   <div class="exec-panel mb-6">
     <div class="exec-panel-header">
-      <span class="exec-eyebrow">Execution</span>
+      <h4 class="exec-eyebrow">Execution</h4>
       <span class="exec-desc">How is the signal traded, and what was assumed?</span>
       <a routerLink="/docs/signal-engine-methodology" class="exec-meth-link">
         See methodology <i class="pi pi-external-link" aria-hidden="true"></i>
@@ -67,7 +67,7 @@
     <div class="exec-panel-body">
       <!-- LEFT: timing diagram + prose -->
       <div class="exec-timing-col">
-        <div class="exec-col-eyebrow">Timing</div>
+        <h5 class="exec-col-eyebrow">Timing</h5>
         <svg class="exec-timing-svg" viewBox="0 0 720 200" preserveAspectRatio="xMidYMid meet"
              role="img" aria-label="Execution timing diagram: signal at t-1, entry at t, exit at t+15">
           <!-- Bar grid background -->
@@ -133,7 +133,7 @@
 
       <!-- RIGHT: assumptions table -->
       <div class="exec-facts-col">
-        <div class="exec-col-eyebrow">Assumptions</div>
+        <h5 class="exec-col-eyebrow">Assumptions</h5>
         <div class="exec-facts-table">
           @for (a of executionAssumptions; track a.label) {
             <div class="exec-fact-row">
@@ -149,7 +149,7 @@
     <div class="exec-caveats">
       <div class="exec-caveats-header">
         <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-        <span class="exec-caveats-eyebrow">Caveats</span>
+        <h5 class="exec-caveats-eyebrow">Caveats</h5>
         <span class="exec-caveats-desc">The Sharpe number is conditional on these — read before acting on it.</span>
       </div>
       <ul class="exec-caveats-list">
@@ -259,7 +259,7 @@
       <!-- Joint regime coverage (vol × trend with effective-trades estimate) -->
       <div class="joint-regime-section">
         <div class="joint-regime-eyebrow">
-          <span>Regime Coverage</span>
+          <h5>Regime Coverage</h5>
           <span class="eyebrow-hint">
             Joint vol × trend distribution. Effective-trade counts are estimates derived
             from N<sub>eff</sub> × % active × bucket share.

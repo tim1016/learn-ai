@@ -1,3 +1,5 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
   min-width: 0;
@@ -22,23 +24,14 @@
   }
 
   h3 {
+    @include eyebrow-heading;
     margin-top: var(--space-1);
-    font-size: var(--fs-lg);
   }
 
   p {
     color: var(--text-secondary);
     font-size: var(--fs-xs);
   }
-}
-
-.journey__eyebrow {
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
 }
 
 .journey__scroll {

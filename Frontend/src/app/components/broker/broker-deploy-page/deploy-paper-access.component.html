@@ -8,19 +8,12 @@
       aria-labelledby="paper-access-title"
     >
       <header class="flex items-start justify-between gap-3">
-        <div>
-          <span
-            class="text-[length:var(--fs-xxs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]"
-          >
-            Account permission
-          </span>
-          <h2
-            id="paper-access-title"
-            class="mt-0.5 mb-0 text-[length:var(--fs-lg)]"
-          >
-            {{ modeLabel() }} access
-          </h2>
-        </div>
+        <h2
+          id="paper-access-title"
+          class="mt-0.5 mb-0 eyebrow-heading"
+        >
+          {{ modeLabel() }} access
+        </h2>
         @if (
           strategy().paper_access_state === "enabled" ||
           state.kind === "complete"
@@ -75,12 +68,7 @@
               [attr.aria-label]="reviewRegionLabel()"
             >
               <div>
-                <span
-                  class="text-[length:var(--fs-xxs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]"
-                >
-                  Final confirmation
-                </span>
-                <h3 class="mt-0.5 mb-1 text-[length:var(--fs-md)]">
+                <h3 class="mt-0.5 mb-1 eyebrow-heading">
                   Confirm {{ modeLabel() }} access
                 </h3>
                 <p class="m-0 leading-normal text-[var(--text-secondary)]">

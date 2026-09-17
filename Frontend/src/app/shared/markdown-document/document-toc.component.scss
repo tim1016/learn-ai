@@ -1,3 +1,5 @@
+@use '../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -12,13 +14,9 @@
 }
 
 .document-toc-kicker {
+  @include eyebrow-heading;
   margin: 0;
-  color: var(--text-subtle);
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-bold);
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
 }
 
 ol {

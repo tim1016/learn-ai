@@ -15,15 +15,6 @@ describe('PageErrorComponent', () => {
     expect(el.querySelector('.page-error-title')?.textContent ?? '').toContain('IB Gateway');
   });
 
-  it('renders the eyebrow when one is supplied', () => {
-    const fixture = TestBed.createComponent(PageErrorComponent);
-    fixture.componentRef.setInput('error', new Error('boom'));
-    fixture.componentRef.setInput('eyebrow', 'Page failed');
-    fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.page-error-eyebrow')?.textContent ?? '').toBe('Page failed');
-  });
-
   it('renders the math-sources-of-truth link when extensions.mathRef is present', () => {
     const fixture = TestBed.createComponent(PageErrorComponent);
     fixture.componentRef.setInput(

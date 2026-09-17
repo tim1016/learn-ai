@@ -1,4 +1,5 @@
 @use "../../styles/tokens" as *;
+@use "../../styles/eyebrow-heading" as *;
 
 :host {
   display: block;
@@ -161,8 +162,7 @@
 }
 
 .edge-eyebrow {
-  font-size: 10px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.08em; color: $text-subtle;
+  @include eyebrow-heading;
   font-family: $font-mono;
 }
 
@@ -230,8 +230,8 @@
   padding: 16px 16px 0;
 }
 .card-eyebrow {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; font-family: $font-mono;
+  @include eyebrow-heading;
+  font-family: $font-mono;
 }
 .card-arrow {
   color: $text-muted; font-size: 13px;

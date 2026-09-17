@@ -1,4 +1,5 @@
 @use '../../../styles/tokens' as *;
+@use '../../../styles/eyebrow-heading' as *;
 
 :host {
   display: block;
@@ -23,19 +24,9 @@
   border-bottom: 1px solid $border;
 
   h2 {
+    @include eyebrow-heading;
     margin: 0;
-    font-size: var(--fs-xl);
   }
-}
-
-.notice-card__eyebrow {
-  margin: 0 0 var(--space-1);
-  color: $text-subtle;
-  font-family: $font-mono;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .license-badge {

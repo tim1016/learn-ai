@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
 }
@@ -8,14 +10,11 @@
   gap: var(--space-5);
 
   &__eyebrow {
+    @include eyebrow-heading;
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-3);
     margin: 0;
-    font-size: var(--fs-xs);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-    color: var(--text-subtle);
   }
 
   &__id {

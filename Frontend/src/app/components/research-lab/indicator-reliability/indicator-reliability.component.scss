@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 .indicator-reliability {
   color: var(--text-primary);
 
@@ -87,11 +89,7 @@
   }
 
   .eyebrow {
-    font-size: 0.65rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--text-muted);
+    @include eyebrow-heading;
   }
 
   // "Methodology" button in the header — a muted outline so it doesn't
@@ -246,11 +244,9 @@
     min-width: 0;
 
     .hero-headline {
-      font-size: 2.2rem;
-      font-weight: 700;
+      @include eyebrow-heading;
       line-height: 1.05;
       margin: 8px 0 6px;
-      letter-spacing: -0.03em;
     }
     .hero-desc {
       font-size: 0.95rem;

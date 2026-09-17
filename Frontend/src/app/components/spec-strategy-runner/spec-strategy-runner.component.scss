@@ -3,6 +3,8 @@
 // app's own design tokens from src/app/styles/_tokens.scss; falls back
 // to neutrals when a token doesn't exist.
 
+@use '../../styles/eyebrow-heading' as *;
+
 .ssr-page {
   max-width: 1280px;
   margin: 0 auto;
@@ -112,11 +114,8 @@
 }
 
 .ssr-eye {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--accent);
-  font-weight: 700;
+  @include eyebrow-heading;
+  margin: 0;
 }
 
 .ssr-summary-text {

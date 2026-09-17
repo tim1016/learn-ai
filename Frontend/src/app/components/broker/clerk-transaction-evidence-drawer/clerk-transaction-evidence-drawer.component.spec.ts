@@ -213,7 +213,9 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
 
     const host = fixture.nativeElement as HTMLElement;
     expect(host.querySelector('app-asset-identity')?.textContent).toContain('SPY');
-    expect(host.textContent).toContain('Custody lifecycle');
+    // #2184: "Custody lifecycle" eyebrow retired -- the heading itself
+    // carries the eyebrow look now.
+    expect(host.textContent).toContain('Where this instruction stands');
     expect(host.textContent).toContain('Custody accepted');
     expect(host.textContent).toContain('Economic terminal');
 

@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
   min-width: 0;
@@ -52,23 +54,9 @@ header {
   i { color: var(--text-muted); font-size: var(--fs-xs); }
 }
 
-.evidence-drawer__header {
-  display: grid;
-  gap: 2px;
-
-  span {
-    color: var(--text-muted);
-    font-size: var(--fs-xxs);
-    font-weight: var(--fw-bold);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-  }
-
-  h3 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: var(--fs-md);
-  }
+.evidence-drawer__header h3 {
+  @include eyebrow-heading;
+  margin: 0;
 }
 
 .evidence-drawer__empty {

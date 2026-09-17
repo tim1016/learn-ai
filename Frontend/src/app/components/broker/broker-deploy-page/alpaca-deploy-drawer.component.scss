@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: contents;
 }
@@ -18,12 +20,8 @@
 }
 
 .deploy-drawer-header span {
-  color: var(--text-muted);
+  @include eyebrow-heading;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 .deploy-drawer-header h2 {

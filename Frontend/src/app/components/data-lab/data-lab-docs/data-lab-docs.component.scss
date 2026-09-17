@@ -1,42 +1,11 @@
 @use '../../../styles/tokens' as *;
+@use '../../../styles/eyebrow-heading' as *;
 
 :host { display: block; }
 
 .data-lab-docs {
   max-width: $container-lg;
   margin: 0 auto;
-}
-
-/* ── Page header ────────────────────────────────── */
-.page-header { margin-bottom: 1.5rem; }
-
-.header-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-
-  h1 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    color: $text-primary;
-    margin: 0 0 0.25rem;
-    letter-spacing: -0.02em;
-  }
-  .subtitle {
-    color: $text-muted;
-    font-size: 0.82rem;
-    margin: 0;
-    line-height: 1.6;
-  }
-  .eyebrow {
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: $text-muted;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 4px;
-  }
 }
 
 .back-link {
@@ -356,21 +325,9 @@
   margin-bottom: 1rem;
 
   h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: $text-primary;
+    @include eyebrow-heading;
     margin: 0;
-    letter-spacing: -0.01em;
   }
-}
-.guide-eyebrow {
-  display: block;
-  font-size: 0.65rem;
-  font-weight: 600;
-  color: $text-muted;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 4px;
 }
 .guide-subtitle {
   color: $text-muted;

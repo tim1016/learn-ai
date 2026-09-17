@@ -3,7 +3,7 @@
   <aside class="esd" role="dialog" aria-label="Edge Score Inspector">
     <header class="esd-header">
       <div>
-        <div class="esd-eyebrow">EDGE SCORE INSPECTOR</div>
+        <h2 class="esd-eyebrow">EDGE SCORE INSPECTOR</h2>
         <div class="esd-title">{{ dateLabel() }} · SPY · {{ action() }}</div>
       </div>
       <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
@@ -22,7 +22,7 @@
         </div>
       </section>
 
-      <div class="esd-eyebrow esd-mt12">COMPONENT CONTRIBUTIONS</div>
+      <h3 class="esd-eyebrow esd-mt12">COMPONENT CONTRIBUTIONS</h3>
       @for (c of components(); track c.k) {
         <div class="esd-comp">
           <div class="esd-row-between esd-baseline">
@@ -47,7 +47,7 @@
       }
 
       <section class="esd-mt20 esd-divider">
-        <div class="esd-eyebrow">COMPOSITE OVER TRAILING 60 BARS</div>
+        <h3 class="esd-eyebrow">COMPOSITE OVER TRAILING 60 BARS</h3>
         <div class="esd-mini-wrap">
           <app-edge-mini-line [width]="420" [height]="68"
             [values]="scoreSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />

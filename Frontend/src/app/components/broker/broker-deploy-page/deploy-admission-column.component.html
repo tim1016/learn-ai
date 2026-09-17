@@ -5,7 +5,7 @@
     class="deploy-admission__head"
     [class.deploy-admission__head--blocked]="!deployView.eligibility.eligible"
   >
-    <span class="deploy-admission__eyebrow" id="deploy-admission-title">Live admission</span>
+    <h3 class="deploy-admission__eyebrow" id="deploy-admission-title">Live admission</h3>
     @if (summary(); as readiness) {
       <strong>{{ readiness.label }} · {{ readiness.counts }} gates</strong>
     }
