@@ -76,7 +76,8 @@
 }
 
 .bot-identity__symbol {
-  color: var(--text-subtle);
+  --asset-identity-symbol-color: var(--text-subtle);
+
   font-weight: var(--fw-regular);
 }
 
