@@ -133,8 +133,10 @@ describe('the eyebrow-plus-heading pair is retired, not reintroduced', () => {
         if (/^h[1-6]$/.test(tag.name)) continue; // the heading itself now carries the class
         if (!EYEBROW_LOOK_PATTERN.test(tag.text)) continue;
 
-        const next = tags[i + 1];
-        if (next.indent === tag.indent && /^h[1-6]$/.test(next.name)) {
+        let j = i + 1;
+        while (j < tags.length && tags[j].indent > tag.indent) j++;
+        const next = tags[j];
+        if (next && next.indent === tag.indent && /^h[1-6]$/.test(next.name)) {
           offenders.add(relPath);
         }
       }

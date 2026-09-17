@@ -75,8 +75,6 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
   `,
   styles: [
     `
-      @use '../../styles/eyebrow-heading' as *;
-
       .drawer-header {
         display: grid;
         grid-template-columns: 1fr auto;
@@ -88,7 +86,11 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
       .drawer-title {
         grid-area: title;
         margin: 0;
-        @include eyebrow-heading;
+        color: var(--text-subtle);
+        font-size: var(--fs-xxs);
+        font-weight: var(--fw-semi);
+        letter-spacing: var(--ls-caps);
+        text-transform: uppercase;
       }
       .drawer-actions {
         grid-area: actions;
