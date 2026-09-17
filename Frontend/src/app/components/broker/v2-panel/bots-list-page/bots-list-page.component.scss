@@ -14,45 +14,18 @@
   overflow: hidden;
 }
 
-// ── Header ─────────────────────────────────────────────────────────────────
-
-.bots-page__header {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.bots-page__identity {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-
-  h1 {
-    margin: 0;
-    font-size: var(--fs-lg);
-    font-weight: var(--fw-semi);
-  }
-}
-
-/* Lane context: the routed lane's own trust-anchor pill plus its authority
-   fact, so the roster never loses sight of which lane/account it serves. */
-.bots-page__lane {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-2);
-}
+// ── Commands ───────────────────────────────────────────────────────────────
+// The account this roster serves is named by the workspace header above, so
+// the page's own top line carries only the two commands that act on the
+// roster itself.
 
 .bots-page__commands {
   display: flex;
   flex: 0 0 auto;
+  justify-content: flex-end;
   gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
 
 .command-button,
@@ -75,14 +48,6 @@
   &:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
   &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   &:disabled { cursor: wait; opacity: 0.6; }
-}
-
-.command-button--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--text-on-accent);
-
-  &:hover:not(:disabled) { background: var(--accent-hover); color: var(--text-on-accent); }
 }
 
 // ── Notices ────────────────────────────────────────────────────────────────
@@ -167,12 +132,7 @@
   :host { overflow: auto; }
   .bots-page { height: auto; min-height: 100%; overflow: visible; }
 
-  .bots-page__header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .bots-page__commands { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .bots-page__commands { display: grid; grid-template-columns: repeat(2, 1fr); }
 
   .bots-page__board { grid-template-columns: 1fr; }
 

@@ -1,12 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 
-import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
-import { BrokersService } from '../../../../services/brokers.service';
-import { healthyAccountOperatorPostureFixture } from '../../../../testing/operator-blocker-fixtures';
 import {
   fakeBotPanelView,
   fakeCatalogBot,
@@ -23,60 +20,16 @@ import {
 import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
 import type { ResourceTarget } from '../../../../fleet/resource-target';
 
-function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
-  return {
-    broker: 'alpaca',
-    account_id: 'PA9',
-    account_mode: 'paper',
-    account_status: 'ACTIVE',
-    currency: 'USD',
-    cash: 10_000,
-    equity: 15_000,
-    buying_power: 30_000,
-    portfolio_value: 15_000,
-    long_market_value: 5_000,
-    short_market_value: 0,
-    pattern_day_trader: false,
-    trading_blocked: false,
-    account_blocked: false,
-    created_at_ms: 1_600_000_000_000,
-    observed_at_ms: 1_700_000_000_000,
-    ...overrides,
-  };
-}
-
-function fakeClerkStatus(): ClerkStatus {
-  return {
-    account_id: 'PA9',
-    broker: 'alpaca',
-    hold: { active: false },
-    outstanding_intents: 0,
-    observed_at_ms: 1_700_000_000_000,
-    operator_posture: healthyAccountOperatorPostureFixture(),
-  };
-}
-
-
 async function renderPage(
   bots: BotCatalogView[] = [],
   overrides: {
-    account?: BrokerAccountSnapshot;
     routeAccountId?: string;
-    clerk?: ClerkStatus;
     getCatalog?: (target: ResourceTarget) => Promise<BotCatalogView[]>;
     panelActions?: PanelAction[];
     directory?: FleetDirectoryDouble;
     runBotAction?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
-  const account = overrides.account ?? fakeAccount();
-  const clerk = overrides.clerk ?? fakeClerkStatus();
-
-  const mockBrokersService = {
-    getAccount: () => Promise.resolve(account),
-    getClerkStatus: () => Promise.resolve(clerk),
-  };
-
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
@@ -117,7 +70,6 @@ async function renderPage(
     providers: [
       { provide: directory.provide, useValue: directory.useValue },
       provideRouter([]),
-      { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
       { provide: MessageService, useValue: mockMessageService },
     ],
@@ -127,18 +79,11 @@ async function renderPage(
 }
 
 describe('BotsListPageComponent', () => {
-  it('confirms an uppercase broker account from the lowercase directory link', async () => {
-    await renderPage([], { routeAccountId: 'pa9' });
-    expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
-    expect(screen.queryByText(/Account confirmation unavailable/)).toBeNull();
-  });
-
-  describe('fleet staleness banner (#1806 item 3)', () => {
-    // The account strip's refresh pills fire on a failure *edge* -- they answer
-    // "did a refresh just fail?". This banner answers "is what I am looking at
-    // stale?", which is a state, so it is gated on the snapshot's actual age
-    // and quantifies it. A single failed poll that the next poll repairs was
-    // never meaningfully stale and must stay silent.
+  describe('bot staleness banner (#1806 item 3)', () => {
+    // This banner answers "is what I am looking at stale?", which is a state,
+    // so it is gated on the snapshot's actual age and quantifies it. A single
+    // failed poll that the next poll repairs was never meaningfully stale and
+    // must stay silent.
     it('stays silent when a refresh fails but the snapshot is still fresh', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
@@ -154,13 +99,13 @@ describe('BotsListPageComponent', () => {
         // One poll fires and fails; the snapshot underneath is ~5s old.
         await vi.advanceTimersByTimeAsync(6_000);
 
-        expect(screen.queryByText(/last successful fleet snapshot/i)).toBeNull();
+        expect(screen.queryByText(/last successful bot snapshot/i)).toBeNull();
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it('reports how stale the fleet snapshot is once refreshes stop landing', async () => {
+    it('reports how stale the bot snapshot is once refreshes stop landing', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         let calls = 0;
@@ -174,7 +119,7 @@ describe('BotsListPageComponent', () => {
 
         await vi.advanceTimersByTimeAsync(45_000);
 
-        const banner = await screen.findByText(/last successful fleet snapshot/i);
+        const banner = await screen.findByText(/last successful bot snapshot/i);
         expect(banner.textContent).toMatch(/4[0-9]s ago/);
       } finally {
         vi.useRealTimers();
@@ -182,17 +127,15 @@ describe('BotsListPageComponent', () => {
     });
   });
 
-  it('renders account strip equity value', async () => {
-    await renderPage([], { account: fakeAccount({ equity: 15_000 }) });
+  it('leaves the account, its mode and Deploy to the workspace header above it', async () => {
+    // #2185: the roster used to repeat the account strip, the lane pill and a
+    // Deploy button the workspace header now owns once for every tab.
+    await renderPage([fakeCatalogBot()]);
 
-    expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
-  });
-
-  it('renders PAPER badge for paper accounts', async () => {
-    await renderPage([], { account: fakeAccount({ account_id: 'PA9' }) });
-
-    const accountPosture = await screen.findByLabelText('Alpaca account posture');
-    expect(within(accountPosture).getByText('Paper')).toBeTruthy();
+    expect(screen.queryByLabelText('Alpaca account posture')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Alpaca bots' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Deploy strategy/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /gallery/i })).toBeNull();
   });
 
   it('titles the rail row with its strategy and names the bot below it', async () => {
@@ -252,28 +195,8 @@ describe('BotsListPageComponent', () => {
   it('renders explicit refresh and snapshot freshness', async () => {
     await renderPage([fakeCatalogBot()]);
 
-    expect(await screen.findByRole('button', { name: 'Refresh fleet' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Refresh bots' })).toBeTruthy();
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
-  });
-
-  it('links to the same Clerk gallery rather than the compatibility account route', async () => {
-    await renderPage();
-
-    const gallery = screen.getByRole('link', { name: /gallery/i }) as HTMLAnchorElement;
-    expect(gallery.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery');
-  });
-
-  it('opens and closes Deploy strategy over the Bots list', async () => {
-    await renderPage([]);
-
-    fireEvent.click(await screen.findByRole('button', { name: /Deploy strategy/i }));
-
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close deploy a bot' }));
-
-    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Alpaca bots' })).toBeTruthy();
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
@@ -281,7 +204,7 @@ describe('BotsListPageComponent', () => {
       getCatalog: () => Promise.reject(new Error('data plane restarting')),
     });
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Fleet unavailable');
+    expect((await screen.findByRole('alert')).textContent).toContain('Bots unavailable');
   });
 
   it('never carries a last-good roster across an account route change', async () => {

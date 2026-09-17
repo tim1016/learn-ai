@@ -76,8 +76,8 @@ interface LaneBadge {
  * shows that lane's own label beside it (ADR 0064 Decision 5); nothing here
  * refuses the duplicate. Siblings come from injecting `FleetDirectoryService`
  * directly (`lanesOf(lane.broker)`), not a prop the caller must remember to
- * pass — a `LaneContextStripComponent` mounted deep in the Bots/Gallery pages
- * gets correct disambiguation for free, the same as the shell header.
+ * pass — a badge mounted deep inside a feature page gets correct
+ * disambiguation for free, the same as the shell header.
  */
 @Component({
   selector: 'app-alpaca-live-banner',
