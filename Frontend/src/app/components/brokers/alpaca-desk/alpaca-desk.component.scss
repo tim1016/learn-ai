@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host {
   display: block;
   min-height: 100%;
@@ -71,20 +73,9 @@
 }
 
 .desk-title h1 {
+  @include eyebrow-heading;
   margin: 0;
-  font-size: clamp(1.45rem, 2vw, 1.85rem);
-  line-height: 1.1;
-}
-
-.desk-eyebrow {
-  display: block;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: 0.12em;
   line-height: 1.4;
-  text-transform: uppercase;
 }
 
 .order-route-notice {
