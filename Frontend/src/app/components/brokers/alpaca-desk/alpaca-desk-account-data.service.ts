@@ -9,6 +9,8 @@ import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
 import { resourceTarget } from '../../../fleet/resource-target';
+import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
+import { CurrentUrlService } from '../../../shell/current-url.service';
 
 /** One account read shared by the account workspace's header, its Overview
  * tab's active lens, and the deploy drawer — so the operator's equity, the
@@ -28,6 +30,7 @@ export class AlpacaDeskAccountDataService {
   private readonly routeParams = toSignal(this.route.paramMap, {
     initialValue: this.route.snapshot.paramMap,
   });
+  private readonly currentUrl = inject(CurrentUrlService).url;
 
   /** The account this desk reads.
    *
@@ -38,13 +41,23 @@ export class AlpacaDeskAccountDataService {
    * "Configuration … renders inside the workspace from the lane's confirmed
    * account" (ADR 0064, FR-092).
    *
+   * Read through `accountWorkspaceLocation`, not this service's own
+   * `ActivatedRoute`: that route is the one the parent shell is provided on
+   * (`brokers/alpaca/clerks/:clerkId`), and `:accountId` belongs to a
+   * componentless CHILD segment — inheritance flows parent params down to a
+   * child, never a descendant's params up to an ancestor's own injector, so
+   * `this.route.paramMap` can never see it. The canonical URL parser is the
+   * one reader every workspace surface already shares (`AppComponent`'s
+   * title, the menubar's active-node check) and does not depend on where in
+   * the route tree it is injected.
+   *
    * The route wins wherever it speaks, which is what keeps the directory out
    * of `routeIdentity` below on every URL that mints a command: the fallback
    * is reached only on the lane-scoped tabs, and no command surface renders
    * there. */
   readonly accountId = computed(() => {
-    const routed = this.routeParams().get('accountId');
-    if (routed !== null && routed.length > 0) return routed;
+    const routed = accountWorkspaceLocation(this.currentUrl())?.accountId ?? null;
+    if (routed !== null) return routed;
     const clerkId = this.routeParams().get('clerkId');
     if (clerkId === null) return null;
     const lane = this.fleetDirectory.lane('alpaca', clerkId);

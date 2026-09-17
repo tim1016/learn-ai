@@ -1,3 +1,4 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { BehaviorSubject } from 'rxjs';
@@ -5,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
+import { CurrentUrlService } from '../../../shell/current-url.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /** `paramMap` is a `BehaviorSubject`, not a one-shot `of(...)`, so a test can
@@ -13,9 +15,16 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
  * is genuinely all `ActivatedRoute.snapshot` is: the value at the moment the
  * route resolved, not a live view — matching what the service actually reads
  * from it (only `toSignal`'s `initialValue`, before the observable's first
- * emission). */
-function activatedRoute(clerkId: string, accountId: string) {
-  const initial = convertToParamMap({ clerkId, accountId });
+ * emission).
+ *
+ * Only `clerkId`: the real `ActivatedRoute` this service injects is the one
+ * the parent shell provides it on, and `:accountId` belongs to a
+ * componentless CHILD segment that parent-scoped route can never see (that
+ * gap is exactly what this suite's canonical-route tests below exercise). A
+ * fake that put `accountId` here too would collapse that distinction and
+ * pass regardless of whether the service reads it correctly. */
+function activatedRoute(clerkId: string) {
+  const initial = convertToParamMap({ clerkId });
   const paramMap$ = new BehaviorSubject(initial);
   return {
     provider: {
@@ -23,6 +32,18 @@ function activatedRoute(clerkId: string, accountId: string) {
       useValue: { paramMap: paramMap$, snapshot: { paramMap: initial } },
     },
     paramMap$,
+  };
+}
+
+/** The service's account identity now comes from the canonical URL parser
+ * (`accountWorkspaceLocation`), not `ActivatedRoute` — this fakes
+ * `CurrentUrlService` with a settable URL signal. */
+function currentUrl(clerkId: string, accountId: string) {
+  const url = signal(`/brokers/alpaca/clerks/${clerkId}/accounts/${accountId}`);
+  return {
+    provider: { provide: CurrentUrlService, useValue: { url } },
+    set: (next: { clerkId: string; accountId: string }) =>
+      url.set(`/brokers/alpaca/clerks/${next.clerkId}/accounts/${next.accountId}`),
   };
 }
 
@@ -54,7 +75,8 @@ describe('AlpacaDeskAccountDataService', () => {
     TestBed.configureTestingModule({
       providers: [
         provideFleetDirectory({ observed_at_ms: 1, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
-        activatedRoute('clrk_spec', accountId).provider,
+        activatedRoute('clrk_spec').provider,
+        currentUrl('clrk_spec', accountId).provider,
         { provide: BrokersService, useValue: { getAccount: vi.fn().mockResolvedValue({ account_id: 'PA1' }) } },
         AlpacaDeskAccountDataService,
       ],
@@ -76,7 +98,8 @@ describe('AlpacaDeskAccountDataService', () => {
     TestBed.configureTestingModule({
       providers: [
         provideFleetDirectory({ observed_at_ms: 1, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
-        activatedRoute('clrk_spec', accountId).provider,
+        activatedRoute('clrk_spec').provider,
+        currentUrl('clrk_spec', accountId).provider,
         {
           provide: BrokersService,
           useValue: {
@@ -101,7 +124,8 @@ describe('AlpacaDeskAccountDataService', () => {
     TestBed.configureTestingModule({
       providers: [
         directory,
-        activatedRoute('clrk_spec', 'PA1').provider,
+        activatedRoute('clrk_spec').provider,
+        currentUrl('clrk_spec', 'PA1').provider,
         { provide: BrokersService, useValue: { getAccount: neverAccount() } },
         AlpacaDeskAccountDataService,
       ],
@@ -134,11 +158,13 @@ describe('AlpacaDeskAccountDataService', () => {
         testLane({ clerk_id: 'clrk_other', effective_binding_generation: 9, routing_epoch: 2 }),
       ],
     });
-    const route = activatedRoute('clrk_spec', 'PA1');
+    const route = activatedRoute('clrk_spec');
+    const url = currentUrl('clrk_spec', 'PA1');
     TestBed.configureTestingModule({
       providers: [
         directory,
         route.provider,
+        url.provider,
         { provide: BrokersService, useValue: { getAccount: neverAccount() } },
         AlpacaDeskAccountDataService,
       ],
@@ -149,8 +175,10 @@ describe('AlpacaDeskAccountDataService', () => {
     expect(service.fence()).toEqual({ bindingGeneration: 3, routingEpoch: 4 });
 
     // A real navigation: the route now names a different clerk entirely, not
-    // a directory refresh of the same one.
-    route.paramMap$.next(convertToParamMap({ clerkId: 'clrk_other', accountId: 'PA2' }));
+    // a directory refresh of the same one. Both the route (clerkId) and the
+    // URL (accountId) move together, exactly as a real navigation would.
+    route.paramMap$.next(convertToParamMap({ clerkId: 'clrk_other' }));
+    url.set({ clerkId: 'clrk_other', accountId: 'PA2' });
     TestBed.tick();
 
     expect(service.fence()).toEqual({ bindingGeneration: 9, routingEpoch: 2 });
