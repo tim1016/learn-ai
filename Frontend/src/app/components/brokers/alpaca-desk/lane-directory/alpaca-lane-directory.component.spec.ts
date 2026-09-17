@@ -167,6 +167,10 @@ describe('AlpacaLaneDirectoryComponent', () => {
     });
 
     expect(screen.getByText(/choose a ready Paper or Live account below to deploy/i)).toBeTruthy();
+    // The `href` alone proves only that the link is addressed at a lane — it
+    // cannot see whether the destination still opens the drawer. That is
+    // pinned by following this link for real in
+    // `alpaca-account-workspace.component.spec.ts`.
     expect(screen.getByRole('link', { name: 'Deploy' }).getAttribute('href')).toContain(
       '/brokers/alpaca/clerks/',
     );

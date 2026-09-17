@@ -4,12 +4,12 @@ import {
   DestroyRef,
   computed,
   inject,
+  linkedSignal,
   resource,
-  signal,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink, RouterOutlet } from '@angular/router';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
@@ -81,6 +81,7 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 })
 export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly brokers = inject(BrokersService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
@@ -90,6 +91,9 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly routeParams = toSignal(this.route.paramMap, {
     initialValue: this.route.snapshot.paramMap,
+  });
+  private readonly queryParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
   });
 
   protected readonly fmtCurrency = fmtCurrency;
@@ -193,7 +197,13 @@ export class AlpacaAccountWorkspaceComponent {
     return this.accountData.account.hasValue() ? null : DEPLOY_WITHOUT_ACCOUNT;
   });
 
-  protected readonly deployOpen = signal(false);
+  /** `?deploy` is the deploy entry point's address, not a private flag: the
+   * account list's per-account Deploy link, the menubar's Deploy entry and
+   * the strategy-validation hand-off all arrive here by navigating to this
+   * account with that query param set, and `activeMenuNodeFor` reads the same
+   * param to highlight Deploy. So the drawer is seeded from the URL and the
+   * two commands below keep the URL saying what is open. */
+  protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
 
   constructor() {
     // Equity and the reconciliation verdict both move while the operator
@@ -210,9 +220,20 @@ export class AlpacaAccountWorkspaceComponent {
   protected openDeploy(): void {
     if (this.deployBlockedReason() !== null) return;
     this.deployOpen.set(true);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { deploy: '' },
+      queryParamsHandling: 'merge',
+    });
   }
 
   protected closeDeploy(): void {
     this.deployOpen.set(false);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      // `deployLens` is still nulled so an old bookmarked URL cleans itself up.
+      queryParams: { deploy: null, deployLens: null },
+      queryParamsHandling: 'merge',
+    });
   }
 }
