@@ -51,6 +51,7 @@ import {
 } from '../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import { MarketDataService } from '../../../../services/market-data.service';
+import { WorkspaceTitleContextService } from '../../../../shell/workspace-title-context.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
   actionOutcomeToast,
@@ -131,6 +132,7 @@ export class BotPanelShellComponent {
   private readonly messageService = inject(MessageService);
   private readonly lensPreference = inject(LensPreferenceService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly titleContext = inject(WorkspaceTitleContextService);
 
   // ── Active lens ──────────────────────────────────────────────────────────
   // Precedence: the `?lens=` query param, then the stored preference the
@@ -286,7 +288,13 @@ export class BotPanelShellComponent {
         routingEpoch: target.routingEpoch,
       });
     });
+    // The window names a bot's page by the bot (ADR 0064 Decision 6), and the
+    // bot's label is panel data the shell above does not read. This is the one
+    // fact this page publishes upward; it is cleared on the way out so no
+    // other page can inherit it.
+    effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
     this.destroyRef.onDestroy(() => {
+      this.titleContext.setBotLabel(null);
       this.liveStore.stop();
     });
   }

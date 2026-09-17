@@ -13,7 +13,13 @@ import {
 } from './services/alpaca-live-verdict.service';
 import { fakeVerdictState } from './testing/alpaca-live-verdict-fixtures';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
-import { provideFleetDirectory, testLane, TEST_CLERK_ID } from './fleet/fleet-directory-testing';
+import {
+  provideFleetDirectory,
+  testLane,
+  TEST_ACCOUNT_ID,
+  TEST_CLERK_ID,
+} from './fleet/fleet-directory-testing';
+import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
 
 class FakeAlpacaLiveVerdictService {
   private readonly states = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
@@ -49,6 +55,26 @@ describe('AppComponent', () => {
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
+          // The workspace's own URLs, stubbed: these specs grade the window
+          // title the shell computes from them, not what the tabs render.
+          { path: 'brokers/alpaca/clerks/:clerkId/configuration', component: ShellSmokeRouteComponent },
+          { path: 'brokers/alpaca/clerks/:clerkId/bots', component: ShellSmokeRouteComponent },
+          {
+            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
+            component: ShellSmokeRouteComponent,
+          },
+          {
+            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots',
+            component: ShellSmokeRouteComponent,
+          },
+          {
+            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery',
+            component: ShellSmokeRouteComponent,
+          },
+          {
+            path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
+            component: ShellSmokeRouteComponent,
+          },
         ]),
       ],
       providers: [
@@ -154,6 +180,69 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     expect(TestBed.inject(Title).getTitle()).toBe('Options Lab');
+  });
+
+  describe('the browser title inside an account workspace', () => {
+    const LANE = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
+    const WORKSPACE = `${LANE}/accounts/${TEST_ACCOUNT_ID}`;
+
+    async function titleAt(url: string): Promise<string> {
+      await TestBed.inject(Router).navigateByUrl(url);
+      fixture.detectChanges();
+      return TestBed.inject(Title).getTitle();
+    }
+
+    it.each([
+      [WORKSPACE, 'Overview · Paper'],
+      [`${WORKSPACE}/bots`, 'Bots · Paper'],
+      [`${WORKSPACE}/gallery`, 'Gallery · Paper'],
+      [`${LANE}/configuration`, 'Configuration · Paper'],
+      [`${LANE}/bots`, 'Bots · Paper'],
+    ])('names what is open and the account it is open on: %s', async (url, expected) => {
+      // ADR 0064 Decision 6. "Paper" here is the account's NAME — the lane's
+      // label until a nickname is set — not its Paper/Live mode, which is a
+      // separate fact the header carries.
+      expect(await titleAt(url)).toBe(expected);
+    });
+
+    it('names an account by its nickname, with the lane label when another shares it', async () => {
+      directory.rebind({
+        observed_at_ms: 2,
+        clerks: [
+          testLane({ provider_summary: { account_nickname: 'Growth' } }),
+          testLane({
+            clerk_id: 'clrk_other',
+            display_label: 'Live',
+            provider_summary: { account_nickname: 'Growth' },
+          }),
+        ],
+      });
+      await directory.useValue.refresh?.();
+
+      expect(await titleAt(`${WORKSPACE}/gallery`)).toBe('Gallery · Growth (Paper)');
+    });
+
+    it("names a bot's page by the bot once its page publishes a label", async () => {
+      const botUrl = `${WORKSPACE}/bots/sid-1?from=gallery`;
+      // Before the panel has loaded there is no label, so the tab it belongs
+      // to names the window rather than a stale bot's.
+      expect(await titleAt(botUrl)).toBe('Gallery · Paper');
+
+      TestBed.inject(WorkspaceTitleContextService).setBotLabel('Deployment Validation');
+      fixture.detectChanges();
+
+      expect(TestBed.inject(Title).getTitle()).toBe('Deployment Validation · Paper');
+    });
+
+    it("never lets a bot's label reach a tab that is not a bot's page", async () => {
+      TestBed.inject(WorkspaceTitleContextService).setBotLabel('Deployment Validation');
+
+      expect(await titleAt(`${WORKSPACE}/bots`)).toBe('Bots · Paper');
+    });
+
+    it('leaves titles outside a workspace to the active menu node', async () => {
+      expect(await titleAt('/data-lab')).toBe('Stocks');
+    });
   });
 
   it('keeps the application banner outside the main landmark', async () => {
