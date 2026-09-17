@@ -69,8 +69,12 @@ async function renderWith(
 /** Render a badge as if the operator were standing on `url` — the badge reads
  * the current URL to decide whether it is switching accounts inside a
  * workspace or opening one from outside. */
-async function renderAt(url: string, lane: LaneDescriptor) {
-  const view = await renderWith(lane, { verdict: verdict({}), lastError: null });
+async function renderAt(
+  url: string,
+  lane: LaneDescriptor,
+  state: LaneVerdictState = { verdict: verdict({}), lastError: null },
+) {
+  const view = await renderWith(lane, state);
   const router = view.fixture.debugElement.injector.get(Router);
   await router.navigateByUrl(url);
   await view.fixture.whenStable();
@@ -441,10 +445,7 @@ describe('AlpacaLiveBannerComponent', () => {
       // The link wraps the live region rather than replacing it: one element
       // cannot be both, and the real-money assumption has to keep announcing
       // as a status with its own accessible name (WCAG 1.4.1).
-      const view = await renderWith(PAPER_LANE, { verdict: null, lastError: new Error('down') });
-      const router = view.fixture.debugElement.injector.get(Router);
-      await router.navigateByUrl('/data-lab');
-      await view.fixture.whenStable();
+      await renderAt('/data-lab', PAPER_LANE, { verdict: null, lastError: new Error('down') });
 
       const status = screen.getByRole('status');
       expect(status.className).toContain('is-undetermined');

@@ -198,7 +198,8 @@ const ACCOUNT_SCOPE = (clerk: string, accountId: string) =>
  * service, so a surface that quietly grew a new dependency shows up as a
  * failed read rather than as a silent pass.
  */
-async function installFleetBoundary(page: Page, requests: string[]): Promise<void> {
+async function installFleetBoundary(page: Page): Promise<string[]> {
+  const requests: string[] = [];
   await page.route('**/*', async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -271,6 +272,7 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
     }
     await route.fulfill({ status: 503, json: { detail: 'Outside this fleet fixture.' } });
   });
+  return requests;
 }
 
 /** The shell's per-lane trust-anchor poll fires on every route; it proves the
@@ -280,8 +282,7 @@ const withoutVerdictPolls = (requests: string[]): string[] =>
 
 test.describe('Account-first Alpaca navigation', () => {
   test('walks the account list into one account and stays on it', async ({ page }) => {
-    const requests: string[] = [];
-    await installFleetBoundary(page, requests);
+    const requests = await installFleetBoundary(page);
 
     // The account list: one heading, one card per account, no chooser.
     await page.goto('/brokers/alpaca');
@@ -344,8 +345,7 @@ test.describe('Account-first Alpaca navigation', () => {
   });
 
   test('switches accounts in place, keeping the tab, and comes back by badge', async ({ page }) => {
-    const requests: string[] = [];
-    await installFleetBoundary(page, requests);
+    await installFleetBoundary(page);
 
     await page.goto(`${PAPER_WORKSPACE}/gallery`);
     await expect(page.getByRole('main', { name: 'Bot gallery' })).toBeVisible();
@@ -368,8 +368,7 @@ test.describe('Account-first Alpaca navigation', () => {
   });
 
   test('opens an account from outside any workspace on its Overview', async ({ page }) => {
-    const requests: string[] = [];
-    await installFleetBoundary(page, requests);
+    await installFleetBoundary(page);
 
     // Standing nowhere near an account: a badge has no tab to keep, so it
     // opens the account's own page.
@@ -384,8 +383,7 @@ test.describe('Account-first Alpaca navigation', () => {
   });
 
   test('offers Alpaca as Accounts alone, and retires the broker-wide surfaces', async ({ page }) => {
-    const requests: string[] = [];
-    await installFleetBoundary(page, requests);
+    await installFleetBoundary(page);
 
     await page.goto('/data-lab');
     await page.getByRole('menuitem', { name: 'Alpaca' }).click();

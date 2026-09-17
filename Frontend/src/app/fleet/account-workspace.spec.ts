@@ -4,6 +4,7 @@ import {
   accountWorkspaceBadgeRoute,
   accountWorkspaceBotRoute,
   accountWorkspaceEntryRoute,
+  accountWorkspaceLens,
   accountWorkspaceLocation,
   accountWorkspaceOriginTabRoute,
   accountWorkspaceSwitchRoute,
@@ -88,6 +89,16 @@ describe('accountWorkspaceLocation', () => {
     it('decodes the bot identity the URL escaped', () => {
       expect(accountWorkspaceLocation(`${WORKSPACE}/bots/sid%2F1`)?.botSid).toBe('sid/1');
     });
+  });
+});
+
+describe('accountWorkspaceLens', () => {
+  it('reads the lens perspective a URL names', () => {
+    expect(accountWorkspaceLens(`${WORKSPACE}?lens=operator`)).toBe('operator');
+  });
+
+  it('names none when the URL carries no lens', () => {
+    expect(accountWorkspaceLens(WORKSPACE)).toBeNull();
   });
 });
 

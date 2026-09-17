@@ -237,7 +237,7 @@ export function accountWorkspaceBotRoute(
  * can never be addressed at an Overview it has none for (FR-092).
  */
 export function accountWorkspaceEntryRoute(address: AccountWorkspaceAddress): readonly string[] {
-  return accountWorkspaceTabRoute(address, 'overview') ?? configurationRoute(address);
+  return tabRouteOrConfiguration(address, 'overview');
 }
 
 /**
@@ -291,7 +291,7 @@ export function accountWorkspaceSwitchRoute(
     clerkId: target.clerkId,
     accountId: target.accountId,
   };
-  const commands = accountWorkspaceTabRoute(destination, tab) ?? configurationRoute(destination);
+  const commands = tabRouteOrConfiguration(destination, tab);
   return { commands, queryParams: lensQuery(lens) };
 }
 
@@ -330,6 +330,15 @@ function workspaceRoute(address: AccountWorkspaceAddress): string[] {
  * it is the one tab an address can always offer. */
 function configurationRoute(address: AccountWorkspaceAddress): string[] {
   return [...laneRoute(address.broker, address.clerkId), 'configuration'];
+}
+
+/** A tab's route, or Configuration when the address cannot offer that tab —
+ * the one substitution every cold-open and every switch makes identically. */
+function tabRouteOrConfiguration(
+  address: AccountWorkspaceAddress,
+  tab: AccountWorkspaceTab,
+): readonly string[] {
+  return accountWorkspaceTabRoute(address, tab) ?? configurationRoute(address);
 }
 
 /** The destination's query, built from the lens alone — never merged from the
