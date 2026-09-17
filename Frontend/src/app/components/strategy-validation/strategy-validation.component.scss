@@ -1,3 +1,5 @@
+@use '../../styles/eyebrow-heading' as *;
+
 .strategy-validation {
   display: grid;
   gap: var(--space-5);
@@ -35,18 +37,6 @@
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   min-width: 0;
-}
-
-.sv-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-bold);
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .sv-row-category {
@@ -92,7 +82,7 @@
 }
 
 .sv-header h1 {
-  font-size: var(--fs-h1);
+  @include eyebrow-heading;
   line-height: 1.15;
 }
 

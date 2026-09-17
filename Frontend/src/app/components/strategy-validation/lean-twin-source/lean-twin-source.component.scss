@@ -1,3 +1,5 @@
+@use '../../../styles/eyebrow-heading' as *;
+
 :host { display: block; min-width: 0; }
 
 .lean-twin {
@@ -17,15 +19,7 @@
   gap: var(--space-3);
 }
 
-.lean-twin h3 { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); }
-
-.lean-twin__eyebrow {
-  margin: 0 0 2px;
-  color: var(--accent);
-  font: 500 var(--fs-xxs)/1 var(--font-mono);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
-}
+.lean-twin h3 { @include eyebrow-heading; margin: 0; }
 
 .lean-twin__source {
   max-height: 420px;
