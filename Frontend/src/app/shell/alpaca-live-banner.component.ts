@@ -52,7 +52,12 @@ interface LaneBadge {
   readonly mode: string;
   readonly ariaLabel: string;
   readonly detail: string;
-  readonly account: string | null;
+  /** True when the clerk holds the no-submit Shadow authority (ADR 0059 D2),
+   * read from the server's own `clerk_authority` exactly as
+   * `verdictModeChip` does — never inferred from the account. The authority
+   * *mode* is what this badge says about a live lane; the account number it
+   * used to print here names no risk and guards nothing (ADR 0064). */
+  readonly shadow: boolean;
   readonly armedCount: number | null;
   readonly lossHold: boolean;
   readonly refusalCode: string | null;
@@ -65,7 +70,11 @@ interface LaneBadge {
  * merged or hardcoded pair, so every badge carries its own lane label.
  *
  * The server verdict remains the only truth source. Live mode keeps the
- * account id and armed count visible even in the dense global header.
+ * authority mode and armed count visible even in the dense global header —
+ * but not the account number, which names the account without guarding
+ * anything here (ADR 0064; #2188). The badge already names its account by
+ * its display name, and the number now appears only where it guards a
+ * decision: Configuration, and the confirmation of a consequential action.
  *
  * **It is also the way to that account** (ADR 0064 Decision 3): the whole
  * badge is a link into its workspace, on the tab the operator is already
@@ -145,8 +154,10 @@ interface LaneBadge {
           }
         }
         <span class="alpaca-banner__mode">{{ b.mode }}</span>
-        @if (b.account) {
-          <span class="alpaca-banner__detail">· {{ b.account }}</span>
+        @if (b.shadow) {
+          <span class="alpaca-banner__detail">· Shadow</span>
+        }
+        @if (b.armedCount !== null) {
           <span class="alpaca-banner__detail">· {{ b.armedCount }} armed</span>
         }
         @if (b.lossHold) {
@@ -257,6 +268,10 @@ function verdictBadge(
     ariaLabel: `${accessibleName}: ${v.headline}`,
     detail: v.detail,
     lossHold: v.loss_hold === 'held',
+    // Derived once, before the switch, on exactly the same server field
+    // `verdictModeChip` reads — so this badge and the lane's own mode chip
+    // can never disagree about the authority the operator is standing in.
+    shadow: v.clerk_authority === 'shadow',
   };
   switch (v.final_verdict) {
     case 'paper':
@@ -264,7 +279,6 @@ function verdictBadge(
         ...base,
         tone: 'is-paper',
         mode: 'Paper money',
-        account: null,
         armedCount: null,
         refusalCode: null,
       };
@@ -274,7 +288,6 @@ function verdictBadge(
         ...base,
         tone: v.final_verdict === 'live-armed' ? 'is-live-armed' : 'is-live-unarmed',
         mode: 'Live',
-        account: v.observed_account_id ?? 'account unknown',
         armedCount: v.armed_instance_count,
         refusalCode: null,
       };
@@ -291,6 +304,7 @@ function verdictBadge(
           refusalCode: v.clerk_refusal_reason_code,
         }),
         lossHold: base.lossHold,
+        shadow: base.shadow,
       };
   }
 }
@@ -329,7 +343,10 @@ function undetermined({
     mode,
     ariaLabel: `${named}. ${ASSUME_REAL_MONEY}`,
     detail,
-    account: null,
+    // No verdict reached this path in three of its four causes, so no
+    // authority is known to report. The `unknown` verdict case overrides this
+    // with the authority its own read did carry.
+    shadow: false,
     armedCount: null,
     lossHold: false,
     refusalCode,

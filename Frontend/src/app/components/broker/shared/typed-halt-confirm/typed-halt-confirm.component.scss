@@ -29,6 +29,17 @@
     letter-spacing: 0.04em;
   }
 
+  .account {
+    margin: 0 0 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-subtle);
+
+    strong {
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+    }
+  }
+
   .message {
     display: flex;
     align-items: center;

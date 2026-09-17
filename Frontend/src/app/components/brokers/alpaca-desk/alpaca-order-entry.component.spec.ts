@@ -776,6 +776,60 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await vi.waitFor(() => expect(screen.queryByText(/submission outcome is uncertain/i)).toBeNull());
   });
+
+  /** #2188: submitting a manual order is a consequential action, and a
+   * confirmation is one of the two surfaces where the account NUMBER earns
+   * its place (the other is Configuration). The dialog used to name no
+   * account at all — the operator confirmed legs without confirming which
+   * account they would hit. */
+  it('names the account by number in the Confirm order dialog', async () => {
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: {
+        available: true,
+        unavailable: null,
+        supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+      },
+      preview_token: 'c'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        fence: FENCE,
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [
+        provideFleetDirectory(),
+        {
+          provide: BrokersService,
+          useValue: {
+            previewSqliteManualOrder,
+            getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+          },
+        },
+      ],
+    });
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+
+    // Scoped to the dialog the operator is about to confirm from, not the
+    // page behind it: the account has to be readable *in the ceremony*.
+    const dialog = (await screen.findByRole('button', { name: /Confirm & submit/i }))
+      .closest('.p-dialog');
+    if (dialog === null) throw new Error('confirm-order dialog missing');
+    expect(dialog.textContent).toContain('PA1');
+  });
 });
 const TARGET = resourceTarget('alpaca', 'clrk_spec', {
   accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,

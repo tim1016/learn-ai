@@ -6,8 +6,22 @@ import type {
   AlpacaDeskState,
   BrokerAccountSnapshot,
 } from '../../../api/alpaca.types';
+import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
+
+/** The directory the strip names an *observed* account from when no
+ * configuration choice is effective. One lane, bound to `accountId`, named
+ * `displayLabel` — the same two facts `laneDisplayName` resolves a name
+ * from anywhere else in the app. */
+function directory(accountId = 'PA-123', displayLabel = 'Paper') {
+  const lane = testLane({
+    clerk_id: 'clrk_spec',
+    display_label: displayLabel,
+    provider_summary: { ...testLane().provider_summary, confirmed_account_id: accountId },
+  });
+  return provideFleetDirectory({ observed_at_ms: 1, clerks: [lane] });
+}
 
 function snapshot(
   overrides: Partial<BrokerAccountSnapshot> = {},
@@ -43,7 +57,12 @@ function choice(
     profile_label: 'Alpaca Paper',
     account_id: 'PA-123',
     nickname: 'Strategy lab',
-    account_label: 'Strategy lab · PA-123',
+    // The backend composes this as `nickname or profile.display_name`
+    // (`broker_configuration/desk_state.py`) — a friendly name, never the
+    // account number. A double that embedded the number here would let an
+    // "this strip never shows the number" assertion fail for a fabricated
+    // reason.
+    account_label: 'Strategy lab',
     endpoint_mode: 'paper',
     badge_label: 'Paper',
     description: 'For strategy testing with no live capital.',
@@ -125,7 +144,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
     await render(AlpacaDeskAccountStateComponent, {
       inputs: { state: current, accountAvailable: false, accountFailed: true },
       on: { reviewRequested },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     await fireEvent.click(screen.getByRole('button', { name: current.action.label }));
@@ -159,13 +178,13 @@ describe('AlpacaDeskAccountStateComponent', () => {
     });
     await render(AlpacaDeskAccountStateComponent, {
       inputs: { state: current, accountAvailable: false, accountFailed: true },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     const effectiveSection = screen.getByText('Effective configuration').closest('section');
     if (effectiveSection === null) throw new Error('effective configuration section missing');
     expect(within(effectiveSection).getByText(effective.profile_label)).toBeTruthy();
-    expect(within(effectiveSection).getByText(/Strategy lab · PA-123.*Paper.*Revision 3/)).toBeTruthy();
+    expect(within(effectiveSection).getByText(/Strategy lab.*Paper.*Revision 3/)).toBeTruthy();
     expect(within(effectiveSection).queryByText(current.headline)).toBeNull();
 
     const pendingSection = screen.getByText('Configuration change pending').closest('section');
@@ -196,7 +215,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
     });
     await render(AlpacaDeskAccountStateComponent, {
       inputs: { state: current, accountAvailable: true, accountFailed: false },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     expect(screen.getByText(current.headline)).toBeTruthy();
@@ -224,7 +243,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
     });
     await render(AlpacaDeskAccountStateComponent, {
       inputs: { state: current, accountAvailable: true, accountFailed: false },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     expect(screen.getByText(current.headline)).toBeTruthy();
@@ -244,7 +263,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
     await render(AlpacaDeskAccountStateComponent, {
       inputs: { state: current, accountAvailable: true, accountFailed: false },
       on: { reviewRequested },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     const action = screen.getByRole('button', { name: current.action.label });
@@ -277,7 +296,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
         accountFailed: false,
         snapshot: snapshot(),
       },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     const strip = screen.getByLabelText('Effective broker identity');
@@ -303,14 +322,73 @@ describe('AlpacaDeskAccountStateComponent', () => {
         accountFailed: false,
         snapshot: snapshot({ account_mode: 'live', account_id: 'LIVE-9' }),
       },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      // Not labelled "Live": that is what the endpoint-mode chip beside it
+      // says, and a lane named the same would make the assertion below
+      // ambiguous about which of the two it matched.
+      providers: [
+        directory('LIVE-9', 'Retirement'),
+        { provide: BrokersService, useValue: brokersService() },
+      ],
     });
 
     const strip = screen.getByLabelText('Effective broker identity');
-    expect(within(strip).getByText('LIVE-9')).toBeTruthy();
     expect(within(strip).getByText('Live')).toBeTruthy();
     expect(within(strip).queryByText(/^Revision/)).toBeNull();
     expect(within(strip).getByText(/no revision yet/)).toBeTruthy();
+  });
+
+  // The `effective_choice` branch has always named this line with a friendly
+  // backend-composed label (`nickname or display_name`). The fallback used to
+  // put the raw account number on the same line — one line, two meanings.
+  it("names an observed account by its lane's display name, never its number (#2188)", async () => {
+    const current = state({
+      activation_state: 'staged_not_applied',
+      effective_choice: null,
+      staged_choice: choice({ is_staged: true, is_effective: false }),
+      action: { kind: 'review_staged_configuration', label: 'Review pending change', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: {
+        state: current,
+        accountAvailable: true,
+        accountFailed: false,
+        snapshot: snapshot({ account_mode: 'live', account_id: 'LIVE-9' }),
+      },
+      providers: [
+        directory('LIVE-9', 'Retirement'),
+        { provide: BrokersService, useValue: brokersService() },
+      ],
+    });
+
+    const strip = screen.getByLabelText('Effective broker identity');
+    expect(within(strip).getByText('Retirement')).toBeTruthy();
+    expect(within(strip).queryByText('LIVE-9')).toBeNull();
+  });
+
+  it('omits the account name rather than falling back to the number when no lane serves it', async () => {
+    const current = state({
+      activation_state: 'staged_not_applied',
+      effective_choice: null,
+      staged_choice: choice({ is_staged: true, is_effective: false }),
+      action: { kind: 'review_staged_configuration', label: 'Review pending change', enabled: true },
+    });
+    await render(AlpacaDeskAccountStateComponent, {
+      inputs: {
+        state: current,
+        accountAvailable: true,
+        accountFailed: false,
+        snapshot: snapshot({ account_mode: 'live', account_id: 'LIVE-9' }),
+      },
+      // A directory that knows some other account: nothing can name LIVE-9.
+      providers: [
+        directory('PA-OTHER', 'Paper'),
+        { provide: BrokersService, useValue: brokersService() },
+      ],
+    });
+
+    const strip = screen.getByLabelText('Effective broker identity');
+    expect(within(strip).getByText('Unconfigured worker account')).toBeTruthy();
+    expect(within(strip).queryByText('LIVE-9')).toBeNull();
   });
 
   it('warns and gates identity-dependent actions when account ids disagree', async () => {
@@ -330,7 +408,7 @@ describe('AlpacaDeskAccountStateComponent', () => {
         snapshot: snapshot({ account_id: 'PA-OBSERVED' }),
       },
       on: { reviewRequested },
-      providers: [{ provide: BrokersService, useValue: brokersService() }],
+      providers: [directory(), { provide: BrokersService, useValue: brokersService() }],
     });
 
     const warning = screen.getByRole('alert');

@@ -7,9 +7,11 @@
 } @else if (account.value(); as acct) {
   <section class="account-strip" aria-label="Alpaca account summary" [attr.data-expanded]="expanded()">
     <div class="account-strip__primary">
+      <!-- The account this card is about is named by the workspace header
+           directly above it; repeating its number here guarded nothing
+           (ADR 0064; #2188). The mode and status badges stay — they are
+           facts about the account, not another way to name it. -->
       <div class="account-identity">
-        <span class="account-identity__label">Account</span>
-        <strong class="account-identity__id">{{ acct.account_id }}</strong>
         <div class="account-identity__badges">
           <p-tag [severity]="acct.account_mode === 'live' ? 'danger' : 'warn'" [value]="acct.account_mode | receiptLabel" />
           <p-tag severity="info" [value]="acct.account_status | receiptLabel" />

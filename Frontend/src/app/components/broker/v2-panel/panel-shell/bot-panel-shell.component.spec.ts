@@ -756,6 +756,7 @@ describe('BotPanelShellComponent', () => {
     expect(
       fixture.nativeElement.querySelector('app-typed-halt-confirm app-asset-identity')?.textContent,
     ).toContain('QQQ');
+    expect(screen.getByRole('dialog').textContent).toContain('DUM284968');
 
     fireEvent.input(screen.getByTestId('typed-halt-confirm-input'), {
       target: { value: 'RECOVER' },

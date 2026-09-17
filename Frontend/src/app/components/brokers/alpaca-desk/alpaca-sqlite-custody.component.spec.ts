@@ -500,6 +500,36 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText('order:entry:12')).toBeTruthy();
   });
 
+  /** #2188: a confirmation is one of the two surfaces where the account
+   * NUMBER earns its place. These recovery confirmations carry backend-
+   * composed copy that names no account (`recovery_policy.py`'s descriptors
+   * are module-level constants with no context), so the number has to reach
+   * the dialog as a threaded fact from the host that already knows it — the
+   * same footing as the asset symbol beside it, never prose composed here. */
+  it('names the account by number in an evidence-bound confirmation', async () => {
+    const flatten = action({
+      action_id: 'execute_safe_flatten',
+      label: 'Execute safe flatten',
+      explanation: 'Submit the prepared exact reduction as recovery EXIT custody.',
+      freshness: 'fresh',
+      confirmation: {
+        title: 'Flatten attributed exposure?',
+        explanation: 'The Clerk will submit reduction-only orders.',
+        confirm_label: 'Flatten now',
+      },
+    });
+    const { fixture } = await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection([flatten])),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: flatten.label }));
+    fixture.detectChanges();
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Flatten attributed exposure?');
+    expect(dialog.textContent).toContain('PA1');
+  });
+
   /** #2106: `target` arrives as an `input()` sourced from the live fleet
    * directory. If the lane rebinds between when the operator opened the
    * confirmation and when they confirm it, minting the command from

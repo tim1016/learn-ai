@@ -122,6 +122,7 @@
 
 <app-alpaca-order-preview
   [legs]="legs()"
+  [accountId]="expectedAccountId()"
   [visible]="previewOpen()"
   [submitting]="submitting()"
   (closed)="closePreview()"
