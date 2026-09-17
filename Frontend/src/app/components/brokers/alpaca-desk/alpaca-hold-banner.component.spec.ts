@@ -1,18 +1,19 @@
+import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
+import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClerkStatus } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
+import { provideFleetDirectory, testLane, TEST_ACCOUNT_ID, TEST_CLERK_ID } from '../../../fleet/fleet-directory-testing';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
-import { resourceTarget, type ResourceTarget } from '../../../fleet/resource-target';
-
-const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 4, routingEpoch: 1 });
 
 function heldStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
   return {
     broker: 'alpaca',
-    account_id: 'PA9',
+    account_id: TEST_ACCOUNT_ID,
     hold: {
       active: true,
       reason_code: 'UNEXPLAINED_ORDER_HOLD',
@@ -30,7 +31,7 @@ function heldStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
 function clearStatus(): ClerkStatus {
   return {
     broker: 'alpaca',
-    account_id: 'PA9',
+    account_id: TEST_ACCOUNT_ID,
     hold: { active: false, reason_code: null, reason: null, since_ms: null },
     latest_reconciliation: { verdict: 'clean', recorded_at_ms: 1_700_000_000_000 },
     outstanding_intents: 0,
@@ -39,16 +40,38 @@ function clearStatus(): ClerkStatus {
   };
 }
 
-async function renderBanner(service: Partial<BrokersService>) {
+/** Never resolves: this suite only cares about `clerkStatus`, and letting the
+ * account resource's own `getAccount` call settle is irrelevant noise for it
+ * — the same stance `alpaca-desk-account-data.service.spec.ts` takes. */
+function neverAccount() {
+  return vi.fn(() => new Promise<never>(() => undefined));
+}
+
+/**
+ * `AlpacaHoldBannerComponent` reads `AlpacaDeskAccountDataService.clerkStatus`
+ * (#2185) rather than owning its own resource and poll timer, so this suite
+ * renders it the same way the account workspace does in production: with a
+ * real `AlpacaDeskAccountDataService` as an ancestor provider, backed by a
+ * fake `ActivatedRoute`/`BrokersService`/fleet directory.
+ */
+async function renderBanner(getClerkStatus: BrokersService['getClerkStatus']) {
+  const paramMap$ = new BehaviorSubject(convertToParamMap({ clerkId: TEST_CLERK_ID, accountId: TEST_ACCOUNT_ID }));
   return render(AlpacaHoldBannerComponent, {
-    inputs: { target: TARGET },
-    providers: [{ provide: BrokersService, useValue: service }],
+    providers: [
+      provideFleetDirectory({ observed_at_ms: 1, clerks: [testLane({ clerk_id: TEST_CLERK_ID })] }),
+      {
+        provide: ActivatedRoute,
+        useValue: { paramMap: paramMap$, snapshot: { paramMap: paramMap$.value } },
+      },
+      { provide: BrokersService, useValue: { getAccount: neverAccount(), getClerkStatus } },
+      AlpacaDeskAccountDataService,
+    ],
   });
 }
 
 describe('AlpacaHoldBannerComponent', () => {
   it('renders the hold reason_code through receiptLabel and the backend prose when held', async () => {
-    await renderBanner({ getClerkStatus: () => Promise.resolve(heldStatus()) });
+    await renderBanner(() => Promise.resolve(heldStatus()));
 
     // reason_code rendered code-like via receiptLabel (UNEXPLAINED_ORDER_HOLD →
     // "Unexplained Order Hold").
@@ -62,7 +85,7 @@ describe('AlpacaHoldBannerComponent', () => {
   });
 
   it('renders no banner when there is no active hold', async () => {
-    await renderBanner({ getClerkStatus: () => Promise.resolve(clearStatus()) });
+    await renderBanner(() => Promise.resolve(clearStatus()));
 
     // Give the resource a tick to resolve, then confirm nothing hold-related shows.
     await waitFor(() => {
@@ -71,49 +94,21 @@ describe('AlpacaHoldBannerComponent', () => {
     expect(screen.queryByRole('button', { name: /Clear hold/ })).toBeNull();
   });
 
-  it('refreshes a desk already open when the sweep raises a hold', async () => {
-    // Fake only the polling interval. Testing Library's async queries use
-    // timeouts internally and must keep their real clock.
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    try {
-      const getClerkStatus = vi
-        .fn()
-        .mockResolvedValueOnce(clearStatus())
-        .mockResolvedValueOnce(heldStatus());
-      await renderBanner({ getClerkStatus });
+  it('renders a hold raised after a reload of the shared clerk-status resource', async () => {
+    // The banner no longer owns a poll timer (#2185) — the account workspace's
+    // own 15 s timer reloads `AlpacaDeskAccountDataService.clerkStatus`, and
+    // this proves the banner reacts to that shared reload rather than needing
+    // one of its own.
+    const getClerkStatus = vi
+      .fn()
+      .mockResolvedValueOnce(clearStatus())
+      .mockResolvedValueOnce(heldStatus());
+    const view = await renderBanner(getClerkStatus);
+    await waitFor(() => expect(getClerkStatus).toHaveBeenCalledTimes(1));
 
-      await waitFor(() => expect(getClerkStatus).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(15_000);
+    const accountData = view.fixture.debugElement.injector.get(AlpacaDeskAccountDataService);
+    accountData.clerkStatus.reload();
 
-      expect(await screen.findByText(/Unexplained Order Hold/)).toBeTruthy();
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    expect(await screen.findByText(/Unexplained Order Hold/)).toBeTruthy();
   });
-
-  it('discards a late hold response after the routed clerk target changes', async () => {
-    let resolveOld = (_status: ClerkStatus): void => undefined;
-    const oldResponse = new Promise<ClerkStatus>((resolve) => {
-      resolveOld = resolve;
-    });
-    const nextTarget = resourceTarget('alpaca', 'clrk_other', {
-      accountId: 'PA10',
-      bindingGeneration: 2,
-      routingEpoch: 3,
-    });
-    const getClerkStatus = vi.fn((target: ResourceTarget) =>
-      target.clerkId === TARGET.clerkId ? oldResponse : Promise.resolve(clearStatus()));
-    const view = await renderBanner({ getClerkStatus });
-    await waitFor(() => expect(getClerkStatus).toHaveBeenCalledWith(TARGET));
-
-    view.fixture.componentRef.setInput('target', nextTarget);
-    view.fixture.detectChanges();
-    await waitFor(() => expect(getClerkStatus).toHaveBeenCalledWith(nextTarget));
-    resolveOld(heldStatus());
-    await view.fixture.whenStable();
-
-    expect(screen.queryByText(/Unexplained Order Hold/)).toBeNull();
-  });
-
 });

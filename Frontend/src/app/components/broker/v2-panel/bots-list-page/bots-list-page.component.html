@@ -1,59 +1,25 @@
-<main class="bots-page" aria-labelledby="bots-page-title">
-  <header class="bots-page__header">
-    <div class="bots-page__identity">
-      <h1 id="bots-page-title">Alpaca bots</h1>
-      @if (routedLane(); as lane) {
-        <div class="bots-page__lane">
-          <app-lane-context-strip [lane]="lane" />
-        </div>
-      }
-      <app-account-strip
-        [account]="accountValue()"
-        [clerkStatus]="clerkValue()"
-        [loading]="postureLoading()"
-        [refreshing]="postureRefreshing()"
-        [accountUnavailable]="!!account.error()"
-        [clerkUnavailable]="!!clerkStatus.error()"
-      />
-    </div>
-
-    <div class="bots-page__commands">
-      <button
-        type="button"
-        class="command-button command-button--quiet"
-        [disabled]="initialLoading()"
-        [attr.aria-busy]="refreshing()"
-        (click)="refreshFleet()"
-        aria-label="Refresh fleet"
-      >
-        <span aria-hidden="true">↻</span>
-        {{ refreshing() ? 'Refreshing' : 'Refresh' }}
-      </button>
-      <a
-        class="command-button command-button--quiet"
-        [routerLink]="['/brokers', broker(), 'clerks', clerkId(), 'accounts', accountId(), 'gallery']"
-      >
-        <span aria-hidden="true">⊞</span>
-        Gallery
-      </a>
-      <button
-        type="button"
-        class="command-button command-button--quiet"
-        (click)="openArchive()"
-      >
-        <span aria-hidden="true">🗄</span>
-        Archive finished
-      </button>
-      <button
-        type="button"
-        class="command-button command-button--primary"
-        (click)="openDeploy()"
-      >
-        <span aria-hidden="true">＋</span>
-        Deploy strategy
-      </button>
-    </div>
-  </header>
+<main class="bots-page" aria-label="Bots">
+  <div class="bots-page__commands">
+    <button
+      type="button"
+      class="command-button command-button--quiet"
+      [disabled]="initialLoading()"
+      [attr.aria-busy]="refreshing()"
+      (click)="refreshBots()"
+      aria-label="Refresh bots"
+    >
+      <span aria-hidden="true">↻</span>
+      {{ refreshing() ? 'Refreshing' : 'Refresh' }}
+    </button>
+    <button
+      type="button"
+      class="command-button command-button--quiet"
+      (click)="openArchive()"
+    >
+      <span aria-hidden="true">🗄</span>
+      Archive finished
+    </button>
+  </div>
 
   @if (actionNotice(); as notice) {
     <div
@@ -67,7 +33,7 @@
 
   @if (stale()) {
     <div class="fleet-notice fleet-notice--stale" role="status">
-      Live refresh failed. Showing the last successful fleet snapshot, from {{ staleAge() }}.
+      Live refresh failed. Showing the last successful bot snapshot, from {{ staleAge() }}.
     </div>
   }
 
@@ -81,9 +47,9 @@
         </div>
       } @else if (unavailable()) {
         <div class="fleet-unavailable" role="alert">
-          <strong>Fleet unavailable</strong>
-          <span>The bot catalog could not be loaded. Account posture remains visible.</span>
-          <button type="button" (click)="refreshFleet()">Try again</button>
+          <strong>Bots unavailable</strong>
+          <span>The bot catalog could not be loaded. The account header above still names this account.</span>
+          <button type="button" (click)="refreshBots()">Try again</button>
         </div>
       } @else {
         <app-bots-roster
@@ -108,13 +74,6 @@
     />
   </div>
 </main>
-
-<app-alpaca-deploy-drawer
-  [visible]="deployOpen()"
-  [accountId]="accountId()"
-  [target]="target()"
-  (closed)="closeDeploy()"
-/>
 
 <app-cohort-archive-drawer
   [visible]="archiveOpen()"

@@ -1,0 +1,68 @@
+<div class="account-workspace">
+  <header class="account-workspace__header">
+    @let name = accountName();
+    <h1 class="account-workspace__account">
+      @if (name === null) {
+        Account lane unresolved
+      } @else {
+        {{ name.name }}
+        @if (name.disambiguator; as label) {
+          <span class="account-workspace__lane-label">({{ label }})</span>
+        }
+      }
+    </h1>
+
+    <app-alpaca-lane-mode-chip [chip]="modeChip()" />
+
+    <span class="account-workspace__fact">
+      Equity <strong>{{ fmtCurrency(equity()) }}</strong>
+    </span>
+
+    <span class="account-workspace__fact">
+      Sync
+      @if (reconciliation(); as sync) {
+        <strong>{{ sync.verdict | receiptLabel }}</strong>
+        <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
+      } @else {
+        <strong>{{ syncUnavailable() }}</strong>
+      }
+    </span>
+
+    <div class="account-workspace__deploy">
+      @if (deployBlockedReason(); as reason) {
+        <p class="account-workspace__deploy-reason" id="workspace-deploy-reason">{{ reason }}</p>
+      }
+      <button
+        type="button"
+        class="account-workspace__deploy-button"
+        [disabled]="deployBlockedReason() !== null"
+        [attr.aria-describedby]="deployBlockedReason() === null ? null : 'workspace-deploy-reason'"
+        (click)="openDeploy()"
+      >
+        <span aria-hidden="true">＋</span>
+        Deploy strategy
+      </button>
+    </div>
+  </header>
+
+  <nav class="account-workspace__tabs" aria-label="Account sections">
+    @for (tab of tabs(); track tab.id) {
+      <a
+        class="account-workspace__tab"
+        [class.is-active]="tab.id === activeTab()"
+        [attr.aria-current]="tab.id === activeTab() ? 'page' : null"
+        [routerLink]="tab.route"
+      >{{ tab.label }}</a>
+    }
+  </nav>
+
+  <div class="account-workspace__body">
+    <router-outlet />
+  </div>
+</div>
+
+<app-alpaca-deploy-drawer
+  [target]="target()"
+  [visible]="deployOpen()"
+  (closed)="closeDeploy()"
+/>

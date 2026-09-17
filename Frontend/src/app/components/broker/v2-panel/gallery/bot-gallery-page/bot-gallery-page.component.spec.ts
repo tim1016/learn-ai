@@ -156,16 +156,24 @@ describe('BotGalleryPageComponent', () => {
     expect(screen.queryByLabelText('Loading bot gallery')).toBeNull();
   });
 
-  it('shows the honest empty state with a link to the bots roster when the account has no bots', async () => {
+  it('shows the honest empty state when the account has no bots', async () => {
     const store = fakeGalleryStore({ status: 'live', bots: [] });
 
     await renderPage(store);
 
     expect(screen.getByText('No bots yet')).toBeTruthy();
-    const link = screen.getByRole('link', { name: 'View bots roster' }) as HTMLAnchorElement;
-    expect(link.getAttribute('href')).toBe(
-      `/brokers/${BROKER}/clerks/clrk_spec/accounts/${ACCOUNT_ID}/bots`,
-    );
+    // #2185: the cross-link back to the roster is the account workspace's
+    // Bots tab now, so the wall carries no roster link of its own.
+    expect(screen.queryByRole('link', { name: /bots roster/i })).toBeNull();
+  });
+
+  it('leaves the lane it serves to the workspace header above the wall', async () => {
+    const store = fakeGalleryStore({ status: 'live', bots: [bot()] });
+
+    await renderPage(store);
+
+    expect(screen.queryByRole('status', { name: /Paper/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /bots roster/i })).toBeNull();
   });
 
   it('shows a non-blocking delayed indicator when the feed is stale, and keeps the dock visible', async () => {

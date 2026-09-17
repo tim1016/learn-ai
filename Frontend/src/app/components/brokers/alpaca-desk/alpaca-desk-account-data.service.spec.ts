@@ -65,6 +65,34 @@ describe('AlpacaDeskAccountDataService', () => {
     expect(service.account.hasValue()).toBe(accepted);
   });
 
+  // `clerkStatus` (#2185) shares `target` with `account` and applies the same
+  // confirmation guard (`alpacaClerkMatchesAccount`), so a Clerk report for an
+  // account outside the routed workspace is rejected exactly like a mismatched
+  // `getAccount` response is above — this is also what protects against a
+  // stale response surviving a navigation to a different account, the case
+  // `AlpacaHoldBannerComponent`'s own resource used to guard before this
+  // read moved here.
+  it.each([['pa1', true], ['OTHER', false]])('checks the clerk status account against canonical route %s', async (accountId, accepted) => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideFleetDirectory({ observed_at_ms: 1, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
+        activatedRoute('clrk_spec', accountId).provider,
+        {
+          provide: BrokersService,
+          useValue: {
+            getAccount: neverAccount(),
+            getClerkStatus: vi.fn().mockResolvedValue({ account_id: 'PA1' }),
+          },
+        },
+        AlpacaDeskAccountDataService,
+      ],
+    });
+    const service = TestBed.inject(AlpacaDeskAccountDataService);
+    TestBed.tick();
+    await vi.waitFor(() => expect(service.clerkStatus.isLoading()).toBe(false));
+    expect(service.clerkStatus.hasValue()).toBe(accepted);
+  });
+
   it('does not re-derive its command fence when the directory refreshes on the same route', () => {
     const directory = provideFleetDirectory({
       observed_at_ms: 1_757_000_000_000,

@@ -1,0 +1,9 @@
+<span class="lane-mode-chip lane-mode-chip--{{ chip().tone }}">
+  {{ chip().mode }}
+  @if (chip().shadow) {
+    <span class="lane-mode-chip__detail">· Shadow</span>
+  }
+  @if (chip().armedCount !== null) {
+    <span class="lane-mode-chip__detail">· {{ chip().armedCount }} armed</span>
+  }
+</span>

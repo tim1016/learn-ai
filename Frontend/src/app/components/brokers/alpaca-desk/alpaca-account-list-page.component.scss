@@ -1,0 +1,34 @@
+@use '../../../styles/eyebrow-heading' as *;
+
+:host {
+  display: block;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 95% 0%, rgba(41, 98, 255, 0.08), transparent 30rem),
+    var(--bg-canvas);
+}
+
+.account-list {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.account-list__titlebar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.account-list__titlebar h1 {
+  @include eyebrow-heading;
+  margin: 0;
+  line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .account-list {
+    padding: 0.75rem;
+  }
+}

@@ -56,13 +56,26 @@ describe('app menu projections', () => {
     expect(activeMenuNodeFor(url)?.item.title).toBe('Research Lab');
   });
 
-  it('maps account-scoped Alpaca pages onto their stable menu entry', () => {
-    const node = activeMenuNodeFor(
-      '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery',
-    );
+  it.each([
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery',
+  ])('highlights Accounts on the workspace URL %s', (url) => {
+    // ADR 0064: every tab of one account is that account's place, so the
+    // menubar names the account list rather than moving between Bots and
+    // Gallery entries while the workspace's own tabs already say which page
+    // is open.
+    const node = activeMenuNodeFor(url);
 
     expect(node?.group.title).toBe('Alpaca');
-    expect(node?.item.title).toBe('Gallery');
+    expect(node?.item.title).toBe('Accounts');
+  });
+
+  it("maps a bot's own page onto the Bots entry — it is not yet a workspace URL", () => {
+    const node = activeMenuNodeFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1');
+
+    expect(node?.group.title).toBe('Alpaca');
+    expect(node?.item.title).toBe('Bot rosters');
   });
 
   it.each([
@@ -87,6 +100,17 @@ describe('app menu projections', () => {
   });
 
   it.each([
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?deploy=',
+  ])('resolves the deploy query alias to Deploy from any workspace tab %s', (url) => {
+    // Fix c6dda7d8 lets the operator open Deploy from wherever they are
+    // standing in the workspace, so every tab's `?deploy` URL — not just the
+    // Overview tab's bare account root — must resolve to the same entry.
+    expect(activeMenuNodeFor(url)?.item.title).toBe('Deploy');
+  });
+
+  it.each([
     ['bots', 'Bot rosters'],
     ['gallery', 'Gallery'],
   ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {
@@ -96,7 +120,7 @@ describe('app menu projections', () => {
 
   it('resolves page titles through the active menu node', () => {
     expect(pageTitleFor('/pricing-lab')).toBe('Pricing Lab');
-    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Gallery');
+    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Accounts');
     expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Deploy');
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Deploy');
     expect(pageTitleFor('/jobs-demo')).toBeNull();

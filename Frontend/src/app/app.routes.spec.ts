@@ -9,9 +9,12 @@ import {
 } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
+import { appConfig } from './app.config';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
+import { AlpacaAccountWorkspaceComponent } from './components/brokers/alpaca-workspace/alpaca-account-workspace.component';
 import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { AlpacaClerkSurfaceUnavailableComponent } from './components/brokers/alpaca-desk/lane-directory/alpaca-clerk-surface-unavailable.component';
+import { AlpacaDeskComponent } from './components/brokers/alpaca-desk/alpaca-desk.component';
 import { AlpacaSurfaceChooserComponent } from './components/brokers/alpaca-desk/alpaca-surface-chooser.component';
 import { BotsListPageComponent } from './components/broker/v2-panel/bots-list-page/bots-list-page.component';
 import { BotGalleryPageComponent } from './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component';
@@ -169,30 +172,82 @@ describe('routes', () => {
     expect(desk?.canActivate).toContain(alpacaSurfaceRedirectGuard);
   });
 
-  it.each([
-    [
-      'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots',
-      BotsListPageComponent,
-      'the bots roster',
-    ],
-    [
-      'brokers/alpaca/clerks/:clerkId/accounts/:accountId/gallery',
-      BotGalleryPageComponent,
-      'the gallery',
-    ],
-  ])(
-    'keeps %s on its own operational component — never a redirect to configuration',
-    async (path, expectedComponent, _surfaceLabel) => {
-      // Regression: an operator reported a clerk-scoped Bots URL landing on
-      // the broker configuration page. No such redirect exists in the table;
-      // this pins that the canonical operational routes stay loadComponent
-      // routes with no redirectTo and no canActivate retargeting.
-      const route = routes.find((candidate) => candidate.path === path);
-      if (route === undefined) throw new Error(`Route ${path} is missing.`);
+  describe('the account workspace (ADR 0064)', () => {
+    const workspace = routes.find(
+      (candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
+    );
 
-      expect(route.redirectTo).toBeUndefined();
-      expect(route.canActivate).toBeUndefined();
-      expect(await route.loadComponent?.()).toBe(expectedComponent);
-    },
-  );
+    it('nests Overview, Bots and Gallery under one workspace route', async () => {
+      expect(await workspace?.loadComponent?.()).toBe(AlpacaAccountWorkspaceComponent);
+      // Overview is the empty child, so the account's own URL opens it and
+      // the canonical URLs are unchanged.
+      expect(workspace?.children?.map((child) => child.path)).toEqual(['bots', 'gallery', '']);
+    });
+
+    it('declares full-bleed once, on the workspace itself, so the header never moves', () => {
+      // The header and tab strip are the workspace's chrome: a per-tab
+      // `fullBleed` gave the shell's page inset to some tabs and not others,
+      // which shifted the header when the operator opened Gallery. One flag
+      // on the parent is what makes the three tabs agree.
+      expect(workspace?.data).toMatchObject({ fullBleed: true });
+      for (const child of workspace?.children ?? []) {
+        expect(child.data?.['fullBleed']).toBeUndefined();
+      }
+    });
+
+    it.each([
+      ['', AlpacaDeskComponent, 'the account overview'],
+      ['bots', BotsListPageComponent, 'the bots roster'],
+      ['gallery', BotGalleryPageComponent, 'the gallery'],
+    ])(
+      'keeps the %s tab on its own operational component — never a redirect to configuration',
+      async (path, expectedComponent, _surfaceLabel) => {
+        // Regression: an operator reported a clerk-scoped Bots URL landing on
+        // the broker configuration page. No such redirect exists in the table;
+        // this pins that the canonical operational routes stay loadComponent
+        // routes with no redirectTo and no canActivate retargeting.
+        const route = workspace?.children?.find((candidate) => candidate.path === path);
+        if (route === undefined) throw new Error(`Workspace tab ${path} is missing.`);
+
+        expect(route.redirectTo).toBeUndefined();
+        expect(route.canActivate).toBeUndefined();
+        expect(await route.loadComponent?.()).toBe(expectedComponent);
+      },
+    );
+
+    it.each([
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'the Overview tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'the Bots tab'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'the Gallery tab'],
+    ])('carries clerk and account identity into %s', async (url) => {
+      // Asserted through the app's own router configuration, not a local one:
+      // a non-empty child only inherits its parent's params under
+      // `paramsInheritanceStrategy: 'always'`, and without it the Bots and
+      // Gallery tabs would render without the lane their URL names (FR-092).
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(url);
+
+      let route = router.routerState.snapshot.root;
+      while (route.firstChild !== null) route = route.firstChild;
+      expect(route.params).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9' });
+      expect(route.data).toMatchObject({ broker: 'alpaca' });
+    });
+
+    it("keeps a bot's own page outside the workspace tabs", async () => {
+      // It moves inside in a later slice; until then its own route must match
+      // before the workspace's prefix would swallow it.
+      const panelIndex = routes.findIndex(
+        (candidate) =>
+          candidate.path === 'brokers/alpaca/clerks/:clerkId/accounts/:accountId/bots/:sid',
+      );
+      const workspaceIndex = routes.findIndex(
+        (candidate) => candidate.path === 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
+      );
+
+      expect(panelIndex).toBeGreaterThanOrEqual(0);
+      expect(panelIndex).toBeLessThan(workspaceIndex);
+    });
+  });
 });

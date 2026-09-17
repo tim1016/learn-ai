@@ -1,17 +1,8 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  DestroyRef,
-  inject,
-  input,
-  resource,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { MessageModule } from 'primeng/message';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
-import { BrokersService } from '../../../services/brokers.service';
-import type { ResourceTarget } from '../../../fleet/resource-target';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /**
  * Alpaca exposure-hold banner (phase-2 S6). Renders ONLY when the clerk reports
@@ -23,6 +14,14 @@ import type { ResourceTarget } from '../../../fleet/resource-target';
  * The hold is a safety posture — while active, new submits are refused (409) but
  * cancels stay allowed. When there is no hold (or the status is still loading /
  * errored) the banner renders nothing.
+ *
+ * Reads `AlpacaDeskAccountDataService.clerkStatus` rather than polling
+ * `getClerkStatus` on its own: the account workspace's sync indicator names
+ * the same Clerk status, and the two used to read it independently — two 15 s
+ * timers against the same endpoint for the same account (#2185). The account
+ * workspace's own poll (`AlpacaAccountWorkspaceComponent`) is what reloads
+ * the shared resource now, so this banner needs an ancestor that provides
+ * `AlpacaDeskAccountDataService` — the account workspace, in production.
  */
 @Component({
   selector: 'app-alpaca-hold-banner',
@@ -32,23 +31,7 @@ import type { ResourceTarget } from '../../../fleet/resource-target';
   host: { class: 'block' },
 })
 export class AlpacaHoldBannerComponent {
-  readonly target = input.required<ResourceTarget>();
-  private readonly brokers = inject(BrokersService);
-  private readonly destroyRef = inject(DestroyRef);
-  private readonly refreshEpoch = signal(0);
+  private readonly accountData = inject(AlpacaDeskAccountDataService);
 
-  protected readonly status = resource({
-    params: () => ({ target: this.target(), refreshEpoch: this.refreshEpoch() }),
-    loader: ({ params }) => this.brokers.getClerkStatus(params.target),
-  });
-
-  constructor() {
-    // Holds can be raised by the background reconciliation sweep while this
-    // desk remains open. Polling gives the operator that asynchronous safety
-    // state without requiring a route reload or a separate streaming channel.
-    const refreshTimer = setInterval(() => {
-      this.refreshEpoch.update((epoch) => epoch + 1);
-    }, 15_000);
-    this.destroyRef.onDestroy(() => clearInterval(refreshTimer));
-  }
+  protected readonly status = this.accountData.clerkStatus;
 }

@@ -11,22 +11,15 @@ import {
   signal,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
-import { RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
-import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
-import { BrokersService } from '../../../../services/brokers.service';
-import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../../services/alpaca-account-identity';
 import { fmtElapsedSince } from '../../format';
-import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
-import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
 import {
   BotsRosterComponent,
   type RosterRowActionEvent,
 } from '../bots-roster/bots-roster.component';
-import { LaneContextStripComponent } from '../lane-context-strip/lane-context-strip.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget, withCommand, withEntity } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -41,7 +34,6 @@ import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
 const CATALOG_POLL_MS = 5_000;
-const ACCOUNT_POLL_MS = 15_000;
 /**
  * How old the fleet snapshot must be before the roster says so (#1806 item 3).
  *
@@ -64,17 +56,20 @@ interface ScopedSnapshot<T> {
   readonly value: T;
 }
 
+/**
+ * One account's Bots tab inside the account workspace (ADR 0064). The
+ * account it serves, that account's mode, equity and the Deploy action are
+ * the workspace header's, one line above — this page owns the roster, the
+ * triage detail beside it, and the two commands that act on the roster
+ * itself.
+ */
 @Component({
   selector: 'app-bots-list-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AccountStripComponent,
-    AlpacaDeployDrawerComponent,
     CohortArchiveDrawerComponent,
     BotTriageDetailComponent,
     BotsRosterComponent,
-    LaneContextStripComponent,
-    RouterLink,
   ],
   templateUrl: './bots-list-page.component.html',
   styleUrl: './bots-list-page.component.scss',
@@ -85,7 +80,6 @@ export class BotsListPageComponent {
   readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();
 
-  private readonly brokersService = inject(BrokersService);
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly destroyRef = inject(DestroyRef);
@@ -93,14 +87,11 @@ export class BotsListPageComponent {
   private readonly document = inject(DOCUMENT);
   private readonly messageService = inject(MessageService);
   private readonly catalogSnapshot = signal<ScopedSnapshot<BotCatalogView[]> | null>(null);
-  private readonly accountSnapshot = signal<ScopedSnapshot<BrokerAccountSnapshot> | null>(null);
-  private readonly clerkSnapshot = signal<ScopedSnapshot<ClerkStatus> | null>(null);
 
   protected readonly actionNotice = signal<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
-  protected readonly deployOpen = signal(false);
   protected readonly archiveOpen = signal(false);
   private readonly requestedSid = signal<string | null>(null);
   /** Bumped after an action lands so the detail pane refetches its panel. */
@@ -115,13 +106,6 @@ export class BotsListPageComponent {
           ?.effective_binding_generation ?? null,
       routingEpoch: this.fleetDirectory.lane(this.broker(), this.clerkId())?.routing_epoch ?? null,
     }),
-  );
-
-  /** The routed lane itself, for the header's lane-context strip: its pill
-   * (the same trust anchor the shell renders) plus its authority fact, so the
-   * operator always sees which lane and which account this roster serves. */
-  protected readonly routedLane = computed(
-    () => this.fleetDirectory.lane(this.broker(), this.clerkId()) ?? null,
   );
 
   /** The fence the operator was shown. Captured when the roster renders the
@@ -171,67 +155,9 @@ export class BotsListPageComponent {
     },
   });
 
-  protected readonly account = resource({
-    params: () => ({
-      broker: this.broker(),
-      clerkId: this.clerkId(),
-      accountId: this.accountId(),
-      target: this.target(),
-      scope: this.fleetScope(),
-    }),
-    loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getAccount(params.target);
-      if (params.scope !== this.fleetScope()) return snapshot;
-      if (!sameAlpacaAccount(snapshot.account_id, params.accountId)) {
-        throw new Error(
-          `Alpaca confirmed account ${snapshot.account_id}, not routed account ${params.accountId}.`,
-        );
-      }
-      this.accountSnapshot.set({
-        scope: params.scope,
-        updatedAtMs: snapshot.observed_at_ms,
-        value: snapshot,
-      });
-      return snapshot;
-    },
-  });
-
-  protected readonly clerkStatus = resource({
-    params: () => ({
-      broker: this.broker(),
-      clerkId: this.clerkId(),
-      accountId: this.accountId(),
-      target: this.target(),
-      scope: this.fleetScope(),
-    }),
-    loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getClerkStatus(params.target);
-      if (params.scope !== this.fleetScope()) return snapshot;
-      if (!alpacaClerkMatchesAccount(snapshot, params.accountId)) {
-        throw new Error(
-          `The Clerk is observing account ${snapshot.account_id}, not routed account ${params.accountId}.`,
-        );
-      }
-      this.clerkSnapshot.set({
-        scope: params.scope,
-        updatedAtMs: snapshot.observed_at_ms,
-        value: snapshot,
-      });
-      return snapshot;
-    },
-  });
-
   protected readonly bots = computed(() => {
     const snapshot = this.catalogSnapshot();
     return snapshot?.scope === this.fleetScope() ? snapshot.value : [];
-  });
-  protected readonly accountValue = computed(() => {
-    const snapshot = this.accountSnapshot();
-    return snapshot?.scope === this.fleetScope() ? snapshot.value : null;
-  });
-  protected readonly clerkValue = computed(() => {
-    const snapshot = this.clerkSnapshot();
-    return snapshot?.scope === this.fleetScope() ? snapshot.value : null;
   });
   protected readonly catalogUpdatedAtMs = computed(() => {
     const snapshot = this.catalogSnapshot();
@@ -265,16 +191,6 @@ export class BotsListPageComponent {
   protected readonly refreshing = computed(
     () => this.catalog.isLoading() && this.bots().length > 0,
   );
-  protected readonly postureLoading = computed(
-    () =>
-      (this.account.isLoading() || this.clerkStatus.isLoading()) &&
-      !this.accountValue(),
-  );
-  protected readonly postureRefreshing = computed(
-    () =>
-      (this.account.isLoading() || this.clerkStatus.isLoading()) &&
-      Boolean(this.accountValue()),
-  );
   protected readonly unavailable = computed(
     () => Boolean(this.catalog.error()) && this.bots().length === 0,
   );
@@ -304,36 +220,15 @@ export class BotsListPageComponent {
       }
     }, 1_000);
 
-    const accountTimer = setInterval(() => {
-      if (
-        this.document.visibilityState === 'visible' &&
-        !this.account.isLoading() &&
-        !this.clerkStatus.isLoading()
-      ) {
-        this.account.reload();
-        this.clerkStatus.reload();
-      }
-    }, ACCOUNT_POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(catalogTimer);
       clearInterval(staleTimer);
-      clearInterval(accountTimer);
     });
   }
 
-  protected refreshFleet(): void {
+  protected refreshBots(): void {
     this.actionNotice.set(null);
-    this.account.reload();
-    this.clerkStatus.reload();
     this.catalog.reload();
-  }
-
-  protected openDeploy(): void {
-    this.deployOpen.set(true);
-  }
-
-  protected closeDeploy(): void {
-    this.deployOpen.set(false);
   }
 
   protected openArchive(): void {
