@@ -100,6 +100,17 @@ describe('app menu projections', () => {
   });
 
   it.each([
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots?deploy=',
+    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?deploy=',
+  ])('resolves the deploy query alias to Deploy from any workspace tab %s', (url) => {
+    // Fix c6dda7d8 lets the operator open Deploy from wherever they are
+    // standing in the workspace, so every tab's `?deploy` URL — not just the
+    // Overview tab's bare account root — must resolve to the same entry.
+    expect(activeMenuNodeFor(url)?.item.title).toBe('Deploy');
+  });
+
+  it.each([
     ['bots', 'Bot rosters'],
     ['gallery', 'Gallery'],
   ] as const)('resolves the %s chooser route to its menu entry', (surface, title) => {

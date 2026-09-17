@@ -137,14 +137,13 @@ const ACTIVE_MENU_ITEMS = APP_MENU.flatMap((group) =>
 export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   const { path, query } = splitUrl(url);
   const queryParams = new URLSearchParams(query);
-  if (path === '/brokers/alpaca' && queryParams.has('deploy')) {
-    return nodeForActivePath('/brokers/alpaca/deploy');
-  }
+  const workspace = accountWorkspaceLocation(path);
 
-  if (
-    queryParams.has('deploy')
-    && /^\/brokers\/alpaca\/clerks\/[^/]+\/accounts\/[^/]+$/.test(path)
-  ) {
+  // `?deploy` is openable from the bare Alpaca broker root or from any tab of
+  // the account's own workspace (fix c6dda7d8 lets the operator open Deploy
+  // from wherever they are standing), so both forms highlight Deploy rather
+  // than falling through to Accounts.
+  if (queryParams.has('deploy') && (path === '/brokers/alpaca' || workspace?.broker === 'alpaca')) {
     return nodeForActivePath('/brokers/alpaca/deploy');
   }
 
@@ -154,7 +153,7 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   // owned by `accountWorkspaceLocation`, not re-expressed here, so the
   // menubar and the workspace shell cannot drift apart about what counts as
   // being inside a workspace.
-  if (accountWorkspaceLocation(path) !== null) {
+  if (workspace !== null) {
     const workspaceNode = nodeForActivePath('/brokers/alpaca');
     if (workspaceNode !== null) return workspaceNode;
   }
