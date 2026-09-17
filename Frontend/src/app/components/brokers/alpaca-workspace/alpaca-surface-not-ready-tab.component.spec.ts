@@ -2,12 +2,12 @@ import { provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
-import { AlpacaClerkSurfaceUnavailableComponent } from './alpaca-clerk-surface-unavailable.component';
+import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
+import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
 
-describe('AlpacaClerkSurfaceUnavailableComponent', () => {
+describe('AlpacaSurfaceNotReadyTabComponent', () => {
   it('explains a lane that is not ready, and keeps configuration reachable', async () => {
-    await render(AlpacaClerkSurfaceUnavailableComponent, {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-offline', surface: 'bots' },
       providers: [
         provideRouter([]),
@@ -30,13 +30,14 @@ describe('AlpacaClerkSurfaceUnavailableComponent', () => {
     expect(
       screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
     ).toBe('/brokers/alpaca/clerks/clerk-offline/configuration');
-    expect(
-      screen.getByRole('link', { name: 'Back to the Bots lane chooser' }).getAttribute('href'),
-    ).toBe('/brokers/alpaca/bots');
+    // It used to be a standalone page with its own "back to the chooser"
+    // navigation. Inside the workspace the header and the tab strip are that
+    // navigation, so the only link this tab adds is the way forward.
+    expect(screen.getAllByRole('link')).toHaveLength(1);
   });
 
   it('explains a ready lane with no confirmed account binding', async () => {
-    await render(AlpacaClerkSurfaceUnavailableComponent, {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-unbound', surface: 'gallery' },
       providers: [
         provideRouter([]),
@@ -54,12 +55,12 @@ describe('AlpacaClerkSurfaceUnavailableComponent', () => {
 
     expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
     expect(
-      screen.getByRole('link', { name: 'Back to the Gallery lane chooser' }).getAttribute('href'),
-    ).toBe('/brokers/alpaca/gallery');
+      screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
+    ).toBe('/brokers/alpaca/clerks/clerk-unbound/configuration');
   });
 
   it('explains a lane without the surface capability, through receiptLabel', async () => {
-    await render(AlpacaClerkSurfaceUnavailableComponent, {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-incapable', surface: 'bots' },
       providers: [
         provideRouter([]),
@@ -80,7 +81,7 @@ describe('AlpacaClerkSurfaceUnavailableComponent', () => {
   });
 
   it('links a lane that became servable to its canonical URL instead of refusing', async () => {
-    await render(AlpacaClerkSurfaceUnavailableComponent, {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-ready', surface: 'bots' },
       providers: [
         provideRouter([]),
@@ -98,7 +99,7 @@ describe('AlpacaClerkSurfaceUnavailableComponent', () => {
   });
 
   it('says so in place when the directory does not list the clerk', async () => {
-    await render(AlpacaClerkSurfaceUnavailableComponent, {
+    await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-unknown', surface: 'bots' },
       providers: [provideRouter([]), provideFleetDirectory()],
     });

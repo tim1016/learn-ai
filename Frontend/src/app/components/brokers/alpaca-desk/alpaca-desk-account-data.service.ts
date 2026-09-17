@@ -5,6 +5,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { BrokersService } from '../../../services/brokers.service';
 import { alpacaClerkMatchesAccount, sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
+import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
 import { resourceTarget } from '../../../fleet/resource-target';
@@ -28,11 +29,33 @@ export class AlpacaDeskAccountDataService {
     initialValue: this.route.snapshot.paramMap,
   });
 
+  /** The account this desk reads.
+   *
+   * The URL names it on every account-scoped tab, and that is the only answer
+   * those tabs ever take. The workspace's lane-scoped tabs — Configuration and
+   * the not-ready Bots and Gallery (FR-092) — name no account at all, and for
+   * those the lane's own confirmed binding is the account the header is about:
+   * "Configuration … renders inside the workspace from the lane's confirmed
+   * account" (ADR 0064, FR-092).
+   *
+   * The route wins wherever it speaks, which is what keeps the directory out
+   * of `routeIdentity` below on every URL that mints a command: the fallback
+   * is reached only on the lane-scoped tabs, and no command surface renders
+   * there. */
+  readonly accountId = computed(() => {
+    const routed = this.routeParams().get('accountId');
+    if (routed !== null && routed.length > 0) return routed;
+    const clerkId = this.routeParams().get('clerkId');
+    if (clerkId === null) return null;
+    const lane = this.fleetDirectory.lane('alpaca', clerkId);
+    return lane === undefined ? null : laneConfirmedAccount(lane);
+  });
+
   /** The rendered route owns lane identity; directory data contributes only
    * the binding/epoch provenance frozen into this resource address. */
   readonly target = computed(() => {
     const clerkId = this.routeParams().get('clerkId');
-    const accountId = this.routeParams().get('accountId');
+    const accountId = this.accountId();
     if (clerkId === null || accountId === null) return null;
     const lane = this.fleetDirectory.lane('alpaca', clerkId);
     if (lane === undefined) return null;
@@ -50,7 +73,7 @@ export class AlpacaDeskAccountDataService {
    * unrelated background poll) must not silently re-derive — and therefore
    * un-freeze — the fence below (#2106). */
   private readonly routeIdentity = computed(
-    () => `${this.routeParams().get('clerkId') ?? ''}::${this.routeParams().get('accountId') ?? ''}`,
+    () => `${this.routeParams().get('clerkId') ?? ''}::${this.accountId() ?? ''}`,
   );
 
   /** The frozen binding-generation fence for every command-minting surface
@@ -65,12 +88,13 @@ export class AlpacaDeskAccountDataService {
     () => this.routeIdentity(),
   );
 
+  /** `undefined`, not `null`, when there is no account to read: `resource()`
+   * skips its loader only for `undefined` params, and a `null` would have run
+   * the loader and errored. "No account has been named yet" is not a failed
+   * read, and the header says the two differently. */
   readonly account = resource({
-    params: () => this.target(),
+    params: () => this.target() ?? undefined,
     loader: async ({ params }) => {
-      if (params === null) {
-        throw new Error('The desk route does not name a rendered Alpaca lane.');
-      }
       const account = await this.brokers.getAccount(params);
       if (!sameAlpacaAccount(account.account_id, params.accountId)) {
         throw new Error('The Account Clerk returned an account outside the rendered desk route.');
@@ -84,11 +108,8 @@ export class AlpacaDeskAccountDataService {
    * observing another account is a failed read, never a fact rendered under
    * this account's name. */
   readonly clerkStatus = resource({
-    params: () => this.target(),
+    params: () => this.target() ?? undefined,
     loader: async ({ params }) => {
-      if (params === null) {
-        throw new Error('The desk route does not name a rendered Alpaca lane.');
-      }
       const status = await this.brokers.getClerkStatus(params);
       if (!alpacaClerkMatchesAccount(status, params.accountId ?? '')) {
         throw new Error('The Clerk is observing an account outside the rendered account route.');

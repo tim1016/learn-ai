@@ -13,18 +13,7 @@
   padding: var(--space-3);
 }
 
-.configuration__back {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  text-decoration: none;
-}
-
-.configuration__back:hover,
-.configuration__back:focus-visible {
-  text-decoration: underline;
-}
-
-.configuration h1 {
+.configuration__titlebar h2 {
   margin: var(--space-1) 0 0;
   color: var(--text-primary);
   font-size: var(--fs-lg, 1.15rem);

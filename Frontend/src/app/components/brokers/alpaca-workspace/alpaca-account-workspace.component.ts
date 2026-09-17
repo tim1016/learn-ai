@@ -22,7 +22,7 @@ import {
   type AccountWorkspaceTab,
 } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
-import { laneDisplayName } from '../../../fleet/fleet-directory.types';
+import { laneDisplayName, laneIsReady } from '../../../fleet/fleet-directory.types';
 import { AlpacaLiveVerdictService, verdictModeChip } from '../../../services/alpaca-live-verdict.service';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -44,6 +44,15 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 /** Why the Overview tab is not offered on a lane with no confirmed account:
  * it is that account's own page, and there is no account. */
 const TAB_WITHOUT_ACCOUNT = 'Opens once Alpaca confirms this lane’s account.';
+
+/** Why a workspace is showing no account's facts: the lane is still coming up,
+ * it is up but nothing has bound an account to it, or the directory does not
+ * list it at all. `state` is the lane's own backend lifecycle identifier and
+ * reaches the operator through `receiptLabel`. */
+type WorkspaceAccountStatus =
+  | { readonly kind: 'lifecycle'; readonly state: string }
+  | { readonly kind: 'unbound' }
+  | { readonly kind: 'unresolved' };
 
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
@@ -102,9 +111,13 @@ export class AlpacaAccountWorkspaceComponent {
 
   /** The rendered route owns lane identity — the same stance
    * `AlpacaDeskAccountDataService` takes, so the header and the tab below it
-   * can never disagree about which account they serve. */
+   * can never disagree about which account they serve. The account itself is
+   * read from that service rather than re-derived here: on the lane-scoped
+   * tabs the URL names none and the lane's confirmed binding is the answer
+   * (FR-092), and one resolution is what keeps the header, the tab strip and
+   * the account read pointing at the same account. */
   private readonly clerkId = computed(() => this.routeParams().get('clerkId') ?? '');
-  private readonly accountId = computed(() => this.routeParams().get('accountId'));
+  private readonly accountId = this.accountData.accountId;
 
   /** Which tab the URL has open, and the bot's page open under it. Resolved by
    * the shared pure function, the same one the menubar asks whether a URL is
@@ -162,6 +175,18 @@ export class AlpacaAccountWorkspaceComponent {
   );
 
   protected readonly target = this.accountData.target;
+
+  /** What the header says in place of this account's own facts when the lane
+   * has no account to read them from — the Configuration and not-ready tabs of
+   * an unbound lane. Equity and a reconciliation verdict belong to an account;
+   * a lane without one has a readiness state instead, and saying "$—" and
+   * "Not reconciled" would report a failed read where there was no read. */
+  protected readonly accountStatus = computed<WorkspaceAccountStatus | null>(() => {
+    if (this.accountId() !== null) return null;
+    const lane = this.lane();
+    if (lane === null) return { kind: 'unresolved' };
+    return laneIsReady(lane) ? { kind: 'unbound' } : { kind: 'lifecycle', state: lane.lifecycle_state };
+  });
 
   protected readonly equity = computed(() =>
     this.accountData.account.hasValue() ? this.accountData.account.value().equity : null,

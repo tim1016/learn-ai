@@ -1,30 +1,25 @@
-<main class="clerk-surface" aria-labelledby="clerk-surface-title">
-  <h1 id="clerk-surface-title">
-    {{ surfaceName() }} unavailable
-    @if (laneLabel(); as label) {
-      <span class="clerk-surface__lane">— {{ label }}</span>
-    }
-  </h1>
+<main class="surface-not-ready" [attr.aria-label]="surfaceName()">
+  <h2 class="surface-not-ready__title">{{ surfaceName() }} unavailable</h2>
 
   @if (loading()) {
-    <p class="clerk-surface__state" role="status">Resolving the clerk lane…</p>
+    <p class="surface-not-ready__state" role="status">Resolving the clerk lane…</p>
   } @else if (directoryFailed()) {
-    <p class="clerk-surface__state" role="alert">
+    <p class="surface-not-ready__state" role="alert">
       The fleet directory is unavailable, so this lane's state cannot be read.
       Lane surfaces stay reachable through their canonical clerk routes.
     </p>
-  } @else if (laneLabel() === null) {
-    <p class="clerk-surface__state" role="alert">
+  } @else if (!laneKnown()) {
+    <p class="surface-not-ready__state" role="alert">
       The fleet directory does not list clerk lane {{ clerkId() }}. Its surfaces
       cannot open from here, and no other lane is substituted.
     </p>
   } @else if (canonicalRoute(); as canonical) {
-    <p class="clerk-surface__state" role="status">
+    <p class="surface-not-ready__state" role="status">
       This lane now serves its {{ surfaceName() }}.
     </p>
-    <a class="clerk-surface__primary" [routerLink]="canonical">Open the {{ surfaceName() }}</a>
+    <a class="surface-not-ready__primary" [routerLink]="canonical">Open the {{ surfaceName() }}</a>
   } @else if (refusal(); as refusal) {
-    <p class="clerk-surface__state" role="alert">
+    <p class="surface-not-ready__state" role="alert">
       @switch (refusal.kind) {
         @case ('lifecycle') {
           This lane is {{ refusal.lifecycleState | receiptLabel }}, so its
@@ -44,11 +39,7 @@
       }
     </p>
     @if (configurationRoute(); as configuration) {
-      <a class="clerk-surface__primary" [routerLink]="configuration">Open lane configuration</a>
+      <a class="surface-not-ready__primary" [routerLink]="configuration">Open lane configuration</a>
     }
   }
-
-  <nav class="clerk-surface__links" aria-label="Surface navigation">
-    <a [routerLink]="['/brokers', 'alpaca', surface()]">Back to the {{ chooserLabel() }} lane chooser</a>
-  </nav>
 </main>

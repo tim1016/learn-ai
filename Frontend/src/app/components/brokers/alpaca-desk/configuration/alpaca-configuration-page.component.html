@@ -1,9 +1,9 @@
 <main class="configuration">
   <header class="configuration__titlebar">
-    <a class="configuration__back" routerLink="/brokers/alpaca">
-      <span aria-hidden="true">←</span> Alpaca desk
-    </a>
-    <h1>Broker configuration</h1>
+    <!-- No account chrome and no way back of its own: this is the
+         workspace's Configuration tab (ADR 0064), and the account header and
+         tab strip above it are how the operator moves. -->
+    <h2>Broker configuration</h2>
     <p class="configuration__lede">
       Named profiles this installation owns. A profile is inert until it is staged,
       applied, and the worker is restarted — and no credential is ever entered here.

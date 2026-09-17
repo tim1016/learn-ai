@@ -14,19 +14,30 @@
 
     <app-alpaca-lane-mode-chip [chip]="modeChip()" />
 
-    <span class="account-workspace__fact">
-      Equity <strong>{{ fmtCurrency(equity()) }}</strong>
-    </span>
+    @if (accountStatus(); as status) {
+      <span class="account-workspace__fact">
+        Status
+        @switch (status.kind) {
+          @case ('lifecycle') { <strong>{{ status.state | receiptLabel }}</strong> }
+          @case ('unbound') { <strong>No confirmed account</strong> }
+          @case ('unresolved') { <strong>Lane unresolved</strong> }
+        }
+      </span>
+    } @else {
+      <span class="account-workspace__fact">
+        Equity <strong>{{ fmtCurrency(equity()) }}</strong>
+      </span>
 
-    <span class="account-workspace__fact">
-      Sync
-      @if (reconciliation(); as sync) {
-        <strong>{{ sync.verdict | receiptLabel }}</strong>
-        <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
-      } @else {
-        <strong>{{ syncUnavailable() }}</strong>
-      }
-    </span>
+      <span class="account-workspace__fact">
+        Sync
+        @if (reconciliation(); as sync) {
+          <strong>{{ sync.verdict | receiptLabel }}</strong>
+          <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" />
+        } @else {
+          <strong>{{ syncUnavailable() }}</strong>
+        }
+      </span>
+    }
 
     <div class="account-workspace__deploy">
       @if (deployBlockedReason(); as reason) {

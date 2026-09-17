@@ -1,5 +1,12 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { Router, RouterOutlet, provideRouter, type Routes } from '@angular/router';
+import {
+  Router,
+  RouterOutlet,
+  provideRouter,
+  withComponentInputBinding,
+  withRouterConfig,
+  type Routes,
+} from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { MessageService } from 'primeng/api';
@@ -25,8 +32,10 @@ import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaLaneDirectoryComponent } from '../alpaca-desk/lane-directory/alpaca-lane-directory.component';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
+import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
 
-const WORKSPACE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
+const LANE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
+const WORKSPACE_URL = `${LANE_URL}/accounts/${TEST_ACCOUNT_ID}`;
 /** The account list — the only page that links into a workspace's Deploy. */
 const ACCOUNT_LIST_URL = '/brokers/alpaca';
 
@@ -53,20 +62,64 @@ class BotsStubComponent {}
 @Component({ selector: 'app-gallery-stub', template: '<main aria-label="Gallery">Gallery tab</main>' })
 class GalleryStubComponent {}
 
+@Component({
+  selector: 'app-configuration-stub',
+  template: '<main aria-label="Configuration">Configuration tab</main>',
+})
+class ConfigurationStubComponent {}
+
+// The same shape as `app.routes.ts`: one shell at the clerk level, the
+// lane-scoped tabs directly under it, and the account-scoped tabs under a
+// componentless `accounts/:accountId`. The not-ready tab is the REAL
+// component — a stub could not show that a lane-scoped URL explains itself in
+// place rather than redirecting (FR-096).
 const WORKSPACE_ROUTES: Routes = [
   {
-    path: 'brokers/alpaca/clerks/:clerkId/accounts/:accountId',
+    path: 'brokers/alpaca/clerks/:clerkId',
     component: AlpacaAccountWorkspaceComponent,
     children: [
-      { path: 'bots', component: BotsStubComponent },
-      { path: 'gallery', component: GalleryStubComponent },
-      { path: '', component: OverviewStubComponent },
+      { path: 'configuration', component: ConfigurationStubComponent },
+      { path: 'bots', data: { surface: 'bots' }, component: AlpacaSurfaceNotReadyTabComponent },
+      {
+        path: 'gallery',
+        data: { surface: 'gallery' },
+        component: AlpacaSurfaceNotReadyTabComponent,
+      },
+      {
+        path: 'accounts/:accountId',
+        children: [
+          { path: 'bots', component: BotsStubComponent },
+          { path: 'gallery', component: GalleryStubComponent },
+          { path: '', component: OverviewStubComponent },
+        ],
+      },
+      { path: '', redirectTo: 'configuration', pathMatch: 'full' },
     ],
   },
   // The real account list, so a spec can follow its per-account links into
-  // the workspace instead of only reading their `href`.
-  { path: 'brokers/alpaca', component: AlpacaLaneDirectoryComponent },
+  // the workspace instead of only reading their `href`. Its own page supplies
+  // these two inputs in the app; declared here because component input
+  // binding sets every declared input from route data, `undefined` included.
+  {
+    path: 'brokers/alpaca',
+    data: { surface: null, deployIntent: false },
+    component: AlpacaLaneDirectoryComponent,
+  },
 ];
+
+/** A ready lane that Alpaca has not confirmed an account for: it keeps its
+ * workspace, and only Configuration can open (ADR 0064, FR-096). */
+function unboundDirectory() {
+  return provideFleetDirectory({
+    observed_at_ms: 1,
+    clerks: [
+      testLane({
+        display_label: 'Unbound',
+        provider_summary: { ...testLane().provider_summary, confirmed_account_id: null },
+      }),
+    ],
+  });
+}
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
   return {
@@ -119,7 +172,14 @@ async function renderWorkspace(
   const view = await render(WorkspaceHostComponent, {
     providers: [
       { provide: directory.provide, useValue: directory.useValue },
-      provideRouter(WORKSPACE_ROUTES),
+      provideRouter(
+        WORKSPACE_ROUTES,
+        withComponentInputBinding(),
+        // The lane-scoped tabs read `:clerkId` from the shell's own route and
+        // `surface` from their route data, neither of which reaches a
+        // non-empty child without this (the app config sets the same).
+        withRouterConfig({ paramsInheritanceStrategy: 'always' }),
+      ),
       { provide: MessageService, useValue: { add: vi.fn() } },
       {
         provide: BrokersService,
@@ -182,7 +242,74 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     await renderWorkspace();
 
     expect(screen.getByRole('link', { name: 'Configuration' }).getAttribute('href')).toBe(
-      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/configuration`,
+      `${LANE_URL}/configuration`,
+    );
+  });
+
+  describe('the lane-scoped tabs', () => {
+    it('renders Configuration inside the workspace, under this account’s header', async () => {
+      // Configuration stays lane-scoped (FR-092) but is no longer a page of
+      // its own: the account header and the tab strip frame it like any tab.
+      await renderWorkspace({ url: `${LANE_URL}/configuration` });
+
+      expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
+      expect(screen.getByText('Configuration tab')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Configuration' }).getAttribute('aria-current')).toBe(
+        'page',
+      );
+      // A confirmed lane reads its account's own facts there, exactly as the
+      // account-scoped tabs do (FR-092: "from the lane's confirmed account").
+      expect(await screen.findByText(/\$15,000\.00/)).toBeTruthy();
+    });
+
+    it('keeps the workspace for a lane Alpaca has confirmed no account for', async () => {
+      await renderWorkspace({
+        url: `${LANE_URL}/configuration`,
+        directory: unboundDirectory(),
+      });
+
+      // The lane's own label stands in for the account name it has not got.
+      expect(await screen.findByRole('heading', { name: 'Unbound' })).toBeTruthy();
+      expect(screen.getByText('Configuration tab')).toBeTruthy();
+      // Equity and a sync verdict belong to an account. Saying "$—" and
+      // "Not reconciled" here would report a failed read where there was none.
+      expect(screen.getByText('No confirmed account')).toBeTruthy();
+      expect(screen.queryByText(/Equity/)).toBeNull();
+      expect(screen.queryByText(/Reconciliation unavailable/)).toBeNull();
+    });
+
+    it('offers no Overview to a lane with no account, rather than another lane’s', async () => {
+      await renderWorkspace({
+        url: `${LANE_URL}/configuration`,
+        directory: unboundDirectory(),
+      });
+
+      await screen.findByRole('heading', { name: 'Unbound' });
+      expect(screen.queryByRole('link', { name: 'Overview' })).toBeNull();
+      expect(screen.getByText('Overview').getAttribute('aria-disabled')).toBe('true');
+      expect(screen.getByRole('link', { name: 'Configuration' })).toBeTruthy();
+    });
+
+    it.each([
+      ['bots', 'Bots roster'],
+      ['gallery', 'Gallery'],
+    ] as const)(
+      'explains in place why the %s tab cannot open, and links to Configuration',
+      async (surface, surfaceName) => {
+        const { router } = await renderWorkspace({
+          url: `${LANE_URL}/${surface}`,
+          directory: unboundDirectory(),
+        });
+
+        expect(await screen.findByText(`${surfaceName} unavailable`)).toBeTruthy();
+        expect(screen.getByText(/no confirmed account binding yet/i)).toBeTruthy();
+        expect(
+          screen.getByRole('link', { name: 'Open lane configuration' }).getAttribute('href'),
+        ).toBe(`${LANE_URL}/configuration`);
+        // FR-096: it fails in place. No other lane, and no other account, is
+        // substituted by the navigation itself.
+        expect(router.url).toBe(`${LANE_URL}/${surface}`);
+      },
     );
   });
 

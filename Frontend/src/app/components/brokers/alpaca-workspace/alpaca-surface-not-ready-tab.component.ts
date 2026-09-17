@@ -1,18 +1,18 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
+import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   laneConfirmedAccount,
   laneIsReady,
-} from '../../../../fleet/fleet-directory.types';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+} from '../../../fleet/fleet-directory.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import {
   clerkSurfaceCanonicalRoute,
   SURFACE_CAPABILITY,
   SURFACE_LABEL,
   type LaneSurface,
-} from './alpaca-lane-directory.component';
+} from '../alpaca-desk/lane-directory/alpaca-lane-directory.component';
 
 /** Why one lane cannot serve one surface right now, in the order an operator
  * can act on them. Rendered as prose; the codes inside go through
@@ -23,34 +23,38 @@ type SurfaceRefusal =
   | { readonly kind: 'capability' };
 
 /**
- * The clerk-only in-place route for a lane surface that cannot open
- * (`/brokers/alpaca/clerks/:clerkId/bots|gallery`). The lane keeps a
- * selectable destination for every surface — the chooser never hides a lane,
- * and this page says exactly why the surface is closed: the lane's lifecycle,
- * a missing account binding, or a missing capability.
+ * The Bots or Gallery tab of a lane that cannot serve it
+ * (`/brokers/alpaca/clerks/:clerkId/bots|gallery` — the lane-scoped tab URLs,
+ * which name no account).
  *
- * It renders in place and never retargets: no redirect to another lane, no
- * redirect to the broker directory (FR-096). Configuration stays reachable —
- * configuration access needs no confirmed binding — and a lane that has
- * become servable while the operator sat here links straight to its
- * canonical URL.
+ * A not-ready account keeps its workspace (ADR 0064, FR-096): the header and
+ * the tab strip stay, and the tab itself says exactly why the surface is
+ * closed — the lane's lifecycle, a missing account binding, or a missing
+ * capability — and points at Configuration, the one tab a lane can serve
+ * before it has an account. It renders in place and never retargets: no
+ * redirect to another lane, no redirect to the account list. A lane that has
+ * become servable while the operator sat here links straight to its canonical
+ * account-scoped URL rather than refusing.
+ *
+ * It is the tab's body only: the account name, the mode and the tab strip
+ * above it belong to `AlpacaAccountWorkspaceComponent`, which is what replaced
+ * the standalone clerk-only explanation pages this grew out of.
  */
 @Component({
-  selector: 'app-alpaca-clerk-surface-unavailable',
+  selector: 'app-alpaca-surface-not-ready-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, ReceiptLabelPipe],
-  templateUrl: './alpaca-clerk-surface-unavailable.component.html',
-  styleUrl: './alpaca-clerk-surface-unavailable.component.scss',
+  templateUrl: './alpaca-surface-not-ready-tab.component.html',
+  styleUrl: './alpaca-surface-not-ready-tab.component.scss',
   host: { class: 'block' },
 })
-export class AlpacaClerkSurfaceUnavailableComponent {
+export class AlpacaSurfaceNotReadyTabComponent {
   private readonly fleet = inject(FleetDirectoryService);
 
   readonly clerkId = input.required<string>();
   readonly surface = input.required<LaneSurface>();
 
   protected readonly surfaceName = computed(() => SURFACE_LABEL[this.surface()].long);
-  protected readonly chooserLabel = computed(() => SURFACE_LABEL[this.surface()].chooser);
   protected readonly SURFACE_CAPABILITY = SURFACE_CAPABILITY;
 
   private readonly lane = computed(() =>
@@ -92,5 +96,5 @@ export class AlpacaClerkSurfaceUnavailableComponent {
       : null;
   });
 
-  protected readonly laneLabel = computed(() => this.lane()?.display_label ?? null);
+  protected readonly laneKnown = computed(() => this.lane() !== null);
 }
