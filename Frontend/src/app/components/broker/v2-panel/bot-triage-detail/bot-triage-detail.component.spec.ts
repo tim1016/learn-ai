@@ -297,6 +297,58 @@ describe('BotTriageDetailComponent', () => {
   });
 
   /**
+   * A production HTTP poll deserializes a fresh panel object even when the
+   * selected bot and the availability of its detail pane have not changed.
+   * That refresh must not tear down and recreate the global lens host: the
+   * bridge cleanup reads its own host signal, so re-registering it from the
+   * same effect can turn the refresh into a self-triggering render loop.
+   */
+  it('keeps the lens host stable when a poll returns a fresh panel object', async () => {
+    vi.useFakeTimers();
+    try {
+      const panel = fakeBotPanelView();
+      const getPanel = vi.fn(() => Promise.resolve({ ...panel }));
+      const lensRegister = vi.fn(() => vi.fn());
+      const { fixture } = await render(BotTriageDetailComponent, {
+        providers: [
+          provideRouter([]),
+          provideFleetDirectory(),
+          {
+            provide: BrokerV2PanelService,
+            useValue: {
+              getPanel,
+              getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+              getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
+            },
+          },
+          {
+            provide: ActiveLensBridgeService,
+            useValue: { register: lensRegister },
+          },
+        ],
+        componentInputs: {
+          broker: 'alpaca',
+          clerkId: 'clrk_spec',
+          accountId: 'PA9',
+          sid: panel.strategy_instance_id,
+        },
+      });
+
+      await vi.waitFor(() => expect(lensRegister).toHaveBeenCalledTimes(1));
+      const panelReads = getPanel.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(16_000);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(getPanel.mock.calls.length).toBeGreaterThan(panelReads);
+      expect(lensRegister).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * The Trader default hides the custody journal, so reading it there would
    * stamp an audit assertion the operator never saw. The read is parked until
    * the Operator lens is opened — the first genuine act.
