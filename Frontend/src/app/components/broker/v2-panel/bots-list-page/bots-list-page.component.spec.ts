@@ -86,7 +86,7 @@ describe('BotsListPageComponent', () => {
     // failed poll that the next poll repairs was never meaningfully stale and
     // must stay silent.
     it('stays silent when a refresh fails but the snapshot is still fresh', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.useFakeTimers();
       try {
         let calls = 0;
         const getCatalog = vi.fn(async () => {
@@ -107,7 +107,7 @@ describe('BotsListPageComponent', () => {
     });
 
     it('reports how stale the bot snapshot is once refreshes stop landing', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.useFakeTimers();
       try {
         let calls = 0;
         const getCatalog = vi.fn(async () => {
