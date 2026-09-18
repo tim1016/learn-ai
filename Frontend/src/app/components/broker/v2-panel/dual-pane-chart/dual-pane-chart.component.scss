@@ -353,6 +353,19 @@
 
   strong { color: var(--text-primary); font-family: var(--font-sans); font-size: var(--fs-md); }
   span { color: var(--text-muted); }
+
+  button {
+    margin-top: var(--space-2);
+    padding: 6px 12px;
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
 }
 
 .chart-state__pulse {

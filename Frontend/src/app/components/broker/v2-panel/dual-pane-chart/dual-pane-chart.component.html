@@ -163,7 +163,13 @@
             }
           </ul>
         }
-        @if (activeLoading() && activeBars().length === 0) {
+        @if (activePane() === 'polygon' && historyFailed()) {
+          <div class="chart-state" role="status">
+            <strong>Polygon history unavailable</strong>
+            <span>This bot's live chart is unaffected.</span>
+            <button type="button" (click)="historyRetry.emit()">Retry history</button>
+          </div>
+        } @else if (activeLoading() && activeBars().length === 0) {
           <div class="chart-state" role="status" aria-live="polite">
             <span class="chart-state__pulse" aria-hidden="true"></span>
             Loading {{ activePane() === 'live' ? liveResolution() + ' IBKR candles' : 'Polygon candles' }}…

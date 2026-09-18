@@ -242,6 +242,9 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
   readonly liveLoading = input(false);
   readonly historyLoading = input(false);
+  /** Settled Polygon-history failure (#2202 FR-005): renders the delayed
+   * pane's unavailable state instead of an indefinite spinner. */
+  readonly historyFailed = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly histBars = input<readonly ChartBar[]>([]);
   readonly histIndicatorBars = input<readonly ChartBar[]>([]);
@@ -253,6 +256,9 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
+  /** One explicit retry per click (#2202 FR-005/FR-006) — no automatic
+   * retry loop; the shell owns the resource and issues the reload. */
+  readonly historyRetry = output();
 
   private readonly chartContainer =
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');

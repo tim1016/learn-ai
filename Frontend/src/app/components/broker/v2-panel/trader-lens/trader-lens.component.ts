@@ -53,6 +53,9 @@ export class TraderLensComponent {
   readonly histChart = input<ChartHistoryResponse | null>(null);
   readonly liveChartLoading = input(false);
   readonly histChartLoading = input(false);
+  /** Settled-error state for the delayed pane (#2202 FR-002): a typed
+   * boolean, never a raw `ResourceRef.error()`/`HttpErrorResponse`. */
+  readonly histChartFailed = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
 
@@ -61,6 +64,9 @@ export class TraderLensComponent {
   /** User selected a Polygon candle timeframe. */
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
+  /** One explicit retry (#2202 FR-005/FR-006): the shell owns the resource
+   * and issues at most one `histChart.reload()` per click. */
+  readonly histChartRetry = output();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
