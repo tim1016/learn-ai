@@ -322,6 +322,52 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         await route.fulfill({ json: PROFILE });
         return;
       }
+      if (path === `${CLERK_SCOPE}/account`) {
+        // The account workspace shell that hosts this bot's page reads its
+        // account and Clerk status once per navigation (#2185) — read-only,
+        // and not part of this campaign's evidence-click surface.
+        await route.fulfill({
+          json: {
+            broker: 'alpaca',
+            account_id: ACCOUNT_ID,
+            account_mode: 'paper',
+            account_status: 'ACTIVE',
+            currency: 'USD',
+            cash: 10_000,
+            equity: 10_000,
+            buying_power: 20_000,
+            portfolio_value: 10_000,
+            long_market_value: 0,
+            short_market_value: 0,
+            pattern_day_trader: false,
+            trading_blocked: false,
+            account_blocked: false,
+            created_at_ms: null,
+            observed_at_ms: 1_753_800_004_000,
+          },
+        });
+        return;
+      }
+      if (path === `${CLERK_SCOPE}/clerk/status`) {
+        await route.fulfill({
+          json: {
+            broker: 'alpaca',
+            account_id: ACCOUNT_ID,
+            authority_kind: 'real_paper',
+            hold: { active: false, reason: null, reason_code: null, since_ms: null },
+            operator_posture: {
+              account_desk: null,
+              condition: null,
+              fleet_roster: null,
+              status_detail: null,
+              status_headline: 'Clerk and broker are in sync.',
+            },
+            outstanding_intents: 0,
+            observed_at_ms: 1_753_800_004_000,
+          },
+        });
+        return;
+      }
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/runs/current`)) {
         await route.fulfill({ status: 404, json: { detail: 'No current run fixture.' } });
         return;

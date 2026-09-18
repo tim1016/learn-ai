@@ -13,7 +13,7 @@ import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 
 /** One account read shared by the account workspace's header, its Overview
- * tab's active lens, and the deploy drawer — so the operator's equity, the
+ * tab's active lens, and the Deploy tab — so the operator's equity, the
  * account the header names, and the account a command is minted against all
  * come from the same confirmed read rather than three of them.
  *

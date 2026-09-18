@@ -9,6 +9,7 @@ import {
   fakeCatalogBot,
   fakePanelAction,
 } from '../../../../testing/bot-panel-fixtures';
+import { BotsPageActionsBridgeService } from '../../../brokers/alpaca-workspace/bots-page-actions-bridge.service';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
@@ -192,11 +193,13 @@ describe('BotsListPageComponent', () => {
     expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
   });
 
-  it('renders explicit refresh and snapshot freshness', async () => {
-    await renderPage([fakeCatalogBot()]);
+  it('renders snapshot freshness and registers its refresh command with the workspace header', async () => {
+    const view = await renderPage([fakeCatalogBot()]);
 
-    expect(await screen.findByRole('button', { name: 'Refresh bots' })).toBeTruthy();
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+    expect(typeof bridge.host()?.refresh).toBe('function');
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {

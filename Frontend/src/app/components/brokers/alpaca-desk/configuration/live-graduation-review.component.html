@@ -1,0 +1,56 @@
+<div class="graduation__review" aria-label="Live graduation evidence">
+  <div class="graduation__review-head">
+    <div>
+      <p class="graduation__eyebrow">
+        Exact review · expires
+        <app-timestamp-display [value]="plan().expires_at_ms" mode="local" granularity="time" />
+      </p>
+      <h3>Evidence is ready</h3>
+    </div>
+    @if (expired()) {
+      <span class="graduation__expired">Expired — prepare again</span>
+    }
+  </div>
+
+  <dl class="graduation__facts">
+    <div><dt>Broker account</dt><dd>{{ plan().account_id }}</dd></div>
+    <div><dt>Open positions</dt><dd>{{ plan().position_count }} · flat</dd></div>
+    <div><dt>Open orders</dt><dd>{{ plan().open_order_count }} · clear</dd></div>
+    <div><dt>Stopped bots</dt><dd>{{ plan().stopped_bot_ids.length }}</dd></div>
+    <div><dt>Daily loss limits</dt><dd>{{ plan().daily_loss_fraction | percent }} or {{ plan().daily_loss_usd | currency }}</dd></div>
+    <div><dt>Arming lapse</dt><dd>{{ plan().arming_max_sessions }} session</dd></div>
+    <div><dt>Extended-hours allowance</dt><dd>{{ plan().extended_hours_entry_bps }} / {{ plan().extended_hours_exit_bps }} bps</dd></div>
+    <div><dt>Verified backup</dt><dd>Complete</dd></div>
+  </dl>
+
+  @if (plan().stopped_bot_ids.length > 0) {
+    <p class="graduation__bots">
+      Stopped roster: {{ plan().stopped_bot_ids.join(', ') }}
+    </p>
+  }
+
+  <p class="graduation__consequence">{{ plan().consequence }}</p>
+  <label class="graduation__acknowledgement">
+    <input
+      type="checkbox"
+      [checked]="acknowledged()"
+      [disabled]="busy() || expired()"
+      (change)="acknowledged.set(!acknowledged())" />
+    <span>
+      I understand this irreversibly graduates account {{ plan().account_id }} to
+      real-money custody, while every strategy remains stopped and unarmed.
+    </span>
+  </label>
+  <div class="graduation__actions">
+    <button
+      type="button"
+      class="button button--danger"
+      [disabled]="!acknowledged() || busy() || expired()"
+      (click)="confirmRequested.emit()">
+      {{ applying() ? 'Activating Live authority…' : 'Graduate to Live and restart' }}
+    </button>
+    <button type="button" class="button button--secondary" [disabled]="busy()" (click)="refreshRequested.emit()">
+      Refresh evidence
+    </button>
+  </div>
+</div>

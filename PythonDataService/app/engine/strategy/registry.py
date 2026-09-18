@@ -467,7 +467,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # experiment in fixture history. Live admission was re-aligned on
             # 2026-09-17 with the accepted Golden review and the registered
             # LEAN-parity defaults, so the UI and runtime corpus authorize the
-            # same exact parameter point.
+            # same exact parameter point. See ADR 0054 and
+            # tests/fixtures/golden/ema-signal-session/v1/attribution.md
+            # ("Regeneration 2026-09-17") for the reconciliation record.
             validated_settings={
                 "gap": 0.20,
                 "gap_bps": 0.0,

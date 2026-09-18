@@ -20,9 +20,9 @@ import type {
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
-import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
@@ -88,9 +88,11 @@ interface HistoricalExecutionRecoveryDraft {
  * - Action execution (post to backend, re-poll on success).
  *
  * ## Lens architecture (S3 trader + S4 operator)
- * The `activeLens` signal determines which lens renders. The tab bar in the
- * template drives `selectLens()`. Both lenses receive identical `panel` +
- * `profile` + `actionPending` inputs from the shell.
+ * The `activeLens` signal determines which lens renders. The switch itself
+ * lives in the global top bar (`ActiveLensBridgeService`) — this page
+ * registers `activeLens` + `selectLens()` as its host while loaded, and
+ * unregisters on destroy. Both lenses receive identical `panel` + `profile`
+ * + `actionPending` inputs from the shell.
  *
  * The operator lens additionally receives `broker`, `accountId`, and `sid`
  * so it can call the operator-gated evidence endpoint directly.
@@ -99,7 +101,6 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    LensTabsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
@@ -133,6 +134,7 @@ export class BotPanelShellComponent {
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
   private readonly lensPreference = inject(LensPreferenceService);
+  private readonly lensBridge = inject(ActiveLensBridgeService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly titleContext = inject(WorkspaceTitleContextService);
 
@@ -287,6 +289,8 @@ export class BotPanelShellComponent {
     () => this.panel() !== null && this.profile.hasValue(),
   );
 
+  private lensUnregister: (() => void) | null = null;
+
   protected readonly loadError = computed(() => {
     const liveError = this.liveStore.error();
     if (liveError !== null) return liveError;
@@ -322,6 +326,20 @@ export class BotPanelShellComponent {
       this.titleContext.setBotLabel(null);
       this.liveStore.stop();
     });
+    // The global top bar's one Trader/Operator toggle switches whichever
+    // page is mounted; this page is that host only once it has something to
+    // switch between.
+    effect(() => {
+      this.lensUnregister?.();
+      this.lensUnregister = this.isLoaded()
+        ? this.lensBridge.register({
+          lens: this.activeLens,
+          select: (lens) => this.selectLens(lens),
+          ariaLabel: 'Bot control perspective',
+        })
+        : null;
+    });
+    this.destroyRef.onDestroy(() => this.lensUnregister?.());
   }
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────

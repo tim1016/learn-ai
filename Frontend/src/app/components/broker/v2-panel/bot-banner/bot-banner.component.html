@@ -1,32 +1,39 @@
 <header class="bot-banner">
-  <div class="bot-banner__topline">
-    <a class="bot-banner__back" [routerLink]="backRoute()">
-      <span aria-hidden="true">←</span> {{ backLabel() }}
-    </a>
+  <div class="bot-banner__topline" [attr.data-state]="panel().mission_verdict.state">
+    <div class="bot-banner__topline-lead">
+      <a class="bot-banner__back" [routerLink]="backRoute()">
+        <span aria-hidden="true">←</span> {{ backLabel() }}
+      </a>
+      <app-mission-verdict-status
+        class="bot-banner__status-chip"
+        [verdict]="panel().mission_verdict"
+        [title]="panel().mission_verdict.explanation"
+        [bare]="true"
+      />
+    </div>
+
+    <app-bot-banner-run-timing
+      [runState]="runState()"
+      [health]="panel().health"
+      [operator]="operator()"
+      (retryRequested)="retryRequested.emit()"
+    />
+
     <span class="bot-banner__updated">
-      Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" />
+      Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" granularity="time" />
     </span>
     <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="snapshotStatus()">{{ snapshotStatus() }}</span>
   </div>
 
-  <div class="bot-banner__identity">
-    <h2 class="bot-banner__name">
-      {{ panel().strategy_label }}
-      <app-asset-identity class="bot-banner__symbol" [symbol]="panel().symbol" size="sm" />
-    </h2>
-    <code class="bot-banner__instance">{{ panel().strategy_instance_id }}</code>
-  </div>
-
-  <app-bot-run-timing
-    class="bot-banner__run-timing"
-    [state]="runState()"
-    [health]="panel().health"
-    [operator]="operator()"
-    (retryRequested)="retryRequested.emit()"
-  />
-
   <div class="bot-banner__status-row">
     <div class="bot-banner__status">
+      <div class="bot-banner__identity">
+        <h2 class="bot-banner__name">
+          {{ panel().strategy_label }}
+          <app-asset-identity class="bot-banner__symbol" [symbol]="panel().symbol" size="sm" />
+        </h2>
+        <code class="bot-banner__instance">{{ panel().strategy_instance_id }}</code>
+      </div>
       @if (operator()) {
         <app-panel-instrument-quote
           class="bot-banner__quote"
@@ -34,11 +41,6 @@
           [tickerQuote]="tickerQuote()"
         />
       }
-
-      <app-mission-verdict-status
-        class="bot-banner__verdict"
-        [verdict]="panel().mission_verdict"
-      />
     </div>
 
     <div class="bot-banner__actions">

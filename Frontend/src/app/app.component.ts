@@ -9,6 +9,8 @@ import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
+import { LensTabsComponent } from './shared/lens/lens-tabs.component';
+import { ActiveLensBridgeService } from './shared/lens/active-lens-bridge.service';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
@@ -32,6 +34,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
+    LensTabsComponent,
     Toast,
   ],
   styles: [`
@@ -53,25 +56,41 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     .shell-actions {
       display: flex;
       min-width: 0;
+      max-width: 100%;
       align-items: center;
       justify-content: flex-end;
       gap: var(--space-2);
+      overflow-x: auto;
       white-space: nowrap;
       /* The live-verdict pills are the account-mode trust anchor (ADR 0059
          D8): one badge per lane (FleetDirectoryService.lanesOf('alpaca')),
          so the row's natural width grows with the fleet. The header's
          minmax(0, 1fr) side columns let content overflow past their own
          track rather than being clamped, which used to bleed the pills
-         under the centered Botasur logo at in-between widths. Wrapping
-         unconditionally (not just under the old 760px mobile query) keeps
-         every pill inside this column at any width, never past it. */
-      flex-wrap: wrap;
+         under the centered Botasur logo at in-between widths. Wrapping kept
+         every pill inside this column, but let the header itself grow past
+         its fixed height whenever the row needed a second line — so this
+         column scrolls horizontally within its own track instead: it never
+         bleeds past the track and the header height stays fixed. */
+      flex-wrap: nowrap;
     }
 
     @media (max-width: 760px) {
       .shell-actions {
         gap: 3px;
       }
+    }
+
+    /* Shrinks the shared pill toggle (its own default look, unmodified) to
+       sit comfortably beside the live-mode pills in the top bar. */
+    .shell-lens-toggle ::ng-deep .lens-tabs {
+      padding: 2px;
+    }
+
+    .shell-lens-toggle ::ng-deep .lens-tabs__tab {
+      min-height: auto;
+      padding: 0.3rem 0.75rem;
+      font-size: var(--fs-xs);
     }
 
     /* Named container "ide" drives the .ide-grid breakpoints declared in
@@ -100,7 +119,17 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
-        <div class="shell-actions" shell-connection>
+        <nav class="shell-actions" shell-connection aria-label="Quick links and account status">
+          @if (lensHost(); as host) {
+            <app-lens-tabs
+              class="shell-lens-toggle"
+              [ariaLabel]="host.ariaLabel ?? 'Desk perspective'"
+              [idPrefix]="host.idPrefix ?? ''"
+              [panelId]="host.panelId ?? null"
+              [lens]="host.lens()"
+              (lensChange)="host.select($event)"
+            />
+          }
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
           } @empty {
@@ -108,7 +137,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
                  undetermined mode, and the banner says so loudly. -->
             <app-alpaca-live-banner [lane]="null" />
           }
-        </div>
+        </nav>
       </app-top-bar>
       <main class="main">
         <div class="main-content">
@@ -129,6 +158,12 @@ export class AppComponent {
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
   private readonly titleContext = inject(WorkspaceTitleContextService);
+  private readonly lensBridge = inject(ActiveLensBridgeService);
+
+  /** The one Trader/Operator toggle, shown only while some page has
+   * registered as its host (ActiveLensBridgeService) — never a dead control
+   * on pages with no lens. */
+  protected readonly lensHost = this.lensBridge.host;
 
   /** Inside an account workspace the window names what is open and the account
    * it is open on — "Gallery · Paper" (ADR 0064 Decision 6). The account's
@@ -141,8 +176,8 @@ export class AppComponent {
    * when the URL names a bot is what keeps a stale label from ever reaching a
    * tab's title.
    *
-   * A workflow opened over the workspace — the Deploy drawer's `?deploy` — is
-   * not a tab, so it does not rename the window; the menubar names it. */
+   * Deploy is one of the tabs (ADR 0064 Decision 1 extended), so opening it
+   * renames the window exactly as switching to Bots or Gallery does. */
   private readonly workspaceTitle = computed(() => {
     const location = accountWorkspaceLocation(this.currentUrl());
     if (location === null) return null;

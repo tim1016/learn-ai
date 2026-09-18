@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { HttpErrorResponse } from '@angular/common/http';
-import { TestBed } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import { of } from 'rxjs';
@@ -11,6 +11,7 @@ import type {
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import { MarketDataService } from '../../../../services/market-data.service';
@@ -537,6 +538,22 @@ const marketDataMock = {
   })),
 };
 
+// The switch itself now lives in the global top bar, outside this
+// component's own render tree (ActiveLensBridgeService); this mirrors what
+// it does — call the registered host's own select() — rather than driving
+// the query param through `Router.navigate` directly, which a test that
+// spies on `Router.navigate` for an unrelated assertion would neuter.
+async function switchLens(
+  fixture: ComponentFixture<BotPanelShellComponent>,
+  lens: 'trader' | 'operator',
+): Promise<void> {
+  const bridge = TestBed.inject(ActiveLensBridgeService);
+  await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+  bridge.host()?.select(lens);
+  await fixture.whenStable();
+  fixture.detectChanges();
+}
+
 function openDisclosure(label: string): void {
   const details = screen.getByText(label).closest('details');
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
@@ -646,17 +663,14 @@ describe('BotPanelShellComponent', () => {
       );
     });
 
-    it('names the bot above the Trader/Operator switch', async () => {
+    it('names the bot in its banner and registers as the global lens toggle host', async () => {
       const { container } = await renderShellWithStamp('?from=bots');
 
       expect(screen.getByRole('heading', { name: /Ema Crossover/ })).toBeTruthy();
-      // Which bot and where it sits come before the choice of view onto it.
-      const banner = container.querySelector('app-bot-banner');
-      const lenses = container.querySelector('.lens-navigation');
-      if (banner === null || lenses === null) throw new Error('The bot page is missing a header.');
-      expect(
-        banner.compareDocumentPosition(lenses) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
+      expect(container.querySelector('app-bot-banner')).not.toBeNull();
+      // The choice of view onto this bot is the global top bar's toggle now
+      // (ActiveLensBridgeService), not a nav row this page renders itself.
+      expect(TestBed.inject(ActiveLensBridgeService).host()).not.toBeNull();
     });
   });
 
@@ -682,14 +696,13 @@ describe('BotPanelShellComponent', () => {
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
-    const timing = within(screen.getByRole('region', { name: 'Latest run timing' }));
-    expect(timing.getByText(formatTimestampDisplay(makeRun().started_at_ms))).toBeTruthy();
-    expect(timing.queryByText('Last decision')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
+    const runTimes = within(fixture.nativeElement.querySelector('.run-timing'));
+    expect(runTimes.getByText(
+      formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
+    )).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
 
     openDisclosure('Run evidence');
     await fixture.whenStable();
@@ -712,9 +725,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', {
       name: /Ready Prepare safe flatten/i,
     }));
@@ -757,9 +768,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     // The backend policy folds RecoveryCapability.primary into the Operator
     // reference (ADR 0027 precedence, #1665): the banner renders it once,
     // and the readiness accordion suppresses its own would-be duplicate row.
@@ -824,9 +833,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
     expect(navigate).toHaveBeenLastCalledWith(
@@ -865,8 +872,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
+    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -894,9 +900,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     fireEvent.click(screen.getByRole('button', {
       name: /Ready Prepare safe flatten/i,
     }));
@@ -915,7 +919,7 @@ describe('BotPanelShellComponent', () => {
     })).toBeNull();
   });
 
-  it('renders the bot banner once above lens navigation, not re-mounted inside a lens, and keeps run evidence out of Trader', async () => {
+  it('renders the bot banner once, not re-mounted inside a lens, registers one lens-toggle host, and keeps run evidence out of Trader', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -928,20 +932,17 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const navigation = container.querySelector('.lens-navigation');
     const banners = container.querySelectorAll('app-bot-banner');
     const nestedInLens = container.querySelector('app-trader-lens app-bot-banner, app-operator-lens app-bot-banner');
-    expect(navigation).not.toBeNull();
     expect(banners).toHaveLength(1);
     expect(nestedInLens).toBeNull();
-    const banner = banners[0];
-    if (navigation === null || banner === undefined) {
-      throw new Error('Expected lens navigation and the bot banner to render.');
-    }
-    // Which bot this is comes before the choice of view onto it.
-    expect(
-      banner.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // No local Trader/Operator tab UI renders here any more — the global top
+    // bar owns it, and this page is registered as its one host
+    // (ActiveLensBridgeService). (The market-data source switcher is a
+    // different, unrelated tablist the trader lens itself still owns.)
+    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
+    expect(TestBed.inject(ActiveLensBridgeService).host()).not.toBeNull();
     expect(screen.queryByText('Run evidence')).toBeNull();
     expect(screen.queryByText('Strategy evidence')).toBeNull();
     expect(screen.queryByText('Clerk evidence')).toBeNull();
@@ -962,12 +963,8 @@ describe('BotPanelShellComponent', () => {
 
     expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
+    await switchLens(fixture, 'trader');
 
     expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
   });
@@ -985,11 +982,8 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const timing = within(screen.getByRole('region', { name: 'Latest run timing' }));
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
@@ -1005,24 +999,26 @@ describe('BotPanelShellComponent', () => {
       undefined,
     );
     expect(screen.getByText('run-previous')).toBeTruthy();
-    expect(timing.getByText(formatTimestampDisplay(makeRun().started_at_ms))).toBeTruthy();
-    expect(timing.queryByText(formatTimestampDisplay(1_753_700_000_000))).toBeNull();
-    expect(timing.getByText('Last decision')).toBeTruthy();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
+    // The banner's own Started time is the current run's, never clobbered by
+    // the previous-run fetch the disclosure just made.
+    const bannerRunTimes = within(fixture.nativeElement.querySelector('.run-timing'));
+    expect(bannerRunTimes.getByText(
+      formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
+    )).toBeTruthy();
+    expect(bannerRunTimes.queryByText(
+      formatTimestampDisplay(1_753_700_000_000, { granularity: 'time' }),
+    )).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'trader');
 
     expect(screen.queryByText('run-previous')).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
 
     expect(screen.queryByText('run-previous')).toBeNull();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
@@ -1073,9 +1069,7 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
@@ -1125,9 +1119,7 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
@@ -1135,9 +1127,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'trader');
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
 
@@ -1206,9 +1196,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
     openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
@@ -1246,9 +1234,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
 
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     openDisclosure('Run evidence');
@@ -1290,7 +1276,11 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByRole('alert').textContent).toBe('Network error');
   });
 
-  it('persists keyboard lens changes in the query string', async () => {
+  it('registers with the global lens toggle while loaded, and its choice updates the query string', async () => {
+    // The tab UI itself moved to the global top bar (ActiveLensBridgeService);
+    // keyboard/roving-tabindex behavior is covered by lens-tabs.component.spec.
+    // What this shell still owns: registering while it has content to switch,
+    // and persisting the toggle's choice into `?lens=`.
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -1299,13 +1289,16 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Trader' }), {
-      key: 'ArrowRight',
-    });
+    const bridge = TestBed.inject(ActiveLensBridgeService);
+    const host = bridge.host();
+    if (host === null) throw new Error('Expected the shell to register as the active lens host.');
+    expect(host.lens()).toBe('trader');
+
+    host.select('operator');
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-selected')).toBe('true');
+    expect(bridge.host()?.lens()).toBe('operator');
     expect(fixture.debugElement.injector.get(Router).url).toContain('lens=operator');
   });
 
@@ -1316,9 +1309,7 @@ describe('BotPanelShellComponent', () => {
         { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await switchLens(fixture, 'operator');
 
     openDisclosure('Audit trail');
     await fixture.whenStable();

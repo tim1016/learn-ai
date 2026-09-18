@@ -163,34 +163,6 @@
   gap: var(--space-2);
 }
 
-// The shared tab widget, compacted to the lens bar's dense row.
-.triage-lensbar__tabs {
-  ::ng-deep .lens-tabs {
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--border-light);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-  }
-
-  ::ng-deep .lens-tabs__tab {
-    min-height: auto;
-    padding: 0.2rem 0.75rem;
-    border-radius: var(--radius);
-    background: transparent;
-    color: var(--text-subtle);
-    font-size: var(--fs-xs);
-
-    &:hover { background: transparent; color: var(--text-primary); }
-
-    &--active,
-    &--active:hover {
-      background: var(--border-strong);
-      color: var(--text-primary);
-    }
-  }
-}
-
 // ── Lens panel ─────────────────────────────────────────────────────────────
 
 // Wraps whichever lens is active. A flex column with the same gap the host used

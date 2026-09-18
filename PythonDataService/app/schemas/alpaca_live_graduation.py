@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 
 class LiveGraduationStatus(BaseModel):
     """Backend-authored state for the Configuration page's authority rail."""
@@ -30,9 +32,9 @@ class LiveGraduationPlanView(BaseModel):
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirmation_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     account_id: str
-    created_at_ms: int = Field(ge=0)
-    expires_at_ms: int = Field(ge=0)
-    broker_observed_at_ms: int = Field(ge=0)
+    created_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    expires_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    broker_observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     position_count: int = Field(ge=0)
     open_order_count: int = Field(ge=0)
     stopped_bot_ids: tuple[str, ...]
@@ -63,6 +65,6 @@ class LiveGraduationApplyOutcome(BaseModel):
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     state: Literal["restart_scheduled"]
     receipt_reference: str
-    activated_at_ms: int = Field(ge=0)
+    activated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     message: str
 

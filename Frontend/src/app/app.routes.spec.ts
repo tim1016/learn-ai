@@ -207,9 +207,11 @@ describe('routes', () => {
       // Overview is the account's empty child, so the account's own URL opens
       // it and the canonical URLs are unchanged. `bots/:sid` is declared
       // before the `bots` tab it nests under, so the longer path matches
-      // without relying on the router backtracking between siblings.
+      // without relying on the router backtracking between siblings. Deploy
+      // is one of the five tabs (ADR 0064 Decision 1 extended), routed
+      // inline rather than opened as an overlay.
       expect(account?.children?.map((child) => child.path)).toEqual([
-        'bots/:sid', 'bots', 'gallery', '',
+        'bots/:sid', 'bots', 'gallery', 'deploy', '',
       ]);
     });
 

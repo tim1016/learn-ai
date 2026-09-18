@@ -116,6 +116,25 @@ describe('LiveGraduationComponent', () => {
     }
   });
 
+  it('clears a reviewed plan and its acknowledgement when the account switches', async () => {
+    const { fixture, service } = await renderGraduation();
+    fireEvent.click(await screen.findByRole('button', { name: 'Review Live graduation' }));
+    await fixture.whenStable();
+    expect(await screen.findByText('Evidence is ready')).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+
+    service.readStatus.mockResolvedValue({ ...STATUS, account_id: 'PA2' });
+    fixture.componentRef.setInput('accountId', 'PA2');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByText('Evidence is ready')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Graduate to Live and restart' })).toBeNull();
+    expect(service.apply).not.toHaveBeenCalled();
+  });
+
   it('has no detectable accessibility violations in the review state', async () => {
     const { fixture } = await renderGraduation();
     fireEvent.click(await screen.findByRole('button', { name: 'Review Live graduation' }));

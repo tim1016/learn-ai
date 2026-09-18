@@ -237,13 +237,14 @@ describe('AlpacaLaneCardComponent', () => {
     expect(getCatalog).not.toHaveBeenCalled();
   });
 
-  it('carries a deploy intent into the account the operator chooses', async () => {
+  it('carries a deploy intent into the account the operator chooses, landing on its Deploy tab', async () => {
     // The hand-off from strategy validation lands on the list as
     // `?deploy=&strategy=…`; the card is the account-selection step, so the
-    // intent has to survive the click or the drawer opens on nothing.
+    // intent has to survive the click by landing straight on that account's
+    // Deploy tab rather than merging a now-meaningless `?deploy` forward.
     await renderCard(testLane(), {}, true);
 
-    expect(screen.getByRole('link').getAttribute('href')).toBe(`${WORKSPACE_URL}?deploy=`);
+    expect(screen.getByRole('link').getAttribute('href')).toBe(`${WORKSPACE_URL}/deploy`);
   });
 
   it("shows a lane's account nickname, and its own label when another shares it", async () => {

@@ -10,6 +10,7 @@ import { RouterLink } from '@angular/router';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
+import type { DeskLens } from '../../../../shared/lens/lens';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type {
   ActionId,
@@ -18,11 +19,11 @@ import type {
   PanelAction,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
-import { BotRunTimingComponent } from '../bot-run-history/bot-run-timing.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { MissionVerdictStatusComponent } from '../bot-detail-banner/mission-verdict-status.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
+import { BotBannerRunTimingComponent } from './bot-banner-run-timing.component';
 import {
   actionTone,
   primaryActionForLens,
@@ -47,10 +48,11 @@ const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
 /**
  * The one bot-detail banner (ADR 0064 Decision 1 + the Trader/Operator
  * lifecycle-action banners it replaces): which bot this is, the way back,
- * its latest run timing, and its live status/actions, all in one card above
- * the Trader/Operator switch. Both lenses render the same instance; only
- * `operator` differs which extra content (a live quote, the promoted
- * safe-flatten action, and the richer overflow) appears.
+ * its latest run's Started/Ended times, and its live status/actions, all in
+ * one card. Both lenses render the same instance; only `lens` differs which
+ * extra content (a live quote, the promoted safe-flatten action, and the
+ * richer overflow) appears. The Trader/Operator switch itself lives in the
+ * global top bar (`ActiveLensBridgeService`), not here.
  */
 @Component({
   selector: 'app-bot-banner',
@@ -59,11 +61,11 @@ const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
     AssetIdentityComponent,
     TimestampDisplayComponent,
     RouterLink,
-    BotRunTimingComponent,
     PanelActionButtonComponent,
     MissionVerdictStatusComponent,
     BotBannerOverflowComponent,
     PanelInstrumentQuoteComponent,
+    BotBannerRunTimingComponent,
   ],
   templateUrl: './bot-banner.component.html',
   styleUrl: './bot-banner.component.scss',
@@ -76,10 +78,12 @@ export class BotBannerComponent {
   readonly clerkId = input.required<string>();
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly actionPending = input(false);
-  readonly operator = input(false);
+  readonly lens = input.required<DeskLens>();
 
   readonly actionRequested = output<PanelActionTrigger>();
   readonly retryRequested = output();
+
+  protected readonly operator = computed(() => this.lens() === 'operator');
 
   protected readonly primaryAction = computed(() =>
     primaryActionForLens(this.panel(), this.operator() ? 'operator' : 'trader'),

@@ -741,7 +741,9 @@ describe('OperatorLensComponent', () => {
 
     expandReadiness('Flatten & Stop');
     const btn = await screen.findByRole('button', { name: 'Flatten & Stop' });
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    // Styled disabled via `aria-disabled`, not the native attribute, so a
+    // blocked action's reason stays reachable by keyboard/screen reader.
+    expect(btn.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('clicking flatten-stop calls actionRequested with the action', async () => {

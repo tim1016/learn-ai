@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import secrets
+import signal
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -51,6 +54,8 @@ from app.schemas.alpaca_live_graduation import (
 )
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 _EVIDENCE_MAX_AGE_MS = 300_000
 _CONFIRMATION_TTL_MS = 300_000
@@ -227,7 +232,9 @@ class AlpacaLiveGraduationService:
                 current.next_action or "Refresh the account authority state.",
             )
         try:
-            plan, backup_path = self._read_persisted_plan(account_id, plan_id)
+            plan, backup_path = await asyncio.to_thread(
+                self._read_persisted_plan, account_id, plan_id
+            )
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise LiveGraduationRefused(
                 "graduation_plan_unavailable",
@@ -240,6 +247,11 @@ class AlpacaLiveGraduationService:
                 "The reviewed plan does not belong to this account.",
                 "Prepare a fresh review from this account's Configuration page.",
             )
+        # Re-observe broker state now, at apply time — never reuse prepare()'s
+        # snapshot. apply_cutover() refuses when this evidence disagrees with
+        # the plan's stored evidence, which is the only thing that catches a
+        # position or order opened during the confirmation window.
+        evidence = await self._capture_broker_evidence(account_id)
         async with graduation_mutation_fence():
             try:
                 receipt = await asyncio.to_thread(
@@ -247,6 +259,7 @@ class AlpacaLiveGraduationService:
                     plan,
                     backup_path,
                     confirmation_token,
+                    evidence,
                 )
             except (CutoverRefused, RecoveryRefused, OSError, ValueError) as exc:
                 raise LiveGraduationRefused(
@@ -290,6 +303,32 @@ class AlpacaLiveGraduationService:
                 "Repair the effective profile or account pin before graduation.",
             )
         observed_at_ms = now_ms_utc()
+        payload = {
+            "schema_version": 1,
+            "account_id": account.account_id,
+            "account_mode": account.account_mode,
+            "observed_at_ms": observed_at_ms,
+            "positions": {position.symbol: position.quantity for position in positions},
+            "open_order_ids": [order.order_id for order in orders],
+        }
+        proof_reference = await asyncio.to_thread(
+            self._write_broker_evidence_proof, account_id, observed_at_ms, payload
+        )
+        return BrokerCutoverEvidence(
+            account_id=account.account_id,
+            account_mode="live",
+            observed_at_ms=observed_at_ms,
+            proof_reference=proof_reference,
+            positions=payload["positions"],
+            open_order_ids=tuple(payload["open_order_ids"]),
+        )
+
+    def _write_broker_evidence_proof(
+        self,
+        account_id: str,
+        observed_at_ms: int,
+        payload: dict[str, Any],
+    ) -> str:
         artifacts_root = resolved_alpaca_settings().clerk_dir
         _accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
         proof_dir = account_dir / _PROOF_DIRECTORY
@@ -304,23 +343,8 @@ class AlpacaLiveGraduationService:
         proof_path = proof_dir / (
             f"broker-observation-{observed_at_ms}-{secrets.token_hex(6)}.json"
         )
-        payload = {
-            "schema_version": 1,
-            "account_id": account.account_id,
-            "account_mode": account.account_mode,
-            "observed_at_ms": observed_at_ms,
-            "positions": {position.symbol: position.quantity for position in positions},
-            "open_order_ids": [order.order_id for order in orders],
-        }
         atomic_write_json(proof_path, payload)
-        return BrokerCutoverEvidence(
-            account_id=account.account_id,
-            account_mode="live",
-            observed_at_ms=observed_at_ms,
-            proof_reference=relative_reference(artifacts_root, proof_path),
-            positions=payload["positions"],
-            open_order_ids=tuple(payload["open_order_ids"]),
-        )
+        return relative_reference(artifacts_root, proof_path)
 
     def _prepare_domain_plan(
         self,
@@ -372,6 +396,7 @@ class AlpacaLiveGraduationService:
         plan: CutoverPlan,
         backup_path: Path,
         confirmation_token: str,
+        broker_evidence: BrokerCutoverEvidence,
     ) -> Any:
         artifacts_root = resolved_alpaca_settings().clerk_dir
         verify_backup_bundle(
@@ -384,7 +409,7 @@ class AlpacaLiveGraduationService:
             confirmation_token=confirmation_token,
             artifacts_root=artifacts_root,
             runner_artifacts_root=live_artifacts_root(),
-            broker_evidence=plan.broker_evidence,
+            broker_evidence=broker_evidence,
             max_broker_evidence_age_ms=_EVIDENCE_MAX_AGE_MS,
         )
 
@@ -422,3 +447,18 @@ _service = AlpacaLiveGraduationService()
 
 def get_alpaca_live_graduation_service() -> AlpacaLiveGraduationService:
     return _service
+
+
+async def restart_after_graduation() -> None:
+    """Let the 202 body flush, then enter Uvicorn's graceful shutdown path.
+
+    The deployed clerk service uses a supervisor restart policy. SIGTERM is
+    intentional here: lifespan shutdown drains the shadow Clerk and releases
+    its lease before the supervisor boots the activation-selected Live Clerk.
+    """
+    await asyncio.sleep(0.35)
+    logger.warning(
+        "Live graduation activation committed; requesting supervised clerk restart",
+        extra={"action": "live_graduation_restart_requested"},
+    )
+    os.kill(os.getpid(), signal.SIGTERM)

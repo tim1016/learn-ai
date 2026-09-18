@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import { RouterLink, type QueryParamsHandling } from '@angular/router';
 
-import { accountWorkspaceEntryRoute } from '../../../fleet/account-workspace';
+import { accountWorkspaceEntryRoute, accountWorkspaceTabRoute } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import {
   type LaneDescriptor,
@@ -87,9 +87,9 @@ export class AlpacaLaneCardComponent {
   /** A broker-wide deploy intent the list is carrying (`/brokers/alpaca?deploy`
    * — the strategy-validation hand-off's landing URL). The operator asked to
    * deploy before they had an account, so choosing one here is the step that
-   * was missing, and the intent travels into that account's workspace where
-   * the drawer opens over it. The list itself offers no Deploy of its own
-   * (ADR 0064 Decision 2): deploying is something one does *on* an account. */
+   * was missing, and the intent travels into that account's own Deploy tab.
+   * The list itself offers no Deploy of its own (ADR 0064 Decision 2):
+   * deploying is something one does *on* an account. */
   readonly deployIntent = input(false);
 
   private readonly account = computed(() => laneConfirmedAccount(this.lane()));
@@ -122,22 +122,25 @@ export class AlpacaLaneCardComponent {
 
   /** The card's one destination: this lane's confirmed account, whatever the
    * lane can currently report about itself. The resolver substitutes
-   * Configuration only for a lane with no account at all. */
+   * Configuration only for a lane with no account at all — the same
+   * substitution a carried deploy intent falls back to when this lane has no
+   * account for Deploy to target either. */
   protected readonly openRoute = computed(() => {
     const lane = this.lane();
-    return accountWorkspaceEntryRoute({
-      broker: lane.broker,
-      clerkId: lane.clerk_id,
-      accountId: this.account(),
-    });
+    const address = { broker: lane.broker, clerkId: lane.clerk_id, accountId: this.account() };
+    if (this.deployIntent()) {
+      return accountWorkspaceTabRoute(address, 'deploy') ?? accountWorkspaceEntryRoute(address);
+    }
+    return accountWorkspaceEntryRoute(address);
   });
 
-  protected readonly openQuery = computed(() => (this.deployIntent() ? { deploy: '' } : {}));
-
   /** Merged only while an intent is being carried: the hand-off arrives as
-   * `?deploy=&strategy=…` and the strategy is the drawer's to read, so
-   * replacing the query instead of merging it would open an empty drawer.
-   * Without an intent nothing from this URL belongs on the next one. */
+   * `?deploy=&strategy=…`, and `strategy` is the Deploy tab's own deep link to
+   * read — but `deploy` itself is stripped, since Deploy is a path now, not a
+   * query param. Without an intent nothing from this URL belongs on the
+   * next one. */
+  protected readonly openQuery = computed(() => (this.deployIntent() ? { deploy: null } : {}));
+
   protected readonly openQueryHandling = computed<QueryParamsHandling>(() =>
     this.deployIntent() ? 'merge' : '',
   );

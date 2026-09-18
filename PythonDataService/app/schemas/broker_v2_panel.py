@@ -37,6 +37,7 @@ from app.schemas.account_authority import (
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.schemas.signal_program_seal import SealedBotProgram
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _validate_simulated_authority_metadata(
@@ -251,14 +252,14 @@ class FeedContinuityEventView(BaseModel):
 
     evidence_seq: int
     kind: Literal["interruption", "recovered", "gap", "substituted", "refused"]
-    occurred_at_ms: int
+    occurred_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     label: str
     explanation: str
     cause: str | None
-    duration_ms: int | None
+    duration_ms: int | None = Field(ge=0)
     duration_label: str | None
-    window_start_ms: int | None
-    window_end_ms: int | None
+    window_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    window_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class FeedContinuityView(BaseModel):
@@ -275,9 +276,9 @@ class FeedContinuityView(BaseModel):
     recovery_count: int
     unresolved_count: int
     decision_impact_count: int
-    last_interruption_at_ms: int | None
-    last_recovery_at_ms: int | None
-    latest_bar_at_ms: int | None
+    last_interruption_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    last_recovery_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    latest_bar_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     events: list[FeedContinuityEventView]
 
 

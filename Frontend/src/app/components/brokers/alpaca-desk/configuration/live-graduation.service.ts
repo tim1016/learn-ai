@@ -2,47 +2,13 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
+import type { components } from '../../../../api/broker.types';
 import { operationUrl } from '../../../../fleet/operation-url';
 import { commandBodyOf, withCommand, type ResourceTarget } from '../../../../fleet/resource-target';
 
-export interface LiveGraduationStatus {
-  readonly account_id: string;
-  readonly configured_mode: 'live';
-  readonly authority: 'shadow' | 'live' | 'unavailable';
-  readonly state: 'review_available' | 'graduated' | 'blocked';
-  readonly headline: string;
-  readonly detail: string;
-  readonly next_action: string | null;
-  readonly restart_managed: boolean;
-}
-
-export interface LiveGraduationPlan {
-  readonly plan_id: string;
-  readonly confirmation_token: string;
-  readonly account_id: string;
-  readonly created_at_ms: number;
-  readonly expires_at_ms: number;
-  readonly broker_observed_at_ms: number;
-  readonly position_count: number;
-  readonly open_order_count: number;
-  readonly stopped_bot_ids: readonly string[];
-  readonly backup_reference: string;
-  readonly daily_loss_fraction: number;
-  readonly daily_loss_usd: number;
-  readonly arming_max_sessions: number;
-  readonly extended_hours_entry_bps: number;
-  readonly extended_hours_exit_bps: number;
-  readonly consequence: string;
-}
-
-export interface LiveGraduationOutcome {
-  readonly account_id: string;
-  readonly plan_id: string;
-  readonly state: 'restart_scheduled';
-  readonly receipt_reference: string;
-  readonly activated_at_ms: number;
-  readonly message: string;
-}
+export type LiveGraduationStatus = components['schemas']['LiveGraduationStatus'];
+export type LiveGraduationPlan = components['schemas']['LiveGraduationPlanView'];
+export type LiveGraduationOutcome = components['schemas']['LiveGraduationApplyOutcome'];
 
 @Injectable({ providedIn: 'root' })
 export class LiveGraduationService {

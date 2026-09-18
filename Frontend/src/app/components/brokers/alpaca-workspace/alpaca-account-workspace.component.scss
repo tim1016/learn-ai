@@ -42,51 +42,44 @@
   font-weight: var(--fw-semi);
 }
 
-.account-workspace__deploy {
+.account-workspace__actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-left: auto;
 }
 
-/* The refusal is visible text beside the control, not a title attribute a
-   disabled button never announces. */
-.account-workspace__deploy-reason {
-  max-width: 24rem;
-  margin: 0;
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
-}
-
-.account-workspace__deploy-button {
+/* The Bots tab's own commands, hoisted into the persistent header so they sit
+   in the one action slot every tab shares rather than their own row above the
+   roster. Styling matches `BotsListPageComponent`'s `.command-button`. */
+.account-workspace__command-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   min-height: 2.25rem;
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--text-on-accent);
+  background: var(--bg-surface);
+  color: var(--text-primary);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semi);
   cursor: pointer;
 }
 
-.account-workspace__deploy-button:hover:not(:disabled) {
-  background: var(--accent-hover);
+.account-workspace__command-button:hover {
+  background: var(--bg-hover);
 }
 
-.account-workspace__deploy-button:disabled {
-  border-color: var(--border-light);
-  background: transparent;
-  color: var(--text-subtle);
-  cursor: not-allowed;
-}
-
-.account-workspace__deploy-button:focus-visible {
+.account-workspace__command-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.account-workspace__command-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .account-workspace__tabs {
@@ -156,7 +149,7 @@
     padding: var(--space-2);
   }
 
-  .account-workspace__deploy {
+  .account-workspace__actions {
     width: 100%;
     margin-left: 0;
   }

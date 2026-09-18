@@ -1,23 +1,45 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
-import type { BotPanelView, PanelAction } from '../lib/broker-v2-panel.types';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import type { BotPanelView, BotRunView, CurrentRunState, PanelAction } from '../lib/broker-v2-panel.types';
 import { EMPTY_CURRENT_RUN_STATE } from '../lib/broker-v2-panel.types';
 import { BotBannerComponent } from './bot-banner.component';
 
 const BACK_ROUTE = ['brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'acc-1', 'bots'];
 
-function inputs(overrides: Partial<BotPanelView> = {}, operator = false) {
+function fakeRun(overrides: Partial<BotRunView> = {}): BotRunView {
+  return {
+    strategy_instance_id: 'sid-001',
+    run_id: 'run-current',
+    configuration_hash: 'a'.repeat(64),
+    launch_reason: 'deploy',
+    started_at_ms: 1_753_800_000_000,
+    is_current: true,
+    process: {
+      strategy_instance_id: 'sid-001',
+      run_id: 'run-current',
+      process_identity: 'process-1',
+      state: 'RUNNING',
+      registry_generation: 'registry-1',
+      observed_at_ms: 1_753_800_005_000,
+    },
+    terminal_outcome: null,
+    ...overrides,
+  };
+}
+
+function inputs(overrides: Partial<BotPanelView> = {}, operator = false, runState: CurrentRunState = EMPTY_CURRENT_RUN_STATE) {
   return {
     panel: fakeBotPanelView(overrides),
-    runState: EMPTY_CURRENT_RUN_STATE,
+    runState,
     backRoute: BACK_ROUTE,
     backLabel: 'Bots',
     clerkId: 'clrk_spec',
-    operator,
+    lens: operator ? 'operator' as const : 'trader' as const,
   };
 }
 
@@ -33,10 +55,101 @@ describe('BotBannerComponent', () => {
     expect(screen.getByRole('heading', { name: /Deployment Validation/ })).toBeTruthy();
     expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByText('spy-momentum-01')).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Latest run timing' })).toBeTruthy();
     expect(screen.getByText(/Updated/)).toBeTruthy();
     const revisionStatus = screen.getByRole('status', { name: 'Revision 1 running' });
     expect(revisionStatus.textContent).toBe('Revision 1 running');
+  });
+
+  it('shows the working/off-duty state once, in the topline next to the back link', async () => {
+    const { container } = await render(BotBannerComponent, {
+      inputs: inputs(),
+      providers: [provideRouter([])],
+    });
+
+    const topline = container.querySelector('.bot-banner__topline');
+    expect(topline?.getAttribute('data-state')).toBe('working');
+    const status = within(topline as HTMLElement).getByRole('status', { name: 'Working' });
+    expect(status.textContent).toBe('Working');
+    // The status-row no longer carries a second copy of the same chip.
+    expect(screen.getAllByRole('status', { name: 'Working' })).toHaveLength(1);
+  });
+
+  it('recolors the topline for an off-duty bot', async () => {
+    const { container } = await render(BotBannerComponent, {
+      inputs: inputs({
+        mission_verdict: {
+          state: 'off_duty',
+          label: 'Off duty',
+          explanation: 'The runtime is not scheduled to run right now.',
+          next_action: null,
+          evaluated_at_ms: 1_753_800_000_000,
+        },
+      }),
+      providers: [provideRouter([])],
+    });
+
+    const topline = container.querySelector('.bot-banner__topline');
+    expect(topline?.getAttribute('data-state')).toBe('off_duty');
+    expect(screen.getByRole('status', { name: 'Off duty' })).toBeTruthy();
+  });
+
+  it('shows the current run\'s Started/Ended times, compactly, in the topline', async () => {
+    await render(BotBannerComponent, {
+      inputs: inputs({}, false, {
+        run: fakeRun({
+          terminal_outcome: {
+            kind: 'STOPPED',
+            reason_code: 'OPERATOR_STOP',
+            recorded_at_ms: 1_753_850_000_000,
+            run_id: 'run-current',
+          },
+        }),
+        loading: false,
+        failed: false,
+      }),
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByText(
+      formatTimestampDisplay(1_753_800_000_000, { granularity: 'time' }),
+    )).toBeTruthy();
+    expect(screen.getByText(
+      formatTimestampDisplay(1_753_850_000_000, { granularity: 'time' }),
+    )).toBeTruthy();
+  });
+
+  it('shows a still-running run as Running, not a blank end time', async () => {
+    await render(BotBannerComponent, {
+      inputs: inputs({}, false, { run: fakeRun(), loading: false, failed: false }),
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByText('Running')).toBeTruthy();
+  });
+
+  it('surfaces a run-timing retry request from the caller', async () => {
+    const retried = { called: false };
+    await render(BotBannerComponent, {
+      inputs: inputs({}, false, { run: null, loading: false, failed: true }),
+      providers: [provideRouter([])],
+      on: { retryRequested: () => { retried.called = true; } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry run timing' }));
+    expect(retried.called).toBe(true);
+  });
+
+  it('shows loading and unavailable placeholders while the run has not resolved', async () => {
+    const { rerender } = await render(BotBannerComponent, {
+      inputs: inputs({}, false, { run: null, loading: true, failed: false }),
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getAllByText('Loading…')).toHaveLength(2);
+
+    await rerender({ inputs: inputs({}, false, { run: null, loading: false, failed: true }) });
+
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2);
   });
 
   it('has no detectable accessibility violations in either lens', async () => {
@@ -58,6 +171,22 @@ describe('BotBannerComponent', () => {
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(results.violations).toEqual([]);
+  });
+
+  it('puts the strategy title and its actions on one row, not two', async () => {
+    const { container } = await render(BotBannerComponent, {
+      inputs: inputs({
+        actions: [fakePanelAction('resume')],
+        primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      }),
+      providers: [provideRouter([])],
+    });
+
+    const row = container.querySelector('.bot-banner__status-row');
+    const heading = screen.getByRole('heading', { name: /Deployment Validation/ });
+    const button = screen.getByRole('button', { name: 'Resume' });
+    expect(row?.contains(heading)).toBe(true);
+    expect(row?.contains(button)).toBe(true);
   });
 
   it('shows the trader mission verdict and direct trader actions, with no quote or promoted flatten', async () => {

@@ -16016,6 +16016,7 @@
           "duration_ms": {
             "anyOf": [
               {
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -16048,12 +16049,16 @@
             "type": "string"
           },
           "occurred_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Occurred At Ms",
             "type": "integer"
           },
           "window_end_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -16065,6 +16070,8 @@
           "window_start_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -16114,6 +16121,8 @@
           "last_interruption_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -16125,6 +16134,8 @@
           "last_recovery_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -16136,6 +16147,8 @@
           "latest_bar_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -22138,6 +22151,7 @@
             "type": "string"
           },
           "activated_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Activated At Ms",
             "type": "integer"
@@ -22211,6 +22225,7 @@
             "type": "string"
           },
           "broker_observed_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Broker Observed At Ms",
             "type": "integer"
@@ -22225,6 +22240,7 @@
             "type": "string"
           },
           "created_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Created At Ms",
             "type": "integer"
@@ -22241,6 +22257,7 @@
             "type": "number"
           },
           "expires_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Expires At Ms",
             "type": "integer"

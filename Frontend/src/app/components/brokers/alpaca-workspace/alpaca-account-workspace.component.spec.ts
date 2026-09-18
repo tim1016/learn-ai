@@ -20,7 +20,6 @@ import {
   TEST_CLERK_ID,
   type FleetDirectoryDouble,
 } from '../../../fleet/fleet-directory-testing';
-import type { ResourceTarget } from '../../../fleet/resource-target';
 import { BrokersService } from '../../../services/brokers.service';
 import {
   AlpacaLiveVerdictService,
@@ -72,6 +71,12 @@ class ConfigurationStubComponent {}
 @Component({ selector: 'app-bot-stub', template: '<main aria-label="Bot">Bot page</main>' })
 class BotStubComponent {}
 
+@Component({
+  selector: 'app-deploy-stub',
+  template: '<main aria-label="Deploy strategy">Deploy strategy tab</main>',
+})
+class DeployStubComponent {}
+
 // The same shape as `app.routes.ts`: one shell at the clerk level, the
 // lane-scoped tabs directly under it, and the account-scoped tabs under a
 // componentless `accounts/:accountId`. The not-ready tab is the REAL
@@ -95,6 +100,7 @@ const WORKSPACE_ROUTES: Routes = [
           { path: 'bots/:sid', component: BotStubComponent },
           { path: 'bots', component: BotsStubComponent },
           { path: 'gallery', component: GalleryStubComponent },
+          { path: 'deploy', component: DeployStubComponent },
           { path: '', component: OverviewStubComponent },
         ],
       },
@@ -164,9 +170,6 @@ async function renderWorkspace(
 ) {
   const directory = overrides.directory ?? provideFleetDirectory();
   const getAccount = vi.fn(() => Promise.resolve(fakeAccount()));
-  const getDeployView = vi.fn(
-    (_target: ResourceTarget, _symbol?: string) => new Promise<never>(() => undefined),
-  );
 
   const view = await render(WorkspaceHostComponent, {
     providers: [
@@ -194,7 +197,7 @@ async function renderWorkspace(
       // this workspace's: the account-list route above renders them.
       {
         provide: BrokerV2PanelService,
-        useValue: { getDeployView, getCatalog: () => Promise.resolve([]) },
+        useValue: { getCatalog: () => Promise.resolve([]) },
       },
       {
         provide: BrokerConfigurationService,
@@ -213,7 +216,7 @@ async function renderWorkspace(
   const router = view.fixture.debugElement.injector.get(Router);
   await router.navigateByUrl(overrides.url ?? WORKSPACE_URL);
   await view.fixture.whenStable();
-  return { view, router, getAccount, getDeployView };
+  return { view, router, getAccount };
 }
 
 describe('AlpacaAccountWorkspaceComponent', () => {
@@ -221,12 +224,13 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     [WORKSPACE_URL, 'Overview'],
     [`${WORKSPACE_URL}/bots`, 'Bots'],
     [`${WORKSPACE_URL}/gallery`, 'Gallery'],
+    [`${WORKSPACE_URL}/deploy`, 'Deploy strategy'],
   ])('renders the account header and marks the open tab on %s', async (url, tab) => {
     await renderWorkspace({ url });
 
     expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
     expect(screen.getByText(`${tab} tab`)).toBeTruthy();
-    for (const label of ['Overview', 'Bots', 'Gallery', 'Configuration']) {
+    for (const label of ['Overview', 'Bots', 'Gallery', 'Configuration', 'Deploy strategy']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     expect(screen.getByRole('link', { name: tab }).getAttribute('aria-current')).toBe('page');
@@ -235,8 +239,6 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     ).toHaveLength(1);
   });
 
-  // Declared before the Deploy tests below: those leave a PrimeNG drawer
-  // appended to `document.body`, and this rule grades the whole document.
   it('has no detectable accessibility violations', async () => {
     await renderWorkspace();
     await screen.findByRole('heading', { name: 'Paper' });
@@ -370,91 +372,30 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(screen.getByText('· Shadow')).toBeTruthy();
   });
 
-  it('disables Deploy with its reason when the lane declares no deploy capability', async () => {
-    const directory = provideFleetDirectory({
-      observed_at_ms: 1,
-      clerks: [testLane({ capabilities: ['account_read'] })],
-    });
-    const { getDeployView } = await renderWorkspace({ directory });
+  it('points Deploy at the workspace’s own lane and account from every other tab', async () => {
+    // Blocked-reason messaging (no lane, no declared capability, no confirmed
+    // account) is `AlpacaDeployTabComponent`'s own concern now — this shell
+    // only has to get the tab's address right, from wherever it is clicked.
+    await renderWorkspace({ url: `${WORKSPACE_URL}/gallery` });
 
-    const deploy = await screen.findByRole('button', { name: /Deploy strategy/ });
-    expect(deploy.hasAttribute('disabled')).toBe(true);
-    expect(screen.getByText('This clerk does not declare Deploy capability.')).toBeTruthy();
-    expect(deploy.getAttribute('aria-describedby')).toBe('workspace-deploy-reason');
-
-    fireEvent.click(deploy);
-
-    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
-    expect(getDeployView).not.toHaveBeenCalled();
-  });
-
-  it('disables Deploy when the routed lane is not in the directory at all', async () => {
-    const directory = provideFleetDirectory({ observed_at_ms: 1, clerks: [] });
-    await renderWorkspace({ directory });
-
-    expect(
-      await screen.findByText(/lane has not resolved, so Deploy has no clerk to target/),
-    ).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Deploy strategy/ }).hasAttribute('disabled')).toBe(
-      true,
+    expect(screen.getByRole('link', { name: 'Deploy strategy' }).getAttribute('href')).toBe(
+      `${WORKSPACE_URL}/deploy`,
     );
   });
 
-  it.each([
-    [`${WORKSPACE_URL}/bots`],
-    [`${WORKSPACE_URL}/gallery`],
-  ])('opens Deploy from %s against the workspace lane and account', async (url) => {
-    const { getDeployView, router } = await renderWorkspace({ url });
-
-    fireEvent.click(await screen.findByRole('button', { name: /Deploy strategy/ }));
-
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-    // Opening writes `?deploy` on the tab the operator is standing on — the
-    // drawer's address, which the menubar reads too. The tab itself does not
-    // move.
-    await vi.waitFor(() => expect(router.url).toBe(`${url}?deploy=`));
-    // The workflow reads the target the drawer froze when it opened — never
-    // the live directory while it is open (FR-094).
-    await vi.waitFor(() => expect(getDeployView).toHaveBeenCalled());
-    const [target] = getDeployView.mock.calls[0];
-    expect(target.broker).toBe('alpaca');
-    expect(target.clerkId).toBe(TEST_CLERK_ID);
-    expect(target.accountId).toBe(TEST_ACCOUNT_ID);
-    expect(target.bindingGeneration).toBe(3);
-  });
-
-  it('opens the Deploy drawer from a ?deploy deep link, and closing clears it', async () => {
-    // `?deploy` is an address, not a private flag: the menubar's Deploy entry
-    // and the strategy-validation hand-off both arrive by navigating to this
-    // account with it set. Entered from another route, so the workspace is
-    // created against that URL rather than reacting to a change on it.
-    const { router } = await renderWorkspace({ url: ACCOUNT_LIST_URL });
-
-    await router.navigateByUrl(`${WORKSPACE_URL}?deploy=`);
-
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close deploy a bot' }));
-
-    await vi.waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull(),
-    );
-    await vi.waitFor(() => expect(router.url).not.toContain('deploy'));
-  });
-
-  it('opens the drawer when an account card is chosen under a deploy intent', async () => {
+  it('lands on the chosen account’s Deploy tab under a deploy intent', async () => {
     // The regression this pins: the link's `href` stayed correct while the
     // destination stopped reading `?deploy`, so choosing an account under a
-    // deploy intent landed on Overview with nothing open. Asserting the href
-    // alone could not see that — this follows the card and looks at what the
-    // destination actually renders. The list has no Deploy link of its own
-    // any more (#2187): the whole card is the click target, and it carries
-    // the intent the hand-off arrived with.
-    await renderWorkspace({ url: `${ACCOUNT_LIST_URL}?deploy=` });
+    // deploy intent landed on Overview with nothing open. This follows the
+    // card and looks at what the destination actually renders, not just its
+    // href. The list has no Deploy link of its own (#2187): the whole card is
+    // the click target, and it carries the intent the hand-off arrived with.
+    const { router } = await renderWorkspace({ url: `${ACCOUNT_LIST_URL}?deploy=` });
 
     fireEvent.click(await screen.findByRole('link', { name: /Paper/ }));
 
-    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+    await vi.waitFor(() => expect(router.url).toBe(`${WORKSPACE_URL}/deploy`));
+    expect(await screen.findByText('Deploy strategy tab')).toBeTruthy();
   });
 
   describe("a bot's own page", () => {
@@ -618,6 +559,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       [`${WORKSPACE_URL}/bots`, `${LIVE_URL}/bots`, 'Bots'],
       [`${WORKSPACE_URL}/gallery`, `${LIVE_URL}/gallery`, 'Gallery'],
       [`${LANE_URL}/configuration`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/configuration`, 'Configuration'],
+      [`${WORKSPACE_URL}/deploy`, `${LIVE_URL}/deploy`, 'Deploy'],
     ])('lands on the same tab of the chosen account, from %s', async (url, expected) => {
       await openSwitcher(url);
 
@@ -639,23 +581,6 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
       expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
         `${LIVE_URL}/bots?lens=operator`,
-      );
-    });
-
-    it('closes an open Deploy drawer rather than retargeting it at the other account', async () => {
-      const { router } = await renderWorkspace({
-        url: ACCOUNT_LIST_URL,
-        directory: twoLaneDirectory(),
-      });
-      await router.navigateByUrl(`${WORKSPACE_URL}?deploy=`);
-      expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
-
-      fireEvent.click(screen.getByRole('button', { name: /Paper/ }));
-      fireEvent.click(screen.getByRole('link', { name: /^Live/ }));
-
-      await vi.waitFor(() => expect(router.url).toBe(LIVE_URL));
-      await vi.waitFor(() =>
-        expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull(),
       );
     });
 

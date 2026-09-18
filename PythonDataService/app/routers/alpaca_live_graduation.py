@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import os
-import signal
 from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
@@ -20,9 +16,8 @@ from app.services.alpaca_live_graduation import (
     AlpacaLiveGraduationService,
     LiveGraduationRefused,
     get_alpaca_live_graduation_service,
+    restart_after_graduation,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/brokers/alpaca/accounts/{account_id}/live-graduation",
@@ -45,22 +40,6 @@ def _raise_refusal(error: LiveGraduationRefused) -> NoReturn:
             "next_action": error.next_action,
         },
     ) from error
-
-
-async def _restart_worker_after_response() -> None:
-    """Let the 202 body flush, then enter Uvicorn's graceful shutdown path.
-
-    The deployed clerk service uses a supervisor restart policy.  SIGTERM is
-    intentional here: lifespan shutdown drains the shadow Clerk and releases
-    its lease before the supervisor boots the activation-selected Live Clerk.
-    """
-
-    await asyncio.sleep(0.35)
-    logger.warning(
-        "Live graduation activation committed; requesting supervised clerk restart",
-        extra={"action": "live_graduation_restart_requested"},
-    )
-    os.kill(os.getpid(), signal.SIGTERM)
 
 
 @router.get("", response_model=LiveGraduationStatus)
@@ -104,6 +83,6 @@ async def apply_live_graduation(
         )
     except LiveGraduationRefused as error:
         _raise_refusal(error)
-    background_tasks.add_task(_restart_worker_after_response)
+    background_tasks.add_task(restart_after_graduation)
     return outcome
 

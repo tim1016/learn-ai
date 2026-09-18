@@ -7,7 +7,7 @@
 
 ## Decision
 
-1. **The account is the place.** Every page about one broker account sits in an **account workspace**: one account header — the account name as an **account switcher**, the Paper/Live mode, equity, a sync indicator and the Deploy action — over four tabs: Overview, Bots, Gallery, Configuration. A bot's page sits inside the workspace, under the tab it was opened from (Bots when it has no origin), and its way back returns there.
+1. **The account is the place.** Every page about one broker account sits in an **account workspace**: one account header — the account name as an **account switcher**, the Paper/Live mode, equity and a sync indicator — over five tabs: Overview, Bots, Gallery, Configuration, Deploy strategy. A bot's page sits inside the workspace, under the tab it was opened from (Bots when it has no origin), and its way back returns there. (Decision 1 extended 2026-09-17: Deploy started as a header action opening an overlay drawer; it is a routed tab like the other four, so the sealed evidence it reviews has its own URL and the same "explain in place" and account-switch behavior every other tab already has. See "Amendment" below.)
 2. **The account list is the only multi-account page.** `/brokers/alpaca` lists every account (name, mode, readiness, equity, running bots) and opens its workspace. The broker-wide Bots and Gallery chooser routes and the menu's Deploy item redirect to it; the app menu's Alpaca group names only Accounts.
 3. **Account badges navigate.** Each top-bar account badge opens its account — on the same tab when the operator is already in a workspace, otherwise on Overview. The unscoped Bots/Gallery quick links are removed.
 4. **Switching keeps the tab.** Moving from Paper → Bots to Live lands on Live → Bots; from a bot's page, which the other account does not have, it lands on Bots.
@@ -33,3 +33,11 @@
 
 - The fleet directory must carry each lane's account nickname so every page can show the same name and spot a shared one.
 - The pick-an-account pages from #2168 and the clerk-only surface pages are retired as destinations; their URLs redirect or render as the not-ready workspace tabs.
+
+## Amendment 2026-09-17 — Deploy strategy becomes the fifth tab
+
+Deploy shipped as Decision 1 described it: a header action opening an overlay drawer. Once graduation and continuity work made the account workspace the obvious home for every account-scoped surface, keeping Deploy as the one exception — no URL of its own, no "explain in place" for a not-ready lane, retargeted by closing and reopening rather than by the account-switcher's normal same-tab behavior — cost more than the extra tab does. Deploy is now routed at `.../accounts/:accountId/deploy`, positioned after Configuration, and follows Overview's pattern: it requires a confirmed account and has no lane-scoped fallback, because Deploy cannot target anything without one.
+
+- The broker-wide `?deploy=` intent (arriving from strategy validation with no account chosen yet) is unchanged: it still carries through the account list, and now lands the operator on the chosen account's Deploy tab instead of opening the drawer.
+- `AlpacaDeployDrawerComponent` is retired from the account workspace; no other production caller remained.
+- FR-094's "not a command surface" language and FR-096's "explain in place" language now cover Deploy exactly as they cover Bots and Gallery.

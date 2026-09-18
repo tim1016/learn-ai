@@ -1,26 +1,4 @@
 <main class="bots-page" aria-label="Bots">
-  <div class="bots-page__commands">
-    <button
-      type="button"
-      class="command-button command-button--quiet"
-      [disabled]="initialLoading()"
-      [attr.aria-busy]="refreshing()"
-      (click)="refreshBots()"
-      aria-label="Refresh bots"
-    >
-      <span aria-hidden="true">↻</span>
-      {{ refreshing() ? 'Refreshing' : 'Refresh' }}
-    </button>
-    <button
-      type="button"
-      class="command-button command-button--quiet"
-      (click)="openArchive()"
-    >
-      <span aria-hidden="true">🗄</span>
-      Archive finished
-    </button>
-  </div>
-
   @if (actionNotice(); as notice) {
     <div
       class="fleet-notice"

@@ -78,9 +78,9 @@ from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.channel_health import evaluate_channel_health
+from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
-    build_feed_continuity,
     build_panel,
     compute_revision,
     program_build_view_from_run_evidence,

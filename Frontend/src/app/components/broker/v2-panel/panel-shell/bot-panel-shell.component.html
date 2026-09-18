@@ -21,19 +21,10 @@
     [clerkId]="clerkId()"
     [tickerQuote]="tickerQuote()"
     [actionPending]="actionPending()"
-    [operator]="activeLens() === 'operator'"
+    [lens]="activeLens()"
     (actionRequested)="onActionRequested($event)"
     (retryRequested)="currentRun.reload()"
   />
-
-  <nav class="lens-navigation" aria-label="Bot detail views">
-    <app-lens-tabs
-      class="lens-navigation__tabs"
-      ariaLabel="Bot control perspective"
-      [lens]="activeLens()"
-      (lensChange)="selectLens($event)"
-    />
-  </nav>
 
   @if (actionReceipt(); as receipt) {
     <div class="panel-feedback">

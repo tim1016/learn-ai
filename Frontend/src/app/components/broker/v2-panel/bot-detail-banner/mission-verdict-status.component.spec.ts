@@ -20,4 +20,22 @@ describe('MissionVerdictStatusComponent', () => {
     const status = screen.getByRole('status', { name: 'Mission blocked' });
     expect(status.getAttribute('data-state')).toBe('blocked');
   });
+
+  it('drops the chip decoration in bare mode without losing the accessible status', async () => {
+    await render(MissionVerdictStatusComponent, {
+      inputs: {
+        verdict: {
+          state: 'off_duty',
+          label: 'Off duty',
+          explanation: 'Not scheduled to run right now.',
+          next_action: null,
+          evaluated_at_ms: 1_753_800_001_000,
+        },
+        bare: true,
+      },
+    });
+
+    const status = screen.getByRole('status', { name: 'Off duty' });
+    expect(status.classList.contains('mission-verdict-status--bare')).toBe(true);
+  });
 });

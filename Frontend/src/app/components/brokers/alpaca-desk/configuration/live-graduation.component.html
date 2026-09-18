@@ -77,58 +77,14 @@
   }
 
   @if (plan(); as review) {
-    <div class="graduation__review" aria-label="Live graduation evidence">
-      <div class="graduation__review-head">
-        <div>
-          <p class="graduation__eyebrow">Exact review · expires {{ review.expires_at_ms | date:'mediumTime' }}</p>
-          <h3>Evidence is ready</h3>
-        </div>
-        @if (reviewExpired()) {
-          <span class="graduation__expired">Expired — prepare again</span>
-        }
-      </div>
-
-      <dl class="graduation__facts">
-        <div><dt>Broker account</dt><dd>{{ review.account_id }}</dd></div>
-        <div><dt>Open positions</dt><dd>{{ review.position_count }} · flat</dd></div>
-        <div><dt>Open orders</dt><dd>{{ review.open_order_count }} · clear</dd></div>
-        <div><dt>Stopped bots</dt><dd>{{ review.stopped_bot_ids.length }}</dd></div>
-        <div><dt>Daily loss limits</dt><dd>{{ review.daily_loss_fraction | percent }} or {{ review.daily_loss_usd | currency }}</dd></div>
-        <div><dt>Arming lapse</dt><dd>{{ review.arming_max_sessions }} session</dd></div>
-        <div><dt>Extended-hours allowance</dt><dd>{{ review.extended_hours_entry_bps }} / {{ review.extended_hours_exit_bps }} bps</dd></div>
-        <div><dt>Verified backup</dt><dd>Complete</dd></div>
-      </dl>
-
-      @if (review.stopped_bot_ids.length > 0) {
-        <p class="graduation__bots">
-          Stopped roster: {{ review.stopped_bot_ids.join(', ') }}
-        </p>
-      }
-
-      <p class="graduation__consequence">{{ review.consequence }}</p>
-      <label class="graduation__acknowledgement">
-        <input
-          type="checkbox"
-          [checked]="acknowledged()"
-          [disabled]="busy() || reviewExpired()"
-          (change)="acknowledged.set(!acknowledged())" />
-        <span>
-          I understand this irreversibly graduates account {{ review.account_id }} to
-          real-money custody, while every strategy remains stopped and unarmed.
-        </span>
-      </label>
-      <div class="graduation__actions">
-        <button
-          type="button"
-          class="button button--danger"
-          [disabled]="!acknowledged() || busy() || reviewExpired()"
-          (click)="confirm()">
-          {{ phase() === 'applying' ? 'Activating Live authority…' : 'Graduate to Live and restart' }}
-        </button>
-        <button type="button" class="button button--secondary" [disabled]="busy()" (click)="prepareReview()">
-          Refresh evidence
-        </button>
-      </div>
-    </div>
+    <app-live-graduation-review
+      [plan]="review"
+      [expired]="reviewExpired()"
+      [busy]="busy()"
+      [applying]="phase() === 'applying'"
+      [(acknowledged)]="acknowledged"
+      (confirmRequested)="confirm()"
+      (refreshRequested)="prepareReview()"
+    />
   }
 </section>

@@ -10,10 +10,10 @@ import {
   signal,
 } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { CurrencyPipe, DatePipe, PercentPipe } from '@angular/common';
 
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { LiveGraduationReviewComponent } from './live-graduation-review.component';
 import {
   LiveGraduationService,
   type LiveGraduationPlan,
@@ -34,7 +34,7 @@ function refusalMessage(error: unknown): string {
 @Component({
   selector: 'app-live-graduation',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DatePipe, PercentPipe],
+  imports: [LiveGraduationReviewComponent],
   templateUrl: './live-graduation.component.html',
   styleUrl: './live-graduation.component.scss',
 })
@@ -65,15 +65,29 @@ export class LiveGraduationComponent {
   }
 
   constructor() {
+    // Route reuse keeps this component instance across an account switch —
+    // its own inputs just update. Without this, a stale plan and an already
+    // -ticked acknowledgement could stay on screen labeled for the new
+    // account, which is exactly what a real-money confirmation must never do.
+    effect(() => {
+      this.clerkId();
+      this.accountId();
+      this.resetCeremony();
+    });
     effect(() => {
       if (this.status.hasValue() && this.status.value().state === 'graduated') {
-        this.phase.set('idle');
-        this.plan.set(null);
-        this.acknowledged.set(false);
-        this.stopPolling();
+        this.resetCeremony();
       }
     });
     this.destroyRef.onDestroy(() => this.stopPolling());
+  }
+
+  private resetCeremony(): void {
+    this.phase.set('idle');
+    this.plan.set(null);
+    this.acknowledged.set(false);
+    this.refusal.set(null);
+    this.stopPolling();
   }
 
   protected prepareReview(): void {

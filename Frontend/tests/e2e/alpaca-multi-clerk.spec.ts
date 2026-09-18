@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { DEPLOY_VIEW } from '../../src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
 
 const PAPER_CLERK = 'clrk-paper-0001';
 const PAPER_ACCOUNT = 'paper-account-0001';
@@ -122,6 +123,10 @@ async function installFleetBoundary(page: Page, requests: string[]): Promise<voi
         await route.fulfill({ json: paperAccount });
         return;
       }
+      if (url.pathname === `${PAPER_ACCOUNT_SCOPE}/bots/deploy`) {
+        await route.fulfill({ json: { ...DEPLOY_VIEW, broker: 'alpaca', account_id: PAPER_ACCOUNT } });
+        return;
+      }
       if (url.pathname === `${PAPER_ACCOUNT_SCOPE}/gallery/snapshot`) {
         await route.fulfill({
           json: {
@@ -192,7 +197,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     await expect(page).toHaveURL(
       new RegExp(`/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}$`),
     );
-    await expect(page.getByRole('button', { name: 'Deploy strategy' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Deploy strategy' })).toBeVisible();
     await expect.poll(() => brokerRequests.some((entry) => entry === `GET ${PAPER_SCOPE}/account`))
       .toBe(true);
 
@@ -210,13 +215,14 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
       page.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
     ).toBeVisible();
     // The list has no Deploy link of its own (#2187): choosing the account is
-    // the step the intent was waiting for, and it travels with that choice.
+    // the step the intent was waiting for, and it travels with that choice,
+    // landing on the account's own Deploy tab (ADR 0064 Decision 1 extended).
     await page.locator('li').filter({ hasText: 'Paper lane' }).getByRole('link').click();
 
     await expect(page).toHaveURL(new RegExp(
-      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}\\?deploy=`,
+      `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/deploy$`,
     ));
-    await expect(page.getByRole('heading', { name: 'Deploy a bot' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
   });
 
   test('turns a global Bots intent into an explicit account choice', async ({ page }) => {
@@ -240,30 +246,32 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     ));
   });
 
-  test('keeps an open Deploy workflow on the canonical clerk/account URL', async ({ page }) => {
+  test('keeps the Deploy tab on its own routed URL, surviving a reload', async ({ page }) => {
     const brokerRequests: string[] = [];
     await installFleetBoundary(page, brokerRequests);
     await page.goto(
       `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`,
     );
 
-    await page.getByRole('button', { name: 'Deploy strategy' }).click();
+    await page.getByRole('link', { name: 'Deploy strategy' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Deploy a bot' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
     await expect(page).toHaveURL(
       new RegExp(
-        `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}\\?deploy=`,
+        `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/deploy$`,
       ),
     );
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Deploy a bot' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Bot binding' })).toBeVisible();
     expect(withoutVerdictPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
 
-    await page.getByRole('button', { name: 'Close deploy a bot' }).click();
+    // Leaving Deploy is switching tabs, like any other — not closing an
+    // overlay (ADR 0064 Decision 1 extended).
+    await page.getByRole('link', { name: 'Bots', exact: true }).click();
     await expect(page).toHaveURL(
-      new RegExp(`/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}$`),
+      new RegExp(`/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}/bots$`),
     );
   });
 

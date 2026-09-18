@@ -6,17 +6,16 @@ import {
   computed,
   effect,
   inject,
-  linkedSignal,
   viewChild,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink, RouterOutlet } from '@angular/router';
+import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 
-import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
 import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
+import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
 import { fmtCurrency } from '../../broker/format';
 import {
@@ -39,13 +38,6 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-d
  * one tab, and neither is pushed. */
 const ACCOUNT_POLL_MS = 15_000;
 
-/** Why Deploy is unavailable, in the order the operator can act on: no lane
- * to target, then no declared capability, then no confirmed account.
- * Capability evidence is the provider's, never inferred (FR-097). */
-const DEPLOY_WITHOUT_LANE = 'This account’s lane has not resolved, so Deploy has no clerk to target.';
-const DEPLOY_WITHOUT_CAPABILITY = 'This clerk does not declare Deploy capability.';
-const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
-
 /** Why the Overview tab is not offered on a lane with no confirmed account:
  * it is that account's own page, and there is no account. */
 const TAB_WITHOUT_ACCOUNT = 'Opens once Alpaca confirms this lane’s account.';
@@ -61,7 +53,7 @@ type WorkspaceAccountStatus =
 
 /**
  * The account workspace (ADR 0064 Decision 1): one account header over the
- * Overview, Bots, Gallery and Configuration tabs.
+ * Overview, Bots, Gallery, Configuration and Deploy tabs.
  *
  * The operator chooses an account once, in the account list, and the
  * workspace keeps it while they move between its pages — the tabs are
@@ -76,17 +68,16 @@ type WorkspaceAccountStatus =
  * (FR-093); the header says what it could not read rather than borrowing a
  * sibling's fact.
  *
- * Deploy is a command surface, so it obeys FR-094: the drawer freezes the
- * target it was opened against (see `AlpacaDeployDrawerComponent`), and this
- * header hands it the target of the rendered resource rather than letting it
- * re-read the live directory while the workflow is open.
+ * Deploy is one of the five tabs, not an overlay: `AlpacaDeployTabComponent`
+ * reads this same `AlpacaDeskAccountDataService` instance for its target
+ * (FR-094), so a bind command can never target an account the header itself
+ * is not showing.
  */
 @Component({
   selector: 'app-alpaca-account-workspace',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaAccountSwitcherComponent,
-    AlpacaDeployDrawerComponent,
     AlpacaLaneModeChipComponent,
     ReceiptLabelPipe,
     RouterLink,
@@ -99,9 +90,11 @@ type WorkspaceAccountStatus =
 })
 export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
-  private readonly router = inject(Router);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  /** The Bots tab's own Refresh/Archive finished commands, while that tab is
+   * the one mounted — rendered in the header's action slot below. */
+  protected readonly botsPageActions = inject(BotsPageActionsBridgeService).host;
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
   private readonly currentUrl = inject(CurrentUrlService).url;
   private readonly document = inject(DOCUMENT);
@@ -151,7 +144,7 @@ export class AlpacaAccountWorkspaceComponent {
 
   protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
 
-  /** The four tabs with the route each one links to, or `null` for a tab this
+  /** The five tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per
    * render, so a tab's `routerLink` is not handed a freshly allocated array on
    * every change-detection pass. */
@@ -186,8 +179,6 @@ export class AlpacaAccountWorkspaceComponent {
     verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
   );
 
-  protected readonly target = this.accountData.target;
-
   /** What the header says in place of this account's own facts when the lane
    * has no account to read them from — the Configuration and not-ready tabs of
    * an unbound lane. Equity and a reconciliation verdict belong to an account;
@@ -221,21 +212,6 @@ export class AlpacaAccountWorkspaceComponent {
   protected readonly syncUnavailable = computed(() =>
     this.accountData.clerkStatus.error() === undefined ? 'Not reconciled' : 'Reconciliation unavailable',
   );
-
-  protected readonly deployBlockedReason = computed(() => {
-    const lane = this.lane();
-    if (lane === null) return DEPLOY_WITHOUT_LANE;
-    if (!lane.capabilities.includes('deploy')) return DEPLOY_WITHOUT_CAPABILITY;
-    return this.accountData.account.hasValue() ? null : DEPLOY_WITHOUT_ACCOUNT;
-  });
-
-  /** `?deploy` is the deploy entry point's address, not a private flag: the
-   * account list's per-account Deploy link, the menubar's Deploy entry and
-   * the strategy-validation hand-off all arrive here by navigating to this
-   * account with that query param set, and `activeMenuNodeFor` reads the same
-   * param to highlight Deploy. So the drawer is seeded from the URL and the
-   * two commands below keep the URL saying what is open. */
-  protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
 
   private readonly workspaceBody = viewChild.required<ElementRef<HTMLElement>>('workspaceBody');
 
@@ -296,25 +272,5 @@ export class AlpacaAccountWorkspaceComponent {
       if (!this.accountData.clerkStatus.isLoading()) this.accountData.clerkStatus.reload();
     }, ACCOUNT_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(accountTimer));
-  }
-
-  protected openDeploy(): void {
-    if (this.deployBlockedReason() !== null) return;
-    this.deployOpen.set(true);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams: { deploy: '' },
-      queryParamsHandling: 'merge',
-    });
-  }
-
-  protected closeDeploy(): void {
-    this.deployOpen.set(false);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      // `deployLens` is still nulled so an old bookmarked URL cleans itself up.
-      queryParams: { deploy: null, deployLens: null },
-      queryParamsHandling: 'merge',
-    });
   }
 }

@@ -1,0 +1,28 @@
+:host {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 100%;
+  flex-direction: column;
+  background: var(--bg-canvas);
+}
+
+app-alpaca-deploy-workflow {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.deploy-tab-context {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--page-pad-y) var(--page-pad-x);
+  padding: var(--space-8);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.deploy-tab-context--error strong {
+  color: var(--bear);
+}

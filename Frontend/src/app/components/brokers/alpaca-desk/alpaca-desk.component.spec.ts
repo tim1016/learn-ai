@@ -1,10 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AlpacaDeskState } from '../../../api/alpaca.types';
+import type { DeskLens } from '../../../shared/lens/lens';
+import { ActiveLensBridgeService } from '../../../shared/lens/active-lens-bridge.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
@@ -13,6 +16,21 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { CurrentUrlService } from '../../../shell/current-url.service';
+
+// The tab UI moved to the global top bar (ActiveLensBridgeService); this
+// mirrors what it does — call the registered host's own select() — so
+// switching still runs the desk's own persistence and side effects. The
+// registration itself only lands once an operating account is visible.
+async function switchLens(
+  fixture: ComponentFixture<AlpacaDeskComponent>,
+  lens: DeskLens,
+): Promise<void> {
+  const bridge = TestBed.inject(ActiveLensBridgeService);
+  await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+  bridge.host()?.select(lens);
+  await fixture.whenStable();
+  fixture.detectChanges();
+}
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
@@ -236,8 +254,7 @@ describe('AlpacaDeskComponent', () => {
   it('defaults to the Trader lens while restoring account safety surfaces', async () => {
     const { brokers } = await renderDesk();
 
-    expect((await screen.findByRole('tab', { name: 'Trader' })).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Operator desk' })).toBeNull();
     // #2185: the account name, its mode, equity and Deploy are the account
     // workspace's header — the Overview tab renders none of them itself.
@@ -255,13 +272,13 @@ describe('AlpacaDeskComponent', () => {
   });
 
   it('switches instantly, updates the query parameter, persists, and lazy-loads operator data', async () => {
-    const { brokers, router } = await renderDesk();
+    const { brokers, router, view } = await renderDesk();
     // Wait for the account read to land before switching lenses. Keyed on the
     // card's own landmark rather than the account number, which the desk no
     // longer prints anywhere (#2188).
     await screen.findByLabelText('Alpaca account summary');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await switchLens(view.fixture, 'operator');
 
     expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
     expect(localStorage.getItem(LENS_STORAGE_KEY)).toBe('operator');
@@ -269,8 +286,8 @@ describe('AlpacaDeskComponent', () => {
     await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2));
     expect(brokers.getAccount).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await switchLens(view.fixture, 'trader');
+    await switchLens(view.fixture, 'operator');
 
     expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2);
     expect(brokers.getAccount).toHaveBeenCalledOnce();
@@ -279,8 +296,7 @@ describe('AlpacaDeskComponent', () => {
   it('opens the Operator lens from a query deep link', async () => {
     const { brokers } = await renderDesk({ lens: 'operator' });
 
-    expect((await screen.findByRole('tab', { name: 'Operator' })).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Operator desk' })).toBeTruthy();
     await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2));
   });
 
@@ -305,7 +321,7 @@ describe('AlpacaDeskComponent', () => {
   it('keeps the operating desk visible when account data succeeds during bootstrap', async () => {
     await renderDesk({}, brokerService(), accountActivation);
 
-    expect(await screen.findByRole('tab', { name: 'Trader' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: accountActivation.headline })).toBeNull();
   });
 
@@ -370,7 +386,7 @@ describe('AlpacaDeskComponent', () => {
 
     expect(await screen.findByText(pending.headline)).toBeTruthy();
     expect(screen.getByText(pending.consequence)).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Trader' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
 
     await fireEvent.click(screen.getByRole('button', { name: pending.action.label }));
     expect(navigate).toHaveBeenCalledWith(['/brokers', 'alpaca', 'clerks', 'clrk_spec0000000000000000aa', 'configuration'], {
@@ -418,15 +434,13 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Operator desk' })).toBeTruthy();
   });
 
-  it('moves focus and selection with the lens tab keyboard controls', async () => {
+  it('registers with the global lens toggle once an operating account is visible, with the alpaca id prefix', async () => {
     await renderDesk();
-    const traderTab = await screen.findByRole('tab', { name: 'Trader' });
-    const operatorTab = screen.getByRole('tab', { name: 'Operator' });
+    await screen.findByLabelText('Alpaca account summary');
 
-    traderTab.focus();
-    fireEvent.keyDown(traderTab, { key: 'ArrowRight' });
-
-    expect(document.activeElement).toBe(operatorTab);
-    expect(operatorTab.getAttribute('aria-selected')).toBe('true');
+    const host = TestBed.inject(ActiveLensBridgeService).host();
+    if (host === null) throw new Error('Expected the desk to register as the active lens host.');
+    expect(host.lens()).toBe('trader');
+    expect(host.idPrefix).toBe('alpaca');
   });
 });
