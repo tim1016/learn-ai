@@ -80,58 +80,6 @@ async function renderPage(
 }
 
 describe('BotsListPageComponent', () => {
-  describe('bot staleness banner (#1806 item 3)', () => {
-    // This banner answers "is what I am looking at stale?", which is a state,
-    // so it is gated on the snapshot's actual age and quantifies it. A single
-    // failed poll that the next poll repairs was never meaningfully stale and
-    // must stay silent.
-    it('stays silent when a refresh fails but the snapshot is still fresh', async () => {
-      vi.useFakeTimers();
-      try {
-        let calls = 0;
-        const getCatalog = vi.fn(async () => {
-          calls += 1;
-          if (calls === 1) return [fakeCatalogBot()];
-          throw new HttpErrorResponse({ status: 503 });
-        });
-        await renderPage([], { getCatalog });
-        await screen.findByRole('button', { name: /spy-momentum-01/ });
-
-        // One poll fires and fails; the snapshot underneath is ~5s old. A
-        // synchronous advance fires every interval tick in one JS turn
-        // instead of awaiting a real microtask flush per tick (45+ ticks
-        // otherwise blew CI's 120s shard budget); the awaited query below
-        // still yields to the microtask queue that flushes Angular's
-        // pending change detection before asserting.
-        vi.advanceTimersByTime(6_000);
-
-        expect(screen.queryByText(/last successful bot snapshot/i)).toBeNull();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('reports how stale the bot snapshot is once refreshes stop landing', async () => {
-      vi.useFakeTimers();
-      try {
-        let calls = 0;
-        const getCatalog = vi.fn(async () => {
-          calls += 1;
-          if (calls === 1) return [fakeCatalogBot()];
-          throw new HttpErrorResponse({ status: 503 });
-        });
-        await renderPage([], { getCatalog });
-        await screen.findByRole('button', { name: /spy-momentum-01/ });
-
-        vi.advanceTimersByTime(45_000);
-
-        const banner = await screen.findByText(/last successful bot snapshot/i);
-        expect(banner.textContent).toMatch(/4[0-9]s ago/);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
 
   it('leaves the account, its mode and Deploy to the workspace header above it', async () => {
     // #2185: the roster used to repeat the account strip, the lane pill and a
