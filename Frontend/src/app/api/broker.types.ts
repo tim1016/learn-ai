@@ -10161,6 +10161,12 @@ export interface components {
          *     entitlement. The explicit budget fields distinguish a complete calculation
          *     window from entitlement- or liquidity-limited history. The existing 7-day
          *     live resolver is not widened.
+         *
+         *     ``overlay_notices`` mirrors ``ChartLiveResponse.overlay_notices`` (issue
+         *     #2203): a present-but-empty ``POLYGON_API_KEY`` or a Polygon fetch failure
+         *     degrades into a notice here — ``bars``/``indicator_bars`` stay empty rather
+         *     than fabricated — instead of an unhandled exception. Empty for a healthy
+         *     result.
          */
         ChartHistoryResponse: {
             /** As Of Ms */
@@ -10177,6 +10183,8 @@ export interface components {
             indicator_bar_budget_satisfied: boolean;
             /** Indicator Bars */
             indicator_bars: components["schemas"]["ChartBar"][];
+            /** Overlay Notices */
+            overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */

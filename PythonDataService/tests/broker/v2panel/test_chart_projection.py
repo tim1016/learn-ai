@@ -18,7 +18,8 @@ import pytest
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
-from app.data_lake.polygon_fetcher import PolygonBar
+from app.config import settings
+from app.data_lake.polygon_fetcher import PolygonAuthError, PolygonBar
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
     session_close_ms_utc,
@@ -144,6 +145,7 @@ async def test_history_timeframe_maps_to_fixed_bar_window(
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
     assert result.timeframe == timeframe
     assert observed
@@ -246,6 +248,7 @@ async def test_history_truncates_at_each_configured_display_cap(
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
 
     assert result.truncated is True
@@ -272,6 +275,7 @@ async def test_history_keeps_indicator_warmup_outside_the_display_window() -> No
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
 
     assert len(result.bars) == 300
@@ -315,6 +319,7 @@ async def test_history_extends_backward_when_sparse_aggregates_underfill_budget(
         symbol="ILLQ",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
 
     assert len(calls) == 2
@@ -337,6 +342,7 @@ async def test_history_never_fetches_before_polygon_two_year_entitlement() -> No
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
 
     assert starts == [date(2021, 11, 14)]
@@ -378,6 +384,7 @@ async def test_daily_bar_completes_at_session_close_not_midnight_plus_one_day(
         symbol="SPY",
         bar_source=_source,
         now_ms=now_ms,
+        polygon_api_key="test-key",
     )
 
     assert [bar.start_ms for bar in result.bars] == [bar_start_ms]
@@ -432,6 +439,7 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
 
     assert [bar.start_ms for bar in result.bars] == [bar.t_ms for bar in closed]
@@ -483,6 +491,7 @@ async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
     assert result.truncated is True
     assert len(result.bars) == 300
@@ -519,10 +528,65 @@ async def test_history_fill_markers_within_window() -> None:
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
+        polygon_api_key="test-key",
     )
     assert len(result.fill_markers) == 1
     assert result.fill_markers[0].side == "buy"
     assert result.fill_markers[0].price == 500.0
+
+
+async def test_history_empty_polygon_key_returns_notice_with_no_bars_and_no_fetch() -> None:
+    """Regression for issue #2203.
+
+    Fleet Clerks boot with a present-but-empty ``POLYGON_API_KEY``. Before the
+    fix, ``build_history_chart`` had no ``polygon_api_key`` parameter at all,
+    so this call raised ``TypeError`` instead of degrading into a notice.
+    """
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        pytest.fail("must not fetch from Polygon when the key is empty")
+
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+        polygon_api_key="",
+    )
+
+    assert result.bars == []
+    assert result.indicator_bars == []
+    assert [notice.code for notice in result.overlay_notices] == ["polygon_api_key_missing"]
+    assert result.overlay_notices[0].source == "polygon"
+
+
+async def test_history_polygon_auth_error_returns_notice_with_no_bars() -> None:
+    """Regression for issue #2203: a Polygon fetch failure degrades, not raises.
+
+    Before the fix, ``PolygonAuthError`` escaped ``build_history_chart``
+    unhandled — this call would fail with that exception instead of
+    completing with a settled ``polygon_auth_error`` notice.
+    """
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        raise PolygonAuthError("Polygon 401 for SPY: bad key", 401)
+
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+        polygon_api_key="present-but-rejected",
+    )
+
+    assert result.bars == []
+    assert result.indicator_bars == []
+    assert [notice.code for notice in result.overlay_notices] == ["polygon_auth_error"]
+    assert result.overlay_notices[0].message == "Polygon 401 for SPY: bad key"
 
 
 def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:
@@ -806,3 +870,68 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
 
     assert calls == [("alpaca", "paper-account", SID, _NOW - 86_400_000, _NOW)]
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
+
+
+async def test_history_chart_with_empty_polygon_key_settles_instead_of_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #2203, at the ``get_history_chart`` boundary.
+
+    Every Fleet Clerk boots with a present-but-empty ``POLYGON_API_KEY``
+    (ADR 0062). Before the fix, the ``_bar_source`` closure called Polygon
+    directly with that empty key, which would 401 and raise
+    ``PolygonAuthError`` unhandled — the fleet coordinator then remaps that
+    500 to a routed ``clerk_unreachable`` 503. This proves the route settles
+    with a ``polygon_api_key_missing`` notice and never calls Polygon at all.
+    """
+    status = BotStatusView(
+        strategy_instance_id=SID,
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        running=True,
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        active_run_id="run-1",
+        duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000,
+        last_transition_at_ms=_NOW - 60_000,
+    )
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(
+        broker: str,
+        account_id: str,
+        sid: str,
+        *,
+        from_ms: int,
+        to_ms: int,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=()))
+
+    async def unexpected_fetch(*_args: object, **_kwargs: object) -> list[PolygonBar]:
+        pytest.fail("must not call Polygon when POLYGON_API_KEY is empty")
+
+    monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "history_fill_window",
+        lambda timeframe, now_ms: (_NOW - 86_400_000, now_ms),
+    )
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+    monkeypatch.setattr(panel_chart_data_source, "fetch_aggregate_bars", unexpected_fetch)
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "")
+
+    result = await panel_chart_data_source.get_history_chart(
+        "alpaca",
+        "paper-account",
+        SID,
+        "1m",
+    )
+
+    assert result.bars == []
+    assert [notice.code for notice in result.overlay_notices] == ["polygon_api_key_missing"]

@@ -22,12 +22,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.bar_models import IbkrMinuteBar
-from app.data_lake.polygon_fetcher import PolygonBar
+from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
     session_close_ms_utc,
@@ -45,6 +46,10 @@ from app.schemas.broker_v2_panel import (
 from app.services.dataset_service import INDICATOR_CONFIGS
 from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
 from app.services.live_chart_window import ChartWindowResult
+from app.services.polygon_notice_classifier import (
+    classify_polygon_exception,
+    missing_polygon_api_key_notice,
+)
 
 MS_PER_DAY = 86_400_000
 _POLYGON_HISTORY_YEARS = 2
@@ -70,6 +75,23 @@ _INDICATOR_WARMUP_BARS = configured_indicator_warmup_bars(INDICATOR_CONFIGS)
 
 class ChartTimeframeError(ValueError):
     """Raised when a Polygon timeframe is outside the closed selector set."""
+
+
+class _PolygonFailure(Protocol):
+    """Structural type shared by ``PolygonNotice`` and ``ChartOverlayNotice``.
+
+    Lets :func:`_notice_view` convert either the LIVE pane's per-session
+    ``live_chart_window.ChartOverlayNotice`` or the HISTORY pane's bare
+    ``PolygonNotice`` into the wire view without one caller importing the
+    other's notice type.
+    """
+
+    code: str
+    message: str
+
+
+def _notice_view(notice: _PolygonFailure) -> ChartOverlayNoticeView:
+    return ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
 
 
 # A history bar source fetches aggregate bars for a symbol/date-range at a given
@@ -197,10 +219,7 @@ def build_live_chart(
 
     bars = aggregator_bars_to_chart_bars(chart_window.bars)
     markers = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
-    notices = [
-        ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
-        for notice in chart_window.overlay_notices
-    ]
+    notices = [_notice_view(notice) for notice in chart_window.overlay_notices]
     return ChartLiveResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,
@@ -328,19 +347,36 @@ async def build_history_chart(
     symbol: str,
     bar_source: HistoryBarSource,
     now_ms: int,
+    polygon_api_key: str,
 ) -> ChartHistoryResponse:
     """Build the bounded Polygon series for a selected timeframe (§8).
 
     The returned candles are the newest complete display window for the chosen
     timeframe. Indicator clients therefore receive one coherent candle set per
     selection, rather than resampling or reusing a prior timeframe locally.
+
+    A present-but-empty ``polygon_api_key`` (every Fleet Clerk boots with one,
+    per ADR 0062) or a Polygon fetch failure degrades into a ``polygon_*``
+    notice on ``overlay_notices`` with no bars, instead of letting the
+    exception escape as an unhandled 500 (issue #2203). Notice codes come
+    from the shared ``polygon_notice_classifier`` vocabulary, the same one the
+    LIVE overlay uses, so the two panes cannot drift onto different codes.
     """
     plan = _plan_history(timeframe, now_ms)
-    polygon_bars = await _fetch_history_bars(
-        symbol=symbol,
-        plan=plan,
-        bar_source=bar_source,
-    )
+    notices: list[ChartOverlayNoticeView] = []
+    if not polygon_api_key:
+        polygon_bars: list[PolygonBar] = []
+        notices.append(_notice_view(missing_polygon_api_key_notice("Polygon history")))
+    else:
+        try:
+            polygon_bars = await _fetch_history_bars(
+                symbol=symbol,
+                plan=plan,
+                bar_source=bar_source,
+            )
+        except PolygonFetchError as exc:
+            polygon_bars = []
+            notices.append(_notice_view(classify_polygon_exception(exc)))
 
     truncated = len(polygon_bars) > plan.display_bars
     polygon_bars = polygon_bars[-plan.indicator_bars :]
@@ -363,5 +399,6 @@ async def build_history_chart(
         indicator_bar_budget_satisfied=len(indicator_bars) >= plan.indicator_bars,
         fill_markers=markers,
         truncated=truncated,
+        overlay_notices=notices,
         as_of_ms=now_ms,
     )

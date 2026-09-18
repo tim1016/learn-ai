@@ -998,6 +998,12 @@ class ChartHistoryResponse(BaseModel):
     entitlement. The explicit budget fields distinguish a complete calculation
     window from entitlement- or liquidity-limited history. The existing 7-day
     live resolver is not widened.
+
+    ``overlay_notices`` mirrors ``ChartLiveResponse.overlay_notices`` (issue
+    #2203): a present-but-empty ``POLYGON_API_KEY`` or a Polygon fetch failure
+    degrades into a notice here — ``bars``/``indicator_bars`` stay empty rather
+    than fabricated — instead of an unhandled exception. Empty for a healthy
+    result.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -1013,4 +1019,5 @@ class ChartHistoryResponse(BaseModel):
     indicator_bar_budget_satisfied: bool
     fill_markers: list[ChartFillMarker]
     truncated: bool
+    overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
     as_of_ms: int
