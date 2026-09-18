@@ -4,6 +4,7 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import {
   fakeBotPanelView,
   fakeCatalogBot,
@@ -319,7 +320,9 @@ describe('BotsListPageComponent', () => {
     // and opens its Operator lens — the only lens that reads the audit-logged
     // custody journal — so bot-b has a genuine baseline read.
     fireEvent.click(await screen.findByRole('button', { name: /bot-b/ }));
-    fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
+    const lensBridge = view.fixture.debugElement.injector.get(ActiveLensBridgeService);
+    await vi.waitFor(() => expect(lensBridge.host()).not.toBeNull());
+    lensBridge.host()?.select('operator');
     await vi.waitFor(() =>
       expect(view.mockPanelService.getEvidence).toHaveBeenCalledWith(
         expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }),
@@ -398,8 +401,12 @@ describe('BotsListPageComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    // `fireEvent` does not await the async output handler: flush the rejected
+    // command and the directory refresh it schedules before asserting.
+    await Promise.resolve();
+    await Promise.resolve();
 
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(refresh).toHaveBeenCalledTimes(1);
     // `clerk_binding_generation_conflict` is a 409 in the fleet's closed
     // refusal vocabulary (#2067), so it now reads as a conflict, not the
     // generic "Unknown" `error` severity a pre-#2102 render gave every fleet
@@ -436,11 +443,12 @@ describe('BotsListPageComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    // Flush both the rejected command and the refresh rejection handler.
+    await Promise.resolve();
+    await Promise.resolve();
 
-    await vi.waitFor(() =>
-      expect(view.mockMessageService.add).toHaveBeenCalledWith(
-        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
-      ),
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
     );
     expect(runBotAction).toHaveBeenCalledTimes(1);
   });
