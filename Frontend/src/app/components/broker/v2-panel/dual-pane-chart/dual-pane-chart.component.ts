@@ -242,6 +242,9 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
   readonly liveLoading = input(false);
   readonly historyLoading = input(false);
+  /** Settled Polygon-history failure (#2202 FR-005): renders the delayed
+   * pane's unavailable state instead of an indefinite spinner. */
+  readonly historyFailed = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly histBars = input<readonly ChartBar[]>([]);
   readonly histIndicatorBars = input<readonly ChartBar[]>([]);
@@ -253,6 +256,9 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
+  /** One explicit retry per click (#2202 FR-005/FR-006) — no automatic
+   * retry loop; the shell owns the resource and issues the reload. */
+  readonly historyRetry = output();
 
   private readonly chartContainer =
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
@@ -272,8 +278,19 @@ export class DualPaneChartComponent implements AfterViewInit {
     params: () => 'chart-indicator-catalog',
     stream: () => this.indicatorService.supportedIndicators(),
   });
+  /** Guarded read (#2202): `supportedIndicatorResource.value()` throws
+   * `ResourceValueError` while the catalog fetch is in its error state — the
+   * same defect class as the `histChart`/`journalPage` freeze this issue
+   * fixed elsewhere. Left unguarded, opening the indicator rail
+   * (`[categories]="indicatorCategories()"`, gated by `@if (fullscreen())`)
+   * would abort this component's whole render pass the moment the user
+   * clicks Expand while the catalog call has failed. */
   protected readonly indicatorCategories = computed(() => {
-    const supported = new Set(this.supportedIndicatorResource.value()?.names ?? []);
+    const supported = new Set(
+      this.supportedIndicatorResource.hasValue()
+        ? this.supportedIndicatorResource.value()?.names ?? []
+        : [],
+    );
     return this.indicatorCatalog.categories()
       .map((category) => ({
         ...category,

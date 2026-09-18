@@ -49,13 +49,15 @@
           [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [liveChart]="liveChart()"
-          [histChart]="histChart.value() ?? null"
+          [histChart]="histChart.hasValue() ? histChart.value() : null"
           [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
           [histChartLoading]="histChart.isLoading()"
+          [histChartFailed]="histChartFailed()"
           [liveResolution]="liveResolution()"
           [historyTimeframe]="selectedHistoryTimeframe()"
           (historyTimeframeChange)="onHistoryTimeframeChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
+          (historyRetry)="histChart.reload()"
         />
       </div>
     }

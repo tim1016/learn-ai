@@ -8,6 +8,7 @@
       [liveNotices]="liveNotices()"
       [liveLoading]="liveChartLoading()"
       [historyLoading]="histChartLoading()"
+      [historyFailed]="histChartFailed()"
       [liveResolution]="liveResolution()"
       [histBars]="histBars()"
       [histIndicatorBars]="histIndicatorBars()"
@@ -18,6 +19,7 @@
       [historyTimeframe]="historyTimeframe()"
       (historyTimeframeChange)="onHistoryTimeframeChange($event)"
       (liveResolutionChange)="liveResolutionChange.emit($event)"
+      (historyRetry)="historyRetry.emit()"
     />
   </section>
 

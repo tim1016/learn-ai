@@ -268,22 +268,35 @@ export class BotPanelShellComponent {
     };
   });
 
+  /** FR-006 (#2202): history read identity is broker + clerk + account + sid
+   * + timeframe only. `ResourceTarget.bindingGeneration`/`routingEpoch` fence
+   * commands, not reads — keying this on `this.target()` made a fleet
+   * directory rebind or same-lane generation/epoch bump silently re-request
+   * history underneath the user, even though nothing about what to read had
+   * changed. */
   protected readonly histChart = resource({
     params: () =>
       this.activeLens() === 'trader'
         ? {
-            target: this.target(),
+            broker: this.broker(),
+            clerkId: this.clerkId(),
+            accountId: this.accountId(),
             sid: this.sid(),
             timeframe: this.selectedHistoryTimeframe(),
           }
         : undefined,
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
-        params.target,
+        resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
         params.sid,
         params.timeframe,
       ),
   });
+
+  /** Settled-error presentation for the delayed pane (#2202 FR-002/FR-005): a
+   * boolean the leaf components can render without ever touching the raw
+   * `ResourceRef.error()`/`HttpErrorResponse`. */
+  protected readonly histChartFailed = computed(() => this.histChart.error() !== undefined);
 
   protected readonly isLoaded = computed(
     () => this.panel() !== null && this.profile.hasValue(),
