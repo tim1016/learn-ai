@@ -53,9 +53,25 @@
  * requires the factory name followed by `(`/`<` — no `readonly`, no
  * assignment shape — and failing if the strict and loose counts disagree
  * anywhere under this directory.
+ *
+ * All three scans — the class-read scan, the template-side declaration
+ * lookup, and the discovery cross-check — run on `.ts` source with comments
+ * blanked out by `stripComments` first, and share that one implementation.
+ * A prose comment naming `resource()`, or a trailing `//` on an otherwise
+ * correctly guarded declaration line, is real text that both regexes above
+ * see; without stripping, one falsely names a guarded file as an offender
+ * and the other falsely reports a discovery mismatch. `stripComments` uses
+ * the TypeScript parser rather than a hand-rolled regex or a bare
+ * `ts.createScanner` pass — see its doc comment for why a bare scanner was
+ * tried and rejected. Getting this wrong in the other direction (stripping
+ * too much) is the worse failure: a `//` inside a string, template, or
+ * regex literal must not start a comment, or a real unguarded read on that
+ * line goes uninspected and the guard passes silently. The fixture tests
+ * below pin both directions.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import * as ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const V2_PANEL_ROOT = __dirname;
@@ -95,6 +111,65 @@ function sourceFiles(dir: string, extension: '.html' | '.ts'): string[] {
   return found;
 }
 
+/**
+ * Blanks every comment in TypeScript source with spaces, keeping newlines,
+ * line numbers, statement-boundary offsets (`;`/`{`/`}`), and every
+ * non-comment character byte-identical to the input. All three scans in
+ * this file run on this output, not the raw source — see the file header.
+ *
+ * Backed by the real TypeScript parser (vendored for the Angular compiler —
+ * `Frontend/node_modules/typescript`, so this is not a new dependency), not
+ * a hand-rolled regex or a bare `ts.createScanner` pass. A bare scanner was
+ * tried first: fed a genuine regex literal like `/a\/\/b/`, it cannot tell
+ * "`/` starts a regex" from "`/` starts a division" without grammar
+ * context, mis-scans the back half as a same-line `//` comment, and
+ * silently eats real code — the exact silent-strips-too-much failure this
+ * function exists to prevent (a `//` inside a string, template, or regex
+ * literal must never start a comment). The parser resolves that ambiguity;
+ * walking its concrete leaf tokens and reading each one's actual comment
+ * trivia via `ts.getLeadingCommentRanges`/`ts.getTrailingCommentRanges` is
+ * the rest of the work. This does not change what the guard checks: the
+ * `.value()`/`.hasValue()` matching below is still plain text on the result.
+ */
+function stripComments(source: string): string {
+  const sourceFile = ts.createSourceFile(
+    'resource-guard-scan.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TS,
+  );
+  const leaves: ts.Node[] = [];
+  const collectLeaves = (node: ts.Node): void => {
+    const children = node.getChildren(sourceFile);
+    if (children.length === 0) {
+      leaves.push(node);
+      return;
+    }
+    children.forEach(collectLeaves);
+  };
+  collectLeaves(sourceFile);
+
+  const chars = source.split('');
+  const blank = (pos: number, end: number): void => {
+    for (let i = pos; i < end; i++) if (chars[i] !== '\n') chars[i] = ' ';
+  };
+  for (const token of leaves) {
+    for (const range of ts.getTrailingCommentRanges(source, token.getEnd()) ?? []) blank(range.pos, range.end);
+    for (const range of ts.getLeadingCommentRanges(source, token.getFullStart()) ?? []) blank(range.pos, range.end);
+  }
+  return chars.join('');
+}
+
+/** Blanks `<!-- ... -->` template comments the same way `stripComments`
+ * blanks `.ts` ones, so an HTML comment naming a resource read can't
+ * false-alarm the template scan. A regex is safe here — unlike the `.ts`
+ * case above, Angular templates have no string/regex-literal construct that
+ * could contain a stray `-->`. */
+function stripHtmlComments(source: string): string {
+  return source.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, ' '));
+}
+
 function declaredResources(classSource: string): string[] {
   return [...classSource.matchAll(RESOURCE_DECLARATION)].map((match) => match[1]);
 }
@@ -103,7 +178,7 @@ function declaredResources(classSource: string): string[] {
  * `.hasValue()` precedes within its statement. Comments are stripped first so
  * prose naming a read is not mistaken for one. */
 function unguardedClassReads(classSource: string): string[] {
-  const code = classSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const code = stripComments(classSource);
   const offenders: string[] = [];
   for (const identifier of declaredResources(code)) {
     const guardPattern = new RegExp(`\\b${identifier}\\.hasValue\\(\\)`);
@@ -122,8 +197,8 @@ describe('Broker V2 never reads an unguarded resource value', () => {
     const offenders: string[] = [];
     for (const path of sourceFiles(V2_PANEL_ROOT, '.html')) {
       const relPath = path.slice(V2_PANEL_ROOT.length + 1);
-      const lines = readFileSync(path, 'utf8').split('\n');
-      const resources = declaredResources(readFileSync(path.replace(/\.html$/, '.ts'), 'utf8'));
+      const lines = stripHtmlComments(readFileSync(path, 'utf8')).split('\n');
+      const resources = declaredResources(stripComments(readFileSync(path.replace(/\.html$/, '.ts'), 'utf8')));
       for (const identifier of resources) {
         const valuePattern = new RegExp(`\\b${identifier}\\.value\\(\\)`);
         const guardPattern = new RegExp(`\\b${identifier}\\.hasValue\\(\\)`);
@@ -170,13 +245,83 @@ describe('Broker V2 never reads an unguarded resource value', () => {
       });`)).toEqual([]);
   });
 
+  it('a trailing comment naming a guarded read does not trip the class scan', () => {
+    // Reproduces a real false positive: a trailing `//` comment on the
+    // rxResource(...) declaration line itself, naming the identifier's
+    // already-guarded .value() read below. Before stripComments handled
+    // trailing comments, this line's raw text (comment included) matched
+    // the "unguarded read" regex and flagged a file doing everything right.
+    const source = `
+      private readonly supportedIndicatorResource = rxResource({ // seeds supportedIndicatorResource.value() below
+        params: () => 'chart-indicator-catalog',
+        stream: () => this.indicatorService.supportedIndicators(),
+      });
+      protected readonly indicatorCategories = computed(() => {
+        const supported = new Set(
+          this.supportedIndicatorResource.hasValue()
+            ? this.supportedIndicatorResource.value()?.names ?? []
+            : [],
+        );
+      });`;
+    expect(unguardedClassReads(source)).toEqual([]);
+  });
+
+  it('a `//` inside a string literal is not mistaken for a comment — the silent-pass direction', () => {
+    // The dangerous direction: over-stripping. If a naive strip started a
+    // comment at the first "//" on a line, the "https://" URL below would
+    // swallow the real, unguarded histChart.value() read that follows it on
+    // the same line, and the guard would pass having checked nothing.
+    const source = `
+      private readonly histChart = resource({
+        params: () => 'https://example.test',
+        loader: () => this.service.fetch(),
+      });
+      protected readonly label = computed(() => {
+        const url = 'https://example.test'; return this.histChart.value();
+      });`;
+    expect(unguardedClassReads(source)).toEqual(['histChart']);
+  });
+
+  it('a block comment spanning lines naming x.value() does not trip the class scan', () => {
+    const source = `
+      private readonly tape = resource({
+        params: () => this.symbol(),
+        loader: () => this.service.fetch(),
+      });
+      /**
+       * Do not call tape.value() directly — always check tape.hasValue()
+       * first, the way the rest of this file does.
+       */
+      protected readonly summary = computed(() => (
+        this.tape.hasValue() ? this.tape.value() : null
+      ));`;
+    expect(unguardedClassReads(source)).toEqual([]);
+  });
+
+  it('a prose comment naming resource() does not trip declaration discovery', () => {
+    // Reproduces a real false positive: a comment describing the API used,
+    // not a declaration, containing the literal text "resource(". Before
+    // both counts ran on stripComments output, the loose regex counted this
+    // comment as an extra call site the strict regex never claimed to find.
+    const source = `
+      // Uses Angular's resource() API for the previous-run lookup.
+      private readonly previousRun = resource({
+        params: () => this.runId(),
+        loader: () => this.service.fetch(),
+      });`;
+    const code = stripComments(source);
+    expect(declaredResources(code).length).toEqual(
+      [...code.matchAll(LOOSE_RESOURCE_OCCURRENCE)].length,
+    );
+  });
+
   it('declaration discovery finds every resource()/rxResource()/httpResource() call site, or the two scans above are checking nothing', () => {
     const mismatches: string[] = [];
     for (const path of sourceFiles(V2_PANEL_ROOT, '.ts')) {
       const relPath = path.slice(V2_PANEL_ROOT.length + 1);
-      const source = readFileSync(path, 'utf8');
-      const strictCount = declaredResources(source).length;
-      const looseCount = [...source.matchAll(LOOSE_RESOURCE_OCCURRENCE)].length;
+      const code = stripComments(readFileSync(path, 'utf8'));
+      const strictCount = declaredResources(code).length;
+      const looseCount = [...code.matchAll(LOOSE_RESOURCE_OCCURRENCE)].length;
       if (strictCount !== looseCount) {
         mismatches.push(`${relPath}: RESOURCE_DECLARATION found ${strictCount}, but ${looseCount} call site(s) exist`);
       }
