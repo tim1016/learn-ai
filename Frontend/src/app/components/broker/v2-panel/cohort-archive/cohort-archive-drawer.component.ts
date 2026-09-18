@@ -176,7 +176,7 @@ export class CohortArchiveDrawerComponent {
   }
 
   protected readonly view = computed<CohortArchiveView | null>(() => {
-    const value = this.archivable.value();
+    const value = this.archivable.hasValue() ? this.archivable.value() : null;
     // Never hand back another account's legs: the resource keeps its previous
     // value across a params change, and these legs carry act-on-me tokens.
     return value?.account_id === this.accountId() ? value : null;
