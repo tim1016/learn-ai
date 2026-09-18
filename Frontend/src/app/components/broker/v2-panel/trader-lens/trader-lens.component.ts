@@ -11,6 +11,7 @@ import type {
   ChartLiveResolution,
   ChartLiveResponse,
   ChartHistoryResponse,
+  ChartOverlayNoticeView,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
@@ -56,6 +57,11 @@ export class TraderLensComponent {
   /** Settled-error state for the delayed pane (#2202 FR-002): a typed
    * boolean, never a raw `ResourceRef.error()`/`HttpErrorResponse`. */
   readonly histChartFailed = input(false);
+  /** Settled *successful* zero-bar response that is unavailable rather than
+   * genuinely empty (#2211 FR-002): the backend-authored notice to render,
+   * or `null` when history has bars, has no notices, or every notice is in
+   * the closed "genuinely empty" set (`../lib/chart-history-notice.ts`). */
+  readonly histChartUnavailableNotice = input<ChartOverlayNoticeView | null>(null);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
 

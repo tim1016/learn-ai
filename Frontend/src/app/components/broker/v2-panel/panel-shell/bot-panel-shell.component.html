@@ -53,6 +53,7 @@
           [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
           [histChartLoading]="histChart.isLoading()"
           [histChartFailed]="histChartFailed()"
+          [histChartUnavailableNotice]="histChartUnavailableNotice()"
           [liveResolution]="liveResolution()"
           [historyTimeframe]="selectedHistoryTimeframe()"
           (historyTimeframeChange)="onHistoryTimeframeChange($event)"

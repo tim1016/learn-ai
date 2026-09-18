@@ -163,10 +163,10 @@
             }
           </ul>
         }
-        @if (activePane() === 'polygon' && historyFailed()) {
+        @if (activePane() === 'polygon' && historyUnavailable()) {
           <div class="chart-state" role="status">
             <strong>Polygon history unavailable</strong>
-            <span>This bot's live chart is unaffected.</span>
+            <span>{{ historyUnavailableNotice()?.message ?? "This bot's live chart is unaffected." }}</span>
             <button type="button" (click)="historyRetry.emit()">Retry history</button>
           </div>
         } @else if (activeLoading() && activeBars().length === 0) {
