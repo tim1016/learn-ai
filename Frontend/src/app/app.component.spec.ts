@@ -149,9 +149,11 @@ describe('AppComponent', () => {
 
     const badges = fixture.nativeElement.querySelectorAll('app-alpaca-live-banner [role="status"]');
     expect(badges.length).toBe(2);
-    expect(badges[0].textContent).toContain('Paper');
+    // The compact pill shows only the mode word; each lane's own name lives in
+    // its accessible name, so identity is asserted there (#2200).
+    expect(badges[0].getAttribute('aria-label')).toContain('Paper');
     expect(badges[0].textContent).not.toContain('assume real money');
-    expect(badges[1].textContent).toContain('Live');
+    expect(badges[1].getAttribute('aria-label')).toContain('Live');
     expect(badges[1].textContent).toContain('assume real money');
   });
 
