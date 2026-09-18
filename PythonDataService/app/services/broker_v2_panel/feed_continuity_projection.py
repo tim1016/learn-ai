@@ -96,14 +96,19 @@ def build_feed_continuity(
         None,
     )
 
-    if unresolved_count:
-        state = "interrupted"
-        state_label = "Interrupted"
-        explanation = "IBKR delivery is interrupted and same-run recovery is in progress."
-    elif decision_impact_count:
+    if decision_impact_count:
+        # A refusal is terminal for its decision window even when the
+        # interruption that caused it was never paired with a `recovered`
+        # event (the deadline-miss path in ibkr_continuity.py raises without
+        # recording one) — check this before `unresolved_count` so that case
+        # surfaces as "compromised", not as a merely still-recovering one.
         state = "compromised"
         state_label = "Continuity refused"
         explanation = "One or more strategy decision windows could not be proven from live data."
+    elif unresolved_count:
+        state = "interrupted"
+        state_label = "Interrupted"
+        explanation = "IBKR delivery is interrupted and same-run recovery is in progress."
     elif interruption_count:
         state = "recovered"
         state_label = "Recovered"

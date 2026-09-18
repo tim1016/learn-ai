@@ -548,6 +548,37 @@ def test_feed_continuity_distinguishes_an_active_loss_from_a_refused_decision_wi
     assert refused.decision_impact_count == 1
 
 
+def test_feed_continuity_reports_compromised_when_the_deadline_miss_never_recovers() -> None:
+    """ibkr_continuity.py's deadline-miss path records interruption -> refused
+    with no paired recovered event (it raises before reaching that branch), so
+    unresolved_count and decision_impact_count are both nonzero at once. The
+    terminal refusal must win over the still-recovering label."""
+    view = build_feed_continuity(
+        [
+            _continuity_event(
+                evidence_seq=1,
+                kind="interruption",
+                observed_at_ms=_NOW - 22_000,
+                cause="stall",
+            ),
+            _continuity_event(
+                evidence_seq=2,
+                kind="refused",
+                observed_at_ms=_NOW - 9_000,
+                reason="DECISION_BAR_MISSED",
+            ),
+        ],
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 70_000,
+        now_ms=_NOW,
+    )
+
+    assert view.unresolved_count == 1
+    assert view.decision_impact_count == 1
+    assert view.state == "compromised"
+    assert view.state_label == "Continuity refused"
+
+
 def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
