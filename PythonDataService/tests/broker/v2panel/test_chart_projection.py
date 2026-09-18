@@ -586,8 +586,7 @@ async def test_history_polygon_auth_error_returns_notice_with_no_bars() -> None:
     assert result.bars == []
     assert result.indicator_bars == []
     assert [notice.code for notice in result.overlay_notices] == ["polygon_auth_error"]
-    # No credential appears in the notice message.
-    assert "present-but-rejected" not in result.overlay_notices[0].message
+    assert result.overlay_notices[0].message == "Polygon 401 for SPY: bad key"
 
 
 def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:

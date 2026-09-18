@@ -44,8 +44,33 @@ def test_classify_polygon_exception_maps_each_subclass_to_its_stable_code(
 
 def test_missing_polygon_api_key_notice_is_distinct_from_auth_error() -> None:
     """An unconfigured key is never mistaken for a key Polygon itself rejected."""
-    notice = missing_polygon_api_key_notice()
+    notice = missing_polygon_api_key_notice("Polygon overlay")
 
     assert notice.code == POLYGON_API_KEY_MISSING_CODE
     assert notice.code != classify_polygon_exception(PolygonAuthError("401", 401)).code
     assert "POLYGON_API_KEY" in notice.message
+
+
+@pytest.mark.parametrize(
+    ("subject", "expected_message"),
+    [
+        (
+            "Polygon overlay",
+            "Polygon overlay is unavailable because POLYGON_API_KEY is not configured.",
+        ),
+        (
+            "Polygon history",
+            "Polygon history is unavailable because POLYGON_API_KEY is not configured.",
+        ),
+    ],
+)
+def test_missing_polygon_api_key_notice_names_its_own_surface(
+    subject: str, expected_message: str
+) -> None:
+    """Each caller keeps its own correct wording; only the code is shared.
+
+    The LIVE overlay's "Polygon overlay is unavailable..." string is shipped
+    operator-facing copy and must stay byte-identical — a prior version of
+    this classifier hardcoded a generic message and silently changed it.
+    """
+    assert missing_polygon_api_key_notice(subject).message == expected_message

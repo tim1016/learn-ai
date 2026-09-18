@@ -366,7 +366,7 @@ async def build_history_chart(
     notices: list[ChartOverlayNoticeView] = []
     if not polygon_api_key:
         polygon_bars: list[PolygonBar] = []
-        notices.append(_notice_view(missing_polygon_api_key_notice()))
+        notices.append(_notice_view(missing_polygon_api_key_notice("Polygon history")))
     else:
         try:
             polygon_bars = await _fetch_history_bars(

@@ -16,6 +16,13 @@ This module is the single mapping. Each caller converts the returned
 than importing each other's private mapping, so the two panes cannot drift
 onto a second vocabulary (CLAUDE.md guiding philosophy #5).
 
+The shared thing is the *taxonomy* (the notice code), not the sentence: the
+missing-key message names its own surface ("Polygon overlay" for LIVE,
+"Polygon history" for HISTORY), so ``missing_polygon_api_key_notice`` takes
+that subject as a parameter rather than hardcoding one surface's wording.
+This is deliberate — genericizing the message previously changed the LIVE
+chart's shipped operator-facing copy by accident (issue #2203 review).
+
 Canonical implementation: this module.
 Reference: the ``PolygonFetchError`` hierarchy in
 ``app.data_lake.polygon_fetcher``.
@@ -46,17 +53,22 @@ class PolygonNotice:
     message: str
 
 
-def missing_polygon_api_key_notice() -> PolygonNotice:
+def missing_polygon_api_key_notice(subject: str) -> PolygonNotice:
     """The notice for a present-but-empty ``POLYGON_API_KEY``.
 
     Callers check this *before* attempting a fetch — an empty key never
     reaches Polygon, so it is a precondition, not an exception mapping, and
     is kept distinct from ``polygon_auth_error`` (a key that Polygon itself
     rejected).
+
+    ``subject`` names the failing surface in the message (e.g. ``"Polygon
+    overlay"`` for the LIVE chart, ``"Polygon history"`` for the HISTORY
+    chart) so each caller keeps its own correct, stable wording while still
+    sharing the ``polygon_api_key_missing`` code.
     """
     return PolygonNotice(
         code=POLYGON_API_KEY_MISSING_CODE,
-        message="Polygon is unavailable because POLYGON_API_KEY is not configured.",
+        message=f"{subject} is unavailable because POLYGON_API_KEY is not configured.",
     )
 
 

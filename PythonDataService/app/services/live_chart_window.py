@@ -243,7 +243,9 @@ async def _polygon_overlay_bars(
             continue
         session_label = window.session_date.isoformat()
         if not polygon_api_key:
-            notices.append(_to_overlay_notice(missing_polygon_api_key_notice(), session_label))
+            notices.append(
+                _to_overlay_notice(missing_polygon_api_key_notice("Polygon overlay"), session_label)
+            )
             continue
         try:
             polygon_bars = await _fetch_polygon_overlay_bars(
