@@ -376,7 +376,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (this.supportedIndicatorResource.error()) {
       return 'The chart indicator catalog could not be loaded.';
     }
-    return this.indicatorResource.value()?.error ?? null;
+    return this.indicatorResource.hasValue() ? this.indicatorResource.value().error : null;
   });
   private readonly loadedIndicatorResults = signal<readonly ChartIndicatorResult[]>([]);
   private readonly loadedIndicatorViewKey = signal<string | null>(null);
@@ -404,7 +404,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     effect(() => this.renderActivePane());
     effect(() => {
       const selected = this.selectedIndicators();
-      const loaded = this.indicatorResource.value();
+      const loaded = this.indicatorResource.hasValue() ? this.indicatorResource.value() : null;
       if (selected.length === 0) {
         this.loadedIndicatorResults.set([]);
         this.loadedIndicatorViewKey.set(null);
