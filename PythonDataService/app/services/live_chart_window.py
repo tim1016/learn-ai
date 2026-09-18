@@ -17,12 +17,8 @@ from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
 from app.data_lake.polygon_fetcher import (
-    PolygonAuthError,
     PolygonBar,
-    PolygonEntitlementError,
     PolygonFetchError,
-    PolygonRateLimitedError,
-    PolygonUnknownSymbolError,
     fetch_minute_trade_aggregates,
 )
 from app.lean_sidecar.trading_calendar import (
@@ -31,6 +27,11 @@ from app.lean_sidecar.trading_calendar import (
     session_windows_ms_utc,
 )
 from app.marketdata.feed import BarSessionPhase
+from app.services.polygon_notice_classifier import (
+    PolygonNotice,
+    classify_polygon_exception,
+    missing_polygon_api_key_notice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,13 +243,7 @@ async def _polygon_overlay_bars(
             continue
         session_label = window.session_date.isoformat()
         if not polygon_api_key:
-            notices.append(
-                ChartOverlayNotice(
-                    code="polygon_api_key_missing",
-                    message="Polygon overlay is unavailable because POLYGON_API_KEY is not configured.",
-                    session_date=session_label,
-                )
-            )
+            notices.append(_to_overlay_notice(missing_polygon_api_key_notice(), session_label))
             continue
         try:
             polygon_bars = await _fetch_polygon_overlay_bars(
@@ -257,20 +252,8 @@ async def _polygon_overlay_bars(
                 overlay_to_ms=overlay_to_ms,
                 api_key=polygon_api_key,
             )
-        except PolygonAuthError as exc:
-            notices.append(_notice("polygon_auth_error", exc, session_label))
-            continue
-        except PolygonEntitlementError as exc:
-            notices.append(_notice("polygon_entitlement_error", exc, session_label))
-            continue
-        except PolygonRateLimitedError as exc:
-            notices.append(_notice("polygon_rate_limited", exc, session_label))
-            continue
-        except PolygonUnknownSymbolError as exc:
-            notices.append(_notice("polygon_unknown_symbol", exc, session_label))
-            continue
         except PolygonFetchError as exc:
-            notices.append(_notice("polygon_fetch_error", exc, session_label))
+            notices.append(_to_overlay_notice(classify_polygon_exception(exc), session_label))
             continue
 
         converted = _convert_polygon_bars(
@@ -292,8 +275,8 @@ async def _polygon_overlay_bars(
     return sorted(overlay, key=lambda bar: bar.start_ms), notices
 
 
-def _notice(code: str, exc: Exception, session_date: str) -> ChartOverlayNotice:
-    return ChartOverlayNotice(code=code, message=str(exc), session_date=session_date)
+def _to_overlay_notice(notice: PolygonNotice, session_date: str) -> ChartOverlayNotice:
+    return ChartOverlayNotice(code=notice.code, message=notice.message, session_date=session_date)
 
 
 async def _fetch_polygon_overlay_bars(

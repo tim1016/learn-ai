@@ -192,7 +192,13 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
-    """Build bounded history from SQLite facts."""
+    """Build bounded history from SQLite facts.
+
+    A present-but-empty ``POLYGON_API_KEY`` (every Fleet Clerk boots with one)
+    or a Polygon fetch failure is not raised — ``build_history_chart``
+    degrades it into a ``polygon_*`` notice on the response's
+    ``overlay_notices`` with no fabricated bars (issue #2203).
+    """
     resolved = await validate_account(broker, account_id)
     observed_at_ms = now_ms_utc()
     from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
@@ -234,4 +240,5 @@ async def get_history_chart(
         symbol=status.symbol,
         bar_source=_bar_source,
         now_ms=observed_at_ms,
+        polygon_api_key=settings.POLYGON_API_KEY,
     )

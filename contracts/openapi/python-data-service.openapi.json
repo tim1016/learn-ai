@@ -7274,7 +7274,7 @@
         "type": "object"
       },
       "ChartHistoryResponse": {
-        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\n``bars`` is the bounded display window. ``indicator_bars`` includes every\navailable preceding warmup candle, capped by the configured Polygon history\nentitlement. The explicit budget fields distinguish a complete calculation\nwindow from entitlement- or liquidity-limited history. The existing 7-day\nlive resolver is not widened.",
+        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\n``bars`` is the bounded display window. ``indicator_bars`` includes every\navailable preceding warmup candle, capped by the configured Polygon history\nentitlement. The explicit budget fields distinguish a complete calculation\nwindow from entitlement- or liquidity-limited history. The existing 7-day\nlive resolver is not widened.\n\n``overlay_notices`` mirrors ``ChartLiveResponse.overlay_notices`` (issue\n#2203): a present-but-empty ``POLYGON_API_KEY`` or a Polygon fetch failure\ndegrades into a notice here \u2014 ``bars``/``indicator_bars`` stay empty rather\nthan fabricated \u2014 instead of an unhandled exception. Empty for a healthy\nresult.",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -7311,6 +7311,13 @@
               "$ref": "#/components/schemas/ChartBar"
             },
             "title": "Indicator Bars",
+            "type": "array"
+          },
+          "overlay_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ChartOverlayNoticeView"
+            },
+            "title": "Overlay Notices",
             "type": "array"
           },
           "strategy_instance_id": {
