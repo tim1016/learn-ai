@@ -97,8 +97,13 @@ describe('BotsListPageComponent', () => {
         await renderPage([], { getCatalog });
         await screen.findByRole('button', { name: /spy-momentum-01/ });
 
-        // One poll fires and fails; the snapshot underneath is ~5s old.
-        await vi.advanceTimersByTimeAsync(6_000);
+        // One poll fires and fails; the snapshot underneath is ~5s old. A
+        // synchronous advance fires every interval tick in one JS turn
+        // instead of awaiting a real microtask flush per tick (45+ ticks
+        // otherwise blew CI's 120s shard budget); the awaited query below
+        // still yields to the microtask queue that flushes Angular's
+        // pending change detection before asserting.
+        vi.advanceTimersByTime(6_000);
 
         expect(screen.queryByText(/last successful bot snapshot/i)).toBeNull();
       } finally {
@@ -118,7 +123,7 @@ describe('BotsListPageComponent', () => {
         await renderPage([], { getCatalog });
         await screen.findByRole('button', { name: /spy-momentum-01/ });
 
-        await vi.advanceTimersByTimeAsync(45_000);
+        vi.advanceTimersByTime(45_000);
 
         const banner = await screen.findByText(/last successful bot snapshot/i);
         expect(banner.textContent).toMatch(/4[0-9]s ago/);
