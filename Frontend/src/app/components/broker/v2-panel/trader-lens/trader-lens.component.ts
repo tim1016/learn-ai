@@ -65,8 +65,12 @@ export class TraderLensComponent {
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
   /** One explicit retry (#2202 FR-005/FR-006): the shell owns the resource
-   * and issues at most one `histChart.reload()` per click. */
-  readonly histChartRetry = output();
+   * and issues at most one `histChart.reload()` per click. Named
+   * `historyRetry`, not `histChartRetry`, to match `historyTimeframeChange`
+   * — the event naming is kept identical across shell/lens/chart layers,
+   * even though the `hist*` inputs (`histChart`, `histChartLoading`,
+   * `histChartFailed`) are renamed to `history*` at this same boundary. */
+  readonly historyRetry = output();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 

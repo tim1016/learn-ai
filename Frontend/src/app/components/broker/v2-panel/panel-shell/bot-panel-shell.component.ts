@@ -287,10 +287,7 @@ export class BotPanelShellComponent {
         : undefined,
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
-        resourceTarget(params.broker, params.clerkId, {
-          accountId: params.accountId,
-          entityId: params.sid,
-        }),
+        resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
         params.sid,
         params.timeframe,
       ),

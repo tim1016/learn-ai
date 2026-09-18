@@ -278,8 +278,19 @@ export class DualPaneChartComponent implements AfterViewInit {
     params: () => 'chart-indicator-catalog',
     stream: () => this.indicatorService.supportedIndicators(),
   });
+  /** Guarded read (#2202): `supportedIndicatorResource.value()` throws
+   * `ResourceValueError` while the catalog fetch is in its error state — the
+   * same defect class as the `histChart`/`journalPage` freeze this issue
+   * fixed elsewhere. Left unguarded, opening the indicator rail
+   * (`[categories]="indicatorCategories()"`, gated by `@if (fullscreen())`)
+   * would abort this component's whole render pass the moment the user
+   * clicks Expand while the catalog call has failed. */
   protected readonly indicatorCategories = computed(() => {
-    const supported = new Set(this.supportedIndicatorResource.value()?.names ?? []);
+    const supported = new Set(
+      this.supportedIndicatorResource.hasValue()
+        ? this.supportedIndicatorResource.value()?.names ?? []
+        : [],
+    );
     return this.indicatorCatalog.categories()
       .map((category) => ({
         ...category,
