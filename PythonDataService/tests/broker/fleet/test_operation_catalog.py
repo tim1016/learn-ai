@@ -217,3 +217,23 @@ def test_catalog_validation_refuses_cross_field_incoherence() -> None:
                 }
             )
         )
+
+
+def test_catalog_validation_refuses_a_non_positive_read_timeout() -> None:
+    """Issue #2204: the outer delivery bound, when declared, must be usable."""
+    with pytest.raises(ValueError, match="non-positive read_timeout_s"):
+        validate_operation_catalog(
+            frozenset({_operation(read_timeout_s=0.0)})
+        )
+    with pytest.raises(ValueError, match="non-positive read_timeout_s"):
+        validate_operation_catalog(
+            frozenset({_operation(read_timeout_s=-5.0)})
+        )
+
+
+def test_catalog_validation_accepts_a_declared_positive_read_timeout() -> None:
+    """The default (``None``, the fleet default) and an explicit widened
+    bound both pass -- only every other operation's *absence* of a widened
+    bound distinguishes ``bot_chart_history`` (issue #2204)."""
+    validate_operation_catalog(frozenset({_operation()}))
+    validate_operation_catalog(frozenset({_operation(read_timeout_s=45.0)}))

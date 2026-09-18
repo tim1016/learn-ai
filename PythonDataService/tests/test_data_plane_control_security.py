@@ -477,6 +477,24 @@ def test_local_dev_opt_out_has_named_environment_switch() -> None:
     assert CONTROL_ALLOW_UNAUTHENTICATED_ENV_VAR == "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"
 
 
+def test_internal_fleet_prefix_is_absent_from_the_browser_control_surface_manifest() -> None:
+    """Issue #2204: the coordinator-only history-batch route
+    (``/internal/fleet/history/batch``) is guarded by the fleet agent-token
+    scheme (``X-Fleet-Clerk-Id`` + ``X-Fleet-Agent-Token``), never the browser
+    control secret. This manifest's schema is for browser ``/api/*``
+    prefixes; an ``/internal`` entry here would wrongly attach
+    ``X-Data-Plane-Control-Secret`` policy to a surface that must never
+    accept it."""
+    assert not any(
+        prefix == "/internal" or prefix.startswith("/internal/")
+        for prefix in _CONTROL_SURFACE_PREFIXES
+    )
+    assert not any(
+        prefix == "/internal" or prefix.startswith("/internal/")
+        for prefix in _PROTECTED_READ_PREFIXES
+    )
+
+
 @pytest.mark.asyncio
 async def test_disallowed_host_header_is_rejected() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

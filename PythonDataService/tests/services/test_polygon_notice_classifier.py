@@ -17,8 +17,10 @@ from app.data_lake.polygon_fetcher import (
     PolygonUnknownSymbolError,
 )
 from app.services.polygon_notice_classifier import (
+    COORDINATOR_UNAVAILABLE_CODE,
     POLYGON_API_KEY_MISSING_CODE,
     classify_polygon_exception,
+    coordinator_unavailable_notice,
     missing_polygon_api_key_notice,
 )
 
@@ -74,3 +76,28 @@ def test_missing_polygon_api_key_notice_names_its_own_surface(
     this classifier hardcoded a generic message and silently changed it.
     """
     assert missing_polygon_api_key_notice(subject).message == expected_message
+
+
+def test_coordinator_unavailable_notice_is_not_a_polygon_code() -> None:
+    """Issue #2204: the one history-transport extension to this vocabulary.
+
+    Distinct from every ``polygon_*`` code and from the missing-key code --
+    the vendor may be entirely healthy while only the internal hop is down.
+    """
+    notice = coordinator_unavailable_notice("Polygon history")
+
+    assert notice.code == COORDINATOR_UNAVAILABLE_CODE
+    assert not notice.code.startswith("polygon_")
+    assert notice.code != POLYGON_API_KEY_MISSING_CODE
+
+
+def test_coordinator_unavailable_notice_names_its_own_surface_and_leaks_nothing() -> None:
+    notice = coordinator_unavailable_notice("Polygon history")
+
+    assert notice.message == (
+        "Polygon history is unavailable because the fleet coordinator "
+        "could not be reached."
+    )
+    # No hostname, port, or token ever belongs in this text (FR-010).
+    assert "://" not in notice.message
+    assert ":" not in notice.message

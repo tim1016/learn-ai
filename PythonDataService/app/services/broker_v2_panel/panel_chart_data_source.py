@@ -11,7 +11,6 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.config import settings
-from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_v2_panel import (
     BotPanelView,
     ChartHistoryResponse,
@@ -24,6 +23,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     history_fill_window,
     live_window,
 )
+from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
 from app.services.broker_v2_panel.panel_errors import (
     PanelDataError,
@@ -194,10 +194,13 @@ async def get_history_chart(
 ) -> ChartHistoryResponse:
     """Build bounded history from SQLite facts.
 
-    A present-but-empty ``POLYGON_API_KEY`` (every Fleet Clerk boots with one)
-    or a Polygon fetch failure is not raised — ``build_history_chart``
-    degrades it into a ``polygon_*`` notice on the response's
-    ``overlay_notices`` with no fabricated bars (issue #2203).
+    Issue #2204: this Clerk-side assembly never calls Polygon directly —
+    every Fleet Clerk boots with a present-but-empty ``POLYGON_API_KEY``
+    (ADR 0062), so the actual vendor walk runs on the fleet-coordinator role,
+    reached through the ``batch_provider`` seam. A Polygon failure or an
+    unreachable coordinator is not raised — ``build_history_chart`` degrades
+    it into a ``polygon_*`` or ``coordinator_unavailable`` notice on the
+    response's ``overlay_notices`` with no fabricated bars (issue #2203).
     """
     resolved = await validate_account(broker, account_id)
     observed_at_ms = now_ms_utc()
@@ -223,22 +226,11 @@ async def get_history_chart(
     status = evidence.status
     fills = evidence.fills.fills
 
-    async def _bar_source(symbol, start, end, multiplier, timespan):
-        return await fetch_aggregate_bars(
-            symbol,
-            start,
-            end,
-            settings.POLYGON_API_KEY,
-            multiplier=multiplier,
-            timespan=timespan,
-        )
-
     return await build_history_chart(
         timeframe,
         fills,
         strategy_instance_id=sid,
         symbol=status.symbol,
-        bar_source=_bar_source,
+        batch_provider=build_history_batch_provider(),
         now_ms=observed_at_ms,
-        polygon_api_key=settings.POLYGON_API_KEY,
     )

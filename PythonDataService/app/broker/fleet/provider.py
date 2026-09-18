@@ -131,6 +131,14 @@ class ProviderOperation:
     stream: OperationStream = OperationStream.NONE
     request_schema: str | None = None
     response_schema: str | None = None
+    #: This operation's own outer coordinator -> agent delivery read-timeout
+    #: bound, or ``None`` for the fleet default
+    #: (``app.broker.fleet.internal_http.DEFAULT_INTERNAL_TIMEOUT_S``). A
+    #: generic knob, not a special case: the routing/delivery layer only
+    #: honors whatever an operation declares here (issue #2204's
+    #: ``bot_chart_history`` is the first and, as of this writing, only
+    #: operation that widens it) -- it never special-cases an operation id.
+    read_timeout_s: float | None = None
 
     def route_key(self) -> tuple[str, str]:
         """The (method, public path template) pair forwarding matches on."""
@@ -189,6 +197,11 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
                 f"configuration-access operation {operation.operation_id!r} cannot "
                 "require an effective account: configuration access exists precisely "
                 "for lanes without one"
+            )
+        if operation.read_timeout_s is not None and operation.read_timeout_s <= 0:
+            raise ValueError(
+                f"operation {operation.operation_id!r} declares a non-positive "
+                f"read_timeout_s of {operation.read_timeout_s!r}"
             )
         if operation.idempotency == OperationIdempotency.READ and operation.method in _MUTATING_METHODS:
             raise ValueError(

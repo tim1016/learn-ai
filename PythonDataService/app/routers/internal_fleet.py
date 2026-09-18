@@ -2,17 +2,22 @@
 
 Mounted under ``/internal/fleet`` — deliberately outside every public
 ``/api`` prefix — these routes are the machine surface an agent's presence
-calls: volume expectations, session registration, heartbeats, reservation
-and confirmation. Authentication is two-factor and environment-only: the
-``X-Fleet-Agent-Token`` header must match the clerk's agent service token in
-the coordinator's environment (``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the
-registration body presents the durable ``worker_key`` the registry itself
-compares. The browser installation secret never appears here and is never
-forwarded to an agent (PRD FR-046).
+calls: volume expectations, session registration, heartbeats, reservation,
+confirmation, and (issue #2204) one bounded history-batch read. Authentication
+is two-factor and environment-only: the ``X-Fleet-Agent-Token`` header must
+match the clerk's agent service token in the coordinator's environment
+(``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the registration body presents the
+durable ``worker_key`` the registry itself compares. The browser installation
+secret never appears here and is never forwarded to an agent (PRD FR-046).
 
 No unauthenticated fallback exists: a deployment without the token mapping
 refuses every internal call. ``/internal`` stays outside the exported
 OpenAPI contract's public surface and outside every public mount prefix.
+
+The history-batch operation (issue #2204) additionally requires the header
+identity to equal the body identity: ``X-Fleet-Clerk-Id`` must name the same
+clerk as the body's ``clerk_id``, refusing a token that is valid for one
+clerk but presented alongside another clerk's identity.
 """
 
 from __future__ import annotations
@@ -33,6 +38,13 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
+from app.config import settings
+from app.schemas.broker_v2_panel import ChartHistoryTimeframe
+from app.services.broker_v2_panel.chart_projection_service import (
+    MAX_HISTORY_REQUIRED_BAR_COUNT,
+    build_coordinator_history_batch,
+)
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +94,24 @@ class ConfirmRequest(BaseModel):
     effective_revision: int | None = None
 
 
+class HistoryBatchRequest(BaseModel):
+    """One Clerk's request for a complete backward-walked history batch.
+
+    Issue #2204: the sixth ``/internal/fleet/*`` operation. Carries only
+    clerk id, symbol, the closed timeframe vocabulary, a required bar count
+    bounded by the existing display+warmup policy, and the ``as_of_ms``
+    anchor -- no ``date`` or ISO timestamp crosses this boundary
+    (``temporal-rigor.md``); the coordinator does the ms->ET date conversion
+    with the canonical NYSE calendar helpers.
+    """
+
+    clerk_id: str = Field(min_length=1)
+    symbol: str = Field(min_length=1)
+    timeframe: ChartHistoryTimeframe
+    required_bar_count: int = Field(gt=0, le=MAX_HISTORY_REQUIRED_BAR_COUNT)
+    as_of_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+
+
 def _service(request: Request) -> FleetControlService:
     """The coordinator's fleet service, installed by the lifespan."""
     service = getattr(request.app.state, "fleet_service", None)
@@ -94,8 +124,24 @@ def _service(request: Request) -> FleetControlService:
     return service
 
 
-def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
-    """Refuse any agent whose transport token is not the mapped one."""
+def _authorized_agent(
+    request: Request,
+    clerk_id: str,
+    token: str,
+    *,
+    header_clerk_id: str | None = None,
+    require_header_clerk_id: bool = False,
+) -> None:
+    """Refuse any agent whose transport token is not the mapped one.
+
+    ``require_header_clerk_id`` (issue #2204) additionally requires the
+    caller's ``X-Fleet-Clerk-Id`` header identity to equal the body's
+    ``clerk_id`` -- an absent header, or one naming a different clerk than
+    the body, refuses exactly like a wrong or missing token. ``False`` (the
+    default) skips that check, preserving the existing five operations'
+    behavior unchanged; the plain ``header_clerk_id`` value is still ignored
+    by them.
+    """
     mapping_text = getattr(request.app.state, "fleet_agent_tokens_text", "")
     mapping_unreadable_next_step = (
         "Fix FLEET_AGENT_SERVICE_TOKENS_JSON's syntax; a coordinator cannot "
@@ -119,6 +165,7 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
         not isinstance(expected, str)
         or not expected
         or not matches_service_token(token, expected)
+        or (require_header_clerk_id and header_clerk_id != clerk_id)
     ):
         logger.warning(
             "internal fleet call refused for unknown or mismatched agent token",
@@ -127,7 +174,8 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
         raise FleetAgentTokenRefused(
             "agent token refused",
             next_step="Present the X-Fleet-Agent-Token issued for this clerk "
-            "in FLEET_AGENT_SERVICE_TOKENS_JSON.",
+            "in FLEET_AGENT_SERVICE_TOKENS_JSON, with X-Fleet-Clerk-Id naming "
+            "the same clerk as the request body.",
         )
 
 
@@ -262,6 +310,45 @@ async def confirm_assignment(
     except FleetControlError as exc:
         return _refuse(exc)
     return _assignment_body(assignment)
+
+
+@router.post("/history/batch", response_model=None)
+async def history_batch(
+    payload: HistoryBatchRequest,
+    request: Request,
+    x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
+) -> dict[str, Any] | Response:
+    """Serve one complete backward-walked Polygon history batch (issue #2204).
+
+    This process's own ``POLYGON_API_KEY`` is the usable one -- only a
+    ``FLEET_ROLE=fleet_coordinator``/``combined`` process ever mounts this
+    router (``_FLEET_COORDINATOR_SURFACE``, ``app.main``). A Polygon fetch
+    failure degrades into a canonical ``polygon_*`` notice with no bars
+    (issue #2203) rather than a non-200 status: the Clerk always gets a
+    completed batch back on success, whether healthy or vendor-degraded.
+    """
+    _authorized_agent(
+        request,
+        payload.clerk_id,
+        x_fleet_agent_token or "",
+        header_clerk_id=x_fleet_clerk_id,
+        require_header_clerk_id=True,
+    )
+    batch = await build_coordinator_history_batch(
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        required_bar_count=payload.required_bar_count,
+        as_of_ms=payload.as_of_ms,
+        polygon_api_key=settings.POLYGON_API_KEY,
+    )
+    return {
+        "bars": [bar.model_dump(mode="json") for bar in batch.bars],
+        "overlay_notices": [
+            notice.model_dump(mode="json") for notice in batch.overlay_notices
+        ],
+        "effective_as_of_ms": batch.effective_as_of_ms,
+    }
 
 
 __all__ = ["router"]

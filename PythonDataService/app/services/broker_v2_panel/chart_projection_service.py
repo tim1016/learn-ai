@@ -15,10 +15,24 @@ Two contracts:
 Both panes decorate bars with truthful ``ibkr`` / ``polygon`` / ``mixed``
 source tags and project fill markers from SQLite-native ``FillRecord`` values.
 All timestamps are ``int64 ms UTC``; "today" is the canonical NY trading date.
+
+Issue #2204 splits the HISTORY contract's Polygon walk into two layers:
+``fetch_complete_history_batch`` runs the entire backward widening loop and
+every vendor call, and is the fleet-coordinator-role-only entry point reached
+through ``app.routers.internal_fleet``'s ``/internal/fleet/history/batch``
+operation (or, for the legacy/development ``combined`` posture with no
+coordinator/clerk split, called in-process by
+``app.services.broker_v2_panel.history_batch_client``).
+``build_history_chart`` no longer walks anything itself -- it calls an
+injected ``HistoryBatchProvider`` exactly once and turns the one
+already-complete batch it gets back into the display/indicator windows,
+truncation flag and fill markers, exactly as before. This is a relocation of
+the existing walk, not new calendar or candle math.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -28,7 +42,7 @@ from zoneinfo import ZoneInfo
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.bar_models import IbkrMinuteBar
-from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError
+from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError, fetch_aggregate_bars
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
     session_close_ms_utc,
@@ -72,6 +86,15 @@ _HISTORY_TIMEFRAME_SPECS: dict[ChartHistoryTimeframe, _HistoryTimeframeSpec] = {
 
 _INDICATOR_WARMUP_BARS = configured_indicator_warmup_bars(INDICATOR_CONFIGS)
 
+#: The largest ``required_bar_count`` any timeframe's display+warmup policy
+#: can produce (issue #2204 FR-007): the internal history-batch request's
+#: bound derives from this single source rather than repeating a magic number
+#: at the request-schema boundary (``app.routers.internal_fleet``).
+MAX_HISTORY_REQUIRED_BAR_COUNT = (
+    max(spec.display_bars for spec in _HISTORY_TIMEFRAME_SPECS.values())
+    + _INDICATOR_WARMUP_BARS
+)
+
 
 class ChartTimeframeError(ValueError):
     """Raised when a Polygon timeframe is outside the closed selector set."""
@@ -96,7 +119,38 @@ def _notice_view(notice: _PolygonFailure) -> ChartOverlayNoticeView:
 
 # A history bar source fetches aggregate bars for a symbol/date-range at a given
 # Polygon multiplier/timespan. Injected so tests stay hermetic (no live HTTP).
+# Coordinator-only (issue #2204): only `fetch_complete_history_batch` and its
+# callers on the fleet-coordinator role ever construct one of these.
 HistoryBarSource = Callable[[str, date, date, int, str], Awaitable[list[PolygonBar]]]
+
+
+@dataclass(frozen=True)
+class CompleteHistoryBatch:
+    """One already-complete history batch: no further vendor calls needed.
+
+    The wire shape ``app.routers.internal_fleet``'s history-batch operation
+    returns and ``app.services.broker_v2_panel.history_batch_client``
+    reconstructs on the Clerk side. ``bars`` are sorted ascending by
+    ``start_ms`` and already carry the coordinator's ms->ET candle-close math
+    (``_history_bar_end_ms``); ``build_history_chart`` only slices and
+    truncates them, it never recomputes them.
+    """
+
+    bars: list[ChartBar]
+    overlay_notices: list[ChartOverlayNoticeView]
+    effective_as_of_ms: int
+
+
+# A history batch provider answers one (symbol, timeframe, required_bar_count,
+# as_of_ms) request with a *complete* batch -- the Clerk-side seam
+# `build_history_chart` calls exactly once per public history attempt
+# (FR-008). The production implementation is either a direct in-process call
+# to `fetch_complete_history_batch` (the `combined` posture: no
+# coordinator/clerk split) or `RemoteHistoryBatchClient.fetch_batch` (a real
+# fleet-enrolled clerk_agent); tests inject a fake.
+HistoryBatchProvider = Callable[
+    [str, ChartHistoryTimeframe, int, int], Awaitable[CompleteHistoryBatch]
+]
 
 
 def coerce_history_timeframe(raw: str) -> ChartHistoryTimeframe:
@@ -305,31 +359,53 @@ async def _fetch_history_bars(
     return sorted(bars_by_start.values(), key=lambda bar: bar.t_ms)
 
 
-def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
+def _history_fetch_plan(
+    timeframe: ChartHistoryTimeframe, as_of_ms: int, required_bar_count: int
+) -> _HistoryPlan:
+    """The walk's own plan for one target bar count (issue #2204).
+
+    Deliberately decoupled from the display+warmup policy: the walk only
+    needs a target count to stop at, wherever that count came from.
+    ``_plan_history`` (below) derives that count from the indicator-warmup
+    policy for the Clerk's own planning; the fleet-coordinator role
+    (``fetch_complete_history_batch``) derives it from the Clerk's requested
+    ``required_bar_count`` instead, without needing to know anything about
+    warmup or display budgets. ``display_from_ms`` is a placeholder here
+    (unused by the walk or the completeness/end-ms math) -- only
+    ``_plan_history`` fills in the real value.
+    """
     spec = _HISTORY_TIMEFRAME_SPECS[timeframe]
     span_ms = {"minute": spec.multiplier * 60_000, "hour": spec.multiplier * 3_600_000, "day": spec.multiplier * MS_PER_DAY}[
         spec.timespan
     ]
-    indicator_bars = spec.display_bars + _INDICATOR_WARMUP_BARS
     fetch_start = session_start_for_bar_count(
-        now_ms,
-        target_bars=indicator_bars,
-        bar_span_ms=None if spec.timespan == "day" else span_ms,
-    )
-    display_start = session_start_for_bar_count(
-        now_ms,
-        target_bars=spec.display_bars,
+        as_of_ms,
+        target_bars=required_bar_count,
         bar_span_ms=None if spec.timespan == "day" else span_ms,
     )
     return _HistoryPlan(
         multiplier=spec.multiplier,
         timespan=spec.timespan,
-        display_from_ms=session_open_ms_utc(display_start),
-        to_ms=now_ms,
+        display_from_ms=as_of_ms,
+        to_ms=as_of_ms,
         span_ms=span_ms,
         display_bars=spec.display_bars,
-        indicator_bars=indicator_bars,
+        indicator_bars=required_bar_count,
         fetch_start=fetch_start,
+    )
+
+
+def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
+    spec = _HISTORY_TIMEFRAME_SPECS[timeframe]
+    indicator_bars = spec.display_bars + _INDICATOR_WARMUP_BARS
+    plan = _history_fetch_plan(timeframe, now_ms, indicator_bars)
+    display_start = session_start_for_bar_count(
+        now_ms,
+        target_bars=spec.display_bars,
+        bar_span_ms=None if spec.timespan == "day" else plan.span_ms,
+    )
+    return dataclasses.replace(
+        plan, display_from_ms=session_open_ms_utc(display_start)
     )
 
 
@@ -339,15 +415,108 @@ def history_fill_window(timeframe: ChartHistoryTimeframe, now_ms: int) -> tuple[
     return plan.display_from_ms, plan.to_ms
 
 
+async def fetch_complete_history_batch(
+    *,
+    symbol: str,
+    timeframe: ChartHistoryTimeframe,
+    required_bar_count: int,
+    as_of_ms: int,
+    bar_source: HistoryBarSource,
+) -> CompleteHistoryBatch:
+    """Run the full backward Polygon widening walk to completion (issue #2204).
+
+    Fleet-coordinator-role-only: this is the function behind
+    ``/internal/fleet/history/batch`` (``app.routers.internal_fleet``) and the
+    ``combined``-posture local shortcut
+    (``app.services.broker_v2_panel.history_batch_client``). It is the exact walk
+    ``build_history_chart`` used to run inline before #2204 -- widen backward
+    until ``required_bar_count`` bars are collected or the two-year
+    entitlement floor is reached -- unchanged in behavior, just callable with
+    an explicit target count instead of deriving one from the indicator-warmup
+    policy itself (that policy now lives one layer up, in ``_plan_history``,
+    which the Clerk uses to compute the ``required_bar_count`` it sends).
+
+    A Polygon fetch failure degrades into a ``polygon_*`` notice with no bars
+    (issue #2203) rather than raising -- this function's caller always gets a
+    complete, well-formed batch back. Notice codes come from the shared
+    ``polygon_notice_classifier`` vocabulary, the same one the LIVE overlay
+    uses, so the two panes cannot drift onto different codes.
+    """
+    plan = _history_fetch_plan(timeframe, as_of_ms, required_bar_count)
+    notices: list[ChartOverlayNoticeView] = []
+    try:
+        polygon_bars = await _fetch_history_bars(
+            symbol=symbol,
+            plan=plan,
+            bar_source=bar_source,
+        )
+    except PolygonFetchError as exc:
+        polygon_bars = []
+        notices.append(_notice_view(classify_polygon_exception(exc)))
+    bars = [
+        _polygon_bar_to_chart_bar(bar, end_ms=_history_bar_end_ms(bar, plan))
+        for bar in polygon_bars
+    ]
+    return CompleteHistoryBatch(
+        bars=bars, overlay_notices=notices, effective_as_of_ms=as_of_ms
+    )
+
+
+async def build_coordinator_history_batch(
+    *,
+    symbol: str,
+    timeframe: ChartHistoryTimeframe,
+    required_bar_count: int,
+    as_of_ms: int,
+    polygon_api_key: str,
+) -> CompleteHistoryBatch:
+    """The fleet-coordinator role's one entry point for a Clerk's request.
+
+    Pairs the live Polygon fetch with :func:`fetch_complete_history_batch`.
+    Reused by both the real ``/internal/fleet/history/batch`` route handler
+    and the ``combined``-posture in-process shortcut
+    (``app.services.broker_v2_panel.history_batch_client``), so there is exactly one place that
+    decides what "the coordinator serves one history batch" means.
+
+    A present-but-empty ``polygon_api_key`` (a misconfigured coordinator, or a
+    ``combined``-posture deployment with no Polygon key at all) degrades into
+    the same ``polygon_api_key_missing`` notice ``build_history_chart`` used
+    to raise for directly (issue #2203) -- checked here, before ever touching
+    Polygon, because an empty key never reaches the vendor.
+    """
+    if not polygon_api_key:
+        return CompleteHistoryBatch(
+            bars=[],
+            overlay_notices=[
+                _notice_view(missing_polygon_api_key_notice("Polygon history"))
+            ],
+            effective_as_of_ms=as_of_ms,
+        )
+
+    async def _bar_source(
+        bar_symbol: str, start: date, end: date, multiplier: int, timespan: str
+    ) -> list[PolygonBar]:
+        return await fetch_aggregate_bars(
+            bar_symbol, start, end, polygon_api_key, multiplier=multiplier, timespan=timespan
+        )
+
+    return await fetch_complete_history_batch(
+        symbol=symbol,
+        timeframe=timeframe,
+        required_bar_count=required_bar_count,
+        as_of_ms=as_of_ms,
+        bar_source=_bar_source,
+    )
+
+
 async def build_history_chart(
     timeframe: ChartHistoryTimeframe,
     fills: Sequence[FillRecord],
     *,
     strategy_instance_id: str,
     symbol: str,
-    bar_source: HistoryBarSource,
+    batch_provider: HistoryBatchProvider,
     now_ms: int,
-    polygon_api_key: str,
 ) -> ChartHistoryResponse:
     """Build the bounded Polygon series for a selected timeframe (§8).
 
@@ -355,35 +524,22 @@ async def build_history_chart(
     timeframe. Indicator clients therefore receive one coherent candle set per
     selection, rather than resampling or reusing a prior timeframe locally.
 
-    A present-but-empty ``polygon_api_key`` (every Fleet Clerk boots with one,
-    per ADR 0062) or a Polygon fetch failure degrades into a ``polygon_*``
-    notice on ``overlay_notices`` with no bars, instead of letting the
-    exception escape as an unhandled 500 (issue #2203). Notice codes come
-    from the shared ``polygon_notice_classifier`` vocabulary, the same one the
-    LIVE overlay uses, so the two panes cannot drift onto different codes.
+    Issue #2204: this function no longer walks Polygon itself. It calls
+    ``batch_provider`` exactly once -- one internal request per public history
+    attempt, however many vendor calls the fleet-coordinator role needed to
+    satisfy it -- and turns the one complete batch it gets back into the
+    display/indicator windows and truncation flag. A batch's
+    ``overlay_notices`` (a Polygon failure, or ``coordinator_unavailable`` if
+    the internal hop itself failed) pass straight through with no bars
+    fabricated, exactly as the old inline classification did (issue #2203).
     """
     plan = _plan_history(timeframe, now_ms)
-    notices: list[ChartOverlayNoticeView] = []
-    if not polygon_api_key:
-        polygon_bars: list[PolygonBar] = []
-        notices.append(_notice_view(missing_polygon_api_key_notice("Polygon history")))
-    else:
-        try:
-            polygon_bars = await _fetch_history_bars(
-                symbol=symbol,
-                plan=plan,
-                bar_source=bar_source,
-            )
-        except PolygonFetchError as exc:
-            polygon_bars = []
-            notices.append(_notice_view(classify_polygon_exception(exc)))
+    batch = await batch_provider(symbol, timeframe, plan.indicator_bars, now_ms)
+    notices = list(batch.overlay_notices)
+    polygon_bars = batch.bars
 
     truncated = len(polygon_bars) > plan.display_bars
-    polygon_bars = polygon_bars[-plan.indicator_bars :]
-    indicator_bars = [
-        _polygon_bar_to_chart_bar(bar, end_ms=_history_bar_end_ms(bar, plan))
-        for bar in polygon_bars
-    ]
+    indicator_bars = polygon_bars[-plan.indicator_bars :]
     bars = indicator_bars[-plan.display_bars :]
     display_from_ms = bars[0].start_ms if bars else plan.display_from_ms
     markers = markers_in_window(fills, from_ms=display_from_ms, to_ms=plan.to_ms)

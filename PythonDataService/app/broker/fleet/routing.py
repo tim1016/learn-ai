@@ -219,7 +219,9 @@ class LaneRouter:
         )
         delivery = self._delivery_for(broker, session)
         try:
-            result = await delivery.deliver(request)
+            result = await delivery.deliver(
+                request, read_timeout_s=operation.read_timeout_s
+            )
         except DeliveryIdentityMismatch as exc:
             logger.warning(
                 "Lane delivery failed identity verification for %s on %s: %r",
@@ -471,7 +473,9 @@ class LaneRouter:
         # can never present as definitively un-sent (D11).
         self._service.mark_routing_dispatched(correlation_id=receipt.correlation_id)
         try:
-            result = await delivery.deliver(request)
+            result = await delivery.deliver(
+                request, read_timeout_s=operation.read_timeout_s
+            )
         except DeliveryIdentityMismatch as exc:
             self._service.settle_routing_attempt(
                 correlation_id=receipt.correlation_id,
