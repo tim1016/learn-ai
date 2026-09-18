@@ -12,11 +12,13 @@ import type { ChartHistoryResponse, ChartOverlayNoticeView } from './broker-v2-p
  *
  * Canonical implementation: this module. `build_history_chart`
  * (`PythonDataService/app/services/broker_v2_panel/chart_projection_service.py`)
- * and the shared notice vocabulary it draws from
- * (`PythonDataService/app/services/polygon_notice_classifier.py`,
- * `app.services.live_chart_window`) are the reference for which codes exist;
- * `polygon_overlay_empty` is the one code among them that means genuinely
- * empty rather than a provider failure or a missing credential.
+ * is the only place `ChartHistoryResponse` is constructed, and it emits only
+ * failure notices onto `overlay_notices` — a genuinely empty history window
+ * arrives as an empty array, not a code. `polygon_overlay_empty` itself is
+ * never emitted into HISTORY traffic; it is a LIVE-only code, emitted by
+ * `app.services.live_chart_window` into the live chart response. It is kept
+ * in this closed set as a forward-compatible guard, not because today's
+ * history path can produce it.
  */
 const HISTORY_EMPTY_NOTICE_CODES: ReadonlySet<string> = new Set(['polygon_overlay_empty']);
 

@@ -28,14 +28,12 @@ import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed
 import type {
   ChartHistoryTimeframe,
   ChartLiveResolution,
-  ChartOverlayNoticeView,
   CurrentRunState,
   PanelAction,
   PanelActionResult,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import { historyUnavailableNotice } from '../lib/chart-history-notice';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
@@ -299,16 +297,6 @@ export class BotPanelShellComponent {
    * boolean the leaf components can render without ever touching the raw
    * `ResourceRef.error()`/`HttpErrorResponse`. */
   protected readonly histChartFailed = computed(() => this.histChart.error() !== undefined);
-
-  /** Settled *successful* response that is nonetheless unavailable (#2211):
-   * zero bars plus a notice code outside the closed "genuinely empty" set
-   * (`historyUnavailableNotice`, `../lib/chart-history-notice.ts`). Guarded
-   * `hasValue()` read, per the same resource-value-guard rule `histChartFailed`
-   * above follows — never touch `.value()` without proving `.hasValue()`
-   * first. */
-  protected readonly histChartUnavailableNotice = computed<ChartOverlayNoticeView | null>(() =>
-    historyUnavailableNotice(this.histChart.hasValue() ? this.histChart.value() : null),
-  );
 
   protected readonly isLoaded = computed(
     () => this.panel() !== null && this.profile.hasValue(),
