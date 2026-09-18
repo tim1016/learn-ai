@@ -890,6 +890,47 @@ def _cutover_plan_payload(plan: CutoverPlan) -> dict[str, Any]:
     return plan_payload(plan, schema_version=3, refused=CutoverRefused, label="cutover")
 
 
+_CUTOVER_PLAN_FIELDS = frozenset(
+    {
+        "schema_version", "plan_id", "confirmation_token", "account_id",
+        "created_at_ms", "expires_at_ms", "initialization", "database",
+        "broker_evidence", "runner_roster", "legacy_artifacts",
+    }
+)
+
+
+def decode_cutover_plan(payload: dict[str, Any]) -> CutoverPlan:
+    """Reconstruct a schema-version-3 plan from its serialized payload.
+
+    The single decoder for :func:`_cutover_plan_payload`'s encoding — every
+    reader of a persisted or CLI-supplied cutover plan (the browser-driven
+    graduation service, the offline ``manage_alpaca_sqlite_clerk`` CLI) calls
+    this instead of re-deriving the field-by-field reconstruction, so a
+    schema change to this safety-critical, real-money plan cannot update one
+    reader and silently miss the other.
+    """
+    if not isinstance(payload, dict) or set(payload) != _CUTOVER_PLAN_FIELDS or payload.get("schema_version") != 3:
+        raise ValueError("cutover plan fields do not match schema version 3")
+    broker = payload["broker_evidence"]
+    return CutoverPlan(
+        schema_version=payload["schema_version"],
+        plan_id=payload["plan_id"],
+        confirmation_token=payload["confirmation_token"],
+        account_id=payload["account_id"],
+        created_at_ms=payload["created_at_ms"],
+        expires_at_ms=payload["expires_at_ms"],
+        initialization=CutoverInitializationEvidence(**payload["initialization"]),
+        database=DatabaseVerification(**payload["database"]),
+        broker_evidence=BrokerCutoverEvidence(
+            **{**broker, "open_order_ids": tuple(broker["open_order_ids"])}
+        ),
+        runner_roster=tuple(RunnerBotEvidence(**item) for item in payload["runner_roster"]),
+        legacy_artifacts=tuple(
+            LegacyArtifactEvidence(**item) for item in payload["legacy_artifacts"]
+        ),
+    )
+
+
 def _validate_plan_token(plan: CutoverPlan, supplied_token: str) -> None:
     require_plan_token(
         _cutover_plan_payload(plan),

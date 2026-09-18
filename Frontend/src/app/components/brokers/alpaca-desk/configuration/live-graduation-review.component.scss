@@ -1,0 +1,125 @@
+@use './configuration-controls' as controls;
+@use '../../../../styles/eyebrow-heading' as *;
+
+:host {
+  display: block;
+}
+
+.graduation__review {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+
+.graduation__review-head,
+.graduation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.graduation__eyebrow {
+  @include eyebrow-heading;
+  margin: 0 0 var(--space-1);
+}
+
+.graduation__expired {
+  color: var(--bear);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+
+.graduation__facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--border-light);
+}
+
+.graduation__facts div {
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-canvas);
+}
+
+.graduation__facts dt {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.graduation__facts dd {
+  overflow-wrap: anywhere;
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+.graduation__bots,
+.graduation__consequence {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.graduation__consequence {
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--bear);
+}
+
+.graduation__acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bear) 7%, var(--bg-canvas));
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.graduation__acknowledgement input {
+  margin-top: 0.2rem;
+}
+
+.button--secondary {
+  @include controls.secondary-button;
+}
+
+.button--danger {
+  @include controls.primary-button;
+  border-color: var(--bear);
+  background: var(--bear);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 760px) {
+  .graduation__facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .graduation__facts {
+    grid-template-columns: 1fr;
+  }
+}

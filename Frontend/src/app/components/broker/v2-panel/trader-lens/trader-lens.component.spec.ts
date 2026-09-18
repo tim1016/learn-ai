@@ -89,6 +89,21 @@ const BASE_PANEL: BotPanelView = {
     attention_required: false,
     observed_at_ms: 1_700_000_001_000,
   },
+  feed_continuity: {
+    provider_label: 'IBKR market data',
+    run_id: 'run-1',
+    state: 'continuous',
+    state_label: 'Continuous',
+    explanation: 'No IBKR delivery interruptions have been recorded in this run.',
+    interruption_count: 0,
+    recovery_count: 0,
+    unresolved_count: 0,
+    decision_impact_count: 0,
+    last_interruption_at_ms: null,
+    last_recovery_at_ms: null,
+    latest_bar_at_ms: 1_700_000_000_000,
+    events: [],
+  },
   mission_verdict: {
     state: 'working',
     label: 'Working',
@@ -174,6 +189,18 @@ describe('TraderLensComponent — log-only degradation', () => {
 });
 
 describe('TraderLensComponent — trader evidence', () => {
+  it('shows current feed safety and run continuity without operator diagnostics', async () => {
+    await render(TraderLensComponent, {
+      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.getByText('Market feed')).toBeTruthy();
+    expect(screen.getByText('Market data live')).toBeTruthy();
+    expect(screen.getByText('Run continuity')).toBeTruthy();
+    expect(screen.getByText('Continuous')).toBeTruthy();
+    expect(screen.queryByText('Interruptions')).toBeNull();
+  });
+
   it('keeps strategy, Clerk, and run evidence out of the trader lens', async () => {
     const panel: BotPanelView = {
       ...BASE_PANEL,

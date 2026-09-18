@@ -36,6 +36,61 @@
     </p>
   }
 
+  @if (state().mode === 'current') {
+    <section
+      class="run-continuity"
+      [class.run-continuity--attention]="feedContinuity().state === 'interrupted' || feedContinuity().state === 'compromised'"
+      aria-labelledby="run-continuity-title"
+    >
+      <header class="run-continuity__heading">
+        <div>
+          <h3 id="run-continuity-title">IBKR market-data continuity</h3>
+          <p>{{ feedContinuity().explanation }}</p>
+        </div>
+        <strong>{{ feedContinuity().state_label }}</strong>
+      </header>
+
+      <dl class="run-continuity__counts">
+        <div>
+          <dt>Interruptions</dt>
+          <dd>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().interruption_count }}</dd>
+        </div>
+        <div>
+          <dt>Recoveries</dt>
+          <dd>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().recovery_count }}</dd>
+        </div>
+        <div>
+          <dt>Decision impacts</dt>
+          <dd>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().decision_impact_count }}</dd>
+        </div>
+      </dl>
+
+      @if (feedContinuity().state === 'not_recorded') {
+        <p class="run-continuity__empty">No run-scoped continuity evidence is available yet.</p>
+      } @else if (feedContinuity().events.length === 0) {
+        <p class="run-continuity__empty">No feed interruptions have been recorded in this run.</p>
+      } @else {
+        <ol class="run-continuity__events" aria-label="IBKR feed continuity events">
+          @for (event of feedContinuity().events; track event.evidence_seq) {
+            <li>
+              <span class="run-continuity__event-marker" aria-hidden="true"></span>
+              <div>
+                <div class="run-continuity__event-heading">
+                  <strong>{{ event.label }}</strong>
+                  <app-timestamp-display [value]="event.occurred_at_ms" mode="local" />
+                </div>
+                <p>{{ event.explanation }}</p>
+                @if (event.duration_label) {
+                  <span class="run-continuity__duration">Duration {{ event.duration_label }}</span>
+                }
+              </div>
+            </li>
+          }
+        </ol>
+      }
+    </section>
+  }
+
   @if (
     !displayedRun() && (
       (state().mode === 'current' && state().currentLoading) ||

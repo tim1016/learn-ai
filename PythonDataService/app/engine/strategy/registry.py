@@ -371,7 +371,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="e4aec86a55fa7c7aab7305a3cf45eadf705450b2a9ee4ea6a19682d4e49b8309",
+            golden_trace_root="16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -463,15 +463,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # qualified with no normalized floor. A non-zero ``gap_bps`` deploy
             # is still sealed, just not claimed as golden-validated -- only the
             # ENG-007 LEAN fixture pins that configuration.
-            # Relaxed paper-experiment point (2026-09-01): gap 0.20→0.0 (pure
-            # crossover, no absolute floor) and rsi_min 50→30 so the crossover
-            # fires intraday. The LEAN-parity point stays pinned by the Params
-            # defaults and the ENG-007 fixture; this validated point governs
-            # deploy admission only.
+            # The 2026-09-01 relaxed point (gap=0, RSI 30–70) remains a paper
+            # experiment in fixture history. Live admission was re-aligned on
+            # 2026-09-17 with the accepted Golden review and the registered
+            # LEAN-parity defaults, so the UI and runtime corpus authorize the
+            # same exact parameter point. See ADR 0054 and
+            # tests/fixtures/golden/ema-signal-session/v1/attribution.md
+            # ("Regeneration 2026-09-17") for the reconciliation record.
             validated_settings={
-                "gap": 0.0,
+                "gap": 0.20,
                 "gap_bps": 0.0,
-                "rsi_min": 30.0,
+                "rsi_min": 50.0,
                 "rsi_max": 70.0,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),

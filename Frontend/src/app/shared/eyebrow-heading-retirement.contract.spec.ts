@@ -87,14 +87,25 @@ const EYEBROW_LOOK_PATTERN = /class="[^"]*\b(?:[\w-]*eyebrow[\w-]*|[\w-]*kicker[
  *    eyebrow's fold-completeness disclosure is not repeated in the facts
  *    list rendered below it (retention / Sharpe / trade count / winner
  *    changes, but not fold completeness).
+ *  - live-graduation: the "Real-money custody" eyebrow is the category
+ *    label for a real-money safety ceremony (ADR 0059) — the heading below
+ *    it ("Graduate Shadow to Live") never says "real money" on its own, and
+ *    getting this distinction wrong is exactly what this page exists to
+ *    prevent, so the category stays explicit rather than implied.
+ *  - live-graduation-review: the "Exact review · expires HH:MM" eyebrow
+ *    carries the review's live expiry instant — not repeated anywhere else
+ *    while the review is open (the separate "Expired" badge only appears
+ *    after expiry, and never carries the time itself).
  *
- * Both still fold their own CSS onto the shared `eyebrow-heading()` mixin
- * (see their .scss files) — only the HTML pairing survives, not a bespoke
- * hand-rolled look.
+ * All four still fold their own CSS onto the shared `eyebrow-heading()`
+ * mixin (see their .scss files) — only the HTML pairing survives, not a
+ * bespoke hand-rolled look.
  */
 const ALLOWED = new Set<string>([
   join('components', 'strategy-lab', 'analytical-manual', 'metric-reference-entry.component.html'),
   join('components', 'walk-forward-study', 'walk-forward-study-result.component.html'),
+  join('components', 'brokers', 'alpaca-desk', 'configuration', 'live-graduation.component.html'),
+  join('components', 'brokers', 'alpaca-desk', 'configuration', 'live-graduation-review.component.html'),
 ]);
 
 /** Templates: real `.html` files, plus non-spec `.ts` files, which can carry

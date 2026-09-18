@@ -37,6 +37,7 @@ from app.schemas.account_authority import (
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.schemas.signal_program_seal import SealedBotProgram
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _validate_simulated_authority_metadata(
@@ -227,11 +228,58 @@ class ChannelHealthView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     stream: Literal["market_data", "execution"]
+    name: str
     state: ChannelState
     label: str
     explanation: str
     reason: str
     observed_at_ms: int
+
+
+FeedContinuityState = Literal[
+    "continuous",
+    "interrupted",
+    "recovered",
+    "compromised",
+    "not_recorded",
+]
+
+
+class FeedContinuityEventView(BaseModel):
+    """One durable, run-scoped market-data continuity fact."""
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_seq: int
+    kind: Literal["interruption", "recovered", "gap", "substituted", "refused"]
+    occurred_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    label: str
+    explanation: str
+    cause: str | None
+    duration_ms: int | None = Field(ge=0)
+    duration_label: str | None
+    window_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    window_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+
+
+class FeedContinuityView(BaseModel):
+    """Current-run IBKR continuity summary and its newest durable facts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider_label: str
+    run_id: str | None
+    state: FeedContinuityState
+    state_label: str
+    explanation: str
+    interruption_count: int
+    recovery_count: int
+    unresolved_count: int
+    decision_impact_count: int
+    last_interruption_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    last_recovery_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    latest_bar_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    events: list[FeedContinuityEventView]
 
 
 class ClerkCard(BaseModel):
@@ -512,6 +560,7 @@ class BotPanelView(BaseModel):
     updated_at_ms: int
     revision: int
     market_pulse: MarketPulseView
+    feed_continuity: FeedContinuityView
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard

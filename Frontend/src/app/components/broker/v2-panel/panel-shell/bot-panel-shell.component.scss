@@ -16,8 +16,9 @@
   overflow: hidden;
 }
 
-:host(.bot-panel-shell--trader) .bot-identity,
-:host(.bot-panel-shell--trader) .lens-navigation { flex: 0 0 auto; }
+:host(.bot-panel-shell--trader) .bot-banner-strip { flex: 0 0 auto; }
+
+.bot-banner-strip { margin: var(--space-2) var(--space-4) var(--space-3); }
 
 :host(.bot-panel-shell--trader) #trader-panel {
   display: flex;
@@ -46,100 +47,10 @@
   color: var(--text-secondary);
 }
 
-/* Which bot this is, and the way back to the tab it was opened from — above
-   the Trader/Operator switch, because the switch chooses a view of this bot
-   while these two say which bot and where it sits (ADR 0064 Decision 1). */
-.bot-identity {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-2) 0 0;
-}
-
-.bot-identity__back {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  text-decoration: none;
-}
-
-.bot-identity__back:hover,
-.bot-identity__back:focus-visible {
-  text-decoration: underline;
-}
-
-.bot-identity__name {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-md, 1rem);
-  font-weight: var(--fw-semi);
-}
-
-.bot-identity__symbol {
-  --asset-identity-symbol-color: var(--text-subtle);
-
-  font-weight: var(--fw-regular);
-}
-
-.lens-navigation {
-  position: sticky;
-  z-index: 10;
-  top: 0;
-  display: flex;
-  min-height: 2.75rem;
-  align-items: end;
-  margin: 0 0 var(--space-3);
-  padding: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-canvas) 94%, transparent);
-  backdrop-filter: blur(12px);
-}
-
-// The shared tab widget, laid out as the nav's underline-style tab row.
-.lens-navigation__tabs {
-  display: flex;
-  align-self: stretch;
-  width: auto;
-  gap: var(--space-1);
-  padding: 0 var(--space-4);
-  border: 0;
-  background: transparent;
-
-  ::ng-deep .lens-tabs {
-    gap: var(--space-1);
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-
-  ::ng-deep .lens-tabs__tab {
-    min-width: 7rem;
-    min-height: auto;
-    padding: 0.65rem 1rem 0.55rem;
-    border-radius: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--text-secondary);
-
-    &:hover { background: transparent; color: var(--text-primary); }
-
-    &--active,
-    &--active:hover {
-      background: transparent;
-      border-bottom-color: var(--accent);
-      color: var(--text-primary);
-      font-weight: var(--fw-semi);
-    }
-  }
-}
-
 .panel-feedback { padding: 0 var(--space-4); }
 
 @media (max-width: 800px) {
-  .lens-navigation__tabs,
   .panel-feedback { padding-inline: var(--space-3); }
-  .lens-navigation__tabs { width: 100%; }
-  .lens-navigation__tabs ::ng-deep .lens-tabs__tab { flex: 1; }
 }
 
 @media (max-width: 1100px) {

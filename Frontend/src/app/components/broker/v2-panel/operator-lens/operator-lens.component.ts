@@ -10,11 +10,13 @@ import {
 } from '@angular/core';
 import type {
   BotPanelView,
+  CurrentRunState,
+  FeedContinuityView,
   PanelAction,
   PanelActionTrigger,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
-import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
+import { EMPTY_CURRENT_RUN_STATE, feedContinuityFor } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -27,7 +29,6 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
-import { OperatorBotBannerComponent } from './operator-bot-banner/operator-bot-banner.component';
 import { primaryActionForLens } from '../bot-detail-banner/lifecycle-action';
 
 /**
@@ -63,7 +64,6 @@ const EXIT_ACTION_IDS: readonly string[] = ['retire', 'archive'];
     OperatorRunHistoryComponent,
     OperatorDisclosureCardComponent,
     AssetIdentityComponent,
-    OperatorBotBannerComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -72,7 +72,8 @@ export class OperatorLensComponent {
   // ── Shell-provided data ───────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
-  readonly tickerQuote = input<TickerQuoteView | null>(null);
+  readonly currentRunState = input<CurrentRunState>(EMPTY_CURRENT_RUN_STATE);
+  readonly runRefreshRequested = output();
   readonly profile = input.required<PanelProfile>();
   readonly actionPending = input(false);
 
@@ -129,6 +130,9 @@ export class OperatorLensComponent {
   protected readonly health = computed(() => this.panel().health);
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
+  protected readonly feedContinuity = computed<FeedContinuityView>(() =>
+    feedContinuityFor(this.panel()),
+  );
   protected readonly primaryAction = computed<PanelAction | null>(() =>
     primaryActionForLens(this.panel(), 'operator'),
   );

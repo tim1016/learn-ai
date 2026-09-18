@@ -11,6 +11,7 @@ Resume attempts.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.schemas.run_admission import (
@@ -184,7 +186,7 @@ def _admission(
 
 
 @pytest.mark.asyncio
-async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate_denies(
+async def test_resume_preview_appends_a_reconstructible_covered_seal(
 ) -> None:
     """PRD Sec 11.5 append case: preview alone proves reconstruction, no clone.
 
@@ -198,16 +200,9 @@ async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate
     evidence has no factual source for them and must clone -- see
     ``test_resume_fails_closed_when_no_lineage_writer_is_configured`` below.
 
-    Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
-    deliberately differs from the Params defaults (the LEAN-parity point a
-    no-params legacy binding resolves to and reconstructs exactly), so this
-    exact reconstruction is PROVEN with its corpus coverage stamped
-    UNCOVERED -- the same consequence
-    ``test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes``
-    (``test_signal_program_admission.py``) encodes for
-    ``prove_running_program_build`` directly; this test proves the same
-    thing through the real ``BotResumeAdmission.preview`` orchestration,
-    against the synthetic Dry Run authority, which is a paper environment.
+    The registered default and current corpus point are aligned, so the exact
+    reconstruction is PROVEN and COVERED through the real
+    ``BotResumeAdmission.preview`` orchestration.
     """
     prior = _prior(strategy_params=None)
     admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3, _NOW + 4])
@@ -215,13 +210,33 @@ async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate
     decision = await admission.preview(prior, _status())
 
     assert decision.reason_code not in {"PROGRAM_BUILD_UNPROVEN", "PROGRAM_CORPUS_UNCOVERED"}
-    assert "program-corpus-coverage:UNCOVERED" in decision.evidence_refs
+    assert "program-corpus-coverage:COVERED" in decision.evidence_refs
 
 
 @pytest.mark.asyncio
-async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account() -> None:
-    """The same reconstruction on a custody answer naming a live environment
-    is refused on the coverage gate, through the real orchestration."""
+async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A corpus/default disagreement still refuses Live through orchestration."""
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY,
+        "ema_crossover_signal",
+        replace(
+        registration,
+        signal_program_contract=replace(
+            contract,
+            validated_settings={
+                "gap": 0.0,
+                "gap_bps": 0.0,
+                "rsi_min": 30.0,
+                "rsi_max": 70.0,
+            },
+        ),
+        ),
+    )
     prior = _prior(strategy_params=None)
     admission = _admission(
         repository=None,
@@ -233,6 +248,7 @@ async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account() -> 
 
     assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
     assert "program-corpus-coverage:UNCOVERED" in decision.evidence_refs
+
 
 
 @pytest.mark.asyncio

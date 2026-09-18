@@ -155,9 +155,10 @@ describe('AlpacaAccountListPageComponent', () => {
       screen.getByText(/choose a ready Paper or Live account below to deploy a strategy/i),
     ).toBeTruthy();
     // The intent has no lane of its own, so it travels with whichever account
-    // the operator picks (FR-096 — nothing is chosen for them).
+    // the operator picks (FR-096 — nothing is chosen for them), landing on
+    // that account's own Deploy tab rather than a `?deploy=` overlay.
     for (const link of screen.getAllByRole('link')) {
-      expect(link.getAttribute('href')).toContain('?deploy=');
+      expect(link.getAttribute('href')).toContain('/deploy');
     }
   });
 

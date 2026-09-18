@@ -36,9 +36,25 @@
   color: var(--bear);
 }
 
-.panel-action__button:disabled {
+// The primary action button stays natively focusable even when blocked, so
+// its `aria-describedby` blocker explanation is reachable by keyboard and
+// screen-reader users — it is styled disabled via `aria-disabled`, not the
+// native `disabled` attribute, which would remove it from the tab order.
+.panel-action__button[aria-disabled='true'] {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .panel-action__blocker {

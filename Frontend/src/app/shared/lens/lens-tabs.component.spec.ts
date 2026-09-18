@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { DeskLens } from '../../../../shared/lens/lens';
+import type { DeskLens } from './lens';
 import { LensTabsComponent } from './lens-tabs.component';
 
 async function renderTabs(

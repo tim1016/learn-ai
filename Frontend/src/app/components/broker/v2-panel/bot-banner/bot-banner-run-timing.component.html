@@ -1,0 +1,50 @@
+@let run = runState().run;
+<div class="run-timing">
+  <span class="run-timing__item">
+    <span class="run-timing__label">Started</span>
+    @if (run) {
+      <app-timestamp-display [value]="run.started_at_ms" mode="local" granularity="time" />
+    } @else {
+      {{ runState().loading ? 'Loading…' : 'Unavailable' }}
+    }
+  </span>
+  <span class="run-timing__item">
+    <span class="run-timing__label">Ended</span>
+    @if (run?.terminal_outcome; as outcome) {
+      <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" granularity="time" />
+    } @else if (run) {
+      {{ run.process?.state === 'RUNNING' ? 'Running' : 'No end' }}
+    } @else {
+      {{ runState().loading ? 'Loading…' : 'Unavailable' }}
+    }
+  </span>
+  @if (operator()) {
+    <span class="run-timing__item">
+      <span class="run-timing__label">Last bar</span>
+      <app-timestamp-display
+        [value]="health().last_bar_at_ms"
+        mode="local"
+        granularity="time"
+        fallback="None"
+      />
+    </span>
+    <span class="run-timing__item">
+      <span class="run-timing__label">Last decision</span>
+      <app-timestamp-display
+        [value]="health().last_decision_at_ms"
+        mode="local"
+        granularity="time"
+        fallback="None"
+      />
+      @if (health().last_decision_at_ms !== null && health().decision_stale) {
+        <span class="run-timing__stale">Stale</span>
+      }
+    </span>
+  }
+</div>
+@if (runState().failed) {
+  <p class="run-timing__retry" role="status">
+    {{ run ? 'Run timing could not be refreshed.' : 'Run timing could not be loaded.' }}
+    <button type="button" (click)="retryRequested.emit()">Retry run timing</button>
+  </p>
+}

@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
+import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import type { DeskLens } from '../../../../shared/lens/lens';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import type {
   BotPanelView,
   ChartLiveResponse,
@@ -46,12 +49,23 @@ function fakeLiveChart(overrides: Partial<ChartLiveResponse> = {}): ChartLiveRes
   };
 }
 
+// The tab UI moved to the global top bar (ActiveLensBridgeService); this
+// mirrors what it does — call the registered host's own select() — so
+// switching still runs this pane's own lens signal update. The registration
+// itself only lands once the view resolves, same as `findByRole('tab', ...)`
+// used to wait for the tab to exist before the old fireEvent.click.
+async function switchLens(lens: DeskLens): Promise<void> {
+  const bridge = TestBed.inject(ActiveLensBridgeService);
+  await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+  bridge.host()?.select(lens);
+}
+
 /**
  * Command availability and the custody journal live on the Operator lens now;
  * the pane opens on Trader. Tests about that evidence must switch first.
  */
 async function showOperator(): Promise<void> {
-  fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
+  await switchLens('operator');
 }
 
 async function renderDetail(
@@ -202,7 +216,7 @@ describe('BotTriageDetailComponent', () => {
 
     await showOperator();
 
-    const card = screen.getByRole('region', { name: 'Command availability' });
+    const card = await screen.findByRole('region', { name: 'Command availability' });
     expect(within(card).getByText('Stop')).toBeTruthy();
     expect(screen.queryByText('The market-data window is current.')).toBeNull();
     expect(screen.queryByText('never shown')).toBeNull();
@@ -289,7 +303,7 @@ describe('BotTriageDetailComponent', () => {
    */
   it('reads the audit-logged evidence only once the Operator lens is opened', async () => {
     const { mockPanelService } = await renderDetail();
-    await screen.findByRole('tab', { name: 'Trader' });
+    await screen.findByRole('heading', { name: fakeBotPanelView().strategy_label });
 
     expect(mockPanelService.getEvidence).not.toHaveBeenCalled();
 
@@ -394,16 +408,13 @@ describe('BotTriageDetailComponent', () => {
   });
   it('opens on the trader lens, with command availability one click away', async () => {
     await renderDetail();
+    await screen.findByRole('heading', { name: fakeBotPanelView().strategy_label });
 
-    expect(await screen.findByRole('tab', { name: 'Trader' })).toHaveProperty(
-      'ariaSelected',
-      'true',
-    );
     expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull();
 
     await showOperator();
 
-    expect(screen.getByRole('region', { name: 'Command availability' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Command availability' })).toBeTruthy();
   });
 
   /**
@@ -475,25 +486,25 @@ describe('BotTriageDetailComponent', () => {
   });
 
   /**
-   * Only the active tab is tabbable, so a keyboard-only operator reaches the
-   * other lens through the WAI-ARIA arrow-key pattern, not the Tab key.
+   * The switch itself is the global top bar's now (ActiveLensBridgeService);
+   * roving-tabindex/arrow-key mechanics are covered by lens-tabs.component
+   * .spec. What this pane still owns: reacting to that choice.
    */
-  it('switches lens with the arrow keys, not only the pointer', async () => {
+  it('switches lens content when the global toggle reports a choice', async () => {
     await renderDetail();
+    await screen.findByRole('heading', { name: fakeBotPanelView().strategy_label });
 
-    const trader = await screen.findByRole('tab', { name: 'Trader' });
-    const operator = screen.getByRole('tab', { name: 'Operator' });
-    expect(trader).toHaveProperty('ariaSelected', 'true');
-
-    fireEvent.keyDown(trader, { key: 'ArrowRight' });
-
-    expect(operator).toHaveProperty('ariaSelected', 'true');
-    expect(screen.getByRole('region', { name: 'Command availability' })).toBeTruthy();
-
-    fireEvent.keyDown(operator, { key: 'ArrowLeft' });
-
-    expect(trader).toHaveProperty('ariaSelected', 'true');
     expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull();
+
+    await showOperator();
+
+    expect(await screen.findByRole('region', { name: 'Command availability' })).toBeTruthy();
+
+    await switchLens('trader');
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull(),
+    );
   });
 
   /**

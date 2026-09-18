@@ -65,6 +65,13 @@ td {
   text-align: right;
 
   > span { display: block; }
+  > strong { display: block; color: var(--text-primary); font-family: var(--font-sans); font-size: var(--fs-xs); }
+  > small { display: block; margin-top: 0.15rem; color: var(--text-subtle); font-family: var(--font-sans); font-size: 0.6rem; line-height: 1.35; }
+}
+
+.feed-status--attention {
+  th { color: var(--bear); }
+  td { box-shadow: inset -3px 0 0 var(--bear); }
 }
 
 .freshness {

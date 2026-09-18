@@ -19,13 +19,6 @@
 
     <app-alpaca-custody-resolution [target]="target" />
 
-    <app-lens-tabs
-      idPrefix="alpaca"
-      ariaLabel="Desk perspective"
-      [lens]="lens()"
-      (lensChange)="selectLens($event)"
-    />
-
     @if (lens() === 'trader') {
       <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
     } @else {

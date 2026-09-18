@@ -58,7 +58,26 @@ function makeClerk(): ClerkCard {
     reconciliation_verdict_label: null,
     last_sweep_at_ms: null,
     outstanding_intents: 0,
-    channels: [],
+    channels: [
+      {
+        stream: 'market_data',
+        name: 'IBKR market data',
+        state: 'healthy',
+        label: 'Healthy',
+        explanation: 'The channel is connected and current.',
+        reason: 'Current IBKR bars are arriving.',
+        observed_at_ms: 1_700_000_001_000,
+      },
+      {
+        stream: 'execution',
+        name: 'Alpaca execution',
+        state: 'healthy',
+        label: 'Healthy',
+        explanation: 'The channel is connected and current.',
+        reason: 'Alpaca execution reports are current.',
+        observed_at_ms: 1_700_000_001_000,
+      },
+    ],
   };
 }
 
@@ -114,6 +133,46 @@ function makePanel(): BotPanelView {
       next_step: null,
       attention_required: false,
       observed_at_ms: 1_700_000_001_000,
+    },
+    feed_continuity: {
+      provider_label: 'IBKR market data',
+      run_id: 'run-1',
+      state: 'recovered',
+      state_label: 'Recovered',
+      explanation: 'Every recorded IBKR interruption recovered within this run.',
+      interruption_count: 1,
+      recovery_count: 1,
+      unresolved_count: 0,
+      decision_impact_count: 0,
+      last_interruption_at_ms: 1_700_000_000_000,
+      last_recovery_at_ms: 1_700_000_022_000,
+      latest_bar_at_ms: 1_700_000_060_000,
+      events: [
+        {
+          evidence_seq: 1,
+          kind: 'interruption',
+          occurred_at_ms: 1_700_000_000_000,
+          label: 'Feed interrupted',
+          explanation: 'The IBKR socket disconnected. Same-run recovery began.',
+          cause: 'socket_down',
+          duration_ms: null,
+          duration_label: null,
+          window_start_ms: null,
+          window_end_ms: null,
+        },
+        {
+          evidence_seq: 2,
+          kind: 'recovered',
+          occurred_at_ms: 1_700_000_022_000,
+          label: 'Feed recovered',
+          explanation: 'IBKR delivery resumed under the run continuity rules.',
+          cause: null,
+          duration_ms: 22_000,
+          duration_label: '22 seconds',
+          window_start_ms: null,
+          window_end_ms: null,
+        },
+      ],
     },
     mission_verdict: {
       state: 'working',
@@ -289,6 +348,34 @@ describe('OperatorLensComponent', () => {
     expect(within(screen.getByLabelText('Bot health')).getByText('Live')).toBeTruthy();
   });
 
+  it('names both providers and shows current-run IBKR continuity counts', async () => {
+    await renderLens(makePanel());
+
+    const custody = screen.getByLabelText('Account and clerk status');
+    expect(within(custody).getByText('IBKR market data')).toBeTruthy();
+    expect(within(custody).getByText('Alpaca execution')).toBeTruthy();
+    expect(within(custody).getByText('Recovered')).toBeTruthy();
+    expect(within(custody).getByText('Interruptions')).toBeTruthy();
+    expect(within(custody).getByText('Recoveries')).toBeTruthy();
+    expect(within(custody).getByText('Decision impacts')).toBeTruthy();
+  });
+
+  it('keeps provider identity and unknown continuity truthful during a rolling clerk upgrade', async () => {
+    const panel = makePanel();
+    delete (panel as Partial<BotPanelView>).feed_continuity;
+    for (const channel of panel.clerk.channels) {
+      delete (channel as Partial<typeof channel>).name;
+    }
+
+    await renderLens(panel);
+
+    const custody = screen.getByLabelText('Account and clerk status');
+    expect(within(custody).getByText('IBKR market data')).toBeTruthy();
+    expect(within(custody).getByText('Alpaca execution')).toBeTruthy();
+    expect(within(custody).getByText('Continuity not recorded')).toBeTruthy();
+    expect(within(custody).getAllByText('—')).toHaveLength(3);
+  });
+
   it('renders run evidence as the final operator section', async () => {
     const fakeSvc = makeFakePanelService();
     const { container } = await render(OperatorLensComponent, {
@@ -445,6 +532,13 @@ describe('OperatorLensComponent', () => {
   });
 
   it('keeps the promoted lifecycle action out of readiness while retaining its gate', async () => {
+    // The banner rendering this same promoted action lives one level up, at
+    // the shell (bot-panel-shell.component.spec.ts covers that end-to-end
+    // "exactly one button, and it's the banner's" claim); this component's
+    // own responsibility, still fully testable in isolation, is that its
+    // readiness accordion does not grow a second, redundant control for the
+    // operation the banner already promotes — while the gate itself (label,
+    // "Ready" state, explanation) stays visible for inspection.
     const fakeSvc = makeFakePanelService();
     const resumeAction: PanelAction = {
       action_id: 'resume', label: 'Resume', explanation: 'Resume bot.', enabled: true,
@@ -466,8 +560,9 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /Ready Resume/i })).toBeTruthy();
+    expandReadiness('Resume');
+    expect(screen.getByText('Resume bot.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
   it('renders the transaction rail with the station from the panel', async () => {
@@ -646,7 +741,9 @@ describe('OperatorLensComponent', () => {
 
     expandReadiness('Flatten & Stop');
     const btn = await screen.findByRole('button', { name: 'Flatten & Stop' });
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    // Styled disabled via `aria-disabled`, not the native attribute, so a
+    // blocked action's reason stays reachable by keyboard/screen reader.
+    expect(btn.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('clicking flatten-stop calls actionRequested with the action', async () => {
@@ -750,7 +847,13 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 
-  it('renders the backend-selected recovery-primary action once, in the banner, not the accordion (#1665)', async () => {
+  it('suppresses the recovery-primary action out of the readiness accordion (#1665)', async () => {
+    // The full "exactly one button, and it's the banner's" claim needs the
+    // banner rendered alongside this lens; that end-to-end assembly now
+    // happens one level up, at the shell
+    // (bot-panel-shell.component.spec.ts). What stays this component's own
+    // job is that readiness never re-derives a duplicate control for the
+    // operation the backend already promoted.
     const fakeSvc = makeFakePanelService();
     const actionRequested = vi.fn();
     const recoveryAction: PanelAction = {
@@ -790,10 +893,10 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getAllByRole('button', { name: recoveryAction.label })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: recoveryAction.label }));
-
-    expect(actionRequested).toHaveBeenCalledWith({ action: recoveryAction, reason: null });
+    expandReadiness(recoveryAction.label);
+    expect(screen.getByText(recoveryAction.explanation)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: recoveryAction.label })).toBeNull();
+    expect(actionRequested).not.toHaveBeenCalled();
   });
 
   it('keeps a disabled operator action reason code visible with its current gate', async () => {

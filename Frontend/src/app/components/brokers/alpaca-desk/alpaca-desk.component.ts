@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   computed,
   effect,
   inject,
@@ -14,9 +15,9 @@ import { DialogModule } from 'primeng/dialog';
 
 import type { AlpacaDeskSelectionSummary } from '../../../api/alpaca.types';
 import { LensPreferenceService } from '../../broker/shared/lens/lens-preference.service';
-import { LensTabsComponent } from '../../broker/shared/lens/lens-tabs.component';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../shared/lens/lens-url';
+import { ActiveLensBridgeService } from '../../../shared/lens/active-lens-bridge.service';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaDeskAccountStateComponent } from './alpaca-desk-account-state.component';
@@ -72,7 +73,6 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
     AlpacaOrderEntryComponent,
     AlpacaTraderLensComponent,
     DialogModule,
-    LensTabsComponent,
   ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
@@ -86,6 +86,8 @@ export class AlpacaDeskComponent {
   private readonly brokers = inject(BrokersService);
   private readonly configuration = inject(BrokerConfigurationService);
   private readonly lensPreference = inject(LensPreferenceService);
+  private readonly lensBridge = inject(ActiveLensBridgeService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
@@ -165,6 +167,8 @@ export class AlpacaDeskComponent {
   protected readonly orderEntryOpen = signal(false);
   protected readonly historyRefreshVersion = signal(0);
 
+  private lensUnregister: (() => void) | null = null;
+
   constructor() {
     effect(() => {
       if (this.operatingDeskVisible() && this.lens() === 'operator') this.operatorData.loadOnce();
@@ -174,6 +178,21 @@ export class AlpacaDeskComponent {
         this.orderPrefill() !== null && this.manualOrderCapability.hasValue(),
       );
     });
+    // The global top bar's one Trader/Operator toggle switches whichever
+    // page is mounted; this desk is that host only once it has an operating
+    // account to switch a lens on.
+    effect(() => {
+      this.lensUnregister?.();
+      this.lensUnregister = this.operatingDeskVisible()
+        ? this.lensBridge.register({
+          lens: this.lens,
+          select: (lens) => this.selectLens(lens),
+          idPrefix: 'alpaca',
+          ariaLabel: 'Desk perspective',
+        })
+        : null;
+    });
+    this.destroyRef.onDestroy(() => this.lensUnregister?.());
   }
 
   protected selectLens(lens: DeskLens): void {

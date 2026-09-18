@@ -14,6 +14,8 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
@@ -56,6 +58,7 @@ from app.services.broker_v2_panel.channel_health import (
     channel_state,
     evaluate_channel_health,
 )
+from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity
 from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
@@ -66,6 +69,7 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
+from app.services.source_bar_ledger import RetainedContinuityEvent
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -202,6 +206,7 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
         views.append(
             ChannelHealthView(
                 stream=health.stream,
+                name=("IBKR market data" if health.stream == "market_data" else "Alpaca execution"),
                 state=state,
                 label=copy.label,
                 explanation=copy.explanation,
@@ -775,6 +780,8 @@ def build_panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
+    feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
+    feed_continuity_run_id: str | None = None,
     symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
@@ -902,6 +909,16 @@ def build_panel(
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,
+        feed_continuity=build_feed_continuity(
+            feed_continuity_events,
+            run_id=(
+                feed_continuity_run_id
+                or status.active_run_id
+                or (status.duty_outcome.run_id if status.duty_outcome is not None else None)
+            ),
+            latest_bar_at_ms=market_pulse.latest_bar_at_ms,
+            now_ms=now_ms,
+        ),
         mission_verdict=_mission_verdict(
             status,
             clerk,

@@ -14,6 +14,7 @@ import { DOCUMENT } from '@angular/common';
 import { MessageService } from 'primeng/api';
 
 import { fmtElapsedSince } from '../../format';
+import { BotsPageActionsBridgeService } from '../../../brokers/alpaca-workspace/bots-page-actions-bridge.service';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
 import {
@@ -58,10 +59,13 @@ interface ScopedSnapshot<T> {
 
 /**
  * One account's Bots tab inside the account workspace (ADR 0064). The
- * account it serves, that account's mode, equity and the Deploy action are
- * the workspace header's, one line above — this page owns the roster, the
- * triage detail beside it, and the two commands that act on the roster
- * itself.
+ * account it serves, that account's mode and equity are the workspace
+ * header's, one line above — this page owns the roster and the triage detail
+ * beside it. Refresh and Archive finished stay this page's own commands (its
+ * `catalog` resource, its `archiveOpen` state) but render in that same header,
+ * via `BotsPageActionsBridgeService` — the same single-active-host pattern
+ * `ActiveLensBridgeService` uses to hoist the Trader/Operator switch, so the
+ * header need not know this page's internals to host its buttons.
  */
 @Component({
   selector: 'app-bots-list-page',
@@ -82,6 +86,7 @@ export class BotsListPageComponent {
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
+  private readonly actionsBridge = inject(BotsPageActionsBridgeService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
   private readonly document = inject(DOCUMENT);
@@ -224,6 +229,14 @@ export class BotsListPageComponent {
       clearInterval(catalogTimer);
       clearInterval(staleTimer);
     });
+
+    const actionsUnregister = this.actionsBridge.register({
+      refreshing: this.refreshing,
+      initialLoading: this.initialLoading,
+      refresh: () => this.refreshBots(),
+      openArchive: () => this.openArchive(),
+    });
+    this.destroyRef.onDestroy(actionsUnregister);
   }
 
   protected refreshBots(): void {

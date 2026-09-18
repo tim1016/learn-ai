@@ -1,11 +1,4 @@
 <div class="operator-lens">
-  <app-operator-bot-banner
-    [panel]="panel()"
-    [tickerQuote]="tickerQuote()"
-    [actionPending]="actionPending()"
-    (actionRequested)="onActionRequested($event)"
-  />
-
   <div class="operator-lens__grid">
     <div class="operator-lens__column">
       <app-operator-readiness
@@ -17,6 +10,7 @@
 
       <app-clerk-card
         [clerk]="clerk()"
+        [feedContinuity]="feedContinuity()"
         [reconcileAction]="null"
         [clearHoldAction]="null"
         [actionPending]="actionPending()"
@@ -99,7 +93,10 @@
         [clerkId]="clerkId()"
         [accountId]="accountId()"
         [sid]="sid()"
+        [currentRunState]="currentRunState()"
+        (runRefreshRequested)="runRefreshRequested.emit()"
         [botRunning]="health().running"
+        [feedContinuity]="feedContinuity()"
       />
     </div>
   </div>

@@ -13,9 +13,17 @@ import type { OperatorBlocker, OperatorMove } from '../../../../api/operator-blo
 import { movesForBlocker } from '../../../../api/operator-blocker.types';
 import type { PanelAction, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel, ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 export type PanelActionTone = 'primary' | 'neutral' | 'warning' | 'danger';
+
+let nextBlockerDescriptionId = 0;
+
+function describeBlocker(blocker: OperatorBlocker): string {
+  return [formatReceiptLabel(blocker.condition.id), blocker.headline, blocker.detail]
+    .filter((part): part is string => Boolean(part))
+    .join(' — ');
+}
 
 /**
  * A move this component performs with no host help. `navigate` is the only
@@ -60,12 +68,26 @@ export class PanelActionButtonComponent {
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
   protected readonly confirmationOpen = signal(false);
+  protected readonly blockerDescriptionId = `panel-action-blocker-${nextBlockerDescriptionId++}`;
 
   protected readonly visibleBlockers = computed(() => {
     const suppressedBlockerId = this.suppressedBlockerId();
     return this.action().blockers.filter(
       (blocker) => blocker.condition.id !== suppressedBlockerId,
     );
+  });
+
+  /**
+   * Why the button is disabled, as a hover tooltip and an
+   * `aria-describedby` target — not stacked prose under the button, which
+   * inflated it to the point of misaligning it with the overflow trigger
+   * beside it.
+   */
+  protected readonly tooltip = computed(() => {
+    const blockers = this.visibleBlockers();
+    return blockers.length === 0
+      ? this.action().explanation
+      : blockers.map(describeBlocker).join('\n');
   });
 
   /**

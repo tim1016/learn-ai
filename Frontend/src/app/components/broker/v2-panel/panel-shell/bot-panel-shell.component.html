@@ -12,24 +12,19 @@
   @let panelData = panel()!;
   @let profileData = profile.value()!;
 
-  <div class="bot-identity">
-    <a class="bot-identity__back" [routerLink]="backRoute()">
-      <span aria-hidden="true">←</span> {{ backLabel() }}
-    </a>
-    <h2 class="bot-identity__name">
-      {{ panelData.strategy_label }}
-      <app-asset-identity class="bot-identity__symbol" [symbol]="panelData.symbol" size="sm" />
-    </h2>
-  </div>
-
-  <nav class="lens-navigation" aria-label="Bot detail views">
-    <app-lens-tabs
-      class="lens-navigation__tabs"
-      ariaLabel="Bot control perspective"
-      [lens]="activeLens()"
-      (lensChange)="selectLens($event)"
-    />
-  </nav>
+  <app-bot-banner
+    class="bot-banner-strip"
+    [panel]="panelData"
+    [runState]="currentRunState()"
+    [backRoute]="backRoute()"
+    [backLabel]="backLabel()"
+    [clerkId]="clerkId()"
+    [tickerQuote]="tickerQuote()"
+    [actionPending]="actionPending()"
+    [lens]="activeLens()"
+    (actionRequested)="onActionRequested($event)"
+    (retryRequested)="currentRun.reload()"
+  />
 
   @if (actionReceipt(); as receipt) {
     <div class="panel-feedback">
@@ -51,7 +46,6 @@
       <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
         <app-trader-lens
           [panel]="panelData"
-          [clerkId]="clerkId()"
           [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [liveChart]="liveChart()"
@@ -60,10 +54,8 @@
           [histChartLoading]="histChart.isLoading()"
           [liveResolution]="liveResolution()"
           [historyTimeframe]="selectedHistoryTimeframe()"
-          [actionPending]="actionPending()"
           (historyTimeframeChange)="onHistoryTimeframeChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
-          (actionRequested)="onActionRequested($event)"
         />
       </div>
     }
@@ -71,13 +63,14 @@
       <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
         <app-operator-lens
           [panel]="panelData"
-          [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [actionPending]="actionPending()"
           [broker]="broker()"
           [clerkId]="clerkId()"
           [accountId]="accountId()"
           [sid]="sid()"
+          [currentRunState]="currentRunState()"
+          (runRefreshRequested)="currentRun.reload()"
           (transactionSelected)="onTransactionSelected($event)"
           (actionRequested)="onActionRequested($event)"
         />

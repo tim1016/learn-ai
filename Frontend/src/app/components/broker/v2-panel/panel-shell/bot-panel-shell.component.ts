@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom } from 'rxjs';
 
@@ -19,16 +19,16 @@ import type {
   HistoricalExecutionRecoveryPlan,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
-import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
-import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
   ChartHistoryTimeframe,
   ChartLiveResolution,
+  CurrentRunState,
   PanelAction,
   PanelActionResult,
   PanelActionTrigger,
@@ -62,6 +62,7 @@ import {
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
+import { BotBannerComponent } from '../bot-banner/bot-banner.component';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
@@ -87,9 +88,11 @@ interface HistoricalExecutionRecoveryDraft {
  * - Action execution (post to backend, re-poll on success).
  *
  * ## Lens architecture (S3 trader + S4 operator)
- * The `activeLens` signal determines which lens renders. The tab bar in the
- * template drives `selectLens()`. Both lenses receive identical `panel` +
- * `profile` + `actionPending` inputs from the shell.
+ * The `activeLens` signal determines which lens renders. The switch itself
+ * lives in the global top bar (`ActiveLensBridgeService`) — this page
+ * registers `activeLens` + `selectLens()` as its host while loaded, and
+ * unregisters on destroy. Both lenses receive identical `panel` + `profile`
+ * + `actionPending` inputs from the shell.
  *
  * The operator lens additionally receives `broker`, `accountId`, and `sid`
  * so it can call the operator-gated evidence endpoint directly.
@@ -98,14 +101,12 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AssetIdentityComponent,
-    LensTabsComponent,
     PanelActionReceiptComponent,
-    RouterLink,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
     TraderLensComponent,
     OperatorLensComponent,
+    BotBannerComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
@@ -133,6 +134,7 @@ export class BotPanelShellComponent {
   private readonly router = inject(Router);
   private readonly messageService = inject(MessageService);
   private readonly lensPreference = inject(LensPreferenceService);
+  private readonly lensBridge = inject(ActiveLensBridgeService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly titleContext = inject(WorkspaceTitleContextService);
 
@@ -222,6 +224,25 @@ export class BotPanelShellComponent {
   });
   protected readonly liveStreamStatus = this.liveStore.status;
 
+  private readonly runLifecycle = computed(() => {
+    const health = this.panel()?.health;
+    return health === undefined ? null
+      : `${health.running}:${health.duty_outcome?.recorded_at_ms ?? ''}`;
+  });
+
+  protected readonly currentRun = resource({
+    params: () => this.runLifecycle() === null ? undefined : {
+      target: this.target(), sid: this.sid(), lifecycle: this.runLifecycle(),
+    },
+    loader: ({ params }) => this.panelSvc.getCurrentRun(params.target, params.sid),
+  });
+
+  protected readonly currentRunState = computed<CurrentRunState>(() => ({
+    run: this.currentRun.hasValue() ? this.currentRun.value() : null,
+    loading: this.currentRun.isLoading(),
+    failed: this.currentRun.error() !== undefined,
+  }));
+
   protected readonly profile = resource({
     params: () => this.broker(),
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
@@ -268,6 +289,8 @@ export class BotPanelShellComponent {
     () => this.panel() !== null && this.profile.hasValue(),
   );
 
+  private lensUnregister: (() => void) | null = null;
+
   protected readonly loadError = computed(() => {
     const liveError = this.liveStore.error();
     if (liveError !== null) return liveError;
@@ -279,6 +302,12 @@ export class BotPanelShellComponent {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   constructor() {
+    const runPollTimer = setInterval(() => {
+      if (this.panel()?.health.running && !this.currentRun.isLoading()) {
+        this.currentRun.reload();
+      }
+    }, 5_000);
+    this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
     effect(() => {
       const target = this.target();
       void this.liveStore.start({
@@ -297,6 +326,20 @@ export class BotPanelShellComponent {
       this.titleContext.setBotLabel(null);
       this.liveStore.stop();
     });
+    // The global top bar's one Trader/Operator toggle switches whichever
+    // page is mounted; this page is that host only once it has something to
+    // switch between.
+    effect(() => {
+      this.lensUnregister?.();
+      this.lensUnregister = this.isLoaded()
+        ? this.lensBridge.register({
+          lens: this.activeLens,
+          select: (lens) => this.selectLens(lens),
+          ariaLabel: 'Bot control perspective',
+        })
+        : null;
+    });
+    this.destroyRef.onDestroy(() => this.lensUnregister?.());
   }
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────

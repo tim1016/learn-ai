@@ -19,7 +19,10 @@ button {
 
 .bot-banner-overflow__menu {
   position: absolute;
-  z-index: 4;
+  // The compacted banner leaves little room below the trigger, so this
+  // drop-down can reach whatever follows the banner; keep it comfortably
+  // above ordinary in-flow content so it never opens invisibly underneath.
+  z-index: 11;
   top: calc(100% + var(--space-2));
   right: 0;
   display: grid;

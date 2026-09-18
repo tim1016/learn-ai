@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -42,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionRead
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.marketdata.feed import FeedContinuityEvent
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -74,7 +76,9 @@ from app.schemas.signal_program_seal import (
 )
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.channel_health import evaluate_channel_health
+from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
@@ -87,6 +91,7 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     build_sqlite_catalog,
 )
+from app.services.source_bar_ledger import RetainedContinuityEvent, SourceBarLedger
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -378,6 +383,7 @@ def _panel(
     sealed_program=None,
     program_build: ProgramBuildAdmissionFact | None = None,
     authority_account_id: str | None = None,
+    feed_continuity_events: tuple[RetainedContinuityEvent, ...] | None = (),
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
     if resume_allowed is None:
@@ -441,7 +447,195 @@ def _panel(
         program_build=program_build or _default_program_build(status.strategy_key),
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
+        feed_continuity_events=feed_continuity_events,
+        feed_continuity_run_id=status.active_run_id,
     )
+
+
+def _continuity_event(
+    *,
+    evidence_seq: int,
+    kind: Literal["interruption", "recovered", "gap", "substituted", "refused"],
+    observed_at_ms: int,
+    cause: str | None = None,
+    reason: str | None = None,
+) -> RetainedContinuityEvent:
+    return RetainedContinuityEvent(
+        seq=evidence_seq,
+        run_id="r1",
+        evidence_seq=evidence_seq,
+        kind=kind,
+        feed_id="ibkr",
+        symbol="SPY",
+        observed_at_ms=observed_at_ms,
+        cause=cause,
+        reason=reason,
+    )
+
+
+def test_feed_continuity_projects_recovery_duration_counts_and_operator_copy() -> None:
+    events = [
+        _continuity_event(
+            evidence_seq=1,
+            kind="interruption",
+            observed_at_ms=_NOW - 22_000,
+            cause="socket_down",
+        ),
+        _continuity_event(
+            evidence_seq=2,
+            kind="recovered",
+            observed_at_ms=_NOW,
+        ),
+    ]
+
+    view = build_feed_continuity(
+        events,
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 5_000,
+        now_ms=_NOW,
+    )
+
+    assert view.state == "recovered"
+    assert view.state_label == "Recovered"
+    assert view.interruption_count == 1
+    assert view.recovery_count == 1
+    assert view.unresolved_count == 0
+    assert view.decision_impact_count == 0
+    assert view.events[0].explanation == "The IBKR socket disconnected. Same-run recovery began."
+    assert view.events[1].duration_ms == 22_000
+    assert view.events[1].duration_label == "22 seconds"
+
+
+def test_feed_continuity_distinguishes_an_active_loss_from_a_refused_decision_window() -> None:
+    active = build_feed_continuity(
+        [
+            _continuity_event(
+                evidence_seq=1,
+                kind="interruption",
+                observed_at_ms=_NOW - 61_000,
+                cause="stall",
+            )
+        ],
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 70_000,
+        now_ms=_NOW,
+    )
+    refused = build_feed_continuity(
+        [
+            _continuity_event(
+                evidence_seq=1,
+                kind="interruption",
+                observed_at_ms=_NOW - 22_000,
+                cause="stall",
+            ),
+            _continuity_event(evidence_seq=2, kind="recovered", observed_at_ms=_NOW - 10_000),
+            _continuity_event(
+                evidence_seq=3,
+                kind="refused",
+                observed_at_ms=_NOW - 9_000,
+                reason="DECISION_BAR_MISSED",
+            ),
+        ],
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 70_000,
+        now_ms=_NOW,
+    )
+
+    assert active.state == "interrupted"
+    assert active.unresolved_count == 1
+    assert active.events[0].duration_label == "1m 1s"
+    assert refused.state == "compromised"
+    assert refused.decision_impact_count == 1
+
+
+def test_feed_continuity_reports_compromised_when_the_deadline_miss_never_recovers() -> None:
+    """ibkr_continuity.py's deadline-miss path records interruption -> refused
+    with no paired recovered event (it raises before reaching that branch), so
+    unresolved_count and decision_impact_count are both nonzero at once. The
+    terminal refusal must win over the still-recovering label."""
+    view = build_feed_continuity(
+        [
+            _continuity_event(
+                evidence_seq=1,
+                kind="interruption",
+                observed_at_ms=_NOW - 22_000,
+                cause="stall",
+            ),
+            _continuity_event(
+                evidence_seq=2,
+                kind="refused",
+                observed_at_ms=_NOW - 9_000,
+                reason="DECISION_BAR_MISSED",
+            ),
+        ],
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 70_000,
+        now_ms=_NOW,
+    )
+
+    assert view.unresolved_count == 1
+    assert view.decision_impact_count == 1
+    assert view.state == "compromised"
+    assert view.state_label == "Continuity refused"
+
+
+def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path,
+        account_id=f"live-evidence:{SID}",
+    )
+    try:
+        ledger.append_event(
+            FeedContinuityEvent(
+                kind="interruption",
+                feed_id="ibkr",
+                symbol="SPY",
+                observed_at_ms=_NOW - 10_000,
+                cause="stall",
+            ),
+            run_id="older-run",
+        )
+        ledger.append_event(
+            FeedContinuityEvent(
+                kind="recovered",
+                feed_id="ibkr",
+                symbol="SPY",
+                observed_at_ms=_NOW,
+            ),
+            run_id="r1",
+        )
+    finally:
+        ledger.close()
+
+    monkeypatch.setattr(panel_data_source, "live_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: "real_live")
+
+    events = panel_data_source._feed_continuity_events_for(
+        SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
+    )
+
+    assert events is not None
+    assert [(event.run_id, event.kind) for event in events] == [("r1", "recovered")]
+
+
+def test_panel_data_source_degrades_continuity_read_when_no_authority_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel read must not crash just because no custody authority is
+    installed; that is a start-time refusal (``bot_binding_authority.
+    primary_custody_kind``), not a read-time one. Regression test for a
+    ``StartAdmissionUnavailable`` that previously escaped ``get_panel``.
+    """
+    monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: None)
+
+    events = panel_data_source._feed_continuity_events_for(
+        SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
+    )
+
+    assert events is None
 
 
 def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:

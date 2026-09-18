@@ -1,6 +1,7 @@
 # Alpaca SQLite Clerk recovery and cutover subprocedure
 
-**Status:** Implemented tooling; human account activation remains gated by issue #1383.
+**Status:** Implemented. Shadow-to-Live graduation is available from the Alpaca
+account Configuration page; the offline CLI remains the recovery and general-cutover fallback.
 
 **Authority:** This is the focused Alpaca SQLite subprocedure incorporated by
 `docs/broker-clerk-fleet-authority.md`. It does not authorize a cutover by itself and
@@ -9,8 +10,9 @@ provision or bind a lane, then run this subprocedure's cutover ceremony, then ve
 is [`add-an-alpaca-account.md`](add-an-alpaca-account.md); an operator onboarding a new
 account should start there, not here.
 
-The tool is broker-free: it verifies operator-captured JSON evidence but never calls
-Alpaca. There is no force flag. Run commands from `PythonDataService/` and replace the
+The CLI tool is broker-free: it verifies operator-captured JSON evidence but never calls
+Alpaca. The UI graduation path instead captures the same evidence through the lane's
+read-only Alpaca port. Neither path has a force flag. Run commands from `PythonDataService/` and replace the
 examples with the exact account, Clerk-artifact, and runner-artifact paths under
 review. In the default compose layout those two roots are
 `artifacts/alpaca_clerk/` and `artifacts/`; do not silently substitute one for the
@@ -127,8 +129,8 @@ idempotent. Keep the resulting receipt with the local reset record.
 
 ## Stop boundary
 
-Online backup is the only ceremony allowed while the Clerk is running. Before restore,
-mirror rebuild, reset, or cutover:
+Online backup is the only general recovery ceremony allowed while the Clerk is running. Before restore,
+mirror rebuild, reset, Paper activation, legacy migration, or a CLI cutover:
 
 1. stop every governed bot;
 2. stop the process that can own the account's SQLite execution lease;
@@ -147,6 +149,16 @@ from plan through apply, including lifecycle, indicator-state, log, and editor p
 Any write changes the planned evidence, so apply is expected to refuse and the operator
 must capture fresh broker evidence and create a new plan. There is no caller-authored
 empty-list bypass.
+
+The one bounded exception is the Configuration page's **Shadow-to-Live graduation**
+(ADR 0059, 2026-09-17 amendment). The running Shadow Clerk owns an isolated
+`shadow:<live_account_id>` database and cannot submit; the target Live database is new,
+inactive, and unopened. Every governed bot must still be durably stopped. A process-wide
+mutation fence prevents Deploy or Resume from crossing the final recheck and activation
+append. The lane returns the durable receipt before requesting graceful shutdown;
+shutdown drains Shadow and releases its lease, and the deployment supervisor restarts
+the worker into the activation-selected Live authority. This exception does not apply
+to any operation named in the preceding paragraph.
 
 A corrupt database may make its lease row
 unreadable, so a database error is **not** proof that the process stopped. In that case,
@@ -329,10 +341,34 @@ record; reset never falls back to legacy JSONL.
 Exposure, open orders, a stale/future proof, roster mismatch, live lease, non-regular
 authority file, or symlink refuses reset before any authority file is moved.
 
-## Human cutover: initialize, plan, then apply
+## UI graduation: review, confirm, restart
 
-This section is tooling documentation for #1383, not permission to run it against a
-real paper account. The SQLite process must be cleanly stopped and checkpointed.
+For an effective Live profile whose account currently runs the Shadow authority, open
+the account's **Configuration** tab and choose **Review Live graduation**. The page is a
+view over the server-owned ceremony; it does not calculate readiness.
+
+The review is available only when authenticated control and a supervised worker restart
+are configured. Preparing it obtains a fresh broker account, position, and open-order
+observation; requires the exact Live account, flat positions, no open orders, and a
+durably stopped bot roster; initializes the inactive Live generation if necessary;
+creates and verifies the SQLite backup; and returns a content-addressed plan with a
+five-minute confirmation window. The review shows the account id, flat/order-free facts,
+stopped roster, verified backup, effective loss limits, arming lapse, and extended-hours
+allowances.
+
+The final checkbox and **Graduate to Live and restart** button confirm that exact plan.
+Apply rechecks the plan, database, broker proof, and stopped roster under the shared bot
+mutation fence. A refusal activates nothing and offers no force path. A successful apply
+returns the durable receipt, then gracefully restarts the clerk. Expect the page to lose
+contact briefly and poll until the lane reports the Live authority. Existing Shadow bots
+remain stopped and foreign to Live; deploy a new Live-sealed instance and run its separate
+arming ceremony afterward.
+
+## CLI cutover fallback: initialize, plan, then apply
+
+This section is the offline fallback and the general Paper/legacy cutover procedure. The
+SQLite process must be cleanly stopped and checkpointed. Do not substitute it for the UI
+graduation merely to bypass a surfaced prerequisite.
 
 ### Establish the inactive generation
 

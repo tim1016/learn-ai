@@ -778,7 +778,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     });
     await renderPage(service);
 
-    expect(await screen.findByText('Live')).toBeTruthy();
+    expect(await screen.findByText('Live', { selector: '.status__mode--live' })).toBeTruthy();
     expect(service.readRevision).toHaveBeenCalledWith('clrk_spec', 'profile-1', 2);
     expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
   });

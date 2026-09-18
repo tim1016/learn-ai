@@ -14,21 +14,9 @@
   overflow: hidden;
 }
 
-// ── Commands ───────────────────────────────────────────────────────────────
-// The account this roster serves is named by the workspace header above, so
-// the page's own top line carries only the two commands that act on the
-// roster itself.
-
-.bots-page__commands {
-  display: flex;
-  flex: 0 0 auto;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.command-button,
+// Refresh and Archive finished render in the workspace header now (see
+// `BotsPageActionsBridgeService`), not on their own row here. This retry
+// button is the one command that still lives on the page itself.
 .fleet-unavailable button {
   display: inline-flex;
   align-items: center;
@@ -132,16 +120,10 @@
   :host { overflow: auto; }
   .bots-page { height: auto; min-height: 100%; overflow: visible; }
 
-  .bots-page__commands { display: grid; grid-template-columns: repeat(2, 1fr); }
-
   .bots-page__board { grid-template-columns: 1fr; }
 
   .bots-page__rail {
     max-height: 22rem;
     border-bottom: 1px solid var(--border);
   }
-}
-
-@media (max-width: 420px) {
-  .bots-page__commands { grid-template-columns: 1fr; }
 }

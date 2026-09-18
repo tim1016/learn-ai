@@ -53,9 +53,15 @@ def _binding(**updates: object) -> BrokerBotBinding:
         "quantity": 1,
         "carryover_policy": "FORBID",
         "action_plan": alpaca_v1_action_plan("SPY"),
-        "strategy_params": {"gap": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
+        "strategy_params": {
+            "gap": 0.2,
+            "gap_bps": 0.0,
+            "rsi_min": 50.0,
+            "rsi_max": 70.0,
+        },
         "strategy_param_origins": {
             "gap": "deploy_override",
+            "gap_bps": "deploy_override",
             "rsi_min": "registered_default",
             "rsi_max": "registered_default",
         },
@@ -115,6 +121,29 @@ def test_seal_resolves_units_origins_and_nested_authority_hashes() -> None:
         assert "bot configuration hash" in str(exc)
     else:  # pragma: no cover - guards the self-hash validator itself
         raise AssertionError("mutated outer seal unexpectedly validated")
+
+
+def test_ema_registered_defaults_are_covered_for_live_admission() -> None:
+    """The UI's accepted Golden scope and runtime corpus must name one point."""
+    parameters = {
+        "gap": 0.2,
+        "gap_bps": 0.0,
+        "rsi_min": 50.0,
+        "rsi_max": 70.0,
+    }
+    binding = _binding(
+        strategy_params=parameters,
+        strategy_param_origins={name: "deploy_override" for name in parameters},
+    )
+
+    seal = build_start_program_seal(
+        binding,
+        _validation(),
+        parameter_origins=binding.strategy_param_origins,
+    )
+
+    assert seal is not None
+    assert seal.configured_signal.parameters_match_validated_settings is True
 
 
 def test_custom_gate_is_sealed_but_not_claimed_as_golden_validated() -> None:
@@ -437,14 +466,11 @@ def test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes(tmp_
         }
     )
     proof = prove_running_program_build(resumed, verified_at_ms=_NOW + 1)
-    # Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
-    # deliberately differs from the Params defaults (the LEAN-parity point a
-    # no-params legacy binding resolves to), so an exact reconstruction is
-    # PROVEN with its corpus coverage stamped UNCOVERED — and ONLY that stamp.
-    # Pinning the stamp keeps every other regression (root, digest,
-    # reconstruction bytes) distinguishable: any of those refuses the proof.
+    # The registered defaults and validated point are deliberately aligned, so
+    # an exact no-params reconstruction remains covered. Any root, digest, or
+    # reconstruction drift still refuses the proof at its own gate.
     assert proof.state == "PROVEN"
-    assert proof.corpus_coverage == "UNCOVERED"
+    assert proof.corpus_coverage == "COVERED"
     resumed = resumed.model_copy(update={"program_build": proof})
 
     repository.record_launch(resumed, launch_reason="resume")

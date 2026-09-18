@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 
 import type {
   BotRunView,
+  FeedContinuityView,
   RunHistoryNavigation,
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
@@ -18,6 +19,7 @@ import { BotRunEvidenceCardComponent } from './bot-run-evidence-card.component';
 export class BotRunHistoryComponent {
   readonly state = input.required<RunHistoryState>();
   readonly botRunning = input(false);
+  readonly feedContinuity = input.required<FeedContinuityView>();
   readonly navigationRequested = output<RunHistoryNavigation>();
 
   protected readonly displayedRun = computed<BotRunView | null>(() => {

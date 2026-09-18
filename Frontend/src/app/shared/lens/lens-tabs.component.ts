@@ -7,19 +7,21 @@ import {
   viewChildren,
 } from '@angular/core';
 
-import { DESK_LENSES, lensFromKey, lensLabel, type DeskLens } from '../../../../shared/lens/lens';
+import { DESK_LENSES, lensFromKey, lensLabel, type DeskLens } from './lens';
 
 /**
  * The one WAI-ARIA tablist for the Trader/Operator lens (task 2026-09-12,
- * acceptance 1). Serves the Alpaca account desk, the full bot panel, and the
- * triage detail.
+ * acceptance 1; hoisted to the global top bar afterward). Its one consumer is
+ * `AppComponent`'s top bar, rendered whenever `ActiveLensBridgeService` has a
+ * registered host — the Alpaca account desk, the full bot panel, or the
+ * triage detail, whichever is currently mounted. Those hosts no longer render
+ * their own tabs; they register their `lens` signal and a change handler with
+ * the bridge instead.
  *
  * Roving tabindex: only the active tab is tabbable; ArrowLeft/ArrowRight,
  * Home, and End move both the selection and focus. Enter/Space activate the
  * focused tab through native button semantics. The component owns no lens
- * state — it renders the host's lens and reports changes — so the triage
- * detail can keep its purely local lens while the routed hosts persist
- * through `LensPreferenceService`.
+ * state — it renders the host's lens and reports changes.
  *
  * Hosts supply stable DOM ids: `idPrefix` builds `${prefix}-${lens}-tab` and
  * `${prefix}-${lens}-panel` (an empty prefix drops the leading dash). A host

@@ -833,6 +833,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Live Graduation Status */
+        get: operations["read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply Live Graduation */
+        post: operations["apply_live_graduation_api_brokers_alpaca_accounts__account_id__live_graduation_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare Live Graduation */
+        post: operations["prepare_live_graduation_api_brokers_alpaca_accounts__account_id__live_graduation_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
         parameters: {
             query?: never;
@@ -2672,6 +2723,66 @@ export interface paths {
         get: operations["fleet_gallery_stream_api_brokers__broker__clerks__clerk_id__accounts__account_id__gallery_stream_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Live Graduation Status
+         * @description Fleet-routed GET /accounts/{account_id}/live-graduation (custody_read).
+         */
+        get: operations["fleet_live_graduation_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Live Graduation Apply
+         * @description Fleet-routed POST /accounts/{account_id}/live-graduation/apply (custody_command).
+         */
+        post: operations["fleet_live_graduation_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Live Graduation Plan
+         * @description Fleet-routed POST /accounts/{account_id}/live-graduation/plan (custody_command).
+         */
+        post: operations["fleet_live_graduation_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_plan_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8831,6 +8942,7 @@ export interface components {
             exposure: {
                 [key: string]: number;
             };
+            feed_continuity: components["schemas"]["FeedContinuityView"];
             /** Fills Today */
             fills_today: number | null;
             health: components["schemas"]["BotHealthCard"];
@@ -9810,6 +9922,8 @@ export interface components {
             explanation: string;
             /** Label */
             label: string;
+            /** Name */
+            name: string;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Reason */
@@ -13919,6 +14033,70 @@ export interface components {
             symbol: string;
         };
         /**
+         * FeedContinuityEventView
+         * @description One durable, run-scoped market-data continuity fact.
+         */
+        FeedContinuityEventView: {
+            /** Cause */
+            cause: string | null;
+            /** Duration Label */
+            duration_label: string | null;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Evidence Seq */
+            evidence_seq: number;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "interruption" | "recovered" | "gap" | "substituted" | "refused";
+            /** Label */
+            label: string;
+            /** Occurred At Ms */
+            occurred_at_ms: number;
+            /** Window End Ms */
+            window_end_ms: number | null;
+            /** Window Start Ms */
+            window_start_ms: number | null;
+        };
+        /**
+         * FeedContinuityView
+         * @description Current-run IBKR continuity summary and its newest durable facts.
+         */
+        FeedContinuityView: {
+            /** Decision Impact Count */
+            decision_impact_count: number;
+            /** Events */
+            events: components["schemas"]["FeedContinuityEventView"][];
+            /** Explanation */
+            explanation: string;
+            /** Interruption Count */
+            interruption_count: number;
+            /** Last Interruption At Ms */
+            last_interruption_at_ms: number | null;
+            /** Last Recovery At Ms */
+            last_recovery_at_ms: number | null;
+            /** Latest Bar At Ms */
+            latest_bar_at_ms: number | null;
+            /** Provider Label */
+            provider_label: string;
+            /** Recovery Count */
+            recovery_count: number;
+            /** Run Id */
+            run_id: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "continuous" | "interrupted" | "recovered" | "compromised" | "not_recorded";
+            /** State Label */
+            state_label: string;
+            /** Unresolved Count */
+            unresolved_count: number;
+        };
+        /**
          * FeedHealth
          * @description Point-in-time health snapshot for a MarketDataFeed.
          *
@@ -16762,6 +16940,106 @@ export interface components {
             xh_entry_bps: number;
             /** Xh Exit Bps */
             xh_exit_bps: number;
+        };
+        /**
+         * LiveGraduationApplyOutcome
+         * @description Durable activation receipt returned before the worker restarts.
+         */
+        LiveGraduationApplyOutcome: {
+            /** Account Id */
+            account_id: string;
+            /** Activated At Ms */
+            activated_at_ms: number;
+            /** Message */
+            message: string;
+            /** Plan Id */
+            plan_id: string;
+            /** Receipt Reference */
+            receipt_reference: string;
+            /**
+             * State
+             * @constant
+             */
+            state: "restart_scheduled";
+        };
+        /**
+         * LiveGraduationApplyRequest
+         * @description The content-addressed plan confirmation; no force or path fields exist.
+         */
+        LiveGraduationApplyRequest: {
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Plan Id */
+            plan_id: string;
+        };
+        /**
+         * LiveGraduationPlanView
+         * @description The exact facts an operator reviews before the one-shot activation.
+         */
+        LiveGraduationPlanView: {
+            /** Account Id */
+            account_id: string;
+            /** Arming Max Sessions */
+            arming_max_sessions: number;
+            /** Backup Reference */
+            backup_reference: string;
+            /** Broker Observed At Ms */
+            broker_observed_at_ms: number;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Consequence */
+            consequence: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Daily Loss Fraction */
+            daily_loss_fraction: number;
+            /** Daily Loss Usd */
+            daily_loss_usd: number;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Extended Hours Entry Bps */
+            extended_hours_entry_bps: number;
+            /** Extended Hours Exit Bps */
+            extended_hours_exit_bps: number;
+            /** Open Order Count */
+            open_order_count: number;
+            /** Plan Id */
+            plan_id: string;
+            /** Position Count */
+            position_count: number;
+            /** Stopped Bot Ids */
+            stopped_bot_ids: string[];
+        };
+        /**
+         * LiveGraduationStatus
+         * @description Backend-authored state for the Configuration page's authority rail.
+         */
+        LiveGraduationStatus: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Authority
+             * @enum {string}
+             */
+            authority: "shadow" | "live" | "unavailable";
+            /**
+             * Configured Mode
+             * @constant
+             */
+            configured_mode: "live";
+            /** Detail */
+            detail: string;
+            /** Headline */
+            headline: string;
+            /** Next Action */
+            next_action: string | null;
+            /** Restart Managed */
+            restart_managed: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "review_available" | "graduated" | "blocked";
         };
         /**
          * LiveGreeksRequest
@@ -27206,6 +27484,109 @@ export interface operations {
             };
         };
     };
+    read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveGraduationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_live_graduation_api_brokers_alpaca_accounts__account_id__live_graduation_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveGraduationApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveGraduationApplyOutcome"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_live_graduation_api_brokers_alpaca_accounts__account_id__live_graduation_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveGraduationPlanView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__get: {
         parameters: {
             query?: never;
@@ -31092,6 +31473,119 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_graduation_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_graduation_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_graduation_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

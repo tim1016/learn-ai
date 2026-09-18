@@ -92,13 +92,18 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: var(--space-2);
 }
 
 .clerk-card__channel {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.15rem var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
   font-size: 0.75rem;
 
   &--healthy .clerk-card__channel-icon { color: #16a34a; }
@@ -107,12 +112,77 @@
 }
 
 .clerk-card__channel-icon {
+  padding-top: 0.2rem;
   font-size: 0.6rem;
 }
+
+.clerk-card__channel-copy { display: grid; gap: 0.15rem; min-width: 0; }
+
+.clerk-card__channel-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.clerk-card__channel-heading strong { color: var(--text-primary); font-size: var(--fs-xs); }
+.clerk-card__channel-label { color: var(--text-primary); font-weight: var(--fw-semibold); }
 
 .clerk-card__channel-state {
   font-size: 0.7rem;
   color: var(--text-secondary);
+}
+
+.clerk-card__channel-observed,
+.clerk-card__continuity-latest {
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+}
+
+.clerk-card__continuity {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-3);
+  border-left: 3px solid var(--bull);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+
+  p { margin: 0; color: var(--text-secondary); font-size: var(--fs-xxs); line-height: 1.45; }
+}
+
+.clerk-card__continuity--attention { border-left-color: var(--bear); }
+
+.clerk-card__continuity-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+
+  strong { color: var(--text-primary); font-size: var(--fs-xs); }
+  span { color: var(--text-subtle); font-size: var(--fs-xxs); }
+}
+
+.clerk-card__continuity-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.clerk-card__continuity-counts li {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: calc(var(--radius) - 0.1rem);
+
+  strong { color: var(--text-primary); font-family: var(--font-mono); font-size: var(--fs-sm); }
+  span { color: var(--text-subtle); font-size: 0.58rem; }
 }
 
 .clerk-card__actions {

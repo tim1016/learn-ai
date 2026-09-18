@@ -72,8 +72,82 @@ button {
 .run-history__pagination { justify-content: flex-end; margin-top: var(--space-3); }
 .run-history__pagination button { border: 1px solid var(--border-light); }
 
+.run-continuity {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--bull);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.run-continuity--attention { border-left-color: var(--bear); }
+
+.run-continuity__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+
+  h3 { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); }
+  p { max-width: 62ch; margin: 0.2rem 0 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+  > strong { color: var(--accent-text); font-size: var(--fs-xs); white-space: nowrap; }
+}
+
+.run-continuity__counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+
+  > div { display: grid; gap: 0.15rem; }
+  dt { color: var(--text-subtle); font-size: var(--fs-xxs); }
+  dd { margin: 0; color: var(--text-primary); font-family: var(--font-mono); font-size: var(--fs-md); }
+}
+
+.run-continuity__empty { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+
+.run-continuity__events {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-continuity__events li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.run-continuity__event-marker {
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: 0.25rem;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+
+.run-continuity__event-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+}
+
+.run-continuity__events p { margin: 0.15rem 0 0; color: var(--text-secondary); font-size: var(--fs-xxs); }
+.run-continuity__duration { color: var(--text-subtle); font-size: var(--fs-xxs); }
+
 @media (max-width: 700px) {
   .run-history__heading,
   .run-history__tabs { align-self: stretch; }
   .run-history__tabs button { flex: 1; }
+  .run-continuity__heading { display: grid; }
+  .run-continuity__counts { grid-template-columns: 1fr; }
 }

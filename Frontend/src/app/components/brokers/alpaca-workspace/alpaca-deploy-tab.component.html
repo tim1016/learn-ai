@@ -1,0 +1,14 @@
+@if (blockedReason(); as reason) {
+  <section class="deploy-tab-context deploy-tab-context--error" role="alert">
+    <strong>Deploy is unavailable.</strong>
+    <span>{{ reason }}</span>
+  </section>
+} @else if (target(); as target) {
+  @if (accountId(); as accountId) {
+    <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" />
+  }
+} @else {
+  <section class="deploy-tab-context" role="status" aria-label="Loading Alpaca deploy context">
+    Resolving the Alpaca account…
+  </section>
+}

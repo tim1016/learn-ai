@@ -1,4 +1,4 @@
-import { Component, signal } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
@@ -28,6 +28,8 @@ import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
+import { LensTabsComponent } from '../../../../shared/lens/lens-tabs.component';
 
 const chartMocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
@@ -74,8 +76,17 @@ class StubEventSource {
 }
 
 @Component({
-  imports: [BotPanelShellComponent],
+  imports: [BotPanelShellComponent, LensTabsComponent],
   template: `
+    @if (lensHost(); as host) {
+      <app-lens-tabs
+        [ariaLabel]="host.ariaLabel ?? 'Desk perspective'"
+        [idPrefix]="host.idPrefix ?? ''"
+        [panelId]="host.panelId ?? null"
+        [lens]="host.lens()"
+        (lensChange)="host.select($event)"
+      />
+    }
     @if (mounted()) {
       <app-bot-panel-shell
         broker="alpaca"
@@ -87,6 +98,8 @@ class StubEventSource {
   `,
 })
 class BotPanelShellReloadHost {
+  private readonly lensBridge = inject(ActiveLensBridgeService);
+  readonly lensHost = this.lensBridge.host;
   readonly mounted = signal(true);
   readonly accountId = ACCOUNT_ID;
   readonly strategyInstanceId = STRATEGY_INSTANCE_ID;
@@ -162,7 +175,45 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
         { provide: BrokerV2PanelService, useValue: campaignService },
         {
           provide: BrokersService,
-          useValue: { checkSqliteRecoveryAction: vi.fn() },
+          // The account workspace shell hosting this bot's page reads its
+          // account and Clerk status once per mount (#2185) — read-only,
+          // and not part of this campaign's evidence-click surface.
+          useValue: {
+            checkSqliteRecoveryAction: vi.fn(),
+            getAccount: vi.fn().mockResolvedValue({
+              broker: 'alpaca',
+              account_id: ACCOUNT_ID,
+              account_mode: 'paper',
+              account_status: 'ACTIVE',
+              currency: 'USD',
+              cash: 10_000,
+              equity: 10_000,
+              buying_power: 20_000,
+              portfolio_value: 10_000,
+              long_market_value: 0,
+              short_market_value: 0,
+              pattern_day_trader: false,
+              trading_blocked: false,
+              account_blocked: false,
+              created_at_ms: null,
+              observed_at_ms: 1_753_800_004_000,
+            }),
+            getClerkStatus: vi.fn().mockResolvedValue({
+              broker: 'alpaca',
+              account_id: ACCOUNT_ID,
+              authority_kind: 'real_paper',
+              hold: { active: false, reason: null, reason_code: null, since_ms: null },
+              operator_posture: {
+                account_desk: null,
+                condition: null,
+                fleet_roster: null,
+                status_detail: null,
+                status_headline: 'Clerk and broker are in sync.',
+              },
+              outstanding_intents: 0,
+              observed_at_ms: 1_753_800_004_000,
+            }),
+          },
         },
         { provide: MessageService, useValue: { add: vi.fn() } },
       ],

@@ -11,15 +11,6 @@
   </div>
 } @else if (view(); as panelView) {
   <div class="triage-lensbar">
-    <app-lens-tabs
-      class="triage-lensbar__tabs"
-      idPrefix="triage-lens"
-      ariaLabel="Detail lens"
-      panelId="triage-lens-panel"
-      [lens]="lens()"
-      (lensChange)="selectLens($event)"
-    />
-
     <p class="triage-lensbar__provenance">
       Revision {{ panelView.revision }} · observed
       <app-timestamp-display [value]="panelView.updated_at_ms" mode="local" />

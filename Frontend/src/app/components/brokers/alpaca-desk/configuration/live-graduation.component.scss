@@ -1,0 +1,191 @@
+@use './configuration-controls' as controls;
+@use '../../../../styles/eyebrow-heading' as *;
+
+:host {
+  display: block;
+}
+
+.graduation {
+  display: grid;
+  gap: var(--space-3);
+  overflow: hidden;
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--bear) 58%, var(--border-light));
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--bear) 7%, transparent), transparent 42%),
+    var(--bg-surface);
+}
+
+.graduation__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.graduation__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-lg);
+}
+
+.graduation__header p:not(.graduation__eyebrow),
+.graduation__state p,
+.graduation__restart p {
+  max-width: 48rem;
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.graduation__eyebrow {
+  @include eyebrow-heading;
+  margin: 0 0 var(--space-1);
+}
+
+.graduation__account {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.authority-rail {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) minmax(2rem, 1fr) minmax(7rem, auto) minmax(2rem, 1fr) minmax(7rem, auto);
+  align-items: center;
+  margin: 0;
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.authority-rail__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+
+.authority-rail__step strong,
+.authority-rail__step small {
+  display: block;
+}
+
+.authority-rail__step small {
+  margin-top: 0.1rem;
+  font-size: var(--fs-xs);
+}
+
+.authority-rail__number {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  background: var(--bg-canvas);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+}
+
+.authority-rail__line {
+  height: 1px;
+  margin: 0 var(--space-2);
+  background: var(--border-light);
+}
+
+.authority-rail__step--current,
+.authority-rail__step--complete {
+  color: var(--text-primary);
+}
+
+.authority-rail__step--current .authority-rail__number {
+  border-color: var(--bear);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bear) 14%, transparent);
+  color: var(--bear);
+}
+
+.authority-rail__step--complete .authority-rail__number {
+  border-color: var(--bull);
+  background: color-mix(in srgb, var(--bull) 12%, var(--bg-canvas));
+  color: var(--bull);
+}
+
+.graduation__state,
+.graduation__restart,
+.graduation__refusal,
+.graduation__loading {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+.graduation__state--live {
+  border-color: var(--bull);
+  background: color-mix(in srgb, var(--bull) 7%, var(--bg-canvas));
+}
+
+.graduation__state--blocked,
+.graduation__refusal {
+  border-color: var(--bear);
+}
+
+.graduation__next,
+.graduation__refusal,
+.graduation__loading {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.graduation__restart {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border-color: var(--accent);
+}
+
+.graduation__pulse {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.25rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0.35rem var(--accent-faint);
+}
+
+.button--primary {
+  @include controls.primary-button;
+  justify-self: start;
+}
+
+.button--secondary {
+  @include controls.secondary-button;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 760px) {
+  .authority-rail {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
+  .authority-rail__line {
+    width: 1px;
+    height: 1.25rem;
+    margin: 0 0 0 1rem;
+  }
+}
+

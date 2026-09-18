@@ -19,8 +19,8 @@ import {
   formatReceiptLabel,
 } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { LensTabsComponent } from '../../shared/lens/lens-tabs.component';
 import type { DeskLens } from '../../../../shared/lens/lens';
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
@@ -104,7 +104,6 @@ function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
     BotBannerOverflowComponent,
     MissionVerdictStatusComponent,
     AssetIdentityComponent,
-    LensTabsComponent,
     TriageActivityComponent,
     TriageEvidenceComponent,
     TriageTapeComponent,
@@ -127,6 +126,7 @@ export class BotTriageDetailComponent {
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
+  private readonly lensBridge = inject(ActiveLensBridgeService);
 
   protected readonly lens = signal<DeskLens>('trader');
   protected readonly tapeResolution = signal<ChartLiveResolution>('1m');
@@ -219,6 +219,8 @@ export class BotTriageDetailComponent {
       this.panelService.getLiveChart(params.target, params.sid, params.resolution),
   });
 
+  private lensUnregister: (() => void) | null = null;
+
   constructor() {
     // The per-bot panel route streams its panel over SSE. This pane is a
     // summary, so it re-reads on a timer instead of standing up a second
@@ -262,6 +264,23 @@ export class BotTriageDetailComponent {
       this.panel.reload();
       this.journal.reload();
     });
+
+    // The global top bar's one Trader/Operator toggle switches whichever
+    // page is mounted; this pane is that host only while it has a settled
+    // bot to show (not the placeholder or error states).
+    effect(() => {
+      this.lensUnregister?.();
+      this.lensUnregister = this.view() !== null
+        ? this.lensBridge.register({
+          lens: this.lens,
+          select: (lens) => this.selectLens(lens),
+          idPrefix: 'triage-lens',
+          panelId: 'triage-lens-panel',
+          ariaLabel: 'Detail lens',
+        })
+        : null;
+    });
+    this.destroyRef.onDestroy(() => this.lensUnregister?.());
   }
 
   /** Guards against rendering the previous bot's panel while the next one loads. */

@@ -23,7 +23,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.6"
+_ADAPTER_VERSION = "alpaca-fleet.7"
 
 
 def _op(
@@ -458,6 +458,32 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.GALLERY_READ,
             account=True,
             stream=OperationStream.SSE,
+        ),
+        # Graduation changes the boot-selected custody world but never deploys
+        # or arms a strategy. It is account-scoped and lane-local: the clerk
+        # owns its broker evidence, backup, activation receipt and restart.
+        _op(
+            "live_graduation_status",
+            "GET",
+            "/accounts/{account_id}/live-graduation",
+            capability=Capability.CUSTODY_READ,
+            account=True,
+        ),
+        _op(
+            "live_graduation_plan",
+            "POST",
+            "/accounts/{account_id}/live-graduation/plan",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_ONE_SHOT,
+            account=True,
+        ),
+        _op(
+            "live_graduation_apply",
+            "POST",
+            "/accounts/{account_id}/live-graduation/apply",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_ONE_SHOT,
+            account=True,
         ),
         # ── Custody family: new public home, agent serves the legacy paths ──
         _op(

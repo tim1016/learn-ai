@@ -8,10 +8,11 @@ settings identity needed to detect a semantic signal-program change.
 
 - Reference: `docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md`
 - Parameters: each cell's signal symbol (`AAPL`, `QQQ`, `SPY`, or `TSLA`),
-  plus the registry's current `validated_settings` — since 2026-09-01:
-  `gap=0.0`, `gap_bps=0.0`, `rsi_min=30`, `rsi_max=70` (see "Regeneration
-  2026-09-01" below; the LEAN-parity point `gap=0.20`, `rsi_min=50` stays
-  pinned by the Params defaults and the ENG-007 fixture).
+  plus the registry's current `validated_settings` — since 2026-09-17:
+  `gap=0.20`, `gap_bps=0.0`, `rsi_min=50`, `rsi_max=70`. This is the
+  registered default, the accepted Live Golden-review point, and the
+  LEAN-parity point. See the dated moves below for the intervening relaxed
+  paper experiment.
 - Root generation: `trace_corpus_root(entries)` in
   `app.engine.strategy.signal_program`, encoded as canonical sorted-key JSON
   and SHA-256.
@@ -110,3 +111,31 @@ re-sealed** (deploy a fresh instance); the admission fence refuses
 Start/Resume for old seals by design. The LEAN-parity claim is
 unaffected: the Params defaults still encode the reconciled `gap=0.20`,
 `rsi_min=50` point and the ENG-007 fixture still pins it.
+
+## Regeneration 2026-09-17 — Live review re-aligned to the registered defaults
+
+Regenerated with the same sanctioned command after the owner explicitly chose
+the EMA crossover defaults (`gap=0.20`, `rsi_min=50`, `rsi_max=70`) for the
+first Live deployment. The accepted Golden review shown by the deploy UI
+already named that exact point, while the runtime corpus still named the
+2026-09-01 paper experiment. That disagreement let the UI approve the ticket
+but made Start refuse it as `PROGRAM_CORPUS_UNCOVERED`; Live correctly cannot
+run an uncovered point under ADR 0054.
+
+This move does not change strategy math and does not weaken the admission
+gate. It re-promotes the already reconciled LEAN-parity point so the human
+Golden review, registered defaults, sealed-program coverage, and Live Start
+policy name one configuration. The generator reproduced the earlier
+`16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184`
+root exactly against the current source. The relaxed `{gap: 0, rsi_min: 30}`
+point remains available for Paper experimentation, stamped `UNCOVERED`; it is
+not Live-qualified.
+
+### Consequence
+
+`golden_trace_root` returns from
+`e4aec86a55fa7c7aab7305a3cf45eadf705450b2a9ee4ea6a19682d4e49b8309` to
+`16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184`.
+Instances sealed against the relaxed root stay historical and cannot Resume;
+the stopped Paper and Shadow instances are not retargeted. A fresh Live-sealed
+instance is required, which is the deployment this ceremony creates.

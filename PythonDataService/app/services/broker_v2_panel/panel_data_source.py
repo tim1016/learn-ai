@@ -13,12 +13,17 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
+from app.broker.alpaca.clerk.account_authority import evidence_account_id_for
+from app.broker.alpaca.clerk.active_authority import (
+    active_program_leg_policy,
+    primary_custody_world,
+)
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     EffectOperationState,
@@ -106,6 +111,12 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
 )
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
+from app.services.source_bar_ledger import (
+    RetainedContinuityEvent,
+    SourceBarLedger,
+    SourceBarLedgerCorruptError,
+    SourceBarLedgerMissingError,
+)
 from app.services.sqlite_clerk_compat import (
     active_reconciliation_sweep,
     active_sqlite_facade,
@@ -185,6 +196,60 @@ def _program_build_for_display(
     if evidence is not None:
         return program_build_view_from_run_evidence(binding.strategy_key, evidence)
     return prove_running_program_build(binding, verified_at_ms=verified_at_ms)
+
+
+def _feed_continuity_events_for(
+    binding: BrokerBotBinding,
+) -> list[RetainedContinuityEvent] | None:
+    """Read this binding's durable current-run continuity facts.
+
+    ``None`` is an explicit unavailable state (mode retains no source bars,
+    ledger absent, ledger unreadable, or no primary custody authority
+    installed to resolve the evidence namespace from). An empty list means
+    the run's ledger exists and has recorded no interruptions.
+
+    This is a read path, not a start path: unlike
+    ``bot_binding_authority.primary_custody_kind`` (which refuses a *start*
+    when no authority is installed), a panel read degrades to the
+    documented ``None`` instead of raising ``StartAdmissionUnavailable`` —
+    a missing authority must not take down an otherwise-servable panel.
+    """
+    if binding.mode not in {"dry_run", "trade"}:
+        return None
+    if binding.mode == "dry_run":
+        custody_kind = "synthetic"
+    else:
+        custody_kind = primary_custody_world()
+        if custody_kind is None:
+            return None
+    evidence_account_id = evidence_account_id_for(
+        mode=binding.mode,
+        strategy_instance_id=binding.strategy_instance_id,
+        custody_kind=custody_kind,
+    )
+    try:
+        ledger = SourceBarLedger(
+            artifacts_root=live_artifacts_root(),
+            account_id=evidence_account_id,
+            read_only=True,
+        )
+        try:
+            return ledger.events(run_id=binding.run_id)
+        finally:
+            ledger.close(checkpoint=False)
+    except SourceBarLedgerMissingError:
+        return None
+    except (SourceBarLedgerCorruptError, sqlite3.Error, OSError) as exc:
+        logger.warning(
+            "Bot panel continuity evidence is unavailable",
+            extra={
+                "action": "panel_feed_continuity_unavailable",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "run_id": binding.run_id,
+                "reason": str(exc),
+            },
+        )
+        return None
 
 
 async def get_authority_facts(
@@ -381,6 +446,8 @@ async def _get_panel_with_entries_from_authority(
             bot_running=status.running,
             extended_window=active_program_leg_policy().window,
         ),
+        feed_continuity_events=_feed_continuity_events_for(binding),
+        feed_continuity_run_id=binding.run_id,
     )
     # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)
     # needs the same repository `read_sqlite_panel_evidence` resolved internally

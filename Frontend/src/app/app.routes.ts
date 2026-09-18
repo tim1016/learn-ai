@@ -402,6 +402,15 @@ export const routes: Routes = [
               ).then((m) => m.BotGalleryPageComponent),
           },
           {
+            // Deploy — binds a validated strategy to this account, inline in
+            // the tab strip rather than as an overlay drawer.
+            path: 'deploy',
+            loadComponent: () =>
+              import(
+                './components/brokers/alpaca-workspace/alpaca-deploy-tab.component'
+              ).then((m) => m.AlpacaDeployTabComponent),
+          },
+          {
             // Overview — the empty child, so the account's own URL opens it.
             path: '',
             loadComponent: () =>

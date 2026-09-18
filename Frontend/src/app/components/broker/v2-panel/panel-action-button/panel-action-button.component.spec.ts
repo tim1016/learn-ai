@@ -65,6 +65,46 @@ describe('PanelActionButtonComponent', () => {
     expect(triggered).not.toHaveBeenCalled();
   });
 
+  it('keeps a blocked action keyboard-focusable so its reason is reachable', async () => {
+    // Regression: the button must stay off the native `disabled` attribute
+    // (which removes it from the tab order) and rely on `aria-disabled` plus
+    // trigger()'s own guard instead — otherwise a keyboard/screen-reader
+    // user can never reach the blocker explanation this button describes.
+    const triggered = vi.fn();
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          enabled: false,
+          blockers: [
+            {
+              condition: { id: 'OPEN_ORDER', severity: 'blocking', scope: 'bot' },
+              host: 'bot_cockpit',
+              anchor: { kind: 'surface', subject_key: null },
+              audience: 'both',
+              disposition: 'wait',
+              headline: 'An order is still open.',
+              detail: 'Wait for the order to settle.',
+              primary_move: null,
+              secondary_moves: [],
+              applies_to: 'run',
+            },
+          ],
+        }),
+      },
+      on: { triggered },
+    });
+
+    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.getAttribute('aria-describedby')).toBeTruthy();
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    fireEvent.click(button);
+    expect(triggered).not.toHaveBeenCalled();
+  });
+
   it('renders backend-presented confirmation and blockers', async () => {
     await render(PanelActionButtonComponent, {
       inputs: {
@@ -97,12 +137,13 @@ describe('PanelActionButtonComponent', () => {
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    expect(button.title).toContain('Open Order');
+    expect(button.title).toContain('An order is still open.');
+    expect(button.getAttribute('aria-describedby')).toBeTruthy();
+
+    fireEvent.click(button);
     expect(screen.getByText('This stops the bot.')).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toContain(
-      'An order is still open.',
-    );
-    expect(screen.getByRole('alert').textContent).toContain('Open Order');
   });
 
   it('can suppress only the blocker its parent already presents', async () => {
@@ -152,12 +193,9 @@ describe('PanelActionButtonComponent', () => {
 
     expect(screen.queryByText('The bot is already stopped.')).toBeNull();
     expect(screen.getByText('Bot Already Stopped')).toBeTruthy();
-    expect(
-      screen.getAllByRole('alert').some((alert) =>
-        alert.textContent?.includes('The Clerk cannot prove current account custody.'),
-      ),
-    ).toBe(true);
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    expect(button.title).not.toContain('The bot is already stopped.');
+    expect(button.title).toContain('The Clerk cannot prove current account custody.');
   });
 
   it('does not emit a destructive action until the backend token is confirmed', async () => {

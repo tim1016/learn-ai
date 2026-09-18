@@ -77,8 +77,49 @@
               <span class="clerk-card__channel-icon" aria-hidden="true">
                 {{ channelIcon[ch.state] }}
               </span>
-              <span class="clerk-card__channel-label">{{ ch.label }}</span>
-              <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
+              <span class="clerk-card__channel-copy">
+                <span class="clerk-card__channel-heading">
+                  <strong>{{ channelName(ch) }}</strong>
+                  <span class="clerk-card__channel-label">{{ ch.label }}</span>
+                </span>
+                <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
+                <span class="clerk-card__channel-observed">
+                  Observed <app-timestamp-display [value]="ch.observed_at_ms" mode="local" />
+                </span>
+              </span>
+
+              @if (ch.stream === 'market_data') {
+                <section
+                  class="clerk-card__continuity"
+                  [class.clerk-card__continuity--attention]="feedContinuity().state === 'interrupted' || feedContinuity().state === 'compromised'"
+                  aria-label="Current run IBKR market-data continuity"
+                >
+                  <div class="clerk-card__continuity-heading">
+                    <strong>{{ feedContinuity().state_label }}</strong>
+                    <span>Current run</span>
+                  </div>
+                  <p>{{ feedContinuity().explanation }}</p>
+                  <ul class="clerk-card__continuity-counts" aria-label="Current run continuity counts">
+                    <li>
+                      <strong>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().interruption_count }}</strong>
+                      <span>Interruptions</span>
+                    </li>
+                    <li>
+                      <strong>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().recovery_count }}</strong>
+                      <span>Recoveries</span>
+                    </li>
+                    <li>
+                      <strong>{{ feedContinuity().state === 'not_recorded' ? '—' : feedContinuity().decision_impact_count }}</strong>
+                      <span>Decision impacts</span>
+                    </li>
+                  </ul>
+                  @if (feedContinuity().latest_bar_at_ms; as latestBarAtMs) {
+                    <span class="clerk-card__continuity-latest">
+                      Latest feed bar <app-timestamp-display [value]="latestBarAtMs" mode="local" />
+                    </span>
+                  }
+                </section>
+              }
             </li>
           }
           @if (clerk().channels.length === 0) {

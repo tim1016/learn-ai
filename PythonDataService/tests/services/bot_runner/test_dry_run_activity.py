@@ -179,13 +179,10 @@ async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_st
 ) -> None:
     """ADR 0054 end to end: no bypass helper, no validated-point edit.
 
-    ``EmaCrossoverSignalParams``'s own defaults are the LEAN-parity point,
-    which the registry's validated point deliberately left on 2026-09-01, so
-    a deploy naming no parameters resolves to a point the corpus does not
-    cover. That used to refuse ``PROGRAM_BUILD_UNPROVEN`` and every mechanics
-    test needed a registry bypass helper (since deleted). Dry Run's
-    synthetic authority is a paper environment, so the run is admitted,
-    stamped on the decision, and its per-run evidence keeps the stamp.
+    The former relaxed paper experiment is deliberately outside the current
+    Live-qualified default point. Dry Run's synthetic authority is a paper
+    environment, so the run is admitted, stamped on the decision, and its
+    per-run evidence keeps the stamp.
     """
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
@@ -198,6 +195,13 @@ async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_st
         symbol="SPY",
         mode="dry_run",
         quantity=1,
+        strategy_params={"gap": 0.0, "gap_bps": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
+        strategy_param_origins={
+            "gap": "deploy_override",
+            "gap_bps": "deploy_override",
+            "rsi_min": "deploy_override",
+            "rsi_max": "deploy_override",
+        },
     )
     try:
         assert started.admission.allowed is True

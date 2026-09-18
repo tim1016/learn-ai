@@ -20,6 +20,8 @@ import {
   TEST_CLERK_ID,
 } from './fleet/fleet-directory-testing';
 import { WorkspaceTitleContextService } from './shell/workspace-title-context.service';
+import { ActiveLensBridgeService } from './shared/lens/active-lens-bridge.service';
+import type { DeskLens } from './shared/lens/lens';
 
 class FakeAlpacaLiveVerdictService {
   private readonly states = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
@@ -301,5 +303,44 @@ describe('AppComponent', () => {
 
   it('should contain a router-outlet', () => {
     expect(fixture.nativeElement.querySelector('router-outlet')).toBeTruthy();
+  });
+
+  describe('the global Trader/Operator toggle', () => {
+    it('stays off the top bar while no page has registered a lens to switch', () => {
+      expect(fixture.nativeElement.querySelector('[role="tablist"]')).toBeNull();
+    });
+
+    it('renders the registered host\'s lens, in its id namespace, and reports a choice back to it', () => {
+      const select = vi.fn();
+      TestBed.inject(ActiveLensBridgeService).register({
+        lens: signal<DeskLens>('trader'),
+        select,
+        idPrefix: 'alpaca',
+        ariaLabel: 'Desk perspective',
+      });
+      fixture.detectChanges();
+
+      const trader = fixture.nativeElement.querySelector('#alpaca-trader-tab') as HTMLButtonElement;
+      const operator = fixture.nativeElement.querySelector('#alpaca-operator-tab') as HTMLButtonElement;
+      expect(trader.getAttribute('aria-selected')).toBe('true');
+
+      operator.click();
+
+      expect(select).toHaveBeenCalledWith('operator');
+    });
+
+    it('disappears once its host unregisters', () => {
+      const unregister = TestBed.inject(ActiveLensBridgeService).register({
+        lens: signal<DeskLens>('trader'),
+        select: vi.fn(),
+      });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('[role="tablist"]')).toBeTruthy();
+
+      unregister();
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('[role="tablist"]')).toBeNull();
+    });
   });
 });

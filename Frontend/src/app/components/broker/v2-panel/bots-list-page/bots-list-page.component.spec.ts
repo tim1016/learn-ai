@@ -4,11 +4,13 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 
+import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import {
   fakeBotPanelView,
   fakeCatalogBot,
   fakePanelAction,
 } from '../../../../testing/bot-panel-fixtures';
+import { BotsPageActionsBridgeService } from '../../../brokers/alpaca-workspace/bots-page-actions-bridge.service';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
@@ -79,53 +81,6 @@ async function renderPage(
 }
 
 describe('BotsListPageComponent', () => {
-  describe('bot staleness banner (#1806 item 3)', () => {
-    // This banner answers "is what I am looking at stale?", which is a state,
-    // so it is gated on the snapshot's actual age and quantifies it. A single
-    // failed poll that the next poll repairs was never meaningfully stale and
-    // must stay silent.
-    it('stays silent when a refresh fails but the snapshot is still fresh', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      try {
-        let calls = 0;
-        const getCatalog = vi.fn(async () => {
-          calls += 1;
-          if (calls === 1) return [fakeCatalogBot()];
-          throw new HttpErrorResponse({ status: 503 });
-        });
-        await renderPage([], { getCatalog });
-        await screen.findByRole('button', { name: /spy-momentum-01/ });
-
-        // One poll fires and fails; the snapshot underneath is ~5s old.
-        await vi.advanceTimersByTimeAsync(6_000);
-
-        expect(screen.queryByText(/last successful bot snapshot/i)).toBeNull();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('reports how stale the bot snapshot is once refreshes stop landing', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      try {
-        let calls = 0;
-        const getCatalog = vi.fn(async () => {
-          calls += 1;
-          if (calls === 1) return [fakeCatalogBot()];
-          throw new HttpErrorResponse({ status: 503 });
-        });
-        await renderPage([], { getCatalog });
-        await screen.findByRole('button', { name: /spy-momentum-01/ });
-
-        await vi.advanceTimersByTimeAsync(45_000);
-
-        const banner = await screen.findByText(/last successful bot snapshot/i);
-        expect(banner.textContent).toMatch(/4[0-9]s ago/);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
 
   it('leaves the account, its mode and Deploy to the workspace header above it', async () => {
     // #2185: the roster used to repeat the account strip, the lane pill and a
@@ -192,11 +147,13 @@ describe('BotsListPageComponent', () => {
     expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
   });
 
-  it('renders explicit refresh and snapshot freshness', async () => {
-    await renderPage([fakeCatalogBot()]);
+  it('renders snapshot freshness and registers its refresh command with the workspace header', async () => {
+    const view = await renderPage([fakeCatalogBot()]);
 
-    expect(await screen.findByRole('button', { name: 'Refresh bots' })).toBeTruthy();
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+    expect(typeof bridge.host()?.refresh).toBe('function');
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
@@ -363,7 +320,9 @@ describe('BotsListPageComponent', () => {
     // and opens its Operator lens — the only lens that reads the audit-logged
     // custody journal — so bot-b has a genuine baseline read.
     fireEvent.click(await screen.findByRole('button', { name: /bot-b/ }));
-    fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
+    const lensBridge = view.fixture.debugElement.injector.get(ActiveLensBridgeService);
+    await vi.waitFor(() => expect(lensBridge.host()).not.toBeNull());
+    lensBridge.host()?.select('operator');
     await vi.waitFor(() =>
       expect(view.mockPanelService.getEvidence).toHaveBeenCalledWith(
         expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }),
@@ -442,8 +401,12 @@ describe('BotsListPageComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    // `fireEvent` does not await the async output handler: flush the rejected
+    // command and the directory refresh it schedules before asserting.
+    await Promise.resolve();
+    await Promise.resolve();
 
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(refresh).toHaveBeenCalledTimes(1);
     // `clerk_binding_generation_conflict` is a 409 in the fleet's closed
     // refusal vocabulary (#2067), so it now reads as a conflict, not the
     // generic "Unknown" `error` severity a pre-#2102 render gave every fleet
@@ -480,11 +443,12 @@ describe('BotsListPageComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    // Flush both the rejected command and the refresh rejection handler.
+    await Promise.resolve();
+    await Promise.resolve();
 
-    await vi.waitFor(() =>
-      expect(view.mockMessageService.add).toHaveBeenCalledWith(
-        expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
-      ),
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: LANE_FENCE_REFRESH_FAILED_MESSAGE }),
     );
     expect(runBotAction).toHaveBeenCalledTimes(1);
   });

@@ -13,6 +13,7 @@ import type { BotPanelView } from '../lib/broker-v2-panel.types';
   template: `
     <span
       class="mission-verdict-status"
+      [class.mission-verdict-status--bare]="bare()"
       [attr.data-state]="verdict().state"
       [attr.aria-label]="verdict().label"
       role="status"
@@ -24,4 +25,6 @@ import type { BotPanelView } from '../lib/broker-v2-panel.types';
 })
 export class MissionVerdictStatusComponent {
   readonly verdict = input.required<BotPanelView['mission_verdict']>();
+  /** Text-only, for hosts (the bot banner topline) that carry the state color themselves. */
+  readonly bare = input(false);
 }

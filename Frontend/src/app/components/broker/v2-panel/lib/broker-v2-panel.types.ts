@@ -53,6 +53,8 @@ export type BotCatalogView = components['schemas']['BotCatalogView'];
 export type DutyOutcomeView = components['schemas']['DutyOutcomeView'];
 export type BotHealthCard = components['schemas']['BotHealthCard'];
 export type ChannelHealthView = components['schemas']['ChannelHealthView'];
+export type FeedContinuityEventView = components['schemas']['FeedContinuityEventView'];
+export type FeedContinuityView = components['schemas']['FeedContinuityView'];
 export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
 export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
@@ -80,10 +82,46 @@ export interface PanelActionTrigger {
 export type BotPanelView = components['schemas']['BotPanelView'];
 export type MarketPulseView = components['schemas']['MarketPulseView'];
 
+/**
+ * Keeps the panel usable during a rolling clerk/frontend deployment. Older
+ * clerks omit this newly introduced projection until they are restarted.
+ */
+export const FEED_CONTINUITY_NOT_RECORDED: FeedContinuityView = Object.freeze({
+  provider_label: 'IBKR market data',
+  state: 'not_recorded',
+  state_label: 'Continuity not recorded',
+  explanation: 'This clerk has not reported current-run feed continuity yet.',
+  run_id: null,
+  interruption_count: 0,
+  recovery_count: 0,
+  unresolved_count: 0,
+  decision_impact_count: 0,
+  last_interruption_at_ms: null,
+  last_recovery_at_ms: null,
+  latest_bar_at_ms: null,
+  events: [],
+});
+
+export function feedContinuityFor(panel: BotPanelView): FeedContinuityView {
+  return panel.feed_continuity ?? FEED_CONTINUITY_NOT_RECORDED;
+}
+
 // ── Run navigation ──────────────────────────────────────────────────────────
 
 export type BotRunView = components['schemas']['BotRunView'];
 export type BotRunHistoryPage = components['schemas']['BotRunHistoryPage'];
+export interface CurrentRunState {
+  readonly run: BotRunView | null;
+  readonly loading: boolean;
+  readonly failed: boolean;
+}
+
+export const EMPTY_CURRENT_RUN_STATE: CurrentRunState = Object.freeze({
+  run: null,
+  loading: false,
+  failed: false,
+});
+
 export type RunHistoryMode = 'current' | 'history';
 export type RunHistoryNavigation =
   | 'current'

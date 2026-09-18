@@ -5,8 +5,10 @@ import {
   output,
 } from '@angular/core';
 import type {
+  ChannelHealthView,
   ChannelState,
   ClerkCard,
+  FeedContinuityView,
   PanelAction,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
@@ -37,6 +39,7 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
 })
 export class ClerkCardComponent {
   readonly clerk = input.required<ClerkCard>();
+  readonly feedContinuity = input.required<FeedContinuityView>();
   readonly reconcileAction = input<PanelAction | null>(null);
   readonly clearHoldAction = input<PanelAction | null>(null);
   readonly actionPending = input(false);
@@ -51,5 +54,11 @@ export class ClerkCardComponent {
 
   protected trackChannel(_index: number, channel: { stream: string }): string {
     return channel.stream;
+  }
+
+  /** Preserve provider names while older clerks roll forward to the new field. */
+  protected channelName(channel: ChannelHealthView): string {
+    return channel.name
+      || (channel.stream === 'market_data' ? 'IBKR market data' : 'Alpaca execution');
   }
 }
