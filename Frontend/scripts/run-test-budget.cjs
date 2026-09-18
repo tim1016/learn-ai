@@ -2,7 +2,7 @@
 
 const { spawn } = require("node:child_process");
 
-// CI shards this same suite across 6 jobs (.github/workflows/ci.yml) by
+// CI shards this same suite across 12 jobs (.github/workflows/ci.yml) by
 // setting TEST_SHARD_INDEX/TEST_SHARD_COUNT and NG_BUILD_MAX_WORKERS=2, then
 // passing --runner-config=vitest.ci.config.ts, which refuses to load without
 // both shard vars set. Mirror that locally instead of reinventing it: a dev
