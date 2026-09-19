@@ -49,11 +49,11 @@ interface Harness {
   preview: ReturnType<typeof vi.fn>;
 }
 
-function setup(): Harness {
+function setup(categories: IndicatorCategory[] = STUB_CATEGORIES): Harness {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({ imports: [IndicatorPickerComponent] });
   const fixture = TestBed.createComponent(IndicatorPickerComponent);
-  fixture.componentRef.setInput('categories', STUB_CATEGORIES);
+  fixture.componentRef.setInput('categories', categories);
   fixture.componentRef.setInput('presets', TEST_PRESETS);
   const add = vi.fn();
   const addInstance = vi.fn();
@@ -157,6 +157,40 @@ describe('IndicatorPickerComponent', () => {
     expect(clear).not.toBeNull();
     clickAndFlush(fixture, clear);
     expect(el.querySelector('.ip-chip-clear')).toBeNull();
+  });
+
+  it('facets that filter a non-empty catalog down to nothing keep the filter advice', () => {
+    const { fixture, el } = setup();
+    // Overlay ∩ momentum is empty: rsi and macd are both sub-panel indicators.
+    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-pane="overlay"]'));
+    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="momentum"]'));
+    const empty = textOf(el, '.ip-empty');
+    expect(empty).toContain('No indicators match these filters');
+    expect(empty).toContain('Try removing a pane or category constraint, or clearing the search.');
+    expect(el.querySelector('.ip-link')?.textContent).toContain('Clear search and filters');
+  });
+
+  it('an empty catalog says nothing is available instead of blaming filters', () => {
+    const { fixture, el } = setup([]);
+    const empty = () => textOf(el, '.ip-empty');
+    expect(empty()).toContain('No indicators available');
+    expect(empty()).not.toContain('No indicators match');
+    expect(empty()).not.toContain('Try removing');
+    expect(el.querySelector('.ip-link')).toBeNull();
+
+    // A facet toggled on an empty catalog is still not why nothing is listed.
+    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-pane="overlay"]'));
+    expect(empty()).toContain('No indicators available');
+    expect(empty()).not.toContain('No indicators match');
+    expect(el.querySelector('.ip-link')).toBeNull();
+  });
+
+  it('shows only the loading state while an empty catalog is loading', () => {
+    const { fixture, el } = setup([]);
+    fixture.componentRef.setInput('loading', true);
+    fixture.detectChanges();
+    expect(textOf(el, '.ip-empty')).toContain('Loading indicators…');
+    expect(el.textContent).not.toContain('No indicators available');
   });
 });
 
