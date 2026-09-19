@@ -56,6 +56,16 @@ Some values are semantically a **date** (option expiry `2026-06-19`, a "trading 
 
 No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see "Classical rules") is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
 
+### Readable time in exported CSVs
+
+A CSV the owner downloads to read in a spreadsheet is boundary 2 applied to a file, not a new wire format (owner decision 2026-09-19). Such a file may carry **one display-only wall-clock column** beside `unix_ts`, under these conditions:
+
+- `unix_ts` (`int64 ms UTC`) is **always present, first, and not deselectable** — it is the column every consumer aligns on.
+- The readable column is rendered server-side from `unix_ts` in one owner-chosen IANA zone and is named for that zone (`time_america_chicago`), so a file never states a wall-clock without saying where.
+- Nothing in the repo parses the readable column back, stores it, or aligns on it.
+
+Surfaces: Data Lab `dataset.csv` (`build_csv_bytes` in `app/services/dataset_service.py`, `YYYY-MM-DD HH:MM:SS`) and the options companion's `iso_time` (`docs/options-companion-format.md`).
+
 ### Finite ingestion vs. live subscriptions
 
 The fail-fast rule above governs **finite** ingestion — a historical fetch is a closed dataset where a duplicate or gap *is* upstream corruption, so it must halt. An **active broker subscription** is a different boundary: a long-lived stream (e.g. IBKR `reqRealTimeBars`) can legitimately *redeliver* the bar it most recently sent, and the vendor does not contractually promise duplicate-free delivery. For these and only these live subscriptions, a redelivery of the most-recently-accepted element may be absorbed **idempotently** — but it must be **surfaced, never silenced**: logged with a structured `action` and incremented on an observable counter, exactly like the fail-fast path emits an error. The relaxation is narrow:

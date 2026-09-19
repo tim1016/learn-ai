@@ -127,12 +127,28 @@ export interface GenerateZipMapperInput {
   multiplier: number;
   sort: string;
   limit: number;
+  /** IANA zone of dataset.csv's readable time column; `null` omits it. */
+  timeZone: string | null;
+  /** dataset.csv data columns; `null` exports every planned column. */
+  columns: readonly string[] | null;
 }
 
 /** Map the committed workspace state to the generate-zip payload — the same
  *  shape `_buildGenerateZipPayload` produces today, plus additive numeric
- *  `start_ms_utc` / `end_ms_utc`. Pure. */
+ *  `start_ms_utc` / `end_ms_utc` and the dataset.csv column selection. Pure. */
 export function buildGenerateZipPayload(input: GenerateZipMapperInput): Record<string, unknown> {
+  return {
+    ...buildDatasetPlanPayload(input),
+    columns: input.columns === null ? null : [...input.columns],
+  };
+}
+
+/** The `/api/dataset/plan` body for the same recipe: the generate payload
+ *  without the column selection, because the plan lists the columns a
+ *  selection is chosen from. Pure. */
+export function buildDatasetPlanPayload(
+  input: Omit<GenerateZipMapperInput, 'columns'>,
+): Record<string, unknown> {
   const optionsConfig = input.companions.optionsCompanionEnabled
     ? { ...input.options, enabled: true }
     : null;
@@ -166,5 +182,6 @@ export function buildGenerateZipPayload(input: GenerateZipMapperInput): Record<s
     include_financials: input.companions.includeFinancials,
     include_trades: input.companions.includeStockTrades,
     include_quotes: input.companions.includeStockQuotes,
+    time_zone: input.timeZone,
   };
 }

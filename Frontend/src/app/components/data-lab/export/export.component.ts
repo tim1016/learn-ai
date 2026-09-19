@@ -2,8 +2,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -14,10 +16,14 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { DataLabWorkspaceStore } from '../data-lab-workspace-store';
 import type { DataLabCompanionSettings } from '../data-lab-workspace-store';
 import {
+  buildDatasetPlanPayload,
   buildGenerateZipPayload,
+  type GenerateZipMapperInput,
   type OptionsCompanionWireConfig,
 } from '../data-lab-request-mapper';
 import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.service';
+import { ExportColumnPickerComponent } from './export-column-picker/export-column-picker.component';
+import { columnsForPayload } from './export-csv-options';
 
 /**
  * Data Lab Build dataset (PRD §7.4).
@@ -27,10 +33,18 @@ import { DataLabPlanService, type DataLabPlanReceipt } from './data-lab-plan.ser
  * workspace state; columns/sessions/estimates come from the Python plan
  * receipt rendered verbatim (FR-012); generation goes through
  * `RunSessionService.start()` — the ONLY submission path (FR-005).
+ * The plan re-runs by itself whenever the recipe changes, so the
+ * dataset.csv column picker always lists the current columns (owner
+ * decision 2026-09-19).
  */
 @Component({
   selector: 'app-data-lab-export',
-  imports: [RouterLink, PastChainInspectorComponent, AssetIdentityComponent],
+  imports: [
+    RouterLink,
+    PastChainInspectorComponent,
+    AssetIdentityComponent,
+    ExportColumnPickerComponent,
+  ],
   templateUrl: './export.component.html',
   styleUrls: ['./export.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -71,16 +85,31 @@ export class ExportComponent {
   readonly planReceipt = computed<DataLabPlanReceipt | null>(() =>
     this.store.datasetPlanReceipt() as DataLabPlanReceipt | null,
   );
+  /** Only the newest plan request may write the receipt. */
+  private planRequestSeq = 0;
+
+  /** Serialized plan request for the live recipe; null until a scope is
+   *  committed. The receipt's stored signature is compared against it. */
+  private readonly planSignature = computed(() => {
+    const input = this.recipeInput();
+    return input ? JSON.stringify(buildDatasetPlanPayload(input)) : null;
+  });
 
   /** The stored receipt describes a recipe that no longer matches the live
    *  workspace (ticker/window/timeframe/indicators/options changed after the
    *  plan ran). Its counts must not read as current in §4 — the template
-   *  labels the receipt stale until it is re-run. */
+   *  labels the receipt stale until the automatic re-plan lands. */
   readonly planReceiptStale = computed(() => {
     if (!this.planReceipt()) return false;
     const stored = this.store.datasetPlanReceiptSignature();
-    return stored !== null && stored !== JSON.stringify(this.buildPayload());
+    return stored !== null && stored !== this.planSignature();
   });
+
+  /** The `columns` the generate payload carries — the owner's ticks,
+   *  narrowed to the columns the current plan lists. */
+  readonly payloadColumns = computed(() =>
+    columnsForPayload(this.store.exportColumns(), this.planReceipt()?.output_columns ?? null),
+  );
 
   readonly generateStarting = signal(false);
   readonly generateError = signal('');
@@ -94,6 +123,43 @@ export class ExportComponent {
       this.runSession.state() === 'bundling' ||
       this.generateStarting(),
   );
+
+  /** Generation waits until the receipt is current (in flight or failed
+   *  re-plan): the column selection is narrowed against the plan, so it
+   *  must describe the live recipe. */
+  readonly generateBlocked = computed(
+    () => this.runActive() || this.planLoading() || this.planReceiptStale(),
+  );
+
+  readonly generateLabel = computed(() => {
+    if (this.runActive()) return 'Run in progress…';
+    if (this.planLoading()) return 'Updating column list…';
+    return 'Generate dataset ZIP';
+  });
+
+  readonly timeColumnsSummary = computed(() => {
+    const timeColumn = this.planReceipt()?.time_column;
+    return timeColumn ? `unix_ts, ${timeColumn}` : 'unix_ts';
+  });
+
+  readonly dataColumnsSummary = computed(() => {
+    const available = this.planReceipt()?.output_columns;
+    if (!available) return 'waiting for the plan';
+    const selected = this.payloadColumns();
+    return selected === null
+      ? `all ${available.length}`
+      : `${selected.length} of ${available.length}`;
+  });
+
+  constructor() {
+    // Keep the column list current by itself: re-plan whenever the plan
+    // request for the live recipe differs from the one the receipt answers.
+    effect(() => {
+      const signature = this.planSignature();
+      if (signature === null || signature === this.store.datasetPlanReceiptSignature()) return;
+      untracked(() => void this.loadPlan());
+    });
+  }
 
   readonly scopeSummary = computed(() => {
     const ticker = this.store.committedTicker();
@@ -131,13 +197,13 @@ export class ExportComponent {
     };
   }
 
-  /** One mapper, one payload shape — plan and generate share it. */
-  private buildPayload(): Record<string, unknown> | null {
+  /** One mapper input — the plan and generate payloads both derive from it. */
+  private recipeInput(): Omit<GenerateZipMapperInput, 'columns'> | null {
     const ticker = this.store.committedTicker();
     const window = this.store.committedWindow();
     if (!ticker || !window) return null;
     const draft = this.store.draft();
-    return buildGenerateZipPayload({
+    return {
       ticker,
       window,
       indicators: this.store.indicators(),
@@ -152,34 +218,40 @@ export class ExportComponent {
       multiplier: draft.multiplier,
       sort: this.sort(),
       limit: this.polygonLimit(),
-    });
+      timeZone: this.store.exportTimeZone(),
+    };
   }
 
   async loadPlan(): Promise<void> {
-    const payload = this.buildPayload();
-    if (!payload) {
+    const input = this.recipeInput();
+    if (!input) {
       this.planError.set('Commit a ticker and window before previewing columns.');
       return;
     }
+    const payload = buildDatasetPlanPayload(input);
+    const seq = ++this.planRequestSeq;
     this.planLoading.set(true);
     this.planError.set('');
     try {
       const receipt = await this.planService.plan(payload);
+      if (seq !== this.planRequestSeq) return;
       this.store.setDatasetPlanReceipt(
         receipt as Record<string, unknown>,
         JSON.stringify(payload),
       );
     } catch (e: unknown) {
+      if (seq !== this.planRequestSeq) return;
       this.planError.set(e instanceof Error ? e.message : String(e));
     } finally {
-      this.planLoading.set(false);
+      if (seq === this.planRequestSeq) this.planLoading.set(false);
     }
   }
 
   /** The ONLY submission path (FR-005). */
   async generate(): Promise<void> {
-    if (this.runActive()) return;
-    const payload = this.buildPayload();
+    if (this.generateBlocked()) return;
+    const input = this.recipeInput();
+    const payload = input ? buildGenerateZipPayload({ ...input, columns: this.payloadColumns() }) : null;
     if (!payload) {
       this.generateError.set('Commit a ticker and window before generating.');
       return;

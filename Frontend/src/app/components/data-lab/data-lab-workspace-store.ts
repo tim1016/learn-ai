@@ -4,6 +4,7 @@ import {
   ChartSeriesColorToken,
   isChartSeriesColorToken,
 } from '../../shared/trading-chart/chart-series-color-tokens';
+import { browserTimeZone, type ExportColumnSelection } from './export/export-csv-options';
 
 /* DataLabWorkspaceStore (PRD 2026-09-12 data-lab workspace redesign §7.2).
  *
@@ -174,6 +175,12 @@ export class DataLabWorkspaceStore {
   // ── Companions ──────────────────────────────────────────────
   private readonly _companions = signal<DataLabCompanionSettings>({ ...DEFAULT_COMPANIONS });
 
+  // ── dataset.csv choices (owner decision 2026-09-19) ─────────
+  // Kept while the owner moves between Data Lab tabs; not part of the
+  // saved-session envelope.
+  private readonly _exportColumns = signal<ExportColumnSelection>(null);
+  private readonly _exportTimeZone = signal<string | null>(browserTimeZone());
+
   // ── Session / chart / receipts / runs ───────────────────────
   private readonly _savedSession = signal<DataLabSavedSessionRef | null>(null);
   private readonly _lastChartRequestSignature = signal<string | null>(null);
@@ -206,6 +213,8 @@ export class DataLabWorkspaceStore {
   readonly indicators = this._indicators.asReadonly();
   readonly colorTokenOverrides = this._colorOverrides.asReadonly();
   readonly companions = this._companions.asReadonly();
+  readonly exportColumns = this._exportColumns.asReadonly();
+  readonly exportTimeZone = this._exportTimeZone.asReadonly();
   readonly savedSession = this._savedSession.asReadonly();
   readonly lastChartRequestSignature = this._lastChartRequestSignature.asReadonly();
   readonly chartStale = this._chartStale.asReadonly();
@@ -379,6 +388,16 @@ export class DataLabWorkspaceStore {
   // ── Companions / receipts / refs ────────────────────────────
   patchCompanions(patch: Partial<DataLabCompanionSettings>): void {
     this._companions.update(c => ({ ...c, ...patch }));
+  }
+
+  /** `null` exports every planned column, including later ones. */
+  setExportColumns(selection: ExportColumnSelection): void {
+    this._exportColumns.set(selection === null ? null : [...selection]);
+  }
+
+  /** IANA zone of the readable time column; `null` omits the column. */
+  setExportTimeZone(zone: string | null): void {
+    this._exportTimeZone.set(zone);
   }
 
   setSavedSession(ref: DataLabSavedSessionRef | null): void {

@@ -37,6 +37,12 @@ class DatasetPlanResponse(BaseModel):
         description="Canonical ordered output column list, projected by the same function the ZIP path uses.",
     )
     output_column_count: int = Field(..., ge=0, description="len(output_columns)")
+    time_column: str | None = Field(
+        None,
+        description="Header of the readable time column dataset.csv carries right after unix_ts "
+        "for the requested time_zone, or null when no time_zone was requested. unix_ts is "
+        "always the first column and is not part of output_columns.",
+    )
     estimated_bars: int = Field(
         ...,
         ge=0,
