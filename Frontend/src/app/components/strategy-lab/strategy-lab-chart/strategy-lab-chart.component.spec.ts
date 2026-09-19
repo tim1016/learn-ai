@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { MarketDataService } from "../../../services/market-data.service";
 import { IndicatorCatalogService } from "../../../shared/indicator-catalog/indicator-catalog.service";
-import { TradingChartComponent } from "../../../shared/trading-chart";
+import { TradingChartComponent, TRADING_CHART_FACTORY } from "../../../shared/trading-chart";
 import { indicatorMatches, normalizeIndicatorResults, timeframeKey } from "./strategy-lab-chart.adapter";
 import { StrategyLabChartComponent } from "./strategy-lab-chart.component";
 
@@ -24,6 +24,7 @@ class TradingChartStubComponent {
   readonly activeIndicators = input<unknown[]>([]);
   readonly indicatorCategories = input<unknown[]>([]);
   readonly indicatorCatalogLoading = input(false);
+  readonly indicatorCatalogLoadFailed = input(false);
   readonly indicatorAdded = output<never>();
   readonly indicatorRemoved = output<string>();
 }
@@ -149,7 +150,7 @@ describe("StrategyLabChartComponent", () => {
         provideHttpClientTesting(),
         {
           provide: IndicatorCatalogService,
-          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false) },
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(null) },
         },
         { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
       ],
@@ -233,7 +234,7 @@ describe("StrategyLabChartComponent", () => {
         provideHttpClientTesting(),
         {
           provide: IndicatorCatalogService,
-          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false) },
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(null) },
         },
         { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
       ],
@@ -253,5 +254,62 @@ describe("StrategyLabChartComponent", () => {
     const http = TestBed.inject(HttpTestingController);
     http.expectNone((candidate) => candidate.url.endsWith("/api/engine/chart"));
     http.verify();
+  });
+});
+
+describe("StrategyLabChartComponent indicator catalog failure", () => {
+  // The real trading chart and its rail render here; only the canvas library
+  // is faked, so the picker's failure message is asserted where the operator
+  // would read it.
+  const createChart = vi.fn(() => ({
+    addSeries: vi.fn(() => ({ setData: vi.fn(), createPriceLine: vi.fn() })),
+    panes: vi.fn(() => []),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    resize: vi.fn(),
+    remove: vi.fn(),
+  }));
+
+  async function renderExpandedRail(catalogError: string | null): Promise<HTMLElement> {
+    await TestBed.configureTestingModule({
+      imports: [StrategyLabChartComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: IndicatorCatalogService,
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(catalogError) },
+        },
+        { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
+        { provide: TRADING_CHART_FACTORY, useValue: createChart },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(StrategyLabChartComponent);
+    fixture.componentRef.setInput("run", makeRun());
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>("[aria-label='Expand chart']")?.click();
+    fixture.detectChanges();
+    const rail = root.querySelector<HTMLElement>("app-chart-indicator-rail");
+    if (rail === null) throw new Error("indicator rail not rendered after expansion");
+    return rail;
+  }
+
+  it("tells the operator the indicator catalog failed to load", async () => {
+    const rail = await renderExpandedRail("Http failure response: 500 Internal Server Error");
+
+    const alert = rail.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Indicators could not be loaded.");
+    expect(rail.textContent).not.toContain("No indicators available");
+    // Fixed copy: the raw fetch error never reaches the page.
+    expect(rail.textContent).not.toContain("Http failure response");
+  });
+
+  it("raises no failure when the catalog loaded", async () => {
+    const rail = await renderExpandedRail(null);
+
+    expect(rail.querySelector('[role="alert"]')).toBeNull();
+    expect(rail.textContent).not.toContain("Indicators could not be loaded.");
   });
 });

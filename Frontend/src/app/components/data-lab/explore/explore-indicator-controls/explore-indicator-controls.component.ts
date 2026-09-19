@@ -37,6 +37,7 @@ export class ExploreIndicatorControlsComponent {
   /** Canonical keys of active instances — drive the picker's +N badges. */
   readonly activeKeys = input<readonly string[]>([]);
   readonly loading = input(false);
+  readonly loadFailed = input(false);
   readonly chips = input<readonly ExploreChipEntry[]>([]);
   readonly activeCount = input(0);
   readonly chipsExpanded = input(false);

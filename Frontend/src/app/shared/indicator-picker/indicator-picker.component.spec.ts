@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import axe from 'axe-core';
 import { vi } from 'vitest';
 
 import { IndicatorCategory } from '../indicator-catalog/indicator-catalog.service';
@@ -191,6 +192,51 @@ describe('IndicatorPickerComponent', () => {
     fixture.detectChanges();
     expect(textOf(el, '.ip-empty')).toContain('Loading indicators…');
     expect(el.textContent).not.toContain('No indicators available');
+  });
+
+  it('an empty catalog whose load failed says so in an alert', () => {
+    const { fixture, el } = setup([]);
+    fixture.componentRef.setInput('loadFailed', true);
+    fixture.detectChanges();
+    const alert = el.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Indicators could not be loaded.');
+    expect(el.textContent).not.toContain('No indicators available');
+  });
+
+  it('the load-failure state passes axe', async () => {
+    const { fixture } = setup([]);
+    fixture.componentRef.setInput('presets', []);
+    fixture.componentRef.setInput('loadFailed', true);
+    fixture.detectChanges();
+    // jsdom has no layout, so contrast is not measurable here.
+    const results = await axe.run(fixture.nativeElement as HTMLElement, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(results.violations).toEqual([]);
+  });
+
+  it('an empty catalog with no load failure stays neutral and raises no alert', () => {
+    const { el } = setup([]);
+    expect(textOf(el, '.ip-empty')).toContain('No indicators available');
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('a failed load does not touch a catalog that has indicators', () => {
+    const { fixture, el } = setup();
+    fixture.componentRef.setInput('loadFailed', true);
+    fixture.detectChanges();
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    expect(textOf(el, '.ip-count')).toContain('6 of 6');
+  });
+
+  it('loading wins over a failed load', () => {
+    const { fixture, el } = setup([]);
+    fixture.componentRef.setInput('loadFailed', true);
+    fixture.componentRef.setInput('loading', true);
+    fixture.detectChanges();
+    expect(textOf(el, '.ip-empty')).toContain('Loading indicators…');
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    expect(el.textContent).not.toContain('Indicators could not be loaded.');
   });
 });
 

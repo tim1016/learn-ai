@@ -9,6 +9,7 @@
   [activeIndicators]="activeIndicators()"
   [indicatorCategories]="catalog.categories()"
   [indicatorCatalogLoading]="catalog.loading()"
+  [indicatorCatalogLoadFailed]="catalog.error() !== null"
   (indicatorAdded)="addIndicator($event)"
   (indicatorRemoved)="removeIndicator($event)"
 />

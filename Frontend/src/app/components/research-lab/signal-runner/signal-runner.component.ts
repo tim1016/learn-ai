@@ -129,6 +129,7 @@ export class SignalRunnerComponent {
   /** Catalog passed to the picker. */
   readonly catalogCategories = this.catalog.categories;
   readonly catalogLoading = this.catalog.loading;
+  readonly catalogLoadFailed = computed(() => this.catalog.error() !== null);
 
   // Form inputs
   // CRITICAL — ``range.multiplier`` initialized to 15 to preserve

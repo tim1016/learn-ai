@@ -133,6 +133,7 @@ export class FeatureRunnerComponent {
    *  read the service signal directly without leaking the service. */
   readonly catalogCategories = this.catalog.categories;
   readonly catalogLoading = this.catalog.loading;
+  readonly catalogLoadFailed = computed(() => this.catalog.error() !== null);
 
   // Form inputs
   // Single TickerRange replaces (ticker, fromDate, toDate, timespan,

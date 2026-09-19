@@ -59,6 +59,9 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
   readonly activeKeys = input<readonly string[]>([]);
   readonly presets = input<readonly IndicatorPreset[]>(INDICATOR_PRESETS);
   readonly loading = input<boolean>(false);
+  /** The host's catalog load failed. An empty catalog then says so instead of
+   *  claiming no indicators exist. */
+  readonly loadFailed = input(false);
   readonly allowAdditionalInstances = input(true);
   /** Opt-in searchable presentation (PRD §9). Off by default so existing
    *  consumers keep their current presentation until migrated. */
