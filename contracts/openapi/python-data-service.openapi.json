@@ -12105,6 +12105,21 @@
             "title": "Adjusted",
             "type": "boolean"
           },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Data columns to write to dataset.csv, drawn from the plan's output_columns. Written in the canonical projection order regardless of list order; unix_ts is always first and is not listed here. Null writes every projected column. A name this recipe cannot produce is rejected.",
+            "title": "Columns"
+          },
           "end_ms_utc": {
             "anyOf": [
               {
@@ -12258,6 +12273,18 @@
             "minLength": 1,
             "title": "Ticker",
             "type": "string"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone \u2014 display only; unix_ts stays the canonical time. Null omits the column.",
+            "title": "Time Zone"
           },
           "timespan": {
             "default": "minute",
@@ -12434,6 +12461,18 @@
             "title": "Ticker",
             "type": "string"
           },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone \u2014 display only; unix_ts stays the canonical time. Null omits the column.",
+            "title": "Time Zone"
+          },
           "timespan": {
             "default": "minute",
             "description": "Bar timespan: 'second', 'minute', 'hour', or 'day'+",
@@ -12555,6 +12594,18 @@
             "description": "Ticker the plan was resolved for",
             "title": "Ticker",
             "type": "string"
+          },
+          "time_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Header of the readable time column dataset.csv carries right after unix_ts for the requested time_zone, or null when no time_zone was requested. unix_ts is always the first column and is not part of output_columns.",
+            "title": "Time Column"
           },
           "warnings": {
             "description": "Human-readable cautions (tick-level volume, options workload, \u2026).",

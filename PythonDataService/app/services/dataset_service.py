@@ -980,17 +980,69 @@ def project_output_columns(
     return price_cols + extra_cols + indicator_cols
 
 
-def build_csv_bytes(df: pd.DataFrame, columns: list[str]) -> bytes:
-    """Serialize a DataFrame with canonical ``unix_ts`` milliseconds first."""
+def select_output_columns(projected: list[str], requested: list[str] | None) -> list[str]:
+    """Apply a dataset.csv column selection to the canonical projection.
+
+    ``None`` keeps every projected column. A list keeps only the named
+    columns, in projection order rather than request order. A requested
+    name the projection does not carry raises instead of silently
+    narrowing the export — ``unix_ts`` included, since it is always
+    written first and is not selectable.
+    """
+    if requested is None:
+        return list(projected)
+    missing = sorted(set(requested) - set(projected))
+    if missing:
+        raise ValueError(
+            f"dataset.csv cannot include column(s) {missing}: not among this dataset's "
+            f"columns {projected} (unix_ts is always written first and is not selectable)"
+        )
+    wanted = set(requested)
+    return [c for c in projected if c in wanted]
+
+
+READABLE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def time_column_name(time_zone: str) -> str:
+    """Header of the readable time column: ``America/Chicago`` → ``time_america_chicago``."""
+    return "time_" + time_zone.lower().replace("/", "_")
+
+
+def _time_column_description(time_zone: str) -> str:
+    return (
+        f"The unix_ts instant as {time_zone} wall-clock time (YYYY-MM-DD HH:MM:SS). "
+        "Display only — unix_ts is the canonical time; the hour repeated at a "
+        "daylight-saving fall-back prints twice"
+    )
+
+
+def build_csv_bytes(df: pd.DataFrame, columns: list[str], time_zone: str | None = None) -> bytes:
+    """Serialize a DataFrame with canonical ``unix_ts`` milliseconds first.
+
+    With ``time_zone``, a display-only ``time_<zone>`` column follows
+    ``unix_ts`` carrying the same instant as wall-clock text in that zone
+    (owner decision 2026-09-19). The text is never parsed back; ``unix_ts``
+    stays the time every consumer aligns on.
+    """
     output = io.StringIO()
     writer = csv.writer(output)
-    header = ["unix_ts", *columns]
-    writer.writerow(header)
+    header = ["unix_ts"]
+    time_labels: list[str] | None = None
+    if time_zone is not None:
+        header.append(time_column_name(time_zone))
+        time_labels = (
+            pd.to_datetime(df["timestamp"].astype("int64"), unit="ms", utc=True)
+            .dt.tz_convert(ZoneInfo(time_zone))
+            .dt.strftime(READABLE_TIME_FORMAT)
+            .tolist()
+        )
+    writer.writerow([*header, *columns])
 
-    for _, row in df.iterrows():
+    for position, (_, row) in enumerate(df.iterrows()):
         ts = int(row["timestamp"])
-        values = [ts] + [_fmt(row.get(col)) for col in columns]
-        writer.writerow(values)
+        leading: list[Any] = [ts] if time_labels is None else [ts, time_labels[position]]
+        writer.writerow(leading + [_fmt(row.get(col)) for col in columns])
     return output.getvalue().encode("utf-8")
 
 
@@ -1005,6 +1057,7 @@ def build_metadata_json(
     forward_fill: bool = False,
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
+    time_zone: str | None = None,
 ) -> bytes:
     """Generate CSV metadata JSON describing every column and its calculation."""
     base_columns = [
@@ -1015,6 +1068,15 @@ def build_metadata_json(
             "source": "Polygon.io",
         },
     ]
+    if time_zone is not None:
+        base_columns.append(
+            {
+                "column": time_column_name(time_zone),
+                "type": "string",
+                "description": _time_column_description(time_zone),
+                "source": "Derived from unix_ts",
+            }
+        )
     for col in ohlcv_cols:
         desc_map = {
             "PC": "Previous trading day's RTH close for the underlying ticker",
@@ -1181,6 +1243,7 @@ def _describe_indicator_column(indicator: str, column: str, params: str) -> str:
 def build_metadata_csv(
     column_meta: list[dict[str, Any]],
     ohlcv_cols: list[str],
+    time_zone: str | None = None,
 ) -> bytes:
     """Generate a CSV describing every column in the dataset."""
     output = io.StringIO()
@@ -1190,6 +1253,17 @@ def build_metadata_csv(
     base = [
         ("unix_ts", "int", "Polygon.io", "", "", "Unix timestamp in milliseconds (UTC)"),
     ]
+    if time_zone is not None:
+        base.append(
+            (
+                time_column_name(time_zone),
+                "string",
+                "Derived from unix_ts",
+                "",
+                "",
+                _time_column_description(time_zone),
+            )
+        )
     desc_map = {
         "PC": "Previous close — the RTH close (16:00 ET) of the most recently completed "
         "regular trading session at or before this bar. Bars before 16:00 ET reference the "
@@ -1262,6 +1336,8 @@ def build_metadata_kv_csv(
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
     column_meta: list[dict[str, Any]] | None = None,
+    time_zone: str | None = None,
+    custom_column_selection: bool = False,
 ) -> bytes:
     """Generate a simple key-value CSV with dataset metadata."""
     import zipfile as _zf  # noqa: F401 — just to verify import
@@ -1284,7 +1360,10 @@ def build_metadata_kv_csv(
         ("generated_at_ms", str(now_ms_utc())),
         ("data_source", "Polygon.io (Starter plan)"),
         ("calculation_engine", f"pandas-ta {getattr(ta, 'version', 'unknown')}"),
+        ("column_selection", "custom" if custom_column_selection else "all"),
     ]
+    if time_zone is not None:
+        rows.append(("time_zone", time_zone))
 
     if column_meta:
         for i, meta in enumerate(column_meta, 1):
@@ -1323,10 +1402,14 @@ def build_zip_bytes(
     financials_csv_bytes: bytes | None = None,
     stock_trades_csv_bytes: bytes | None = None,
     stock_quotes_csv_bytes: bytes | None = None,
+    time_zone: str | None = None,
+    custom_column_selection: bool = False,
 ) -> bytes:
     """Pack the dataset bundle into a ZIP.
 
-    Always includes ``dataset.csv``, ``metadata.csv``, ``columns.csv``.
+    Always includes ``dataset.csv``, ``metadata.csv``, ``columns.csv``;
+    ``columns`` / ``column_meta`` / ``ohlcv_cols`` arrive already narrowed
+    to the requested selection, so all three describe the same columns.
     Optional members (from Data Lab toggles):
       * ``trades.csv`` — legacy raw trade data.
       * ``calls/<slot>.csv`` / ``puts/<slot>.csv`` — per-slot options companion files.
@@ -1340,7 +1423,7 @@ def build_zip_bytes(
     import json
     import zipfile
 
-    dataset_csv = build_csv_bytes(df, columns)
+    dataset_csv = build_csv_bytes(df, columns, time_zone=time_zone)
     metadata_csv = build_metadata_kv_csv(
         ticker=ticker,
         from_date=from_date,
@@ -1353,8 +1436,10 @@ def build_zip_bytes(
         raw_bar_count=raw_bar_count,
         filled_bar_count=filled_bar_count,
         column_meta=column_meta,
+        time_zone=time_zone,
+        custom_column_selection=custom_column_selection,
     )
-    columns_csv = build_metadata_csv(column_meta, ohlcv_cols)
+    columns_csv = build_metadata_csv(column_meta, ohlcv_cols, time_zone=time_zone)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

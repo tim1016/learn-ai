@@ -385,9 +385,11 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
         # Numeric window bounds (start_ms_utc/end_ms_utc) take precedence
         # over the date strings — resolve them into the fetch span here so
         # fetch, companions, and filename all describe the planned window.
-        from app.services.dataset_plan_service import resolve_generation_window
+        # A column selection the recipe cannot produce is rejected here too,
+        # before the job queues a single Polygon fetch.
+        from app.services.dataset_plan_service import prepare_generation_request
 
-        dataset_req = resolve_generation_window(dataset_req)
+        dataset_req = prepare_generation_request(dataset_req)
     except Exception as exc:  # pydantic ValidationError or shape mismatch
         raise HTTPException(status_code=400, detail=f"invalid dataset payload: {exc}")
 

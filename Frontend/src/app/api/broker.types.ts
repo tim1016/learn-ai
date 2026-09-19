@@ -12175,6 +12175,11 @@ export interface components {
              */
             adjusted?: boolean;
             /**
+             * Columns
+             * @description Data columns to write to dataset.csv, drawn from the plan's output_columns. Written in the canonical projection order regardless of list order; unix_ts is always first and is not listed here. Null writes every projected column. A name this recipe cannot produce is rejected.
+             */
+            columns?: string[] | null;
+            /**
              * End Ms Utc
              * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.
              */
@@ -12292,6 +12297,11 @@ export interface components {
              * @description Ticker symbol
              */
             ticker: string;
+            /**
+             * Time Zone
+             * @description IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone — display only; unix_ts stays the canonical time. Null omits the column.
+             */
+            time_zone?: string | null;
             /**
              * Timespan
              * @description Bar timespan: 'minute', 'hour', or 'day'
@@ -12436,6 +12446,11 @@ export interface components {
              */
             ticker: string;
             /**
+             * Time Zone
+             * @description IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone — display only; unix_ts stays the canonical time. Null omits the column.
+             */
+            time_zone?: string | null;
+            /**
              * Timespan
              * @description Bar timespan: 'second', 'minute', 'hour', or 'day'+
              * @default minute
@@ -12527,6 +12542,11 @@ export interface components {
              * @description Ticker the plan was resolved for
              */
             ticker: string;
+            /**
+             * Time Column
+             * @description Header of the readable time column dataset.csv carries right after unix_ts for the requested time_zone, or null when no time_zone was requested. unix_ts is always the first column and is not part of output_columns.
+             */
+            time_column?: string | null;
             /**
              * Warnings
              * @description Human-readable cautions (tick-level volume, options workload, …).
