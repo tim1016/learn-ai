@@ -624,7 +624,7 @@ async def test_build_history_chart_forwards_batch_notices_with_no_bars_fabricate
                 ChartOverlayNoticeView(
                     code="coordinator_unavailable",
                     message="Polygon history is unavailable because the fleet "
-                    "coordinator could not be reached.",
+                    "coordinator did not complete the request.",
                     source="polygon",
                 )
             ],
@@ -1053,7 +1053,7 @@ async def test_history_chart_forwards_coordinator_unavailable_from_the_batch_pro
                 ChartOverlayNoticeView(
                     code="coordinator_unavailable",
                     message="Polygon history is unavailable because the fleet "
-                    "coordinator could not be reached.",
+                    "coordinator did not complete the request.",
                     source="polygon",
                 )
             ],

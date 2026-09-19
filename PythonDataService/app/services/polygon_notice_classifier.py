@@ -103,18 +103,22 @@ def coordinator_unavailable_notice(subject: str) -> PolygonNotice:
     Issue #2204: history retrieval moved off the Clerk (which never holds a
     usable Polygon key, per ADR 0062) and onto one authenticated internal
     request to the fleet-coordinator role. A timeout, a connection failure, a
-    malformed success payload or an unexpected coordinator response all
-    collapse into this one stable code -- the single history-transport
-    extension to this module's notice vocabulary (FR-011).
+    non-200 refusal, a malformed success payload, or an unexpected
+    coordinator response all collapse into this one stable code -- the
+    single history-transport extension to this module's notice vocabulary
+    (FR-011).
 
     Deliberately **not** a ``polygon_*`` code: the vendor may be entirely
     healthy while the internal hop itself is down, and a caller that needs to
     tell the two apart (retry guidance, alerting) must not conflate them. The
-    message is generic and carries no hostname, port, token or response body
-    -- the Clerk's own transport log holds that diagnostic detail.
+    message is deliberately phrased so it stays true for every failure mode
+    above (issue #2204 gate F8) -- "could not be reached" would be false for
+    a coordinator that was reached and refused (a 4xx/5xx) -- and carries no
+    hostname, port, token or response body; the Clerk's own transport log
+    holds that diagnostic detail.
     """
     return PolygonNotice(
         code=COORDINATOR_UNAVAILABLE_CODE,
         message=f"{subject} is unavailable because the fleet coordinator "
-        "could not be reached.",
+        "did not complete the request.",
     )

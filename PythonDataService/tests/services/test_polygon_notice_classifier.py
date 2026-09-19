@@ -96,7 +96,7 @@ def test_coordinator_unavailable_notice_names_its_own_surface_and_leaks_nothing(
 
     assert notice.message == (
         "Polygon history is unavailable because the fleet coordinator "
-        "could not be reached."
+        "did not complete the request."
     )
     # No hostname, port, or token ever belongs in this text (FR-010).
     assert "://" not in notice.message
