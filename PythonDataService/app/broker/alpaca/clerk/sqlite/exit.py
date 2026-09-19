@@ -265,6 +265,7 @@ def accept_recovery_exit(
     decision_id: str,
     entry_order_ref: str,
     forbid_active_run: bool = False,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Capture one reduction-only recovery EXIT without the active-run fence.
 
@@ -292,6 +293,12 @@ def accept_recovery_exit(
     ``exit-redrive-<episode-hex12>-<n>`` (both colon-free; the idempotency
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
+
+    ``reducing_shape`` is the operator's confirmed extended-hours limit
+    (#2007), durable with the acceptance exactly as a deciding program's shape
+    is (see ``accept_exit``). ``None`` — every watchdog re-drive, and a safe
+    flatten inside the regular session — reduces market DAY, and only inside
+    the regular session (``exit_resolution._recovery_reduction_waits_for_the_open``).
     """
 
     def resolve_run_id(target: OrderResource) -> str:
@@ -310,6 +317,7 @@ def accept_recovery_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=None,
+        reducing_shape=reducing_shape,
     )
 
 

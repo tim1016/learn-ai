@@ -448,6 +448,9 @@ class _MixedLivenessRegistry(_FakeRegistry):
         return view
 
 
+_COHORT_RTH_MS = 1_700_060_400_000  # 2023-11-15 10:00 ET, a Wednesday
+
+
 @pytest.fixture()
 async def cohort_api(tmp_path):
     reset_broker_registry_for_testing()
@@ -457,7 +460,12 @@ async def cohort_api(tmp_path):
     set_bot_task_registry(_MixedLivenessRegistry(tmp_path, sids=sids))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
-    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
+    # Inside the regular session, where the ladder's flatten is a market order
+    # the generic button may send (#2007) -- pinned so the harness cannot
+    # depend on the time of day it runs.
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCT, artifacts_root=tmp_path, clock=_clock_seq(start=_COHORT_RTH_MS)
+    )
     for sid in sids:
         repo.register_strategy_instance(
             strategy_instance_id=sid,

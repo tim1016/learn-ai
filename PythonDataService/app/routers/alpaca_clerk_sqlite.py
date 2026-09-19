@@ -80,6 +80,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     StartRunRequest,
     StopRunRequest,
     TimelinePageResponse,
+    safe_flatten_pricing_response,
 )
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
@@ -458,8 +459,13 @@ async def _check_recovery_action(
     Mutation executors call the same ``recheck_recovery_action`` immediately
     before their durable command/effect path.  This transport seam lets the
     existing confirmation component refresh evidence before confirmation.
+
+    A single-leg safe-flatten plan also carries how it would go out *now*
+    (#2007): market inside the regular session, the live IBKR quote and a
+    suggested limit in PRE/POST, or why nothing can be sent.
     """
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
+    repo = facade.repository
     try:
         context = await asyncio.to_thread(
             _read_projection,
@@ -497,8 +503,14 @@ async def _check_recovery_action(
                 ).model_dump(mode="json"),
             },
         ) from exc
+    pricing = (
+        None
+        if capability.reduction_plan is None
+        else facade.price_safe_flatten(capability.reduction_plan)
+    )
     return RecoveryActionCheckResponse(
-        capability=RecoveryCapabilityResponse.model_validate(capability)
+        capability=RecoveryCapabilityResponse.model_validate(capability),
+        reduction_pricing=None if pricing is None else safe_flatten_pricing_response(pricing),
     )
 
 
@@ -661,6 +673,9 @@ async def _execute_presented_recovery_action(
                 concurrency_token=body.concurrency_token,
                 execution_ref=body.execution_ref,
                 reason=body.reason,
+                confirmed_limit=(
+                    None if body.extended_limit is None else body.extended_limit.to_confirmed()
+                ),
             ),
             current_context=current_context,
         )

@@ -12,8 +12,14 @@ move; the authoring was violating its own contract.
 
 from __future__ import annotations
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
-from app.services.broker_v2_panel.sqlite_panel_adapter import _capability_blocker
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR,
+    _capability_blocker,
+    _panel_action,
+)
 
 
 def _capability(
@@ -61,3 +67,62 @@ def test_a_condition_the_operator_cannot_cure_still_offers_no_move() -> None:
 
     assert blocker.disposition == "wait"
     assert blocker.primary_move is None
+
+
+# ── #2007: the unpriced flatten button outside the regular session ────────────
+
+
+def _available(action_id: str) -> RecoveryCapability:
+    return RecoveryCapability(
+        action_id=action_id,
+        label="Execute safe flatten",
+        explanation="Submit the prepared reduction.",
+        available=True,
+        unavailable_reason_code=None,
+        unavailable_reason=None,
+        scope="CUSTODY_SUBJECT",
+        freshness="fresh",
+        evidence=(),
+        reduction_plan=None,
+        confirmation=None,
+        next_step="Execute the flatten.",
+        concurrency_token="token-1",
+        execution_ref=None,
+        mutation=True,
+        primary=False,
+    )
+
+
+@pytest.mark.parametrize("phase", ["PRE", "POST"])
+def test_in_extended_hours_the_unpriced_flatten_button_moves_to_the_priced_plan(phase: str) -> None:
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=phase)
+
+    assert action.enabled is False
+    (blocker,) = action.blockers
+    assert blocker.disposition == "fix_here"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "confirm_in_form"
+    assert blocker.primary_move.action.anchor == BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR
+
+
+def test_with_no_session_open_the_flatten_button_waits_with_no_move() -> None:
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase="CLOSED")
+
+    assert action.enabled is False
+    (blocker,) = action.blockers
+    assert blocker.disposition == "wait"
+    assert blocker.primary_move is None
+
+
+@pytest.mark.parametrize("phase", ["RTH", None])
+def test_inside_the_regular_session_the_flatten_button_is_unchanged(phase: str | None) -> None:
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=phase)
+
+    assert action.enabled is True
+    assert action.blockers == []
+
+
+def test_the_session_gates_no_other_recovery_action() -> None:
+    action = _panel_action(_available("reconcile_now"), 7, flatten_phase="CLOSED")
+
+    assert action.enabled is True

@@ -29,6 +29,7 @@ Validated against: tests/broker/alpaca/clerk/test_recovery_reduction.py
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -50,6 +51,11 @@ from app.services.session_authority import (
     TradingSessionPhase,
     session_state_at_ms,
 )
+
+# Where the live bid/ask comes from: ``(symbol, now_ms) -> quote or None``.
+# Injected so the pricing seam is a pure function and a test can state the
+# quote; production reads the market-liveness store's IBKR top of book.
+type QuoteSource = Callable[[str, int], TopOfBookQuote | None]
 
 RECOVERY_QUOTE_MAX_AGE_MS = 10_000
 """How old the quote an operator confirmed against may be when they send.
@@ -232,6 +238,7 @@ __all__ = [
     "RECOVERY_QUOTE_MAX_AGE_MS",
     "ConfirmedRecoveryLimit",
     "ExtendedLimitProposal",
+    "QuoteSource",
     "RecoveryReductionPricing",
     "RegularSessionReduction",
     "no_session_open",

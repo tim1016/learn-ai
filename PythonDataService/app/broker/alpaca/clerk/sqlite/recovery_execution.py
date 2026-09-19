@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
@@ -64,6 +65,7 @@ class ActiveSqliteRecoveryFacade(Protocol):
         *,
         plan: SafeFlattenPlan,
         reason: str | None = None,
+        confirmed_limit: ConfirmedRecoveryLimit | None = None,
     ) -> SafeFlattenResult: ...
 
 
@@ -73,6 +75,9 @@ class RecoveryExecutionRequest:
     concurrency_token: str
     execution_ref: str | None
     reason: str | None
+    # The operator's confirmed extended-hours limit for ``execute_safe_flatten``
+    # (#2007); ``None`` everywhere else and inside the regular session.
+    confirmed_limit: ConfirmedRecoveryLimit | None = None
 
 
 @dataclass(frozen=True)
@@ -211,6 +216,7 @@ async def execute_recovery_action(
             result = await facade.execute_safe_flatten(
                 plan=capability.reduction_plan,
                 reason=request.reason,
+                confirmed_limit=request.confirmed_limit,
             )
         except SafeFlattenExecutionError as exc:
             # A rejected reduction (or any other executability failure) surfaces

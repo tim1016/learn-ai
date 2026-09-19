@@ -162,15 +162,21 @@ class SqliteClerkProjectionReader:
         cls,
         repository: ClerkSqliteRepository,
         *,
-        clock: Clock = now_ms_utc,
+        clock: Clock | None = None,
     ) -> SqliteClerkProjectionReader:
+        """A reader over ``repository``, judging freshness by the repository's own clock.
+
+        One source of time: evidence ages against the clock that stamped it,
+        and the session rules the reader's projections feed (#2007) read that
+        same clock. In production both are the wall clock.
+        """
         meta = repository.control_meta_snapshot()
         return cls(
             db_path=repository.db_path,
             account_id=meta.account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
-            clock=clock,
+            clock=clock or repository.clock,
         )
 
     def close(self) -> None:

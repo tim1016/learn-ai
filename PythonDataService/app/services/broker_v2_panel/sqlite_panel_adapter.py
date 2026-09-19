@@ -50,6 +50,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
+from app.services.session_authority import TradingSessionPhase
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -78,6 +79,7 @@ def adapt_sqlite_panel(
     *,
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
+    flatten_phase: TradingSessionPhase | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -90,6 +92,11 @@ def adapt_sqlite_panel(
     fallback when the selected transaction ref is absent from the bounded
     ``projection.operations`` window (§7.1's 50/100-row cap).  Without it, a
     ref outside the window renders as "not found" rather than being resolved.
+
+    ``flatten_phase`` is the session an operator's flatten would go out in now
+    (``SqliteAlpacaClerkFacade.flatten_session``). Outside the regular session
+    the generic Execute safe flatten button is not the way to flatten (#2007):
+    see ``_flatten_session_blocker``.
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -104,7 +111,7 @@ def adapt_sqlite_panel(
     actions = [
         *lifecycle_actions,
         *(
-            _panel_action(item, projection.control_revision)
+            _panel_action(item, projection.control_revision, flatten_phase=flatten_phase)
             for item in projection.recovery_actions
             if item.action_id not in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
         ),
@@ -428,14 +435,25 @@ def _sqlite_catalog_explanation(
     return "Off duty and flat."
 
 
-def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
-    blocker = None if capability.available else _capability_blocker(capability)
+def _panel_action(
+    capability: RecoveryCapability,
+    revision: int,
+    *,
+    flatten_phase: TradingSessionPhase | None = None,
+) -> PanelAction:
+    blocker = (
+        _capability_blocker(capability)
+        if not capability.available
+        else _flatten_session_blocker(flatten_phase)
+        if capability.action_id == "execute_safe_flatten"
+        else None
+    )
     confirmation = capability.confirmation
     return PanelAction(
         action_id=capability.action_id,
         label=capability.label,
         explanation=capability.explanation,
-        enabled=capability.available,
+        enabled=blocker is None,
         blockers=[] if blocker is None else [blocker],
         confirmation=(
             None
@@ -457,6 +475,9 @@ def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
 # names its equivalents. The shared blocker list renders any
 # ``confirm_in_form`` move; the host decides what the anchor opens.
 BOT_COCKPIT_RECONCILE_ANCHOR = "bot-reconciliation-action"
+# The cockpit's own Prepare safe flatten control: where the live bid and ask
+# are shown and an extended-hours limit is confirmed (#2007).
+BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR = "bot-safe-flatten-prepare"
 
 _RECONCILE_MOVE = OperatorMove(
     label="Reconcile this account now",
@@ -464,6 +485,54 @@ _RECONCILE_MOVE = OperatorMove(
         kind="confirm_in_form", anchor=BOT_COCKPIT_RECONCILE_ANCHOR
     ),
 )
+
+
+_PREPARE_PRICED_FLATTEN_MOVE = OperatorMove(
+    label="Prepare safe flatten",
+    action=ConfirmInFormAction(
+        kind="confirm_in_form", anchor=BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR
+    ),
+)
+
+
+def _flatten_session_blocker(phase: TradingSessionPhase | None) -> OperatorBlocker | None:
+    """Why the generic flatten button cannot send now, or ``None`` inside the regular session.
+
+    This button sends a flatten with no price. Outside 09:30-16:00 there is
+    none to send (#2007, owner decisions 2026-09-19): in PRE/POST a flatten is
+    a limit the operator prices from the live bid and ask in the prepared
+    plan, which sends it through the custody route; with no session open,
+    nothing is sent at all. The Clerk refuses both at execution regardless --
+    this only keeps the button from offering a click that cannot succeed.
+    ``None`` phase means no authority answered; the executor still decides.
+    """
+    if phase is None or phase == "RTH":
+        return None
+    priced_here = phase in ("PRE", "POST")
+    return OperatorBlocker.for_host(
+        condition_id=(
+            "EXTENDED_HOURS_FLATTEN_NEEDS_A_LIMIT" if priced_here else "NO_SESSION_OPEN"
+        ),
+        scope="bot",
+        host="bot_cockpit",
+        anchor=SURFACE_ANCHOR,
+        audience="both",
+        disposition="fix_here" if priced_here else "wait",
+        headline=(
+            "Outside regular hours a flatten is a limit order you price."
+            if priced_here
+            else "No trading session is open now, so no flatten can be sent."
+        ),
+        detail=(
+            "Prepare safe flatten to see the live IBKR bid and ask, then send the limit "
+            "from the prepared plan."
+            if priced_here
+            else "Flatten once the next session opens; Prepare safe flatten shows when."
+        ),
+        applies_to="run",
+        primary_move=_PREPARE_PRICED_FLATTEN_MOVE if priced_here else None,
+        evidence={"session_phase": phase},
+    )
 
 
 def _capability_blocker(capability: RecoveryCapability) -> OperatorBlocker:
