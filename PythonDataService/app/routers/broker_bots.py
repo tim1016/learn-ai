@@ -14,6 +14,10 @@ from typing import NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    is_shadow_account_id,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
@@ -77,9 +81,17 @@ def _require_account_binding(
     account_id: str,
     strategy_instance_id: str,
 ) -> None:
-    """Reject a scoped read when the durable bot binding names another account."""
+    """Reject a scoped read when the durable bot binding names another account.
+
+    The route names the fleet's canonical external account; the seal keeps
+    custody's spelling, ``shadow:``-prefixed when a Shadow authority sealed it.
+    A legacy binding with no seal names no account.
+    """
     binding = registry.binding_for_control(broker, strategy_instance_id)
-    if binding.sealed_account_id != account_id:
+    sealed = binding.sealed_account_id
+    if sealed is None or not account_route_matches_custody(
+        account_id, sealed, shadow=is_shadow_account_id(sealed),
+    ):
         raise UnknownBotError(
             f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",
             detail="Use the account recorded by the bot's sealed binding.",

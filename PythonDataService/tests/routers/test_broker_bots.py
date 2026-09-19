@@ -7,7 +7,8 @@ deploy → running roster row → stop → OFF_DUTY roster row.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -26,12 +28,19 @@ from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard
+from tests._helpers.bot_runner.custody import (
+    _custody_proof,
+    _flat_custody_snapshot,
+    _flat_start_guard,
+)
 from tests._helpers.bot_runner.doubles import _CustodyClerk
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
+# Custody spells the Alpaca account number as the broker reports it; the
+# fleet routes the canonical (strip + lowercase) spelling of the same account.
+_ACCOUNT_NUMBER = "PA3KWXU1C4C3"
 
 
 @pytest.fixture(autouse=True)
@@ -83,17 +92,38 @@ class _HoldFeed:
         )
 
 
+def _bot_registry(
+    tmp_path: Path,
+    start_custody_guard: Callable[
+        [str], AbstractAsyncContextManager[ClerkCustodySnapshot]
+    ] = _flat_start_guard,
+) -> BotTaskRegistry:
+    return BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: _HoldFeed(),
+        boot_recovery_required=False,
+        start_custody_guard=start_custody_guard,
+    )
+
+
+def _start_guard_sealing(
+    account_id: str,
+) -> Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]:
+    """A flat Start custody guard whose snapshot names ``account_id``."""
+
+    @asynccontextmanager
+    async def guard(sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
+        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id})
+
+    return guard
+
+
 @pytest.fixture
 def api(tmp_path: Path):
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())
     set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
-    registry = BotTaskRegistry(
-        tmp_path,
-        feed_resolver=lambda: _HoldFeed(),
-        boot_recovery_required=False,
-        start_custody_guard=_flat_start_guard,
-    )
+    registry = _bot_registry(tmp_path)
     set_bot_task_registry(registry)
     app = FastAPI()
     app.include_router(router)
@@ -203,6 +233,73 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     assert wrong_account_history.status_code == 404
     assert "account-1" in wrong_account_current.json()["detail"]["message"]
     assert "account-1" in wrong_account_history.json()["detail"]["message"]
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sealed_account_id",
+    [_ACCOUNT_NUMBER, f"shadow:{_ACCOUNT_NUMBER}"],
+    ids=["real-account-number", "shadow-custody"],
+)
+async def test_scoped_run_reads_match_the_canonical_account_identity(
+    api, tmp_path: Path, sealed_account_id: str
+) -> None:
+    """The fleet routes the lane's canonical external account; the seal keeps
+    custody's spelling (upper-case account number, ``shadow:`` under Shadow)."""
+    app, _registry = api
+    registry = _bot_registry(tmp_path / "sealed", _start_guard_sealing(sealed_account_id))
+    set_bot_task_registry(registry)
+    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    assert registry.binding_for_control("alpaca", _SID).sealed_account_id == sealed_account_id
+    routed = _ACCOUNT_NUMBER.lower()
+
+    async with _client(app) as client:
+        current = await client.get(
+            f"/api/brokers/alpaca/accounts/{routed}/bots/{_SID}/runs/current"
+        )
+        history = await client.get(
+            f"/api/brokers/alpaca/accounts/{routed}/bots/{_SID}/runs/history",
+            params={"limit": 1},
+        )
+        foreign_current = await client.get(
+            f"/api/brokers/alpaca/accounts/pa9other0000/bots/{_SID}/runs/current"
+        )
+        foreign_history = await client.get(
+            f"/api/brokers/alpaca/accounts/pa9other0000/bots/{_SID}/runs/history",
+            params={"limit": 1},
+        )
+
+    assert current.status_code == 200, current.text
+    assert current.json()["run_id"] == deployed.active_run_id
+    assert history.status_code == 200, history.text
+    assert foreign_current.status_code == 404
+    assert foreign_history.status_code == 404
+    assert "pa9other0000" in foreign_current.json()["detail"]["message"]
+    assert "pa9other0000" in foreign_history.json()["detail"]["message"]
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_scoped_run_read_refuses_a_legacy_unsealed_binding(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A binding with no sealed account is attributable to no account."""
+    app, registry = api
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    unsealed = registry.binding_for_control("alpaca", _SID).model_copy(
+        update={"sealed_account_id": None}
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "binding_for_control", lambda _broker, _sid: unsealed)
+        async with _client(app) as client:
+            response = await client.get(
+                f"/api/brokers/alpaca/accounts/paper-account/bots/{_SID}/runs/current"
+            )
+
+    assert response.status_code == 404
+    assert "paper-account" in response.json()["detail"]["message"]
     await registry.stop("alpaca", _SID)
 
 
