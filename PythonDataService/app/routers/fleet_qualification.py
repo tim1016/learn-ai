@@ -8,25 +8,32 @@ secret.
 Issue #2206 widens this file's scope in one narrow direction: a command-pool
 contention probe (``/hold/command``, a ``POST`` so the deployed
 ``FleetLaneRuntimeMiddleware`` classifies it into the command pool rather
-than the request pool) and a one-shot strategy-instance seed
-(``/seed-bot``) so the recorded-history ceremony can drive the Clerk's real
-public chart-history route without deploying an engine strategy. Neither is
-an execution operation (no order, fill, or position is ever created) and
-both stay behind the exact same per-run secret every other hook here already
-requires.
+than the request pool), needed to prove a held history read (which draws
+from the request pool) cannot starve a command. It is not an execution
+operation (no order, fill, or position is ever created) and stays behind the
+exact same per-run secret every other hook here already requires.
 
 This module also owns the sibling gate for the coordinator-side seam issue
 #2206 adds: :func:`is_qualification_coordinator_lane` and its
 environment-sourced wrapper key the coordinator's own recorded-history
-provider selection (``app.routers.internal_fleet.history_batch``) and its
+provider selection (chosen once at boot in ``app/main.py``, injected onto
+``app.state`` for ``app.routers.internal_fleet.history_batch``) and its
 mode-control router (``app.routers.fleet_qualification_history``) off the
 same random namespace prefix this file already defines, so there is exactly
 one "is this the Compose qualification ceremony" constant in the codebase.
+
+:func:`polygon_api_key_is_qualification_safe` is a fourth, independent gate
+factor (defence in depth): even a process whose role, namespace and secret
+all line up may select the recorded provider only if it also holds no real
+Polygon key. Role/namespace/secret can in principle be forged or
+misconfigured; a lane actually holding a working credential must never be
+made to serve synthetic bars regardless.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from collections.abc import AsyncIterator
 from typing import Literal
@@ -49,7 +56,6 @@ from app.broker.contract.registry import get_broker_registry
 from app.config import settings as service_settings
 from app.schemas.market_liveness import MarketStatusSnapshot
 from app.services.market_liveness import get_market_liveness_store
-from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.utils.timestamps import now_ms_utc
 
 _PREFIX = "/internal/fleet-qualification"
@@ -87,33 +93,6 @@ class QualificationHoldCommandResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     held: Literal["command"]
-
-
-class QualificationSeedBotRequest(BaseModel):
-    """One minimal strategy-instance registration for the recorded-history
-    ceremony (issue #2206) -- no engine deployment or validated settings.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str
-    symbol: str
-
-
-class QualificationSeedBotResponse(BaseModel):
-    """Typed acknowledgement that the strategy instance now exists."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    seeded: Literal["strategy_instance"]
-
-
-class QualificationSeedBotUnavailable(BaseModel):
-    """Typed absence of an active SQLite authority to seed."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    reason: Literal["qualification_sqlite_authority_unavailable"]
 
 
 def _is_qualification_lane(
@@ -155,6 +134,27 @@ def is_qualification_coordinator_lane_from_environment(role: str, namespace: str
         namespace=namespace,
         secret=os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", ""),
     )
+
+
+#: The exact value ``compose.fleet.qualification.yaml`` sets the
+#: coordinator's ``POLYGON_API_KEY`` to -- a non-working placeholder chosen
+#: precisely so qualification can never fetch a real bar (that gap is the
+#: reason issue #2206 exists). Read back here, not guessed, so this gate
+#: cannot silently drift from the compose file that defines it.
+QUALIFICATION_POLYGON_API_KEY_PLACEHOLDER = "qualification-polygon-placeholder"
+
+
+def polygon_api_key_is_qualification_safe(polygon_api_key: str) -> bool:
+    """A fourth gate factor (issue #2206, defence in depth).
+
+    The recorded provider may be selected only when, in addition to the
+    role/namespace/secret gate above, this process's own ``POLYGON_API_KEY``
+    is empty (the value every non-coordinator role boots with) or equals the
+    qualification ceremony's own non-working placeholder. A lane holding a
+    real key must never be made to serve synthetic bars, even if role,
+    namespace and secret all happen to line up.
+    """
+    return polygon_api_key in ("", QUALIFICATION_POLYGON_API_KEY_PLACEHOLDER)
 
 
 def _qualification_settings(account_mode: str) -> AlpacaSettings:
@@ -266,7 +266,7 @@ def qualification_router(
     router = APIRouter(prefix=_PREFIX, include_in_schema=False)
 
     def require_secret(value: str | None) -> None:
-        if value != secret:
+        if value is None or not hmac.compare_digest(value, secret):
             raise HTTPException(status_code=404, detail="Not found")
 
     @router.get(
@@ -338,43 +338,6 @@ def qualification_router(
         await asyncio.sleep(1)
         return QualificationHoldCommandResponse(held="command")
 
-    @router.post(
-        "/seed-bot",
-        response_model=QualificationSeedBotResponse,
-        responses={503: {"model": QualificationSeedBotUnavailable}},
-    )
-    async def seed_bot(
-        payload: QualificationSeedBotRequest,
-        x_fleet_qualification_secret: str | None = Header(default=None),
-    ) -> QualificationSeedBotResponse | JSONResponse:
-        """Register one minimal strategy instance for the recorded-history
-        ceremony (issue #2206).
-
-        ``ClerkSqliteRepository.register_strategy_instance`` is an
-        insert-once registration the repository's own docstring already
-        names as "the repository's narrow fixture and qualification seam" --
-        no engine deployment, validated settings, or signal-program seal is
-        needed to prove a chart-history read end to end. Not an execution
-        operation: it creates only the immutable identity/symbol pair a
-        chart-history read needs, never an order, fill, or position.
-        """
-        require_secret(x_fleet_qualification_secret)
-        facade = active_sqlite_facade("alpaca")
-        if facade is None:
-            return JSONResponse(
-                status_code=503,
-                content=QualificationSeedBotUnavailable(
-                    reason="qualification_sqlite_authority_unavailable"
-                ).model_dump(),
-            )
-        await asyncio.to_thread(
-            facade.repository.register_strategy_instance,
-            strategy_instance_id=payload.strategy_instance_id,
-            symbol=payload.symbol,
-            config_hash="qualification-recorded-history",
-        )
-        return QualificationSeedBotResponse(seeded="strategy_instance")
-
     return router
 
 
@@ -402,10 +365,12 @@ def install_qualification_bindings_from_environment(role: str, namespace: str) -
 
 
 __all__ = [
+    "QUALIFICATION_POLYGON_API_KEY_PLACEHOLDER",
     "install_qualification_bindings",
     "install_qualification_bindings_from_environment",
     "is_qualification_coordinator_lane",
     "is_qualification_coordinator_lane_from_environment",
+    "polygon_api_key_is_qualification_safe",
     "qualification_router",
     "qualification_router_from_environment",
 ]

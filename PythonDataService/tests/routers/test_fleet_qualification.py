@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import cast
 
@@ -17,6 +21,8 @@ from app.routers.fleet_qualification import (
     qualification_router,
 )
 
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_qualification_router_is_absent_without_each_strict_guard() -> None:
     """Normal, coordinator, and non-random namespaces cannot expose the hook."""
@@ -27,11 +33,10 @@ def test_qualification_router_is_absent_without_each_strict_guard() -> None:
 
 
 def test_qualification_router_has_no_execution_operation() -> None:
-    """The opt-in surface is observation, held ASGI work, and a narrow
-    fixture seed only -- never an order, fill, or position (issue #2206
-    widens this from the original "read-only, no POST" invariant to add
-    the command-pool probe and the recorded-history bot seed, both still
-    behind this router's own secret gate and neither an execution op).
+    """The opt-in surface is observation and held ASGI work only -- never an
+    order, fill, or position (issue #2206 widens this from the original
+    "read-only, no POST" invariant to add the command-pool probe, still
+    behind this router's own secret gate and not an execution op).
     """
     router = qualification_router(
         role="clerk_agent",
@@ -47,7 +52,6 @@ def test_qualification_router_has_no_execution_operation() -> None:
         "/internal/fleet-qualification/hold/request",
         "/internal/fleet-qualification/hold/stream",
         "/internal/fleet-qualification/hold/command",
-        "/internal/fleet-qualification/seed-bot",
     }
 
 
@@ -65,7 +69,6 @@ def test_qualification_hold_command_route_is_a_post() -> None:
     assert router is not None
     routes = {route.path: route for route in router.routes}
     assert routes["/internal/fleet-qualification/hold/command"].methods == {"POST"}
-    assert routes["/internal/fleet-qualification/seed-bot"].methods == {"POST"}
     assert routes["/internal/fleet-qualification/hold/request"].methods == {"GET"}
 
 
@@ -126,101 +129,6 @@ def test_qualification_probe_routes_declare_strict_success_and_failure_models() 
     assert QualificationMarketDependencyAvailable.model_json_schema()["additionalProperties"] is False
     assert QualificationMarketDependencyUnavailable.model_json_schema()["additionalProperties"] is False
     assert QualificationHoldRequestResponse.model_json_schema()["additionalProperties"] is False
-
-
-async def test_seed_bot_requires_the_secret_header() -> None:
-    """Issue #2206: the seed-bot hook is behind the same per-run secret as
-    every other qualification hook, even though it now writes SQLite."""
-    from fastapi import FastAPI
-    from httpx import ASGITransport, AsyncClient
-
-    router = qualification_router(
-        role="clerk_agent",
-        namespace="compose:fleetqualificationx",
-        secret="s3cr3t",
-        broker_url="http://fake",
-        market_data_url="http://market",
-    )
-    assert router is not None
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/internal/fleet-qualification/seed-bot",
-            json={"strategy_instance_id": "bot", "symbol": "SPY"},
-        )
-
-    assert response.status_code == 404
-
-
-async def test_seed_bot_registers_a_strategy_instance_against_the_active_facade(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fastapi import FastAPI
-    from httpx import ASGITransport, AsyncClient
-
-    calls: dict[str, object] = {}
-
-    class FakeRepository:
-        def register_strategy_instance(self, **kwargs: object) -> None:
-            calls.update(kwargs)
-
-    class FakeFacade:
-        repository = FakeRepository()
-
-    monkeypatch.setattr(qualification, "active_sqlite_facade", lambda broker: FakeFacade())
-    router = qualification_router(
-        role="clerk_agent",
-        namespace="compose:fleetqualificationx",
-        secret="s3cr3t",
-        broker_url="http://fake",
-        market_data_url="http://market",
-    )
-    assert router is not None
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/internal/fleet-qualification/seed-bot",
-            json={"strategy_instance_id": "qualification-bot", "symbol": "QUALHIST"},
-            headers={"X-Fleet-Qualification-Secret": "s3cr3t"},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {"seeded": "strategy_instance"}
-    assert calls["strategy_instance_id"] == "qualification-bot"
-    assert calls["symbol"] == "QUALHIST"
-
-
-async def test_seed_bot_returns_503_without_an_active_sqlite_authority(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fastapi import FastAPI
-    from httpx import ASGITransport, AsyncClient
-
-    monkeypatch.setattr(qualification, "active_sqlite_facade", lambda broker: None)
-    router = qualification_router(
-        role="clerk_agent",
-        namespace="compose:fleetqualificationx",
-        secret="s3cr3t",
-        broker_url="http://fake",
-        market_data_url="http://market",
-    )
-    assert router is not None
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/internal/fleet-qualification/seed-bot",
-            json={"strategy_instance_id": "qualification-bot", "symbol": "QUALHIST"},
-            headers={"X-Fleet-Qualification-Secret": "s3cr3t"},
-        )
-
-    assert response.status_code == 503
-    assert response.json()["reason"] == "qualification_sqlite_authority_unavailable"
 
 
 def test_install_qualification_bindings_default_off_leaves_registry_and_consumer_untouched(
@@ -366,3 +274,110 @@ async def test_install_qualification_bindings_live_uses_its_own_account_mode_onl
     assert snapshot.account_mode == "live"
     assert calls["paper"] is False
     assert calls["url_override"] == "http://fake-live-provider"
+
+
+# ---- issue #2206 fix: the identity fence refuses the clerk POST hooks ------
+#
+# app/main.py installs FleetIdentityMiddleware(refuse_unpinned_mutations=True)
+# on a clerk_agent role (#2075): every POST/PUT/PATCH/DELETE is refused
+# before any handler or lane-capacity pool runs unless it proves itself as
+# the coordinator's own forward (app.broker.fleet.delivery.lane_forward_is_authorized
+# -- the coordinator token plus the X-Fleet-Broker/X-Fleet-Clerk-Id pin). A
+# bespoke FastAPI app hosting only ``qualification_router`` (as the tests
+# above do) never mounts this middleware, so it cannot see this failure --
+# only a real ``app.main`` import can. Role gating happens once at Python
+# import time (app/main.py reads FLEET_ROLE at module scope), so this runs
+# in a fresh subprocess, the same reasoning as
+# ``test_history_batch_operation.py::test_route_is_absent_outside_the_coordinator_role``.
+
+_HOLD_COMMAND_IDENTITY_FENCE_PROBE = """
+import asyncio
+import json
+import os
+import sys
+import tempfile
+
+tmp = tempfile.mkdtemp(prefix="qualification-hold-command-probe-")
+os.environ.update({
+    "FLEET_ROLE": "clerk_agent",
+    "FLEET_DEPLOYMENT_NAMESPACE": "compose:fleetqualificationprobe",
+    "FLEET_QUALIFICATION_PROBE_SECRET": "probe-secret",
+    "FLEET_FAKE_BROKER_URL": "http://fake-broker:8011",
+    "FLEET_FAKE_MARKET_DATA_URL": "http://fake-market:8013",
+    "FLEET_QUALIFICATION_ACCOUNT_MODE": "paper",
+    "FLEET_CLERK_ID": "clrk_probe",
+    "FLEET_COORDINATOR_SERVICE_TOKEN": "coord-token",
+    "FLEET_AGENT_SERVICE_TOKEN": "agent-token",
+    "FLEET_COORDINATOR_URL": "http://127.0.0.1:1",
+    "FLEET_MAX_INFLIGHT_REQUESTS": "1",
+    "FLEET_MAX_INFLIGHT_STREAMS": "1",
+    "FLEET_MAX_INFLIGHT_COMMANDS": "1",
+    "FLEET_REQUEST_QUEUE_LIMIT": "0",
+    "FLEET_REQUEST_QUEUE_TIMEOUT_MS": "0",
+    "ALPACA_CLERK_DIR": tmp,
+    "IBKR_LIVE_RUNS_ROOT": f"{tmp}/live_runs",
+    "IBKR_LIVE_BARS_ROOT": f"{tmp}/live_bars",
+    "BROKER_CAPTURE_DIR": f"{tmp}/captures",
+    "POLYGON_API_KEY": "",
+    "DATA_PLANE_CONTROL_SECRET": "",
+    "TRUSTED_HOSTS": "localhost,127.0.0.1,test",
+})
+
+from httpx import ASGITransport, AsyncClient
+
+import app.main as main
+
+
+async def run():
+    async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://127.0.0.1") as client:
+        unproven = await client.post(
+            "/internal/fleet-qualification/hold/command",
+            headers={"X-Fleet-Qualification-Secret": "probe-secret"},
+        )
+        proven = await client.post(
+            "/internal/fleet-qualification/hold/command",
+            headers={
+                "X-Fleet-Qualification-Secret": "probe-secret",
+                "X-Fleet-Coordinator-Token": "coord-token",
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clrk_probe",
+            },
+        )
+    return {
+        "unproven_status": unproven.status_code,
+        "unproven_body": unproven.json(),
+        "proven_status": proven.status_code,
+        "proven_body": proven.json(),
+    }
+
+
+sys.stdout.write(json.dumps(asyncio.run(run())))
+"""
+
+
+@pytest.mark.slow
+def test_hold_command_requires_a_proven_coordinator_forward_through_the_real_middleware_stack() -> None:
+    """Fails before the fix: the qualification secret alone used to be
+    treated as sufficient by the harness's probe, but the real identity
+    fence refuses an unproven POST with 400 ``broker_and_clerk_required``
+    regardless of the qualification secret -- it runs before the qualification
+    router's own handler ever sees the request. Sending the coordinator's
+    proven-forward headers alongside the qualification secret (exactly what
+    ``run_broker_fleet_compose_qualification.py``'s
+    ``--call-with-qualification-secret`` path now attaches) is admitted.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _HOLD_COMMAND_IDENTITY_FENCE_PROBE],
+        cwd=_SERVICE_ROOT,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"probe failed:\n{result.stderr}"
+    payload = json.loads(result.stdout)
+
+    assert payload["unproven_status"] == 400
+    assert payload["unproven_body"]["reason"] == "broker_and_clerk_required"
+    assert payload["proven_status"] == 200
+    assert payload["proven_body"] == {"held": "command"}

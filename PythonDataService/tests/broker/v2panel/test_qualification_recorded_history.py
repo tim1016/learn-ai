@@ -43,13 +43,13 @@ def _reset_mode() -> None:
 # ---- the deterministic generator --------------------------------------------
 
 
-def test_stable_unit_fraction_is_pure_and_bounded() -> None:
-    a = recorded._stable_unit_fraction(_SYMBOL, 123_456, salt=0)
-    b = recorded._stable_unit_fraction(_SYMBOL, 123_456, salt=0)
-    c = recorded._stable_unit_fraction(_SYMBOL, 123_456, salt=1)
+def test_stable_unit_fraction_int_is_pure_and_non_negative() -> None:
+    a = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=0)
+    b = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=0)
+    c = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=1)
 
     assert a == b
-    assert 0.0 <= a < 1.0
+    assert a >= 0
     assert a != c  # a different salt must not collide by construction
 
 
@@ -67,29 +67,20 @@ def test_deterministic_bar_is_reproducible_and_internally_consistent() -> None:
     assert first.volume > 0
 
 
-def test_deterministic_bar_open_equals_the_previous_slots_close() -> None:
-    """Continuity across independently-fetched, non-overlapping windows: the
-    same instant always yields the same bar regardless of which call fetched
-    it (issue #2206 -- the walk's widening loop fetches disjoint ranges)."""
-    t_ms = 1_700_000_400_000
-    span_ms = 60_000
-
-    bar = recorded._deterministic_bar(_SYMBOL, t_ms, span_ms)
-    previous_close = recorded._deterministic_close(_SYMBOL, t_ms - span_ms)
-
-    assert bar.open == previous_close
-
-
-def test_recorded_bars_align_to_real_nyse_session_opens_for_day_bars() -> None:
-    """No hardcoded session time: every bar starts at the canonical
-    calendar's actual session open (temporal-rigor.md)."""
+def test_recorded_bars_align_to_real_nyse_session_dates_for_day_bars() -> None:
+    """No hardcoded session time: every daily bar is stamped at midnight
+    America/New_York of the real NYSE session date (Polygon's own daily-bar
+    convention -- see ``_session_midnight_et_ms_utc``), not a hardcoded
+    ``09:30``/``16:00`` (temporal-rigor.md)."""
     start = date(2024, 1, 2)
     end = date(2024, 1, 5)
 
     bars = recorded._recorded_bars(_SYMBOL, start, end, 1, "day")
     windows = session_windows_ms_utc(start, end)
 
-    assert [bar.t_ms for bar in bars] == [window.open_ms_utc for window in windows]
+    assert [bar.t_ms for bar in bars] == [
+        recorded._session_midnight_et_ms_utc(window.session_date) for window in windows
+    ]
     assert len(bars) == len(windows) == 4  # Tue-Fri, no holiday in range
 
 
@@ -103,7 +94,7 @@ def test_recorded_bars_skip_weekends_and_respect_a_real_half_day() -> None:
     bars = recorded._recorded_bars(_SYMBOL, start, end, 1, "day")
 
     assert len(bars) == 1  # only Fri 11/24 (the half-day) is a session
-    assert bars[0].t_ms == session_windows_ms_utc(start, end)[0].open_ms_utc
+    assert bars[0].t_ms == recorded._session_midnight_et_ms_utc(date(2023, 11, 24))
 
 
 def test_recorded_minute_bars_stay_within_each_session_and_step_by_the_span() -> None:
@@ -184,14 +175,17 @@ _GOLDEN_FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
     / "fixtures"
     / "golden"
-    / "qualification-recorded-history"
+    / "fleet-qualification"
+    / "FQ-001"
+    / "v1"
     / "output.json"
 )
 
 
 async def test_golden_batch_matches_the_committed_fixture() -> None:
     """Pins the generator's determinism (not vendor equivalence -- see
-    ``tests/fixtures/golden/qualification-recorded-history/attribution.md``)
+    ``tests/fixtures/golden/fleet-qualification/FQ-001/v1/attribution.md``,
+    manifest fixture ``FQ-001``, ``reference_kind: internal_regression``)
     to a committed value, so a silent behavior change in the generator is
     caught even though nothing here compares to an external reference."""
     expected = json.loads(_GOLDEN_FIXTURE_PATH.read_text(encoding="utf-8"))

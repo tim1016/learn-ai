@@ -38,11 +38,30 @@ lets a unit test pin an exact golden batch (see
 ``tests/fixtures/golden/qualification-recorded-history/``) while the live
 ceremony calls the identical function with a real, moving ``as_of_ms``.
 
-**Injected failure.** A process-local, thread-safe mode flag
-(:func:`set_recorded_history_mode`) lets the qualification-only control
-router (``app.routers.fleet_qualification_history``) switch this provider
-between ``"healthy"``, ``"slow"`` (delays before answering, to hold a Clerk
-request-pool slot for the fleet-lane capacity ceremony step) and
+**Bit-exact across platforms.** Every price is built entirely from integer
+cents -- a triangle wave and a SHA-256-derived offset, both pure integer
+arithmetic -- and converted to a float only once, by dividing by 100 at the
+very end. Division is correctly rounded on every IEEE-754-conformant
+platform, so that one conversion (and CPython's own platform-independent
+float-to-string algorithm downstream) is bit-exact everywhere. An earlier
+version of this generator used ``math.sin`` for the wave: `sin` is *not*
+required to be correctly rounded, and 814 of 20,000 sampled instants differed
+by 1 ulp between macOS arm64 and Linux x86_64 -- enough to break the golden
+fixture's exact-string comparison on CI (which runs Linux x86_64) even though
+it passed locally.
+
+**Daily bars are stamped like Polygon's, not at the session open.** Polygon's
+real daily aggregates carry ``t`` = 00:00 America/New_York of the session
+date, not that session's 09:30 ET open (confirmed by this repo's own
+``test_daily_bar_completes_at_session_close_not_midnight_plus_one_day``).
+This generator matches that convention via :func:`_session_midnight_et_ms_utc`
+so the recorded fixture is shaped like production input, not merely
+internally self-consistent.
+
+**Injected failure.** A process-local mode flag (:func:`set_recorded_history_mode`)
+lets the qualification-only control router (``app.routers.fleet_qualification_history``)
+switch this provider between ``"healthy"``, ``"slow"`` (delays before answering, to
+hold a Clerk request-pool slot for the fleet-lane capacity ceremony step) and
 ``"unavailable"`` (raises :class:`RecordedHistoryInjectedUnavailable`, which
 ``internal_fleet.py`` turns into a non-200 response -- the same "unexpected
 coordinator response" the real ``RemoteHistoryBatchClient`` already converts
@@ -50,7 +69,11 @@ into the stable ``coordinator_unavailable`` notice, FR-010). No sleeping is
 used to model "unavailable": a real timeout and a real non-200 response are
 already equivalent as far as the Clerk-side client is concerned, so an
 immediate refusal keeps the ceremony fast while still exercising that exact
-fallback.
+fallback. The flag is a plain module-level variable, not a lock-guarded
+object: the coordinator runs a single Uvicorn worker
+(``PythonDataService/Dockerfile``), so every request executes on the same
+asyncio event loop thread, and a bare assignment is already atomic there --
+a lock would guard against a concurrency hazard this process cannot have.
 
 This module is reachable only when
 ``app.routers.fleet_qualification.is_qualification_coordinator_lane`` (or its
@@ -64,29 +87,38 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import math
-import threading
-from datetime import date
-from typing import Literal
+from datetime import date, datetime, time
+from typing import Literal, get_args
+from zoneinfo import ZoneInfo
 
 from app.data_lake.polygon_fetcher import PolygonBar
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.schemas.broker_v2_panel import ChartHistoryTimeframe
 from app.schemas.fleet_history_batch import HistoryBatchResponse
-from app.services.broker_v2_panel.chart_projection_service import MS_PER_DAY
-from app.services.broker_v2_panel.history_batch_walk import fetch_complete_history_batch
+from app.services.broker_v2_panel.history_batch_walk import (
+    fetch_complete_history_batch,
+    span_ms_for,
+)
 
-#: The generator's own constants. Not a "seed" in the RNG sense (there is no
-#: RNG -- see ``_stable_unit_fraction``): these just keep the synthesized
-#: price series in a plausible, strictly-positive range so downstream OHLC
-#: invariants (high >= max(o,c), low <= min(o,c), volume > 0) hold trivially.
-_BASE_PRICE = 100.0
-_WAVE_AMPLITUDE = 2.0
+#: The generator's own constants, all in integer cents (see the module
+#: docstring's "Bit-exact across platforms"). Not a "seed" in the RNG sense
+#: (there is no RNG -- see ``_stable_unit_fraction_int``): these just keep
+#: the synthesized price series in a plausible, strictly-positive range so
+#: downstream OHLC invariants (high >= max(o,c), low <= min(o,c), volume > 0)
+#: hold trivially.
+_BASE_PRICE_CENTS = 10_000
+_WAVE_AMPLITUDE_CENTS = 200
 _WAVE_PERIOD_MS = 6 * 3_600_000  # an arbitrary 6-hour wave; only determinism matters
-_NOISE_AMPLITUDE = 0.25
+_NOISE_AMPLITUDE_CENTS = 25
+
+_ET = ZoneInfo("America/New_York")
 
 RecordedHistoryMode = Literal["healthy", "slow", "unavailable"]
-_VALID_MODES: frozenset[str] = frozenset(("healthy", "slow", "unavailable"))
+#: Derived from the ``Literal`` above, not spelled a second time: one place
+#: names the three modes, and both this frozenset and the coordinator-side
+#: request schema (``app.routers.fleet_qualification_history.RecordedHistoryModeRequest``)
+#: read it back rather than repeating the three strings.
+_VALID_MODES: frozenset[str] = frozenset(get_args(RecordedHistoryMode))
 
 #: How long "slow" mode holds the coordinator's response before answering
 #: healthy -- long enough for a concurrent capacity probe to observe the
@@ -101,107 +133,152 @@ class RecordedHistoryInjectedUnavailable(RuntimeError):
     """The recorded provider is in its qualification-injected unavailable mode."""
 
 
-class _RecordedHistoryModeState:
-    """Process-local, thread-safe mode flag (mirrors ``FaultInjectionRegistry``).
-
-    The coordinator runs a single Uvicorn worker (``PythonDataService/Dockerfile``),
-    so a module-level, lock-guarded flag is visible to every request without a
-    shared store.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._mode: RecordedHistoryMode = "healthy"
-
-    def get(self) -> RecordedHistoryMode:
-        with self._lock:
-            return self._mode
-
-    def set(self, mode: RecordedHistoryMode) -> None:
-        if mode not in _VALID_MODES:
-            raise ValueError(f"unknown recorded-history mode: {mode!r}")
-        with self._lock:
-            self._mode = mode
-
-
-_MODE_STATE = _RecordedHistoryModeState()
+#: Process-local mode flag (mirrors ``FaultInjectionRegistry``'s shape, minus
+#: its lock -- see the module docstring for why one is not needed here).
+_mode: RecordedHistoryMode = "healthy"
 
 
 def set_recorded_history_mode(mode: RecordedHistoryMode) -> None:
     """Arm the recorded provider's next answers with ``mode`` (issue #2206)."""
-    _MODE_STATE.set(mode)
+    global _mode
+    if mode not in _VALID_MODES:
+        raise ValueError(f"unknown recorded-history mode: {mode!r}")
+    _mode = mode
 
 
 def recorded_history_mode() -> RecordedHistoryMode:
     """The recorded provider's current mode."""
-    return _MODE_STATE.get()
+    return _mode
 
 
 def reset_recorded_history_mode_for_testing() -> None:
     """Reset to ``"healthy"`` (test isolation, mirrors ``reset_fault_injection_for_testing``)."""
-    _MODE_STATE.set("healthy")
+    global _mode
+    _mode = "healthy"
 
 
-def _span_ms(multiplier: int, timespan: str) -> int:
-    if timespan == "minute":
-        return multiplier * 60_000
-    if timespan == "hour":
-        return multiplier * 3_600_000
-    if timespan == "day":
-        return multiplier * MS_PER_DAY
-    raise ValueError(f"unsupported timespan: {timespan!r}")
-
-
-def _stable_unit_fraction(symbol: str, t_ms: int, salt: int) -> float:
-    """A value in ``[0, 1)`` that is a pure, deterministic function of its inputs.
+def _stable_unit_fraction_int(symbol: str, t_ms: int, salt: int) -> int:
+    """A non-negative integer, deterministic and platform-independent.
 
     Uses ``hashlib.sha256`` rather than Python's builtin ``hash()``: string
     hashing is salted per-process (``PYTHONHASHSEED``) unless disabled, so
     ``hash()`` would make the same ``(symbol, t_ms)`` produce a different bar
     across ceremony runs or even across the coordinator's own worker restarts
-    -- exactly the non-determinism this generator exists to avoid.
+    -- exactly the non-determinism this generator exists to avoid. The result
+    is never routed through a float division: every caller reduces it with
+    integer ``%``, so nothing here can accumulate the platform-dependent
+    rounding a transcendental float function could (see the module docstring).
     """
     digest = hashlib.sha256(f"{symbol}:{t_ms}:{salt}".encode()).digest()
-    return int.from_bytes(digest[:8], "big") / float(2**64)
+    return int.from_bytes(digest[:8], "big")
 
 
-def _deterministic_close(symbol: str, t_ms: int) -> float:
-    wave = _WAVE_AMPLITUDE * math.sin(2 * math.pi * t_ms / _WAVE_PERIOD_MS)
-    noise = (_stable_unit_fraction(symbol, t_ms, salt=0) - 0.5) * 2 * _NOISE_AMPLITUDE
-    return _BASE_PRICE + wave + noise
+def _triangle_wave_cents(t_ms: int) -> int:
+    """A deterministic pseudo-periodic wave, in integer cents.
+
+    Not ``math.sin``: replaced because ``sin`` is not required to be
+    correctly rounded, and observably was not -- see the module docstring's
+    "Bit-exact across platforms". A triangle wave built from pure integer
+    arithmetic (modulo and floor division only) has no such divergence and
+    still gives the synthesized series a plausible, bounded, periodic shape;
+    the module's own constants comment already notes that only determinism
+    matters here, not the wave's exact shape.
+    """
+    half_period = _WAVE_PERIOD_MS // 2
+    phase = t_ms % _WAVE_PERIOD_MS
+    if phase < half_period:
+        return -_WAVE_AMPLITUDE_CENTS + (2 * _WAVE_AMPLITUDE_CENTS * phase) // half_period
+    return _WAVE_AMPLITUDE_CENTS - (2 * _WAVE_AMPLITUDE_CENTS * (phase - half_period)) // half_period
+
+
+def _close_cents(symbol: str, t_ms: int) -> int:
+    """The close price at ``t_ms``, in integer cents -- pure integer arithmetic."""
+    wave = _triangle_wave_cents(t_ms)
+    noise_span = 2 * _NOISE_AMPLITUDE_CENTS + 1
+    noise = (_stable_unit_fraction_int(symbol, t_ms, salt=0) % noise_span) - _NOISE_AMPLITUDE_CENTS
+    return _BASE_PRICE_CENTS + wave + noise
 
 
 def _deterministic_bar(symbol: str, t_ms: int, span_ms: int) -> PolygonBar:
-    """One deterministic OHLCV bar for ``t_ms``, continuous with its neighbor.
+    """One deterministic OHLCV bar for ``t_ms``.
 
-    ``open`` is the previous slot's ``close`` (computed directly from the same
-    pure function, not read from a cache), so the synthesized series is
-    continuous across window boundaries even though the backward-widening
-    walk fetches different, non-overlapping date ranges call by call.
+    ``open`` is ``_close_cents`` evaluated at ``t_ms - span_ms`` -- the same
+    pure function the previous bar's own ``close`` would use if
+    ``t_ms - span_ms`` were itself a real scheduled slot. It is **not**
+    actually the prior real bar's close across a gap: a session open, a
+    weekend, or a DST-affected span all put ``t_ms - span_ms`` on an instant
+    no scheduled bar starts at, so this generator's series is not
+    continuous across those gaps the way a real vendor's tape is. What this
+    generator actually provides, and needs, is determinism -- the same
+    instant always produces the same bar regardless of which call fetched it
+    (the backward-widening walk fetches disjoint date ranges call by call) --
+    not a gap-free OHLC series.
+
+    Every price is converted from integer cents to a float exactly once
+    (``/ 100``), so the only floating-point operation in this function is a
+    single correctly-rounded division -- see the module docstring.
+
+    Known differences from a real Polygon bar, accepted because this
+    generator exists to prove wiring, not to model microstructure: hourly
+    bars are not aligned to a real exchange session boundary beyond their
+    calendar-derived start, and no extended-hours session is modeled (every
+    bar falls inside the regular 09:30-16:00 ET session the canonical
+    calendar reports).
     """
-    close = _deterministic_close(symbol, t_ms)
-    open_ = _deterministic_close(symbol, t_ms - span_ms)
-    high = max(open_, close) + _stable_unit_fraction(symbol, t_ms, salt=1) * 0.1 + 0.01
-    low = min(open_, close) - _stable_unit_fraction(symbol, t_ms, salt=2) * 0.1 - 0.01
-    volume = 1_000 + int(_stable_unit_fraction(symbol, t_ms, salt=3) * 9_000)
-    vwap = (open_ + high + low + close) / 4
+    close_cents = _close_cents(symbol, t_ms)
+    open_cents = _close_cents(symbol, t_ms - span_ms)
+    high_offset_cents = 1 + _stable_unit_fraction_int(symbol, t_ms, salt=1) % 10
+    low_offset_cents = 1 + _stable_unit_fraction_int(symbol, t_ms, salt=2) % 10
+    high_cents = max(open_cents, close_cents) + high_offset_cents
+    low_cents = min(open_cents, close_cents) - low_offset_cents
+    volume = 1_000 + _stable_unit_fraction_int(symbol, t_ms, salt=3) % 9_000
     return PolygonBar(
-        t_ms=t_ms, open=open_, high=high, low=low, close=close, volume=volume, vwap=vwap, n=1
+        t_ms=t_ms,
+        open=open_cents / 100,
+        high=high_cents / 100,
+        low=low_cents / 100,
+        close=close_cents / 100,
+        volume=volume,
+        vwap=(open_cents + high_cents + low_cents + close_cents) / 400,
+        n=1,
     )
+
+
+def _session_midnight_et_ms_utc(session_date: date) -> int:
+    """Polygon's own daily-bar timestamp: 00:00 America/New_York of the
+    session date -- not that session's 09:30 ET open.
+
+    Confirmed by this repo's own
+    ``test_daily_bar_completes_at_session_close_not_midnight_plus_one_day``
+    (``tests/broker/v2panel/test_chart_projection.py``), which builds its
+    daily ``PolygonBar`` fixture at exactly this instant. ``time(0, 0)`` here
+    is not a market-session boundary (the kind ``temporal-rigor.md`` bans as
+    a hardcoded literal) -- it is the vendor's own midnight-anchored
+    timestamp convention for a *daily* bar, unrelated to the NYSE open/close
+    schedule. The conversion still goes through ``ZoneInfo("America/New_York")``
+    so DST is handled correctly, never a fixed offset.
+    """
+    return int(datetime.combine(session_date, time(0, 0), tzinfo=_ET).timestamp() * 1000)
 
 
 def _recorded_bars(symbol: str, start: date, end: date, multiplier: int, timespan: str) -> list[PolygonBar]:
     """Enumerate every scheduled bar-start in ``[start, end]`` and synthesize it.
 
-    Every scheduled instant comes from :func:`session_windows_ms_utc` (the
+    Every scheduled session comes from :func:`session_windows_ms_utc` (the
     canonical NYSE calendar module) -- half-days, weekends, and holidays are
     handled exactly as the real Polygon walk expects them to be, with no
-    hardcoded session boundary (``temporal-rigor.md``).
+    hardcoded session boundary (``temporal-rigor.md``). Daily bars are
+    stamped at session midnight ET (see :func:`_session_midnight_et_ms_utc`);
+    intraday bars are stamped at their real session-open-aligned start, per
+    the canonical calendar.
     """
-    span_ms = _span_ms(multiplier, timespan)
+    span_ms = span_ms_for(multiplier, timespan)
     windows = session_windows_ms_utc(start, end)
     if timespan == "day":
-        return [_deterministic_bar(symbol, window.open_ms_utc, span_ms) for window in windows]
+        return [
+            _deterministic_bar(symbol, _session_midnight_et_ms_utc(window.session_date), span_ms)
+            for window in windows
+        ]
     bars: list[PolygonBar] = []
     for window in windows:
         t_ms = window.open_ms_utc

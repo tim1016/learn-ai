@@ -159,6 +159,7 @@ def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -
         "volume_marker_poison_mismount_refusal",
         "request_queue_saturation",
         "stream_saturation",
+        "command_pool_isolation",
     }
     source = Path(qualification.__file__).read_text(encoding="utf-8")
     function = next(
@@ -346,12 +347,14 @@ def test_stream_capacity_client_does_not_parse_held_sse_as_json(
     }
 
 
-def test_command_capacity_client_holds_and_probes_with_post(
+def test_command_admission_client_holds_a_read_and_admits_the_command(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Issue #2206: the command-pool probe must use POST (not GET), so the
-    deployed middleware classifies it into the command pool rather than the
-    request pool (``_requires_command_capacity`` is method-based)."""
+    """Issue #2206: ``kind="command"`` now proves command-pool *isolation*,
+    not self-pool saturation -- a held read (GET /hold/request) must not
+    starve an admitted command (POST /hold/command). The overlap is proven
+    deterministically: the second read's typed 503 is asserted before the
+    command is ever issued, not inferred from timing alone."""
     hold_calls: list[tuple[str, str]] = []
     call_calls: list[tuple[str, str]] = []
 
@@ -361,19 +364,36 @@ def test_command_capacity_client_holds_and_probes_with_post(
 
     def fake_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, object]]:
         call_calls.append((path, method))
-        return 503, {"reason": "fleet_lane_capacity_exhausted"}
+        if path == "/hold/request":
+            return 503, {"reason": "fleet_lane_capacity_exhausted"}
+        return 200, {"held": "command"}
 
     monkeypatch.setattr(qualification, "_qualification_local_hold", fake_hold)
     monkeypatch.setattr(qualification, "_qualification_local_call", fake_call)
 
     assert qualification._run_capacity_client("command") == 0
-    assert hold_calls == [("/hold/command", "POST")]
-    assert call_calls == [("/hold/command", "POST")]
+    assert hold_calls == [("/hold/request", "GET")]
+    assert call_calls == [("/hold/request", "GET"), ("/hold/command", "POST")]
     assert json.loads(capsys.readouterr().out) == {
         "kind": "command",
-        "reason": "fleet_lane_capacity_exhausted",
-        "refusal_status": 503,
+        "second_read_refusal_status": 503,
+        "command_status": 200,
     }
+
+
+def test_command_admission_client_fails_loudly_if_the_read_hold_is_not_provably_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the second read is not refused, the overlap was never proven --
+    the command admission below would be meaningless, so this must not
+    silently continue."""
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path, *, method="GET": 200)
+    monkeypatch.setattr(
+        qualification, "_qualification_local_call", lambda path, *, method="GET": (200, {"held": "request"})
+    )
+
+    with pytest.raises(qualification.QualificationError, match="provably in flight"):
+        qualification._run_capacity_client("command")
 
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
@@ -571,21 +591,21 @@ def test_exec_probe_forwards_body_and_qualification_secret_flag() -> None:
         def run(self, project: str, args: list[str]) -> subprocess.CompletedProcess[str]:
             calls.append(args)
             return subprocess.CompletedProcess(
-                args, 0, stdout=json.dumps({"status": 200, "body": {"seeded": "strategy_instance"}}), stderr=""
+                args, 0, stdout=json.dumps({"status": 200, "body": {"held": "command"}}), stderr=""
             )
 
     status, body = qualification._exec_probe(
         cast(qualification.ComposeCommand, ComposeStub()),
         "qualification",
         "alpaca-paper-clerk",
-        "/internal/fleet-qualification/seed-bot",
+        "/internal/fleet-qualification/hold/command",
         method="POST",
         json_body={"strategy_instance_id": "bot", "symbol": "QUALHIST"},
         with_qualification_secret=True,
     )
 
     assert status == 200
-    assert body == {"seeded": "strategy_instance"}
+    assert body == {"held": "command"}
     args = calls[0]
     assert "--call-body" in args
     assert json.loads(args[args.index("--call-body") + 1]) == {
@@ -593,23 +613,74 @@ def test_exec_probe_forwards_body_and_qualification_secret_flag() -> None:
         "symbol": "QUALHIST",
     }
     assert "--call-with-qualification-secret" in args
-    assert args[args.index("--call-url") + 1] == "http://localhost:8000/internal/fleet-qualification/seed-bot"
+    assert args[args.index("--call-url") + 1] == "http://localhost:8000/internal/fleet-qualification/hold/command"
 
 
-def test_history_chart_url_matches_the_bot_chart_history_catalog_path() -> None:
-    """Must hit the coordinator's public catalog route, not the internal one."""
-    url = qualification._history_chart_url(
-        "http://127.0.0.1:9000",
-        clerk_id="clrk_paper",
-        account_id="PAQUALIFICATION",
-        sid="qualification-recorded-history-bot",
-        timeframe="1d",
+def test_call_with_qualification_secret_attaches_the_proven_forward_headers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #2206 fix (M1): a bare qualification-secret header is refused
+    400 ``broker_and_clerk_required`` by the real clerk identity fence
+    (``FleetIdentityMiddleware(refuse_unpinned_mutations=True)``, #2075) --
+    the qualification secret alone was never proof of a coordinator forward.
+    ``--call-with-qualification-secret`` must also attach the coordinator's
+    proven-forward headers (``X-Fleet-Coordinator-Token``, ``X-Fleet-Broker``,
+    ``X-Fleet-Clerk-Id``) so a POST like ``/hold/command`` reaches its
+    handler for real. Fails before the fix: an older harness sent only the
+    qualification secret and was refused (proven directly against the real
+    middleware stack in ``tests/routers/test_fleet_qualification.py::
+    test_hold_command_requires_a_proven_coordinator_forward_through_the_real_middleware_stack``).
+    """
+    captured_headers: dict[str, str] = {}
+
+    def fake_request_json(url: str, *, method: str = "GET", headers=None, timeout_s=3.0, json_body=None):
+        captured_headers.update(headers or {})
+        return HTTPStatus.OK, {"held": "command"}
+
+    monkeypatch.setattr(qualification, "_request_json", fake_request_json)
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
+    monkeypatch.setenv("FLEET_COORDINATOR_SERVICE_TOKEN", "coord-token")
+    monkeypatch.setenv("FLEET_CLERK_ID", "clrk_probe")
+
+    result = qualification.main(
+        [
+            "--call-url",
+            "http://localhost:8000/internal/fleet-qualification/hold/command",
+            "--call-method",
+            "POST",
+            "--call-with-qualification-secret",
+        ]
     )
 
-    assert url == (
-        "http://127.0.0.1:9000/api/brokers/alpaca/clerks/clrk_paper"
-        "/accounts/PAQUALIFICATION/bots/qualification-recorded-history-bot/chart/history?timeframe=1d"
-    )
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == {"status": 200, "body": {"held": "command"}}
+    assert captured_headers == {
+        "X-Fleet-Qualification-Secret": "probe-secret",
+        "X-Fleet-Coordinator-Token": "coord-token",
+        "X-Fleet-Broker": "alpaca",
+        "X-Fleet-Clerk-Id": "clrk_probe",
+    }
+
+
+def test_call_with_qualification_secret_requires_the_coordinator_token_and_clerk_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A container with the qualification secret but no coordinator identity
+    cannot silently send a half-proven forward."""
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
+    monkeypatch.delenv("FLEET_COORDINATOR_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("FLEET_CLERK_ID", raising=False)
+
+    with pytest.raises(qualification.QualificationError, match="coordinator token or clerk id"):
+        qualification.main(
+            [
+                "--call-url",
+                "http://localhost:8000/internal/fleet-qualification/hold/command",
+                "--call-method",
+                "POST",
+                "--call-with-qualification-secret",
+            ]
+        )
 
 
 def test_set_recorded_history_mode_raises_on_a_refused_mode_change(
@@ -623,85 +694,91 @@ def test_set_recorded_history_mode_raises_on_a_refused_mode_change(
         qualification._set_recorded_history_mode("http://coordinator", "secret", "unavailable")
 
 
-def test_recorded_history_ceremony_drives_healthy_failure_recovery_and_command_admission(
+def test_history_client_probe_runs_the_history_client_role_inside_the_paper_container() -> None:
+    """Must ``compose exec`` the Paper container with the real, importable
+    ``history-client`` role -- not the public chart route or a bespoke path."""
+    calls: list[list[str]] = []
+
+    class ComposeStub:
+        def run(self, project: str, args: list[str], *, timeout_s: float) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            assert timeout_s == 70.0
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"bars": [], "overlay_notices": []}), stderr=""
+            )
+
+    body = qualification._history_client_probe(cast(qualification.ComposeCommand, ComposeStub()), "qualification")
+
+    assert body == {"bars": [], "overlay_notices": []}
+    args = calls[0]
+    assert args[:6] == [
+        "exec", "-T", "alpaca-paper-clerk", "python", "-m", "scripts.run_broker_fleet_compose_qualification",
+    ]
+    assert args[6:] == ["--container-role", "history-client"]
+
+
+def test_recorded_history_ceremony_drives_healthy_failure_and_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #2206 acceptance criteria 1-4, exercised against a fully faked
-    coordinator/exec layer so the sequencing and assertions are pinned without
-    any real container."""
+    """Issue #2206 acceptance criteria 1-3, exercised against a fully faked
+    coordinator/exec layer so the sequencing and assertions are pinned
+    without any real container. Owner-scoped design (2026-09-18): drives
+    the in-container history client, never the public chart route or a
+    strategy-instance seed."""
     modes: list[str] = []
     history_calls = 0
 
     def fake_request_json(url: str, *, method: str = "GET", headers=None, timeout_s=3.0, json_body=None):
+        assert url.endswith("/internal/fleet-qualification-history/mode")
+        modes.append(json_body["mode"])
+        return HTTPStatus.OK, {"mode": json_body["mode"]}
+
+    def fake_history_client_probe(compose, project):
         nonlocal history_calls
-        if url.endswith("/internal/fleet-qualification-history/mode"):
-            modes.append(json_body["mode"])
-            return HTTPStatus.OK, {"mode": json_body["mode"]}
-        assert "/chart/history" in url
         history_calls += 1
         mode = modes[-1]
         if mode == "unavailable":
-            return HTTPStatus.OK, {
+            return {
                 "bars": [],
                 "overlay_notices": [{"code": "coordinator_unavailable", "message": "x", "source": "polygon"}],
             }
-        return HTTPStatus.OK, {
+        return {
             "bars": [{"start_ms": 1, "end_ms": 2, "source": "polygon"}],
             "overlay_notices": [],
         }
 
-    exec_calls: list[str] = []
-
-    def fake_exec_probe(compose, project, service, path, *, method="GET", json_body=None, with_qualification_secret=False):
-        exec_calls.append(path)
-        if path.endswith("/seed-bot"):
-            return HTTPStatus.OK, {"seeded": "strategy_instance"}
-        assert path.endswith("/hold/command")
-        return HTTPStatus.OK, {"held": "command"}
-
     monkeypatch.setattr(qualification, "_request_json", fake_request_json)
-    monkeypatch.setattr(qualification, "_exec_probe", fake_exec_probe)
+    monkeypatch.setattr(qualification, "_history_client_probe", fake_history_client_probe)
 
     result = qualification._recorded_history_ceremony(
         cast(qualification.ComposeCommand, object()),
         "qualification",
         coordinator_url="http://coordinator",
-        control_headers={"X-Data-Plane-Control-Secret": "s"},
         qualification_secret="probe-secret",
-        paper_clerk_id="clrk_paper",
-        timeout_s=5.0,
     )
 
-    assert exec_calls[0].endswith("/seed-bot")
-    assert exec_calls[-1].endswith("/hold/command")
-    # healthy, unavailable, healthy (recovery), slow, then reset to healthy.
-    assert modes == ["healthy", "unavailable", "healthy", "slow", "healthy"]
-    assert history_calls == 4
+    # healthy, unavailable, healthy (recovery).
+    assert modes == ["healthy", "unavailable", "healthy"]
+    assert history_calls == 3
     assert result["healthy_bar_count"] == 1
-    assert result["recovered_bar_count"] == 1
+    assert result["retried_bar_count"] == 1
     assert result["injected_unavailable_notice_codes"] == ["coordinator_unavailable"]
-    assert result["command_admitted_while_history_read_in_flight"] is True
-    assert result["held_history_read_bar_count"] == 1
 
 
-def test_recorded_history_ceremony_fails_loudly_when_seeding_the_bot_fails(
+def test_recorded_history_ceremony_fails_loudly_when_the_healthy_read_returns_no_bars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(qualification, "_request_json", lambda *_a, **_k: (HTTPStatus.OK, {"mode": "healthy"}))
     monkeypatch.setattr(
-        qualification,
-        "_exec_probe",
-        lambda *args, **kwargs: (HTTPStatus.SERVICE_UNAVAILABLE, {"reason": "qualification_sqlite_authority_unavailable"}),
+        qualification, "_history_client_probe", lambda compose, project: {"bars": [], "overlay_notices": []}
     )
 
-    with pytest.raises(qualification.QualificationError, match="did not seed"):
+    with pytest.raises(qualification.QualificationError, match="returned no candles"):
         qualification._recorded_history_ceremony(
             cast(qualification.ComposeCommand, object()),
             "qualification",
             coordinator_url="http://coordinator",
-            control_headers={},
             qualification_secret="probe-secret",
-            paper_clerk_id="clrk_paper",
-            timeout_s=5.0,
         )
 
 

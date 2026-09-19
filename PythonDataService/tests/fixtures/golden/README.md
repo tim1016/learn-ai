@@ -154,21 +154,6 @@ Same reasoning as `bs-price-cross-engine/`: no stored output, so the manifest sc
 
 This fixture is stored in Parquet format (not Arrow IPC). See `attribution.md` in this directory for source and capture metadata. It is not registered in `manifest.json` because converting to Arrow IPC and adding SHA-256 governance is deferred (the file is small, stable, and covered by Git). If the parquet is regenerated, update `attribution.md` and the meta.json computed values.
 
-### `qualification-recorded-history/`
-
-**Kind:** determinism pin, not equivalence (no independent oracle)
-**Test:** `tests/broker/v2panel/test_qualification_recorded_history.py`
-**Purpose:** Pin the qualification-only recorded history provider's seeded
-generator (`app.services.broker_v2_panel.qualification_recorded_history`,
-issue #2206) to a fixed, committed output for one fixed input. The
-generator is synthetic by design (it does not claim to reproduce real
-Polygon prices), so there is no oracle for the manifest's `reference_kind`
-taxonomy to certify against — only self-determinism, which the test proves
-directly.
-
-Same reasoning as `bs-price-cross-engine/`: governed entirely by its test
-file, not the manifest.
-
 ## Links
 
 - `docs/math-sources-of-truth.md` — concept-level canonical registry

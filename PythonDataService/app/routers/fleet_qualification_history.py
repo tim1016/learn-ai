@@ -15,8 +15,8 @@ reach, not merely an inert one.
 
 from __future__ import annotations
 
+import hmac
 import os
-from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -32,11 +32,15 @@ _PREFIX = "/internal/fleet-qualification-history"
 
 
 class RecordedHistoryModeRequest(BaseModel):
-    """The recorded provider's requested mode (issue #2206)."""
+    """The recorded provider's requested mode (issue #2206).
+
+    ``RecordedHistoryMode`` is the one place the three-mode vocabulary is
+    spelled; this field reuses it rather than repeating the literal.
+    """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
-    mode: Literal["healthy", "slow", "unavailable"]
+    mode: RecordedHistoryMode
 
 
 class RecordedHistoryModeResponse(BaseModel):
@@ -54,7 +58,7 @@ def qualification_history_router(*, role: str, namespace: str, secret: str) -> A
     router = APIRouter(prefix=_PREFIX, include_in_schema=False)
 
     def require_secret(value: str | None) -> None:
-        if value != secret:
+        if value is None or not hmac.compare_digest(value, secret):
             raise HTTPException(status_code=404, detail="Not found")
 
     @router.get("/mode", response_model=RecordedHistoryModeResponse)

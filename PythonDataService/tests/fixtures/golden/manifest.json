@@ -1662,6 +1662,50 @@
         "tests/fixtures/test_return_distribution_golden.py",
         "tests/research/test_return_distribution.py"
       ]
+    },
+    {
+      "id": "FQ-001",
+      "name": "Qualification-only recorded history provider determinism pin",
+      "category": "fleet-qualification",
+      "canonical_module": "PythonDataService/app/services/broker_v2_panel/qualification_recorded_history.py",
+      "canonical_callable": "build_qualification_recorded_history_batch",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "self (no independent oracle)",
+        "citation": "Deterministic self-pin (issue #2206): the same seeded generator run reproduces this output exactly. No vendor equivalence is claimed -- see qualification_recorded_history.py's module docstring and this fixture's attribution.md for the generator's own methodology."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "app.services.broker_v2_panel.qualification_recorded_history.build_qualification_recorded_history_batch (see attribution.md for the exact regeneration command)"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact string comparison. Every price is built from integer cents and converted to a float exactly once via correctly-rounded IEEE-754 division, so the output is bit-exact on every platform (no math.sin or other libm transcendental in the computation)."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "ffd6347dccf4a84537b1387506c32aa4e3792b23aca2b245c9a38bda8f00b8af",
+            "output.json": "93555489a11da6fae3d474bb2b17d06218308d1e0d838978fbb71f2ca4c64590"
+          },
+          "file_sha256": {
+            "input.json": "dca1c382ebf1bd1932df83d6cb8ac52ef57ef1192922091e72ea00c1979d5057",
+            "output.json": "721ce8708c8f80d45a731e2d4ff4e547ec6de465aee3588c03954fdf890d5456",
+            "attribution.md": "db7ffa924c53ca9a21a791b53726dc987258a55ecf52779985b63018f154f2dc"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/broker/v2panel/test_qualification_recorded_history.py::test_golden_batch_matches_the_committed_fixture"
+      ]
     }
   ]
 }

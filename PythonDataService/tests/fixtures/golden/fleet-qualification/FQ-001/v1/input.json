@@ -1,0 +1,6 @@
+{
+  "symbol": "QUALHIST",
+  "timeframe": "1d",
+  "required_bar_count": 5,
+  "as_of_ms": 1700000000000
+}
