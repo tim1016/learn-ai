@@ -35,6 +35,7 @@ from app.services.bot_runner import (
     UnknownBotError,
     get_bot_task_registry,
 )
+from app.services.sqlite_clerk_compat import lane_account_id_for_seal
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,19 @@ def _raise_runner_error(error: BotRunnerError) -> NoReturn:
     )
 
 
+def _require_lane_account(broker: str, sealed_account_id: str) -> str:
+    lane_account_id = lane_account_id_for_seal(broker, sealed_account_id)
+    if lane_account_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No primary Alpaca Clerk authority is active, so the account a "
+                "Dry Run bot belongs to cannot be confirmed."
+            ),
+        )
+    return lane_account_id
+
+
 def _require_account_binding(
     registry: BotTaskRegistry,
     broker: str,
@@ -85,12 +99,16 @@ def _require_account_binding(
 
     The route names the fleet's canonical external account; the seal keeps
     custody's spelling, ``shadow:``-prefixed when a Shadow authority sealed it.
+    A Dry Run seal names its isolated ``sim:`` authority, so it is matched
+    against the lane's primary authority instead -- the account the roster
+    lists it under -- and is unavailable (503) while none is active.
     A legacy binding with no seal names no account.
     """
     binding = registry.binding_for_control(broker, strategy_instance_id)
     sealed = binding.sealed_account_id
-    if sealed is None or not account_route_matches_custody(
-        account_id, sealed, shadow=is_shadow_account_id(sealed),
+    lane_account_id = None if sealed is None else _require_lane_account(broker, sealed)
+    if lane_account_id is None or not account_route_matches_custody(
+        account_id, lane_account_id, shadow=is_shadow_account_id(lane_account_id),
     ):
         raise UnknownBotError(
             f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",

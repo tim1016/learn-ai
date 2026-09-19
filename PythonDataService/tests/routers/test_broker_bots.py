@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
 
 import httpx
 import pytest
@@ -26,6 +28,7 @@ from app.broker.contract.registry import (
 )
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
+from app.services import sqlite_clerk_compat
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import (
@@ -80,6 +83,16 @@ class _HoldFeed:
             session_phase="RTH",
         )
         await asyncio.Event().wait()
+
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        del symbol, use_rth, lookback_days
+        return []
 
     def health(self, _symbol: str | None = None) -> FeedHealth:
         return FeedHealth(
@@ -238,20 +251,39 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "sealed_account_id",
-    [_ACCOUNT_NUMBER, f"shadow:{_ACCOUNT_NUMBER}"],
-    ids=["real-account-number", "shadow-custody"],
+    ("mode", "sealed_account_id"),
+    [
+        ("log_only", _ACCOUNT_NUMBER),
+        ("log_only", f"shadow:{_ACCOUNT_NUMBER}"),
+        # Dry Run bypasses the start guard: ``new_run_binding`` mints the seal.
+        ("dry_run", f"sim:{_SID}"),
+    ],
+    ids=["real-account-number", "shadow-custody", "dry-run"],
 )
 async def test_scoped_run_reads_match_the_canonical_account_identity(
-    api, tmp_path: Path, sealed_account_id: str
+    api,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["log_only", "dry_run"],
+    sealed_account_id: str,
 ) -> None:
     """The fleet routes the lane's canonical external account; the seal keeps
-    custody's spelling (upper-case account number, ``shadow:`` under Shadow)."""
+    custody's spelling (upper-case account number, ``shadow:`` under Shadow).
+    A Dry Run seal names its isolated ``sim:`` authority, so it is matched
+    against the lane's primary authority -- the account its roster lists it
+    under."""
     app, _registry = api
     registry = _bot_registry(tmp_path / "sealed", _start_guard_sealing(sealed_account_id))
     set_bot_task_registry(registry)
-    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    deployed = await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode=mode
+    )
     assert registry.binding_for_control("alpaca", _SID).sealed_account_id == sealed_account_id
+    monkeypatch.setattr(
+        sqlite_clerk_compat,
+        "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id=_ACCOUNT_NUMBER),
+    )
     routed = _ACCOUNT_NUMBER.lower()
 
     async with _client(app) as client:
@@ -300,6 +332,27 @@ async def test_scoped_run_read_refuses_a_legacy_unsealed_binding(
 
     assert response.status_code == 404
     assert "paper-account" in response.json()["detail"]["message"]
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no primary authority there is no lane account to match a Dry Run
+    seal against, so the read is refused as unavailable, never admitted."""
+    app, registry = api
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run"
+    )
+    monkeypatch.setattr(sqlite_clerk_compat, "active_sqlite_facade", lambda _broker: None)
+
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_NUMBER.lower()}/bots/{_SID}/runs/current"
+        )
+
+    assert response.status_code == 503
     await registry.stop("alpaca", _SID)
 
 
