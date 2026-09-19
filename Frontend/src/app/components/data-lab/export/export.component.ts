@@ -124,9 +124,12 @@ export class ExportComponent {
       this.generateStarting(),
   );
 
-  /** Generation waits for an in-flight re-plan: the column selection is
-   *  narrowed against the plan, so it must be the current one. */
-  readonly generateBlocked = computed(() => this.runActive() || this.planLoading());
+  /** Generation waits until the receipt is current (in flight or failed
+   *  re-plan): the column selection is narrowed against the plan, so it
+   *  must describe the live recipe. */
+  readonly generateBlocked = computed(
+    () => this.runActive() || this.planLoading() || this.planReceiptStale(),
+  );
 
   readonly generateLabel = computed(() => {
     if (this.runActive()) return 'Run in progress…';

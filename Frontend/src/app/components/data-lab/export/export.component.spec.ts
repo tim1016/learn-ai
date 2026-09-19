@@ -227,6 +227,22 @@ describe('ExportComponent', () => {
     http.verify();
   });
 
+  it('keeps generate disabled while the column list is out of date', async () => {
+    const { http, store, runSession } = await renderExport();
+    await answerPlan(http);
+    store.addIndicator('atr', { length: 14 });
+    const failed = await waitFor(() => http.expectOne(PLAN_URL));
+    failed.flush({ detail: 'boom' }, { status: 500, statusText: 'Server Error' });
+
+    const button = await screen.findByRole('button', { name: 'Generate dataset ZIP' });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await answerPlan(http, { output_columns: [...COLUMNS, 'atr_length14'] });
+    await generatePayload(runSession);
+    http.verify();
+  });
+
   it('labels the receipt out of date and offers Try again when a re-plan fails', async () => {
     const { http, store } = await renderExport();
     await answerPlan(http);
