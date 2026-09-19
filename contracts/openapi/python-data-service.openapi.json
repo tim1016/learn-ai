@@ -15582,6 +15582,120 @@
         "title": "ExposureSlice",
         "type": "object"
       },
+      "ExtendedLimitConfirmationRequest": {
+        "additionalProperties": false,
+        "description": "The limit an operator confirmed for an extended-hours safe flatten (#2007).\n\n``quote_observed_at_ms`` names the IBKR bid/ask the operator confirmed\nagainst; the Clerk refuses a confirmation whose quote is more than ten\nseconds old when it arrives. Alpaca's precision rule is checked against\nthe leg the Clerk would submit, not restated here.",
+        "properties": {
+          "limit_price": {
+            "exclusiveMinimum": 0.0,
+            "title": "Limit Price",
+            "type": "number"
+          },
+          "quote_observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Quote Observed At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit_price",
+          "quote_observed_at_ms"
+        ],
+        "title": "ExtendedLimitConfirmationRequest",
+        "type": "object"
+      },
+      "ExtendedLimitFlattenPricing": {
+        "description": "The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).\n\n``suggested_limit_price`` is the bid less the sealed exit allowance for a\nsell (the ask plus it to cover). It is a suggestion: the operator may send\nanother price, which the Clerk checks against Alpaca's precision rule.",
+        "properties": {
+          "ask": {
+            "title": "Ask",
+            "type": "number"
+          },
+          "ask_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Size"
+          },
+          "bid": {
+            "title": "Bid",
+            "type": "number"
+          },
+          "bid_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Size"
+          },
+          "exit_allowance_bps": {
+            "title": "Exit Allowance Bps",
+            "type": "number"
+          },
+          "kind": {
+            "const": "extended_limit",
+            "default": "extended_limit",
+            "title": "Kind"
+          },
+          "phase": {
+            "enum": [
+              "PRE",
+              "POST"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "quote_max_age_ms": {
+            "title": "Quote Max Age Ms",
+            "type": "integer"
+          },
+          "quote_observed_at_ms": {
+            "title": "Quote Observed At Ms",
+            "type": "integer"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "suggested_limit_price": {
+            "title": "Suggested Limit Price",
+            "type": "number"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "symbol",
+          "side",
+          "bid",
+          "ask",
+          "bid_size",
+          "ask_size",
+          "quote_observed_at_ms",
+          "quote_max_age_ms",
+          "exit_allowance_bps",
+          "suggested_limit_price"
+        ],
+        "title": "ExtendedLimitFlattenPricing",
+        "type": "object"
+      },
       "ExternalOrderAcknowledgementRequest": {
         "additionalProperties": false,
         "description": "Operator evidence for reviewing one externally observed broker order.",
@@ -23866,6 +23980,14 @@
             "title": "Observed At Ms",
             "type": "integer"
           },
+          "quotes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TopOfBookQuote"
+            },
+            "title": "Quotes",
+            "type": "array"
+          },
           "source": {
             "default": "alpaca.stock_data.status",
             "enum": [
@@ -30345,6 +30467,35 @@
         "properties": {
           "capability": {
             "$ref": "#/components/schemas/RecoveryCapabilityResponse"
+          },
+          "reduction_pricing": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "extended_limit": "#/components/schemas/ExtendedLimitFlattenPricing",
+                    "refused": "#/components/schemas/RefusedFlattenPricing",
+                    "regular_session": "#/components/schemas/RegularSessionFlattenPricing"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RegularSessionFlattenPricing"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExtendedLimitFlattenPricing"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RefusedFlattenPricing"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduction Pricing"
           }
         },
         "required": [
@@ -30388,6 +30539,16 @@
               }
             ],
             "title": "Execution Ref"
+          },
+          "extended_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtendedLimitConfirmationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "anyOf": [
@@ -30702,6 +30863,47 @@
         "title": "RecoveryEvidenceResponse",
         "type": "object"
       },
+      "RefusedFlattenPricing": {
+        "description": "No flatten can be sent now; ``available_at_ms`` is when one can, if the clock is why.",
+        "properties": {
+          "available_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "const": "refused",
+            "default": "refused",
+            "title": "Kind"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason_code",
+          "explanation",
+          "next_step",
+          "available_at_ms"
+        ],
+        "title": "RefusedFlattenPricing",
+        "type": "object"
+      },
       "RegimeBucketResponse": {
         "description": "One cell of the joint (vol \u00d7 trend) regime grid.",
         "properties": {
@@ -30934,6 +31136,18 @@
           "regime_labels"
         ],
         "title": "RegimeStrategyFitBody",
+        "type": "object"
+      },
+      "RegularSessionFlattenPricing": {
+        "description": "Inside the regular session the flatten is a market DAY order; no quote is needed.",
+        "properties": {
+          "kind": {
+            "const": "regular_session",
+            "default": "regular_session",
+            "title": "Kind"
+          }
+        },
+        "title": "RegularSessionFlattenPricing",
         "type": "object"
       },
       "RejectionBreakdown": {
@@ -40251,6 +40465,69 @@
           "note"
         ],
         "title": "ToleranceResponse",
+        "type": "object"
+      },
+      "TopOfBookQuote": {
+        "additionalProperties": false,
+        "description": "One symbol's live IBKR best bid and ask, as the status source last read them.\n\n``observed_at_ms`` is the poll that read the live subscription on a\nconnected source -- IBKR sends quote ticks only on change, so a quiet book\nis still current while its subscription is. It is the instant an operator's\nconfirmed extended-hours limit is judged stale against (#2007).",
+        "properties": {
+          "ask": {
+            "exclusiveMinimum": 0.0,
+            "title": "Ask",
+            "type": "number"
+          },
+          "ask_size": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Size"
+          },
+          "bid": {
+            "exclusiveMinimum": 0.0,
+            "title": "Bid",
+            "type": "number"
+          },
+          "bid_size": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Size"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "bid",
+          "ask",
+          "source",
+          "observed_at_ms"
+        ],
+        "title": "TopOfBookQuote",
         "type": "object"
       },
       "TradeSimRunBody": {

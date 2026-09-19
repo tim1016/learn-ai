@@ -13782,6 +13782,64 @@ export interface components {
             quantity_label: string;
         };
         /**
+         * ExtendedLimitConfirmationRequest
+         * @description The limit an operator confirmed for an extended-hours safe flatten (#2007).
+         *
+         *     ``quote_observed_at_ms`` names the IBKR bid/ask the operator confirmed
+         *     against; the Clerk refuses a confirmation whose quote is more than ten
+         *     seconds old when it arrives. Alpaca's precision rule is checked against
+         *     the leg the Clerk would submit, not restated here.
+         */
+        ExtendedLimitConfirmationRequest: {
+            /** Limit Price */
+            limit_price: number;
+            /** Quote Observed At Ms */
+            quote_observed_at_ms: number;
+        };
+        /**
+         * ExtendedLimitFlattenPricing
+         * @description The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).
+         *
+         *     ``suggested_limit_price`` is the bid less the sealed exit allowance for a
+         *     sell (the ask plus it to cover). It is a suggestion: the operator may send
+         *     another price, which the Clerk checks against Alpaca's precision rule.
+         */
+        ExtendedLimitFlattenPricing: {
+            /** Ask */
+            ask: number;
+            /** Ask Size */
+            ask_size: number | null;
+            /** Bid */
+            bid: number;
+            /** Bid Size */
+            bid_size: number | null;
+            /** Exit Allowance Bps */
+            exit_allowance_bps: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "extended_limit";
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "PRE" | "POST";
+            /** Quote Max Age Ms */
+            quote_max_age_ms: number;
+            /** Quote Observed At Ms */
+            quote_observed_at_ms: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Suggested Limit Price */
+            suggested_limit_price: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * ExternalOrderAcknowledgementRequest
          * @description Operator evidence for reviewing one externally observed broker order.
          */
@@ -17556,6 +17614,11 @@ export interface components {
             /** Observed At Ms */
             observed_at_ms: number;
             /**
+             * Quotes
+             * @default []
+             */
+            quotes?: components["schemas"]["TopOfBookQuote"][];
+            /**
              * Source
              * @default alpaca.stock_data.status
              * @enum {string}
@@ -20264,6 +20327,8 @@ export interface components {
         /** RecoveryActionCheckResponse */
         RecoveryActionCheckResponse: {
             capability: components["schemas"]["RecoveryCapabilityResponse"];
+            /** Reduction Pricing */
+            reduction_pricing?: (components["schemas"]["RegularSessionFlattenPricing"] | components["schemas"]["ExtendedLimitFlattenPricing"] | components["schemas"]["RefusedFlattenPricing"]) | null;
         };
         /**
          * RecoveryActionExecuteRequest
@@ -20279,6 +20344,7 @@ export interface components {
             concurrency_token: string;
             /** Execution Ref */
             execution_ref?: string | null;
+            extended_limit?: components["schemas"]["ExtendedLimitConfirmationRequest"] | null;
             /** Reason */
             reason?: string | null;
         };
@@ -20372,6 +20438,25 @@ export interface components {
             observed_at_ms: number | null;
             /** Reference */
             reference: string;
+        };
+        /**
+         * RefusedFlattenPricing
+         * @description No flatten can be sent now; ``available_at_ms`` is when one can, if the clock is why.
+         */
+        RefusedFlattenPricing: {
+            /** Available At Ms */
+            available_at_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "refused";
+            /** Next Step */
+            next_step: string;
+            /** Reason Code */
+            reason_code: string;
         };
         /**
          * RegimeBucketResponse
@@ -20489,6 +20574,17 @@ export interface components {
             regime_labels: Record<string, never>[];
             /** Trades */
             trades: Record<string, never>[];
+        };
+        /**
+         * RegularSessionFlattenPricing
+         * @description Inside the regular session the flatten is a market DAY order; no quote is needed.
+         */
+        RegularSessionFlattenPricing: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "regular_session";
         };
         /**
          * RejectionBreakdown
@@ -24660,6 +24756,31 @@ export interface components {
             note: string;
             /** Rtol */
             rtol: number;
+        };
+        /**
+         * TopOfBookQuote
+         * @description One symbol's live IBKR best bid and ask, as the status source last read them.
+         *
+         *     ``observed_at_ms`` is the poll that read the live subscription on a
+         *     connected source -- IBKR sends quote ticks only on change, so a quiet book
+         *     is still current while its subscription is. It is the instant an operator's
+         *     confirmed extended-hours limit is judged stale against (#2007).
+         */
+        TopOfBookQuote: {
+            /** Ask */
+            ask: number;
+            /** Ask Size */
+            ask_size?: number | null;
+            /** Bid */
+            bid: number;
+            /** Bid Size */
+            bid_size?: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Source */
+            source: string;
+            /** Symbol */
+            symbol: string;
         };
         /** TradeSimRunBody */
         TradeSimRunBody: {
