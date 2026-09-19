@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.fleet.history_batch import HISTORY_BATCH_OUTER_TIMEOUT_S
+from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
@@ -38,7 +39,7 @@ def _op(
     account: bool = False,
     stream: OperationStream = OperationStream.NONE,
     agent_path: str | None = None,
-    read_timeout_s: float | None = None,
+    read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S,
 ) -> ProviderOperation:
     """Declare one operation; agent paths default to the Alpaca prefix.
 

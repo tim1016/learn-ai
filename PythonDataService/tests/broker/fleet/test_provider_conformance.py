@@ -394,8 +394,8 @@ async def test_a_delivery_contract_violation_on_a_read_is_not_misdiagnosed_as_id
     bind_lane(service, lane, account="acct-contract-violation")
 
     class _ContractViolatingDelivery:
-        async def deliver(self, request: object, *, read_timeout_s: float | None = None) -> None:
-            del request, read_timeout_s
+        async def deliver(self, request: object) -> None:
+            del request
             raise DeliveryContractViolation("the in-process handler returned str, not a DeliveryResult")
 
     router = LaneRouter(service=service, delivery_for=lambda broker, session: _ContractViolatingDelivery())

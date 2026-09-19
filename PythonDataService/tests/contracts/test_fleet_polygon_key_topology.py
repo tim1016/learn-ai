@@ -53,6 +53,26 @@ def _compose_engine() -> tuple[str, ...] | None:
     return None
 
 
+def _require_compose_engine() -> tuple[str, ...]:
+    """The engine to render with, or a loud failure on CI.
+
+    A check that can silently never run is worse than no check: CI runners
+    are expected to carry Docker or Podman, so a CI run with neither is a
+    broken runner, not an environment this test politely defers to. Only a
+    developer's own host -- where neither engine may be installed at all --
+    still gets the quiet skip.
+    """
+    engine = _compose_engine()
+    if engine is not None:
+        return engine
+    if os.environ.get("CI"):
+        pytest.fail(
+            "neither Docker nor Podman is available on this CI runner; "
+            "this topology check cannot silently skip in CI."
+        )
+    pytest.skip("neither Docker nor Podman is available on this host")
+
+
 def _render(
     engine: tuple[str, ...], compose_files: tuple[str, ...], *, profiles: tuple[str, ...] = ()
 ) -> dict[str, dict[str, Any]]:
@@ -120,17 +140,13 @@ def _assert_role_split_honors_the_credential_boundary(services: dict[str, dict[s
 
 
 def test_dev_topology_role_split_honors_the_credential_boundary() -> None:
-    engine = _compose_engine()
-    if engine is None:
-        pytest.skip("neither Docker nor Podman is available on this host")
+    engine = _require_compose_engine()
     services = _render(engine, ("compose.yaml", "compose.fleet.dev.yaml"))
     _assert_role_split_honors_the_credential_boundary(services)
 
 
 def test_production_topology_role_split_honors_the_credential_boundary() -> None:
-    engine = _compose_engine()
-    if engine is None:
-        pytest.skip("neither Docker nor Podman is available on this host")
+    engine = _require_compose_engine()
     services = _render(engine, ("compose.yaml", "compose.fleet.yaml"), profiles=("fleet",))
     _assert_role_split_honors_the_credential_boundary(services)
 
@@ -138,9 +154,7 @@ def test_production_topology_role_split_honors_the_credential_boundary() -> None
 def test_dev_and_production_name_the_coordinator_role_differently() -> None:
     """The exact regression this file guards against: a service-name-keyed
     assertion would silently stop checking one of these two topologies."""
-    engine = _compose_engine()
-    if engine is None:
-        pytest.skip("neither Docker nor Podman is available on this host")
+    engine = _require_compose_engine()
     dev_services = _render(engine, ("compose.yaml", "compose.fleet.dev.yaml"))
     prod_services = _render(engine, ("compose.yaml", "compose.fleet.yaml"), profiles=("fleet",))
 

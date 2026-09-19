@@ -28,7 +28,6 @@ import httpx
 from starlette.datastructures import Headers
 
 from app.broker.fleet.internal_http import (
-    DEFAULT_INTERNAL_TIMEOUT_S,
     FleetStreamError,
     SseEvent,
     build_internal_client,
@@ -275,24 +274,20 @@ class HttpLaneDelivery:
         self._base_url = base_url.rstrip("/")
         self._token = coordinator_service_token
 
-    async def deliver(
-        self, request: DeliveryRequest, *, read_timeout_s: float | None = None
-    ) -> DeliveryResult:
+    async def deliver(self, request: DeliveryRequest) -> DeliveryResult:
         """Forward one complete operation and verify the identity echo.
 
-        ``read_timeout_s`` is the routed operation's own declared bound
-        (``ProviderOperation.read_timeout_s``, issue #2204) -- ``None`` keeps
-        the fleet default. This is the OUTER hop of a routed operation like
-        ``bot_chart_history``: it must stay open at least as long as the
-        agent's own request/response cycle can take, or the outer request
-        expires first and discards work the agent already completed (see
-        ``app.broker.fleet.history_batch`` for the paired inner bound).
+        The client's read timeout is ``request.operation.read_timeout_s``
+        (``ProviderOperation.read_timeout_s``, issue #2204) -- read directly
+        off the pinned request rather than a separately-threaded kwarg, so
+        the two can never drift (gate F3). This is the OUTER hop of a routed
+        operation like ``bot_chart_history``: it must stay open at least as
+        long as the agent's own request/response cycle can take, or the
+        outer request expires first and discards work the agent already
+        completed (see ``app.broker.fleet.history_batch`` for the paired
+        inner bound).
         """
-        client = build_internal_client(
-            read_timeout_s=read_timeout_s
-            if read_timeout_s is not None
-            else DEFAULT_INTERNAL_TIMEOUT_S
-        )
+        client = build_internal_client(read_timeout_s=request.operation.read_timeout_s)
         try:
             response = await client.request(
                 request.operation.method,
@@ -391,15 +386,12 @@ class LocalLaneDelivery:
         """Bind the in-process operation handler."""
         self._handler = handler
 
-    async def deliver(
-        self, request: DeliveryRequest, *, read_timeout_s: float | None = None
-    ) -> DeliveryResult:
+    async def deliver(self, request: DeliveryRequest) -> DeliveryResult:
         """Dispatch in-process and verify the echo.
 
-        ``read_timeout_s`` is accepted for signature parity with
-        :meth:`HttpLaneDelivery.deliver` (``LaneRouter`` calls both the same
-        way) and ignored: an in-process ASGI dispatch has no socket read
-        timeout to widen.
+        An in-process ASGI dispatch has no socket read timeout to widen, so
+        unlike :meth:`HttpLaneDelivery.deliver` this ignores
+        ``request.operation.read_timeout_s`` entirely.
         """
         result = self._handler(request)
         if hasattr(result, "__await__"):

@@ -33,6 +33,7 @@ from app.broker.fleet.errors import (
     BrokerNotSupported,
     FleetProtocolIncompatible,
 )
+from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 
 #: The fleet protocol this build speaks. An agent registering under a
 #: different protocol version refuses explicitly — a newer coordinator must
@@ -132,13 +133,17 @@ class ProviderOperation:
     request_schema: str | None = None
     response_schema: str | None = None
     #: This operation's own outer coordinator -> agent delivery read-timeout
-    #: bound, or ``None`` for the fleet default
-    #: (``app.broker.fleet.internal_http.DEFAULT_INTERNAL_TIMEOUT_S``). A
-    #: generic knob, not a special case: the routing/delivery layer only
-    #: honors whatever an operation declares here (issue #2204's
-    #: ``bot_chart_history`` is the first and, as of this writing, only
-    #: operation that widens it) -- it never special-cases an operation id.
-    read_timeout_s: float | None = None
+    #: bound. Defaults to the fleet default
+    #: (``app.broker.fleet.internal_http.DEFAULT_INTERNAL_TIMEOUT_S``) rather
+    #: than ``None``: ``DeliveryRequest.operation`` already carries this
+    #: value, so ``HttpLaneDelivery.deliver`` reads it directly instead of a
+    #: separately-threaded kwarg that could silently drift from it (issue
+    #: #2204 gate F3). A generic knob, not a special case: the
+    #: routing/delivery layer only honors whatever an operation declares here
+    #: (issue #2204's ``bot_chart_history`` is the first and, as of this
+    #: writing, only operation that widens it) -- it never special-cases an
+    #: operation id.
+    read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S
 
     def route_key(self) -> tuple[str, str]:
         """The (method, public path template) pair forwarding matches on."""
@@ -198,7 +203,7 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
                 "require an effective account: configuration access exists precisely "
                 "for lanes without one"
             )
-        if operation.read_timeout_s is not None and operation.read_timeout_s <= 0:
+        if operation.read_timeout_s <= 0:
             raise ValueError(
                 f"operation {operation.operation_id!r} declares a non-positive "
                 f"read_timeout_s of {operation.read_timeout_s!r}"

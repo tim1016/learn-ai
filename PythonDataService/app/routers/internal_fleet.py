@@ -14,10 +14,13 @@ No unauthenticated fallback exists: a deployment without the token mapping
 refuses every internal call. ``/internal`` stays outside the exported
 OpenAPI contract's public surface and outside every public mount prefix.
 
-The history-batch operation (issue #2204) additionally requires the header
-identity to equal the body identity: ``X-Fleet-Clerk-Id`` must name the same
-clerk as the body's ``clerk_id``, refusing a token that is valid for one
-clerk but presented alongside another clerk's identity.
+Every route additionally requires the header identity to equal the identity
+it authenticates as: ``X-Fleet-Clerk-Id`` must name the same clerk as the
+body's ``clerk_id`` (or, for the path-scoped volume-expectation read, the
+path's ``clerk_id``), refusing a token that is valid for one clerk but
+presented alongside another clerk's identity. ``RemotePresence`` has sent
+this header on every one of its calls since commit 318c92e2, so the check
+applies uniformly rather than through a per-route opt-in (issue #2204).
 """
 
 from __future__ import annotations
@@ -129,18 +132,17 @@ def _authorized_agent(
     clerk_id: str,
     token: str,
     *,
-    header_clerk_id: str | None = None,
-    require_header_clerk_id: bool = False,
+    header_clerk_id: str | None,
 ) -> None:
     """Refuse any agent whose transport token is not the mapped one.
 
-    ``require_header_clerk_id`` (issue #2204) additionally requires the
-    caller's ``X-Fleet-Clerk-Id`` header identity to equal the body's
-    ``clerk_id`` -- an absent header, or one naming a different clerk than
-    the body, refuses exactly like a wrong or missing token. ``False`` (the
-    default) skips that check, preserving the existing five operations'
-    behavior unchanged; the plain ``header_clerk_id`` value is still ignored
-    by them.
+    Also requires the caller's ``X-Fleet-Clerk-Id`` header identity to equal
+    ``clerk_id`` (the body's, or the path's for the volume-expectation read)
+    -- an absent header, or one naming a different clerk, refuses exactly
+    like a wrong or missing token. Applied uniformly across all six routes:
+    ``RemotePresence._headers()`` has sent this header on every one of its
+    calls since commit 318c92e2, so no route needs, or gets, an opt-out
+    (issue #2204).
     """
     mapping_text = getattr(request.app.state, "fleet_agent_tokens_text", "")
     mapping_unreadable_next_step = (
@@ -165,7 +167,7 @@ def _authorized_agent(
         not isinstance(expected, str)
         or not expected
         or not matches_service_token(token, expected)
-        or (require_header_clerk_id and header_clerk_id != clerk_id)
+        or header_clerk_id != clerk_id
     ):
         logger.warning(
             "internal fleet call refused for unknown or mismatched agent token",
@@ -175,7 +177,7 @@ def _authorized_agent(
             "agent token refused",
             next_step="Present the X-Fleet-Agent-Token issued for this clerk "
             "in FLEET_AGENT_SERVICE_TOKENS_JSON, with X-Fleet-Clerk-Id naming "
-            "the same clerk as the request body.",
+            "the same clerk this call authenticates as.",
         )
 
 
@@ -213,9 +215,10 @@ async def volume_expectation(
     clerk_id: str,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Serve the clerk's expected volume identity for local agent proof."""
-    _authorized_agent(request, clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(request, clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id)
     try:
         return _service(request).clerk_volume_expectation(clerk_id)
     except FleetControlError as exc:
@@ -227,9 +230,12 @@ async def register_session(
     payload: RegistrationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Install one agent session under a fresh routing epoch."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         session = _service(request).register_agent_session(
             clerk_id=payload.clerk_id,
@@ -252,9 +258,12 @@ async def observe_session(
     payload: ObservationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Record one heartbeat; observations never confirm anything."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         touched = _service(request).observe_session(
             clerk_id=payload.clerk_id,
@@ -274,9 +283,12 @@ async def reserve_assignment(
     payload: ReserveRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Reserve the broker-qualified account for the authenticated clerk."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         assignment = _service(request).reserve_assignment(
             broker=payload.broker,
@@ -293,9 +305,12 @@ async def confirm_assignment(
     payload: ConfirmRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Record the confirmed binding observation fenced by its session."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         assignment = _service(request).confirm_assignment(
             broker=payload.broker,
@@ -329,11 +344,7 @@ async def history_batch(
     completed batch back on success, whether healthy or vendor-degraded.
     """
     _authorized_agent(
-        request,
-        payload.clerk_id,
-        x_fleet_agent_token or "",
-        header_clerk_id=x_fleet_clerk_id,
-        require_header_clerk_id=True,
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
     batch = await build_coordinator_history_batch(
         symbol=payload.symbol,

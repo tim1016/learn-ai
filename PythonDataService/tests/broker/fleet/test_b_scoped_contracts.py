@@ -231,7 +231,10 @@ class _Lane:
         with httpx.Client(base_url=coordinator_base_url, timeout=10.0) as client:
             response = client.post(
                 "/internal/fleet/sessions",
-                headers={"X-Fleet-Agent-Token": AGENT_TOKEN},
+                headers={
+                    "X-Fleet-Agent-Token": AGENT_TOKEN,
+                    "X-Fleet-Clerk-Id": self.clerk_id,
+                },
                 json={
                     "clerk_id": self.clerk_id,
                     "worker_key": self.worker_key,
