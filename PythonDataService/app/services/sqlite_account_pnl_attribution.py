@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
@@ -51,12 +52,21 @@ def sqlite_account_pnl_attribution(
 
 
 def _active_sqlite_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
+    # ``shadow=False`` throughout: whether P&L attribution serves a Shadow
+    # authority is a separate product decision (#2220), so a failed Shadow
+    # boot answers "not active" exactly as a healthy one does. Only the
+    # account-number case is matched here.
     runtime = get_active_clerk_runtime()
     if runtime is None:
         return None
     if runtime.authority_kind == "unavailable":
         failure = runtime.startup_failure
-        if failure is not None and failure.activation_detected and failure.account_id == account_id:
+        if (
+            failure is not None
+            and failure.activation_detected
+            and failure.account_id is not None
+            and account_route_matches_custody(account_id, failure.account_id, shadow=False)
+        ):
             raise ClerkTransactionProjectionUnavailable(
                 "The selected SQLite Clerk authority is unavailable after startup failure."
             )
@@ -66,7 +76,7 @@ def _active_sqlite_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
         raise RuntimeError("Active SQLite Clerk does not expose its read authority")
-    if clerk.account_id != account_id:
+    if not account_route_matches_custody(account_id, clerk.account_id, shadow=False):
         raise ValueError("Requested account is not the active SQLite authority")
     return clerk
 

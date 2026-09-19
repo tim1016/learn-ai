@@ -4,9 +4,13 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
-from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    ClerkStartupFailure,
+    set_active_clerk_runtime,
+)
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
@@ -119,6 +123,94 @@ async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
     assert response.status_code == 200
     assert response.json()["realized_pnl_total"] == 12.5
     assert response.json()["mark_observed_at_ms"] == {}
+
+
+# Alpaca's stored spelling and the fleet's canonical route spelling (#2220).
+_ACCOUNT_NUMBER = "PA3KWXU1C4C3"
+_CANONICAL_ROUTE_ACCOUNT = "pa3kwxu1c4c3"
+
+
+async def _get_pnl_attribution(route_account: str) -> Response:
+    app = FastAPI()
+    app.include_router(account_pnl_attribution_router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get(
+            f"/api/accounts/{route_account}/pnl-attribution",
+            params={"from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+        )
+
+
+async def _get_pnl_attribution_from_account_number_authority(
+    tmp_path: Path, route_account: str
+) -> Response:
+    repo = ClerkSqliteRepository.initialize(account_id=_ACCOUNT_NUMBER, artifacts_root=tmp_path)
+    broker = object()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
+        )
+    )
+    try:
+        return await _get_pnl_attribution(route_account)
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
+async def test_pnl_attribution_resolves_the_active_authority_on_the_canonical_route(
+    tmp_path: Path,
+) -> None:
+    response = await _get_pnl_attribution_from_account_number_authority(
+        tmp_path, _CANONICAL_ROUTE_ACCOUNT
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["account_id"] == _ACCOUNT_NUMBER
+
+
+async def test_pnl_attribution_still_refuses_a_foreign_route_account(tmp_path: Path) -> None:
+    response = await _get_pnl_attribution_from_account_number_authority(tmp_path, "pa9other0000")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "Requested account is not the active SQLite authority"
+
+
+@pytest.mark.parametrize(
+    ("custody_account_id", "expected_status"),
+    [(_ACCOUNT_NUMBER, 503), (f"shadow:{_ACCOUNT_NUMBER}", 409)],
+    ids=["real_paper", "shadow_stays_not_active"],
+)
+async def test_pnl_attribution_reports_the_failed_authority_on_the_canonical_route(
+    custody_account_id: str,
+    expected_status: int,
+) -> None:
+    """A failed boot of this account's authority is unavailable, not "not active".
+
+    Shadow answers "not active" whether its boot failed or not: P&L attribution
+    does not serve a Shadow authority (#2220), so repairing the boot must not
+    turn a "temporarily unavailable" answer into a refusal.
+    """
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id=custody_account_id,
+                scope="ACCOUNT_CLERK",
+                impact="Broker-mutating Alpaca Clerk capability is not installed.",
+                recovery="The activated database failed integrity verification.",
+                observed_at_ms=1_700_000_000_000,
+                activation_detected=True,
+            ),
+        )
+    )
+    try:
+        response = await _get_pnl_attribution(_CANONICAL_ROUTE_ACCOUNT)
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert response.status_code == expected_status, response.text
 
 
 async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(

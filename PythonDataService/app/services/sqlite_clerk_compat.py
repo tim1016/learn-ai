@@ -6,8 +6,10 @@ import logging
 from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
     authority_kind_in_world,
     custody_account_id_for,
+    is_shadow_account_id,
     is_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_authority import (
@@ -184,14 +186,20 @@ def failed_sqlite_projection(
     if (
         failure is None
         or not failure.activation_detected
-        or failure.account_id != account_id
+        or failure.account_id is None
+        or not account_route_matches_custody(
+            account_id, failure.account_id, shadow=is_shadow_account_id(failure.account_id),
+        )
     ):
         return None
+    # The projection names the failed authority's custody id, as a healthy
+    # snapshot does, whatever the route's spelling.
+    custody_account_id = failure.account_id
     now_ms = now_ms_utc()
     authority_generation = failure.authority_generation or 0
     db_identity_token = failure.db_identity_token or "unverified-activation"
     context = RecoveryPolicyContext(
-        account_id=account_id,
+        account_id=custody_account_id,
         strategy_instance_id=strategy_instance_id,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,
@@ -207,7 +215,7 @@ def failed_sqlite_projection(
     )
     recovery_actions = build_recovery_catalog(context)
     return ClerkProjection(
-        account_id=account_id,
+        account_id=custody_account_id,
         strategy_instance_id=strategy_instance_id,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,

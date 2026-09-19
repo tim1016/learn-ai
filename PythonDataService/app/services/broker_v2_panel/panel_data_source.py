@@ -19,7 +19,10 @@ from contextlib import asynccontextmanager
 from typing import Literal, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.account_authority import evidence_account_id_for
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    evidence_account_id_for,
+)
 from app.broker.alpaca.clerk.active_authority import (
     active_program_leg_policy,
     primary_custody_world,
@@ -829,8 +832,9 @@ async def _revive_lease_or_raise(
     ``REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE`` before any sweep is consulted.
     """
     facade = active_sqlite_facade(broker)
-    custody_account_id = custody_account_id_for_route(broker, account_id)
-    if facade is None or facade.account_id != custody_account_id:
+    if facade is None or not account_route_matches_custody(
+        account_id, facade.account_id, shadow=facade.authority_kind == "shadow",
+    ):
         # The active SQLite authority for this account is gone -- a restart
         # or reset raced this request, or it was never SQLite to begin with
         # (a synthetic authority's facade lookup also returns None here) --

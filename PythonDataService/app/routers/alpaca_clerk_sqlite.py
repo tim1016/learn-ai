@@ -21,7 +21,10 @@ from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    live_account_id_for_shadow_account,
+)
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.commands import (
@@ -605,8 +608,9 @@ async def confirm_bot_historical_execution_recovery(
     body: HistoricalExecutionRecoveryConfirmRequest,
 ) -> HistoricalExecutionRecoveryReceiptResponse:
     """Append only the signed plan's exact evidence and its existing proof result."""
+    facade = _active_sqlite_facade(account_id)
     if (
-        body.plan.account_id != account_id
+        body.plan.account_id != facade.account_id
         or body.plan.strategy_instance_id != strategy_instance_id
     ):
         raise HTTPException(
@@ -617,7 +621,6 @@ async def confirm_bot_historical_execution_recovery(
                 "next_step": "Return to the affected bot and prepare a fresh recovery plan.",
             },
         )
-    facade = _active_sqlite_facade(account_id)
     try:
         receipt = await facade.confirm_historical_execution_recovery(
             plan=HistoricalExecutionRecoveryPlan(**body.plan.model_dump()),
@@ -755,7 +758,7 @@ async def reconcile_now(account_id: str) -> ReconciliationResponse:
         )
     try:
         broker_account = await port.get_account()
-        if broker_account.account_id != account_id:
+        if broker_account.account_id != live_account_id_for_shadow_account(facade.account_id):
             raise HTTPException(
                 status_code=409,
                 detail={

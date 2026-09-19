@@ -10,6 +10,7 @@ import pytest
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    ClerkStartupFailure,
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -88,6 +89,38 @@ def test_public_account_history_resolves_only_its_active_custody(
     finally:
         set_active_clerk_runtime(None)
         repo.close()
+
+
+@pytest.mark.parametrize("custody", ["PA-DESK", "shadow:PA-DESK"], ids=["real_paper", "shadow"])
+def test_public_account_history_reports_its_failed_custody_as_unavailable(custody: str) -> None:
+    """A failed boot answers the canonical route as unavailable, a foreign one as inactive (#2220)."""
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id=custody,
+                scope="ACCOUNT_CLERK",
+                impact="Broker-mutating Alpaca Clerk capability is not installed.",
+                recovery="The activated database failed integrity verification.",
+                observed_at_ms=1_700_000_000_000,
+                activation_detected=True,
+            ),
+        )
+    )
+
+    def read(requested: str) -> ClerkTransactionHistoryResponse | None:
+        return sqlite_transaction_history(
+            account_id=requested, limit=10, cursor=None, origin=None,
+            lifecycle_state=None, strategy_instance_id=None, run_id=None,
+        )
+
+    try:
+        with pytest.raises(ClerkTransactionProjectionUnavailable, match="startup failure"):
+            read("pa-desk")
+        assert read("OTHER") is None
+    finally:
+        set_active_clerk_runtime(None)
 
 
 def _append_execution(
