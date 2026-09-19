@@ -372,11 +372,15 @@ async def test_shadow_evidence_route_reads_the_custody_namespace(
     }
 
 
+@pytest.mark.parametrize(
+    "route_account", [LIVE_ACCT, LIVE_ACCT.lower()], ids=["account_number", "canonical"]
+)
 async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     monkeypatch: pytest.MonkeyPatch,
+    route_account: str,
 ) -> None:
-    """A public Shadow route revives the active Shadow authority's lease."""
+    """A public Shadow route, in either spelling, revives the active Shadow authority's lease."""
     _app, _runtime = shadow_app
     calls: list[str] = []
 
@@ -400,7 +404,7 @@ async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
     with pytest.raises(ExecutionAuthorityRevivedError):
         await panel_data_source._revive_lease_or_raise(
             "alpaca",
-            LIVE_ACCT,
+            route_account,
             SID,
             request,
             error=ExecutionLeaseLost(

@@ -177,14 +177,20 @@ async def test_pnl_attribution_still_refuses_a_foreign_route_account(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    "custody_account_id",
-    [_ACCOUNT_NUMBER, f"shadow:{_ACCOUNT_NUMBER}"],
-    ids=["real_paper", "shadow"],
+    ("custody_account_id", "expected_status"),
+    [(_ACCOUNT_NUMBER, 503), (f"shadow:{_ACCOUNT_NUMBER}", 409)],
+    ids=["real_paper", "shadow_stays_not_active"],
 )
 async def test_pnl_attribution_reports_the_failed_authority_on_the_canonical_route(
     custody_account_id: str,
+    expected_status: int,
 ) -> None:
-    """A failed boot of this account's authority is unavailable, not "not active"."""
+    """A failed boot of this account's authority is unavailable, not "not active".
+
+    Shadow answers "not active" whether its boot failed or not: P&L attribution
+    does not serve a Shadow authority (#2220), so repairing the boot must not
+    turn a "temporarily unavailable" answer into a refusal.
+    """
     set_active_clerk_runtime(
         ActiveClerkRuntime(
             authority_kind="unavailable",
@@ -204,7 +210,7 @@ async def test_pnl_attribution_reports_the_failed_authority_on_the_canonical_rou
     finally:
         set_active_clerk_runtime(None)
 
-    assert response.status_code == 503, response.text
+    assert response.status_code == expected_status, response.text
 
 
 async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(

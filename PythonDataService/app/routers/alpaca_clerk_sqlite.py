@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
-    is_shadow_account_id,
+    live_account_id_for_shadow_account,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
@@ -758,11 +758,7 @@ async def reconcile_now(account_id: str) -> ReconciliationResponse:
         )
     try:
         broker_account = await port.get_account()
-        if not account_route_matches_custody(
-            broker_account.account_id,
-            facade.account_id,
-            shadow=is_shadow_account_id(facade.account_id),
-        ):
+        if broker_account.account_id != live_account_id_for_shadow_account(facade.account_id):
             raise HTTPException(
                 status_code=409,
                 detail={
