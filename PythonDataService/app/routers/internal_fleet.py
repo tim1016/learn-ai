@@ -311,7 +311,7 @@ async def history_batch(
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
     x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
-) -> HistoryBatchResponse | Response:
+) -> HistoryBatchResponse:
     """Serve one complete backward-walked Polygon history batch (issue #2204).
 
     This process's own ``POLYGON_API_KEY`` is the usable one -- only a
