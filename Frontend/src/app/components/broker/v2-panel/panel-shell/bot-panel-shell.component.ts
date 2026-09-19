@@ -288,13 +288,21 @@ export class BotPanelShellComponent {
   private readonly extendedFlattenOpen = computed(() => this.extendedFlattenTicket() !== null);
   /** One quote refresh at a time: a slow check must not overlap the next tick. */
   private flattenQuoteInFlight = false;
+  /** The in-flight refresh, so a Review can queue behind it instead of being dropped. */
+  private flattenQuoteRun: Promise<void> = Promise.resolve();
   /** While a ticket is open the quote refreshes on its own, so what the
-   * operator confirms is never older than one refresh. */
+   * operator confirms is never older than one refresh — except while the
+   * operator is reviewing a price, when a refresh would answer the Clerk's
+   * reading of it with a quote that carries no reading at all. */
   private readonly extendedFlattenQuoteRefresh = effect((onCleanup) => {
     if (!this.extendedFlattenOpen()) return;
-    const timer = setInterval(() => void this.refreshFlattenQuote(), EXTENDED_FLATTEN_QUOTE_REFRESH_MS);
+    const timer = setInterval(() => {
+      if (this.flattenPriceCheck() === null) void this.refreshFlattenQuote();
+    }, EXTENDED_FLATTEN_QUOTE_REFRESH_MS);
     onCleanup(() => clearInterval(timer));
   });
+  /** The price the Clerk is being asked to read, while it is being asked. */
+  private readonly flattenPriceCheck = signal<number | null>(null);
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,
@@ -620,7 +628,10 @@ export class BotPanelShellComponent {
    * beside the ticket, and the quote then ages past the Clerk's bound and
    * cannot be sent.
    */
-  protected async refreshFlattenQuote(retryOnStaleToken = true): Promise<void> {
+  protected async refreshFlattenQuote(
+    retryOnStaleToken = true,
+    proposedLimitPrice: number | null = null,
+  ): Promise<void> {
     const prepared = this.preparedFlatten();
     const prepare = this.presentedAction('prepare_safe_flatten');
     if (prepared === null || this.actionPending() || this.flattenQuoteInFlight) return;
@@ -632,38 +643,64 @@ export class BotPanelShellComponent {
       return;
     }
     this.flattenQuoteInFlight = true;
-    try {
-      const check = await this.brokers.checkSqliteSafeFlatten(
-        prepared.target.clerkId,
-        this.requiredAccountId(prepared.target),
-        { action_id: 'prepare_safe_flatten', concurrency_token: prepare.concurrency_token },
-        prepared.sid,
-      );
-      if (this.preparedFlatten() !== prepared) return;
-      const plan = check.capability.reduction_plan;
-      this.preparedFlatten.set(
-        plan === null
-          ? null
-          : {
-            ...prepared,
-            plan,
-            pricing: check.reduction_pricing ?? null,
-            receivedAtMs: Date.now(),
-            quoteError: null,
+    this.flattenQuoteRun = (async () => {
+      try {
+        const check = await this.brokers.checkSqliteSafeFlatten(
+          prepared.target.clerkId,
+          this.requiredAccountId(prepared.target),
+          {
+            action_id: 'prepare_safe_flatten',
+            concurrency_token: prepare.concurrency_token,
+            ...(proposedLimitPrice === null ? {} : { proposed_limit_price: proposedLimitPrice }),
           },
-      );
-    } catch (error) {
-      if (this.preparedFlatten() !== prepared) return;
-      const rejection = this.describeRejection(error, prepare);
-      if (rejection.reasonCode === 'stale_action_token' && retryOnStaleToken) {
+          prepared.sid,
+        );
+        if (this.preparedFlatten() !== prepared) return;
+        const plan = check.capability.reduction_plan;
+        this.preparedFlatten.set(
+          plan === null
+            ? null
+            : {
+              ...prepared,
+              plan,
+              pricing: check.reduction_pricing ?? null,
+              receivedAtMs: Date.now(),
+              quoteError: null,
+            },
+        );
+      } catch (error) {
+        if (this.preparedFlatten() !== prepared) return;
+        const rejection = this.describeRejection(error, prepare);
+        if (rejection.reasonCode === 'stale_action_token' && retryOnStaleToken) {
+          this.flattenQuoteInFlight = false;
+          await this.liveStore.refresh();
+          await this.refreshFlattenQuote(false, proposedLimitPrice);
+          return;
+        }
+        this.preparedFlatten.set({ ...prepared, quoteError: rejection.message });
+      } finally {
         this.flattenQuoteInFlight = false;
-        await this.liveStore.refresh();
-        await this.refreshFlattenQuote(false);
-        return;
       }
-      this.preparedFlatten.set({ ...prepared, quoteError: rejection.message });
+    })();
+    await this.flattenQuoteRun;
+  }
+
+  /**
+   * Ask the Clerk what the operator's own price would do (#2007).
+   *
+   * The browser derives no execution or cost figure of its own, so Review is
+   * a round trip: the Clerk reads the price against the quote it holds, and
+   * the ticket confirms against that reading. The periodic quote refresh
+   * stands down while this runs, so the answer is not immediately replaced by
+   * a quote carrying no reading.
+   */
+  protected async priceExtendedFlatten(limitPrice: number): Promise<void> {
+    this.flattenPriceCheck.set(limitPrice);
+    try {
+      await this.flattenQuoteRun;
+      await this.refreshFlattenQuote(true, limitPrice);
     } finally {
-      this.flattenQuoteInFlight = false;
+      this.flattenPriceCheck.set(null);
     }
   }
 
@@ -699,15 +736,25 @@ export class BotPanelShellComponent {
       if (requestIdentity !== this.routeIdentity()) return;
       this.preparedFlatten.set(null);
       const price = formatLimitPrice(confirmation.limit_price);
+      // "Sent" is a claim about the broker, so it is only made on the broker's
+      // own evidence. A durably accepted EXIT whose reducing order has not
+      // reached Alpaca — a lookup outage, a transiently blocked REDUCE — is
+      // pending, not sent, and saying otherwise would tell an operator their
+      // exposure is on its way out when nothing has left (Codex review
+      // 2026-09-19).
+      const reachedBroker = result.orders.some((order) => order.broker_order_id !== null);
       const receipt: ActionReceiptView = {
         actionId: 'execute_safe_flatten',
         outcome: 'success',
         receiptId: result.receipt_id,
         recordedAtMs: result.recorded_at_ms,
-        message: result.applied
-          ? `Limit order sent at $${price}. It fills only at that price or better; await its `
-            + 'fill before treating exposure as flat.'
-          : 'This flatten had already been sent; the durable result was replayed.',
+        message: !result.applied
+          ? 'This flatten had already been sent; the durable result was replayed.'
+          : reachedBroker
+            ? `Limit order sent at $${price}. It fills only at that price or better; await its `
+              + 'fill before treating exposure as flat.'
+            : `Flatten accepted at $${price}, but no order has reached the broker yet. `
+              + 'The Clerk keeps trying; nothing is flat until the order exists and fills.',
         remediation: null,
       };
       this.actionReceipt.set(receipt);

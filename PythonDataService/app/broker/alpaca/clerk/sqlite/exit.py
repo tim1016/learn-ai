@@ -169,6 +169,7 @@ def _accept_exit_capture(
             reducing_shape if confirmed_shape is None else confirmed_shape.shape,
             valid_until_ms=None if confirmed_shape is None else confirmed_shape.valid_until_ms,
             reference_quote=None if confirmed_shape is None else confirmed_shape.reference_quote,
+            confirmed_quantity=None if confirmed_shape is None else confirmed_shape.quantity,
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,

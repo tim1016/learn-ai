@@ -227,3 +227,23 @@ async def test_store_answers_a_fresh_quote_and_registers_demand_for_an_unwatched
     # ``requested_symbols`` prunes against the wall clock, so ask at it.
     assert store.top_of_book("QQQ", now_ms=now_ms_utc()) is None
     assert "QQQ" in store.requested_symbols()
+
+
+async def test_a_snapshot_that_omits_a_symbol_drops_its_quote(source):
+    """Codex review of #2007: a dropped subscription, a disconnect, or a
+    reconnect before the book arrives leaves the symbol out of the snapshot.
+    Keeping the last one would let a remembered price answer as live while it
+    is still inside the freshness window."""
+    status, client, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    store = MarketLivenessStore()
+    store.apply_status_snapshot(await status(), now_ms=NOW)
+    assert store.top_of_book("SPY", now_ms=NOW + 1_000) is not None
+
+    client.connection_state = "degraded_data_farm"
+    store.apply_status_snapshot(await status(), now_ms=NOW)
+    client.connection_state = "connected"
+    del ticker.bid, ticker.ask
+    store.apply_status_snapshot(await status(), now_ms=NOW)
+
+    assert store.top_of_book("SPY", now_ms=NOW + 1_000) is None

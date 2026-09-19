@@ -22,8 +22,11 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
     ExtendedLimitProposal,
     RegularSessionReduction,
+    evaluate_proposed_limit,
     price_recovery_reduction,
+    quote_spread_bps,
     realized_slippage_bps,
+    realized_slippage_cost,
     recovery_leg_verdict,
     recovery_reduction_shape,
 )
@@ -386,3 +389,80 @@ def test_realized_slippage_is_positive_when_the_fill_is_worse_than_the_reference
 def test_realized_slippage_needs_a_positive_reference() -> None:
     with pytest.raises(ValueError, match="reference_price"):
         realized_slippage_bps(side=OrderSide.SELL, reference_price=0.0, fill_price=1.0)
+
+
+def test_realized_slippage_cost_is_the_same_difference_in_dollars() -> None:
+    cost = realized_slippage_cost(
+        side=OrderSide.SELL, reference_price=100.0, fill_price=99.9, quantity=10.0
+    )
+    assert cost == pytest.approx(1.0, abs=1e-9, rel=0)
+    # A fill better than the reference gives the operator money back.
+    assert realized_slippage_cost(
+        side=OrderSide.BUY, reference_price=50.0, fill_price=49.95, quantity=20.0
+    ) == pytest.approx(-1.0, abs=1e-9, rel=0)
+
+
+# --- what a proposed price does against the quote ---------------------------
+
+
+def _proposal(side: OrderSide = OrderSide.SELL, **quote_fields) -> ExtendedLimitProposal:
+    return ExtendedLimitProposal(
+        phase="PRE",
+        side=side,
+        quote=TopOfBookQuote(
+            symbol="SPY",
+            bid=quote_fields.pop("bid", 100.00),
+            ask=quote_fields.pop("ask", 100.05),
+            source="ibkr.market_data.status",
+            observed_at_ms=_at(7),
+            **quote_fields,
+        ),
+        exit_allowance_bps=Decimal("20"),
+        suggested_limit_price=Decimal("99.80") if side is OrderSide.SELL else Decimal("100.25"),
+        band_limit_price=Decimal("99.60") if side is OrderSide.SELL else Decimal("100.45"),
+    )
+
+
+def test_quote_spread_is_measured_in_bps_of_the_mid() -> None:
+    assert quote_spread_bps(_proposal().quote) == pytest.approx(4.99875, abs=1e-5, rel=0)
+
+
+def test_a_price_through_the_touch_costs_at_most_the_whole_reach() -> None:
+    evaluation = evaluate_proposed_limit(
+        proposal=_proposal(), limit_price=Decimal("99.70"), quantity=10
+    )
+
+    # $0.30 below a $100.00 bid, on ten shares.
+    assert evaluation.through_book_bps == pytest.approx(30.0, abs=1e-9, rel=0)
+    assert evaluation.worst_case_cost == pytest.approx(3.0, abs=1e-9, rel=0)
+    assert (evaluation.resting, evaluation.outside_band) == (False, False)
+
+
+def test_a_price_behind_the_touch_rests_and_costs_nothing_to_reach() -> None:
+    evaluation = evaluate_proposed_limit(
+        proposal=_proposal(), limit_price=Decimal("100.20"), quantity=10
+    )
+
+    assert evaluation.through_book_bps == pytest.approx(-20.0, abs=1e-9, rel=0)
+    assert evaluation.resting is True
+    # Nothing is given up reaching through a book this price never reaches.
+    assert evaluation.worst_case_cost == 0.0
+
+
+def test_a_price_past_the_band_and_a_book_thinner_than_the_order_are_flagged() -> None:
+    evaluation = evaluate_proposed_limit(
+        proposal=_proposal(bid_size=4), limit_price=Decimal("99.50"), quantity=10
+    )
+
+    assert (evaluation.outside_band, evaluation.thin_book) == (True, True)
+
+
+def test_a_cover_is_measured_against_the_ask() -> None:
+    evaluation = evaluate_proposed_limit(
+        proposal=_proposal(OrderSide.BUY, ask_size=50), limit_price=Decimal("100.35"), quantity=10
+    )
+
+    # $0.30 above a $100.05 ask, and the book is deeper than the order.
+    assert evaluation.through_book_bps == pytest.approx(29.985, abs=1e-3, rel=0)
+    assert evaluation.worst_case_cost == pytest.approx(3.0, abs=1e-9, rel=0)
+    assert (evaluation.outside_band, evaluation.thin_book) == (False, False)

@@ -11,7 +11,10 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.recovery_reduction import realized_slippage_bps
+from app.broker.alpaca.clerk.recovery_reduction import (
+    realized_slippage_bps,
+    realized_slippage_cost,
+)
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.exit_resolution import confirmed_flatten_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -695,12 +698,23 @@ def _recent_fill_view(
         simulated=kind in SIMULATED_AUTHORITY_KINDS,
         authority_account_id=authority_account_id,
         authority_kind=kind,
+        event_key=fill.event_key,
         slippage_reference_price=reference_price,
         slippage_bps=(
             None
             if reference_price is None
             else realized_slippage_bps(
                 side=fill.side, reference_price=reference_price, fill_price=fill.fill_price
+            )
+        ),
+        slippage_cost=(
+            None
+            if reference_price is None
+            else realized_slippage_cost(
+                side=fill.side,
+                reference_price=reference_price,
+                fill_price=fill.fill_price,
+                quantity=fill.quantity,
             )
         ),
     )

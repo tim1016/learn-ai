@@ -23,9 +23,17 @@ Formula (the suggested limit, and the band a confirmed limit must stay inside):
     band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
     where k = RECOVERY_BAND_ALLOWANCE_MULTIPLE and bid/ask are the Clerk's
     live quote at send.
-Formula (realized slippage of a fill, in bps, positive = worse than the reference):
-    sell: (reference_bid − fill_price) / reference_bid × 10⁴
-    buy:  (fill_price − reference_ask) / reference_ask × 10⁴
+Formula (realized slippage of a fill, positive = worse than the reference):
+    sell: (reference_bid − fill_price) / reference_bid × 10⁴ bps
+    buy:  (fill_price − reference_ask) / reference_ask × 10⁴ bps
+    cost: the same numerator in dollars × |quantity|
+Formula (what a proposed limit does against the touch — bid to sell, ask to cover):
+    through the book: (touch − limit) / touch × 10⁴ bps for a sell,
+                      (limit − touch) / touch × 10⁴ bps to cover
+                      (negative rests behind the touch instead of reaching through)
+    worst case:       max(0, touch − limit) × |quantity| for a sell,
+                      max(0, limit − touch) × |quantity| to cover
+    spread:           (ask − bid) / mid × 10⁴ bps
 Reference: docs/references/alpaca-extended-hours.md § "Operator flatten outside
     the regular session"; owner decisions 2026-09-19 on #2007.
 Canonical implementation: this file for the session rule;
@@ -162,6 +170,15 @@ RECOVERY_LIMIT_SESSION_ENDED = LegRefusal(
     next_step="Flatten again in the current session.",
 )
 
+RECOVERY_LIMIT_QUANTITY_CHANGED = LegRefusal(
+    reason_code="RECOVERY_LIMIT_QUANTITY_CHANGED",
+    explanation=(
+        "The position changed after this price was confirmed, so the reduction is no "
+        "longer the one the operator reviewed."
+    ),
+    next_step="Review the new quantity and confirm a price for it.",
+)
+
 type ExtendedPhase = Literal["PRE", "POST"]
 type RecoveryLegVerdict = Literal["send", "wait", "expired"]
 """May a recovery EXIT's reducing leg go to the broker now?
@@ -191,6 +208,21 @@ class ExtendedLimitProposal:
     band_limit_price: Decimal
 
 
+@dataclass(frozen=True)
+class ProposedLimitEvaluation:
+    """What a specific price the operator proposes would do against the Clerk's quote."""
+
+    limit_price: Decimal
+    # Positive reaches through the touch; negative rests behind it.
+    through_book_bps: float
+    # Every share filling at the limit, measured against the touch.
+    worst_case_cost: float
+    outside_band: bool
+    # The quantity is larger than the size showing at the touch.
+    thin_book: bool
+    resting: bool
+
+
 type RecoveryReductionPricing = RegularSessionReduction | ExtendedLimitProposal
 
 
@@ -215,6 +247,9 @@ class ConfirmedRecoveryShape:
     # The Clerk's live quote at send: the reference realized slippage is
     # measured from, at most ten seconds newer than the one the operator saw.
     reference_quote: TopOfBookQuote
+    # The reduction this price was confirmed for. Cancellation resolves the
+    # real quantity later; a different one is not what the operator reviewed.
+    quantity: float
 
 
 def regular_session_open(now_ms: int) -> bool:
@@ -330,6 +365,7 @@ def recovery_reduction_shape(
         shape=shape,
         valid_until_ms=state.next_transition_ms,
         reference_quote=current_quote,
+        quantity=abs(quantity),
     )
 
 
@@ -355,8 +391,62 @@ def realized_slippage_bps(*, side: OrderSide, reference_price: float, fill_price
     """
     if reference_price <= 0:
         raise ValueError(f"reference_price must be positive; got {reference_price}")
-    signed = reference_price - fill_price if side is OrderSide.SELL else fill_price - reference_price
-    return signed / reference_price * 10_000
+    return _signed_against_reference(side, reference_price, fill_price) / reference_price * 10_000
+
+
+def realized_slippage_cost(
+    *, side: OrderSide, reference_price: float, fill_price: float, quantity: float
+) -> float:
+    """What :func:`realized_slippage_bps` cost in dollars over ``quantity`` shares."""
+    if reference_price <= 0:
+        raise ValueError(f"reference_price must be positive; got {reference_price}")
+    return _signed_against_reference(side, reference_price, fill_price) * abs(quantity)
+
+
+def quote_spread_bps(quote: TopOfBookQuote) -> float:
+    """The bid-ask spread as bps of the mid — wide means a fill costs more to reach."""
+    mid = (quote.bid + quote.ask) / 2
+    if mid <= 0:
+        raise ValueError(f"quote mid must be positive; got {mid}")
+    return (quote.ask - quote.bid) / mid * 10_000
+
+
+def evaluate_proposed_limit(
+    *, proposal: ExtendedLimitProposal, limit_price: Decimal, quantity: float
+) -> ProposedLimitEvaluation:
+    """What the operator's own price would do against the quote the Clerk holds.
+
+    The one authority for the numbers an operator reads before confirming an
+    extended-hours flatten: how far the price reaches through the touch, and
+    the most that reach can cost. The browser renders these; it never
+    recomputes them (AGENTS.md § "Python owns all math").
+    """
+    side = proposal.side
+    touch = Decimal(str(proposal.quote.bid if side is OrderSide.SELL else proposal.quote.ask))
+    if touch <= 0:
+        raise ValueError(f"quote touch must be positive; got {touch}")
+    through = touch - limit_price if side is OrderSide.SELL else limit_price - touch
+    touch_size = proposal.quote.bid_size if side is OrderSide.SELL else proposal.quote.ask_size
+    outside_band = (
+        limit_price < proposal.band_limit_price
+        if side is OrderSide.SELL
+        else limit_price > proposal.band_limit_price
+    )
+    return ProposedLimitEvaluation(
+        limit_price=limit_price,
+        through_book_bps=float(through / touch) * 10_000,
+        worst_case_cost=float(max(through, Decimal(0))) * abs(quantity),
+        outside_band=outside_band,
+        thin_book=touch_size is not None and abs(quantity) > touch_size,
+        resting=through < 0,
+    )
+
+
+def _signed_against_reference(side: OrderSide, reference_price: float, fill_price: float) -> float:
+    """Dollars per share worse than the reference: the bid for a sell, the ask for a cover."""
+    if side is OrderSide.SELL:
+        return reference_price - fill_price
+    return fill_price - reference_price
 
 
 def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Decimal) -> Decimal:

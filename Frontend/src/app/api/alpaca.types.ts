@@ -62,6 +62,8 @@ export type SqliteSafeFlattenPlan = components['schemas']['SafeFlattenPlanRespon
 export type SqliteSafeFlattenPricing = NonNullable<SqliteRecoveryActionCheck['reduction_pricing']>;
 export type SqliteExtendedLimitPricing = components['schemas']['ExtendedLimitFlattenPricing'];
 export type SqliteRefusedFlattenPricing = components['schemas']['RefusedFlattenPricing'];
+export type SqliteProposedLimitEvaluation =
+  components['schemas']['ProposedLimitEvaluationResponse'];
 export type SqliteExtendedLimitConfirmation =
   components['schemas']['ExtendedLimitConfirmationRequest'];
 export type SqliteTimelineEntry = components['schemas']['TimelineEntryResponse'];

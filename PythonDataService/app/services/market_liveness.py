@@ -407,11 +407,15 @@ class MarketLivenessStore:
         self._connection_changed_at_ms = snapshot.connection_changed_at_ms
         for evidence in snapshot.symbol_statuses:
             self.observe_symbol_status(evidence)
-        for quote in snapshot.quotes:
-            symbol = quote.symbol.upper()
-            current = self._quotes.get(symbol)
-            if current is None or quote.observed_at_ms >= current.observed_at_ms:
-                self._quotes[symbol] = quote.model_copy(update={"symbol": symbol})
+        # The snapshot is the whole live book, so it *replaces* what is held:
+        # a symbol it omits — a dropped subscription, a disconnect, a
+        # reconnect before the book arrives — has no live quote, and keeping
+        # the last one would let ``top_of_book`` answer a remembered price
+        # inside the freshness window (Codex review 2026-09-19).
+        self._quotes = {
+            quote.symbol.upper(): quote.model_copy(update={"symbol": quote.symbol.upper()})
+            for quote in snapshot.quotes
+        }
 
     def _status_connected(self, now_ms: int) -> bool:
         return self._connected and (

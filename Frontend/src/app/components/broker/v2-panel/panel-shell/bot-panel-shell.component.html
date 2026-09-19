@@ -45,6 +45,7 @@
           [quoteReceivedAtMs]="ticket.receivedAtMs"
           [pending]="actionPending()"
           (send)="sendExtendedFlatten($event)"
+          (priceCheck)="priceExtendedFlatten($event)"
           (refresh)="refreshFlattenQuote()"
         />
         @if (preparedFlatten()?.quoteError; as quoteError) {

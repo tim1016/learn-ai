@@ -1302,8 +1302,63 @@ async def test_bot_recovery_check_carries_the_live_extended_hours_pricing(
         "exit_allowance_bps": 20.0,
         "suggested_limit_price": 99.8,
         "band_limit_price": 99.6,
+        "spread": pytest.approx(0.05, abs=1e-9),
+        "spread_bps": pytest.approx(4.99875, abs=1e-5),
+        "wide_spread": False,
         "spread_warning_bps": 50.0,
+        "proposal": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_the_clerk_evaluates_the_price_the_operator_proposes(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every number the operator reads is the Clerk's; the browser computes none."""
+    capability = _single_leg_flatten_capability()
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite, "recheck_recovery_action", lambda *_a, **_k: capability
+    )
+    monkeypatch.setattr(
+        _active_facade(),
+        "price_safe_flatten",
+        lambda _plan: ExtendedLimitProposal(
+            phase="PRE",
+            side=OrderSide.SELL,
+            quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                bid_size=4,
+                source="ibkr.market_data.status",
+                observed_at_ms=1_700_136_000_000,
+            ),
+            exit_allowance_bps=Decimal("20"),
+            suggested_limit_price=Decimal("99.80"),
+            band_limit_price=Decimal("99.60"),
+        ),
+    )
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/check",
+            json={
+                "action_id": "prepare_safe_flatten",
+                "concurrency_token": "token",
+                "proposed_limit_price": 99.70,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    proposal = response.json()["reduction_pricing"]["proposal"]
+    # $0.30 through a $100.00 bid, on the plan's ten shares against a book of four.
+    assert proposal["through_book_bps"] == pytest.approx(30.0, abs=1e-6)
+    assert proposal["worst_case_cost"] == pytest.approx(3.0, abs=1e-6)
+    assert (proposal["outside_band"], proposal["thin_book"], proposal["resting"]) == (
+        False,
+        True,
+        False,
+    )
 
 
 @pytest.mark.asyncio

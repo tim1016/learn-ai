@@ -6,10 +6,12 @@ import {
   Injector,
   afterNextRender,
   computed,
+  effect,
   inject,
   input,
   output,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
@@ -22,7 +24,9 @@ import { timer } from 'rxjs';
 import type {
   SqliteExtendedLimitConfirmation,
   SqliteExtendedLimitPricing,
+  SqliteProposedLimitEvaluation,
 } from '../../../../api/alpaca.types';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 
 /** Alpaca's limit precision, for display only: two decimals at or above $1, four below.
@@ -34,8 +38,8 @@ export function formatLimitPrice(price: number): string {
 /** A plain positive decimal as typed — no exponent, sign or thousands separator. */
 const PLAIN_DECIMAL = /^\d+(\.\d+)?$/;
 
-/** What the operator looked at when they pressed Review: the confirm pane
- * renders this, and Send sends exactly this — never a later refresh. */
+/** What the operator looked at when the Clerk priced their review: the confirm
+ * pane renders this, and Send sends exactly this — never a later refresh. */
 interface ReviewedLimit {
   readonly limitText: string;
   readonly limitPrice: number;
@@ -45,6 +49,7 @@ interface ReviewedLimit {
   readonly ask: number;
   readonly side: SqliteExtendedLimitPricing['side'];
   readonly quantity: number;
+  readonly evaluation: SqliteProposedLimitEvaluation;
 }
 
 /**
@@ -56,9 +61,15 @@ interface ReviewedLimit {
  * allowance to sell, ask plus it to cover); and warns, before anything is
  * sent, when the spread is wide, when the quantity exceeds the displayed size
  * (the order may fill down to the limit), and how much the limit gives up
- * against the book at worst. A price past the Clerk's band cannot be reviewed.
+ * against the book at worst.
  *
- * Review freezes the price and the quote beside it; Send emits exactly that.
+ * Every one of those numbers is the Clerk's. Pressing Review asks the Clerk
+ * what the operator's own price would do against the quote it holds, and the
+ * answer is what the confirm pane renders and Send sends; this component
+ * derives no execution or cost figure of its own (AGENTS.md § "Python owns
+ * all math"). A price the Clerk refuses as past its band never reaches the
+ * confirm pane.
+ *
  * Quote age is measured from when this browser received the quote, so a
  * skewed browser clock cannot make a fresh quote look stale or a stale one
  * fresh; the Clerk re-judges freshness against its own clock regardless.
@@ -67,6 +78,7 @@ interface ReviewedLimit {
   selector: 'app-extended-flatten-ticket',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AssetIdentityComponent,
     ButtonModule,
     CurrencyPipe,
     DecimalPipe,
@@ -86,13 +98,48 @@ export class ExtendedFlattenTicketComponent {
   /** The reviewed price and the quote it was reviewed against. */
   readonly send = output<SqliteExtendedLimitConfirmation>();
   readonly refresh = output();
+  /** Ask the Clerk what this price would do against the quote it holds. */
+  readonly priceCheck = output<number>();
 
   private readonly injector = inject(Injector);
   private readonly reviewButton = viewChild<ElementRef<HTMLButtonElement>>('reviewButton');
   private readonly sendButton = viewChild<ElementRef<HTMLButtonElement>>('sendButton');
   private readonly editedLimit = signal<string | null>(null);
+  /** The price the Clerk was asked to evaluate, until its answer arrives. */
+  private readonly awaitingPrice = signal<number | null>(null);
   protected readonly reviewed = signal<ReviewedLimit | null>(null);
   private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
+
+  constructor() {
+    // The Clerk's answer to a Review is what the confirm pane shows, so it is
+    // frozen the moment it lands: a later quote refresh must not move the
+    // numbers under the operator, and a price the Clerk put past its band
+    // never becomes reviewable at all.
+    effect(() => {
+      const evaluation = this.pricing().proposal;
+      const wanted = this.awaitingPrice();
+      if (wanted === null || !evaluation || evaluation.limit_price !== wanted) return;
+      untracked(() => {
+        this.awaitingPrice.set(null);
+        if (evaluation.outside_band) return;
+        const pricing = this.pricing();
+        this.reviewed.set({
+          limitText: formatLimitPrice(wanted),
+          limitPrice: wanted,
+          quoteObservedAtMs: pricing.quote_observed_at_ms,
+          quoteReceivedAtMs: this.quoteReceivedAtMs(),
+          bid: pricing.bid,
+          ask: pricing.ask,
+          side: pricing.side,
+          quantity: this.quantity(),
+          evaluation,
+        });
+        afterNextRender(() => this.sendButton()?.nativeElement.focus(), {
+          injector: this.injector,
+        });
+      });
+    });
+  }
 
   protected readonly limitText = computed(
     () => this.editedLimit() ?? formatLimitPrice(this.pricing().suggested_limit_price),
@@ -109,54 +156,15 @@ export class ExtendedFlattenTicketComponent {
   );
   protected readonly sideLabel = computed(() => (this.isSell() ? 'Sell' : 'Buy to cover'));
   protected readonly bookSideLabel = computed(() => (this.isSell() ? 'bid' : 'ask'));
-  /** The price this order must cross to fill now: the bid to sell, the ask to cover. */
-  private readonly touch = computed(() =>
-    this.isSell() ? this.pricing().bid : this.pricing().ask,
-  );
-  private readonly touchSize = computed(() =>
+  protected readonly touchSize = computed(() =>
     this.isSell() ? this.pricing().bid_size : this.pricing().ask_size,
   );
-  protected readonly spread = computed(() => this.pricing().ask - this.pricing().bid);
-  protected readonly spreadBps = computed<number | null>(() => {
-    const mid = (this.pricing().bid + this.pricing().ask) / 2;
-    return mid > 0 ? (this.spread() / mid) * 10_000 : null;
+  /** The Clerk's reading of the price it was last asked about, if it is still current. */
+  protected readonly evaluation = computed<SqliteProposedLimitEvaluation | null>(() => {
+    const proposal = this.pricing().proposal;
+    return proposal && proposal.limit_price === this.limitPrice() ? proposal : null;
   });
-  protected readonly wideSpread = computed(() => {
-    const bps = this.spreadBps();
-    return bps !== null && bps > this.pricing().spread_warning_bps;
-  });
-  /** How far the limit reaches through the book past the touch, in bps (negative = resting). */
-  protected readonly throughBookBps = computed<number | null>(() => {
-    const price = this.limitPrice();
-    const touch = this.touch();
-    if (price === null || touch <= 0) return null;
-    const through = this.isSell() ? touch - price : price - touch;
-    return (through / touch) * 10_000;
-  });
-  /** At worst every share fills at the limit: what that gives up against the touch. */
-  protected readonly worstCaseCost = computed<number | null>(() => {
-    const price = this.limitPrice();
-    if (price === null) return null;
-    const through = this.isSell() ? this.touch() - price : price - this.touch();
-    return Math.max(0, through) * this.quantity();
-  });
-  protected readonly outsideBand = computed(() => {
-    const price = this.limitPrice();
-    if (price === null) return false;
-    const band = this.pricing().band_limit_price;
-    return this.isSell() ? price < band : price > band;
-  });
-  protected readonly thinBook = computed(() => {
-    const size = this.touchSize();
-    return size !== null && this.quantity() > size;
-  });
-  protected readonly restingNote = computed<string | null>(() => {
-    const through = this.throughBookBps();
-    if (through === null || through >= 0) return null;
-    return this.isSell()
-      ? 'Above the bid: this sells only if a buyer pays your price.'
-      : 'Below the ask: this covers only if a seller accepts your price.';
-  });
+  protected readonly checking = computed(() => this.awaitingPrice() !== null);
   protected readonly quoteAgeSeconds = computed(() => {
     this.displayClock();
     return Math.max(0, Math.floor((Date.now() - this.quoteReceivedAtMs()) / 1_000));
@@ -167,7 +175,7 @@ export class ExtendedFlattenTicketComponent {
   });
   protected readonly canReview = computed(
     () =>
-      this.limitPrice() !== null && !this.outsideBand() && !this.quoteStale() && !this.pending(),
+      this.limitPrice() !== null && !this.quoteStale() && !this.pending() && !this.checking(),
   );
   /** Why the reviewed order can no longer be sent as reviewed, or ``null``. */
   protected readonly reviewInvalid = computed<string | null>(() => {
@@ -186,33 +194,26 @@ export class ExtendedFlattenTicketComponent {
 
   protected onLimitInput(value: string): void {
     this.editedLimit.set(value);
+    this.awaitingPrice.set(null);
     this.reviewed.set(null);
   }
 
   protected useSuggested(): void {
     this.editedLimit.set(null);
+    this.awaitingPrice.set(null);
     this.reviewed.set(null);
   }
 
   protected review(): void {
     const limitPrice = this.limitPrice();
     if (limitPrice === null || !this.canReview()) return;
-    const pricing = this.pricing();
-    this.reviewed.set({
-      limitText: this.limitText().trim(),
-      limitPrice,
-      quoteObservedAtMs: pricing.quote_observed_at_ms,
-      quoteReceivedAtMs: this.quoteReceivedAtMs(),
-      bid: pricing.bid,
-      ask: pricing.ask,
-      side: pricing.side,
-      quantity: this.quantity(),
-    });
-    afterNextRender(() => this.sendButton()?.nativeElement.focus(), { injector: this.injector });
+    this.awaitingPrice.set(limitPrice);
+    this.priceCheck.emit(limitPrice);
   }
 
   protected cancel(): void {
     this.reviewed.set(null);
+    this.awaitingPrice.set(null);
     afterNextRender(() => this.reviewButton()?.nativeElement.focus(), { injector: this.injector });
   }
 

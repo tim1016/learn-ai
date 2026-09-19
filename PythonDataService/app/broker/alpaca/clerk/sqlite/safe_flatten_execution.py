@@ -104,9 +104,13 @@ async def execute_safe_flatten_plan(
                 "A manual-custody leg cannot be flattened through strategy recovery EXITs."
             )
     # A confirmed limit is one price for one leg: it can reduce exactly the
-    # leg it was priced for, never a sibling or the opposite side.
+    # leg it was priced for — never a sibling, the opposite side, or a
+    # different quantity than the operator reviewed. The quantity is checked
+    # again inside custody, where cancellation fixes the real one.
     if confirmed_shape is not None and (
-        len(plan.legs) != 1 or plan.legs[0].side != confirmed_shape.shape.side.value
+        len(plan.legs) != 1
+        or plan.legs[0].side != confirmed_shape.shape.side.value
+        or abs(plan.legs[0].quantity) != confirmed_shape.quantity
     ):
         raise SafeFlattenExecutionError(
             "The confirmed limit was priced for a different reduction than this plan presents; "

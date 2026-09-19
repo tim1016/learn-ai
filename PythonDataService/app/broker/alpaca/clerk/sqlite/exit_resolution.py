@@ -8,6 +8,7 @@ import logging
 
 from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
 from app.broker.alpaca.clerk.recovery_reduction import (
+    RECOVERY_LIMIT_QUANTITY_CHANGED,
     RECOVERY_LIMIT_SESSION_ENDED,
     recovery_leg_verdict,
 )
@@ -211,6 +212,14 @@ async def _resolve_claimed(
             symbol=symbol,
         ):
             return _snapshot(repo, effect_operation_id)
+        if not _confirmed_quantity_still_holds(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=_primary_entry_ref(repo, entries),
+            symbol=symbol,
+            remaining_qty=remaining_qty,
+        ):
+            return _snapshot(repo, effect_operation_id)
         require_capability(
             repo,
             capability=Capability.REDUCE,
@@ -399,6 +408,44 @@ def _recovery_leg_may_proceed(
             f"{RECOVERY_LIMIT_SESSION_ENDED.next_step} Automatic re-drives resume "
             "at the regular open."
         ),
+    )
+    return False
+
+
+def _confirmed_quantity_still_holds(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    symbol: str,
+    remaining_qty: float,
+) -> bool:
+    """``True`` unless the reduction is no longer the one the operator priced (#2007).
+
+    An operator confirms a price for a quantity they can see. Cancellation
+    resolves the real reducing quantity several steps later, and a late entry
+    fill in between would otherwise send their price for a position they never
+    reviewed. Their confirmation covers exactly what it was given, so a
+    different quantity fails the EXIT instead — loudly, with the entry left
+    free to price again.
+    """
+    confirmed = _accepted_facts(repo, effect_operation_id).reducing_confirmed_quantity
+    if confirmed is None or confirmed == abs(remaining_qty):
+        return True
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        symbol=symbol,
+        attributed_qty=remaining_qty,
+        summary_code=RECOVERY_LIMIT_QUANTITY_CHANGED.reason_code,
+        reason=RECOVERY_LIMIT_QUANTITY_CHANGED.explanation,
+        headline="The flatten's quantity changed after its price was confirmed",
+        explanation=(
+            f"A price was confirmed to reduce {confirmed:g} {symbol}, but "
+            f"{abs(remaining_qty):g} is attributed now; the confirmation does not cover it."
+        ),
+        next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
     )
     return False
 
@@ -835,9 +882,21 @@ def confirmed_flatten_reference_price(repo: ClerkSqliteRepository, order_ref: st
     if order is None or order.role != "REDUCING":
         return None
     facts = _accepted_facts(repo, order.effect_operation_id)
-    if facts.reducing_side is None:
+    confirmed = facts.reducing_shape()
+    if confirmed is None:
         return None
-    return facts.reference_bid if facts.reducing_side == OrderSide.SELL.value else facts.reference_ask
+    created = _reducing_order_facts(repo, order_ref)
+    # The leg that actually went out is not always the confirmed one: side
+    # reconciliation (R11) replaces a limit priced for the wrong side with a
+    # regular-session market leg. That leg was never priced from this quote,
+    # so it has no reference to have slipped from (Codex review 2026-09-19).
+    if (
+        created.side.lower() != confirmed.side.value.lower()
+        or created.limit_price != confirmed.limit_price
+        or created.extended_hours != confirmed.extended_hours
+    ):
+        return None
+    return facts.reference_bid if confirmed.side is OrderSide.SELL else facts.reference_ask
 
 
 def _is_recovery_exit(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:

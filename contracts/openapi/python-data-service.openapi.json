@@ -15606,7 +15606,7 @@
         "type": "object"
       },
       "ExtendedLimitFlattenPricing": {
-        "description": "The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).\n\n``suggested_limit_price`` is the bid less the sealed exit allowance for a\nsell (the ask plus it to cover). It is a suggestion: the operator may send\nanother price, which the Clerk checks against Alpaca's precision rule.",
+        "description": "The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).\n\n``suggested_limit_price`` is the bid less the sealed exit allowance for a\nsell (the ask plus it to cover). It is a suggestion: the operator may send\nanother price, which the Clerk checks against Alpaca's precision rule.\n``proposal`` is present only when the operator asked what their own price\nwould do.",
         "properties": {
           "ask": {
             "title": "Ask",
@@ -15659,11 +15659,23 @@
             "title": "Phase",
             "type": "string"
           },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedLimitEvaluationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quote_max_age_ms": {
             "title": "Quote Max Age Ms",
             "type": "integer"
           },
           "quote_observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Quote Observed At Ms",
             "type": "integer"
           },
@@ -15674,6 +15686,14 @@
             ],
             "title": "Side",
             "type": "string"
+          },
+          "spread": {
+            "title": "Spread",
+            "type": "number"
+          },
+          "spread_bps": {
+            "title": "Spread Bps",
+            "type": "number"
           },
           "spread_warning_bps": {
             "title": "Spread Warning Bps",
@@ -15686,6 +15706,10 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "wide_spread": {
+            "title": "Wide Spread",
+            "type": "boolean"
           }
         },
         "required": [
@@ -15701,6 +15725,9 @@
           "exit_allowance_bps",
           "suggested_limit_price",
           "band_limit_price",
+          "spread",
+          "spread_bps",
+          "wide_spread",
           "spread_warning_bps"
         ],
         "title": "ExtendedLimitFlattenPricing",
@@ -29034,6 +29061,45 @@
         "title": "ProjectionGuidanceResponse",
         "type": "object"
       },
+      "ProposedLimitEvaluationResponse": {
+        "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (AGENTS.md \u00a7 \"Python\nowns all math\").",
+        "properties": {
+          "limit_price": {
+            "title": "Limit Price",
+            "type": "number"
+          },
+          "outside_band": {
+            "title": "Outside Band",
+            "type": "boolean"
+          },
+          "resting": {
+            "title": "Resting",
+            "type": "boolean"
+          },
+          "thin_book": {
+            "title": "Thin Book",
+            "type": "boolean"
+          },
+          "through_book_bps": {
+            "title": "Through Book Bps",
+            "type": "number"
+          },
+          "worst_case_cost": {
+            "title": "Worst Case Cost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "limit_price",
+          "through_book_bps",
+          "worst_case_cost",
+          "outside_band",
+          "thin_book",
+          "resting"
+        ],
+        "title": "ProposedLimitEvaluationResponse",
+        "type": "object"
+      },
       "QuantLibGreeksResponse": {
         "description": "Single option pricing result.",
         "properties": {
@@ -30215,6 +30281,17 @@
             ],
             "title": "Authority Kind"
           },
+          "event_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Key"
+          },
           "filled_at_ms": {
             "title": "Filled At Ms",
             "type": "integer"
@@ -30264,6 +30341,17 @@
               }
             ],
             "title": "Slippage Bps"
+          },
+          "slippage_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Cost"
           },
           "slippage_reference_price": {
             "anyOf": [
@@ -30465,7 +30553,7 @@
       },
       "RecoveryActionCheckRequest": {
         "additionalProperties": false,
-        "description": "Action-specific token checked against a fresh policy evaluation.",
+        "description": "Action-specific token checked against a fresh policy evaluation.\n\n``proposed_limit_price`` asks what a specific extended-hours price would\ndo against the quote the Clerk holds (#2007) \u2014 the operator's review step.\nIt confirms nothing and sends nothing; only the execute route does that.",
         "properties": {
           "action_id": {
             "enum": [
@@ -30486,6 +30574,18 @@
             "minLength": 1,
             "title": "Concurrency Token",
             "type": "string"
+          },
+          "proposed_limit_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Limit Price"
           }
         },
         "required": [
@@ -30901,6 +31001,8 @@
           "available_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -30930,8 +31032,7 @@
         "required": [
           "reason_code",
           "explanation",
-          "next_step",
-          "available_at_ms"
+          "next_step"
         ],
         "title": "RefusedFlattenPricing",
         "type": "object"

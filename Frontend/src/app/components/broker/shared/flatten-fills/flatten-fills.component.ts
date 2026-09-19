@@ -70,21 +70,31 @@ export class FlattenFillsComponent {
   readonly fills = input.required<readonly RecentFillView[]>();
 
   protected readonly rows = computed<readonly FlattenFillRow[]>(() =>
-    this.fills().flatMap((fill) => {
-      const { slippage_bps: bps, slippage_reference_price: reference, price, quantity } = fill;
-      if (bps === null || bps === undefined || !reference || price === null || quantity === null) {
+    this.fills().flatMap((fill, index) => {
+      const {
+        slippage_bps: bps,
+        slippage_cost: cost,
+        slippage_reference_price: reference,
+        price,
+        quantity,
+      } = fill;
+      if (
+        bps === null || bps === undefined || cost === null || cost === undefined
+        || !reference || price === null || quantity === null
+      ) {
         return [];
       }
-      const worse = fill.side === 'sell' ? reference - price : price - reference;
       return [{
-        key: `${fill.order_ref}:${fill.filled_at_ms}:${price}`,
+        // Two partial fills of one order can share a millisecond and a price;
+        // only the Clerk's execution identity tells them apart.
+        key: fill.event_key ?? `${fill.order_ref}:${index}`,
         filledAtMs: fill.filled_at_ms,
         side: fill.side,
         quantity,
         price,
         referencePrice: reference,
         slippageBps: bps,
-        slippageCost: worse * quantity,
+        slippageCost: cost,
       }];
     }),
   );

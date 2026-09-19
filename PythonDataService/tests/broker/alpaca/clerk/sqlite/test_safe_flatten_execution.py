@@ -208,6 +208,35 @@ async def _held_position(repo: ClerkSqliteRepository) -> str:
     return submission.order_ref
 
 
+async def _late_entry_slice(
+    repo: ClerkSqliteRepository, entry_ref: str, *, quantity: int
+) -> None:
+    """One more execution slice on an entry the Clerk already proved filled.
+
+    The race a confirmed price must survive: the operator reviewed the
+    reduction the Clerk could see, and the broker reports another slice of
+    the same entry before cancellation resolves.
+    """
+    filled = _broker_order(
+        entry_ref, status="filled", quantity=10.0,
+        filled_quantity=10 + quantity, filled_avg_price=100.0,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=entry_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=100, quantity=quantity, execution_id=f"exec-late-{quantity}",
+        ),
+        event_key=f"execution:exec-late-{quantity}",
+        order=filled,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+
 @pytest.fixture
 def crashed_with_exposure(tmp_path: Path):
     """F18 shape: filled entry, attributed +10, run stopped (crash analog).
@@ -567,7 +596,9 @@ def _live_quote(now_ms: int) -> TopOfBookQuote:
     )
 
 
-def _confirmed_limit_shape(side: OrderSide = OrderSide.SELL) -> ConfirmedRecoveryShape:
+def _confirmed_limit_shape(
+    side: OrderSide = OrderSide.SELL, *, quantity: float = 10.0
+) -> ConfirmedRecoveryShape:
     return ConfirmedRecoveryShape(
         shape=LegShape(
             order_type=OrderType.LIMIT,
@@ -579,6 +610,8 @@ def _confirmed_limit_shape(side: OrderSide = OrderSide.SELL) -> ConfirmedRecover
         # Still inside its session at the fixture's clock.
         valid_until_ms=FIXTURE_RTH_MS + 3_600_000,
         reference_quote=_live_quote(FIXTURE_RTH_MS),
+        # The ``_held_position`` fixture attributes exactly ten shares.
+        quantity=quantity,
     )
 
 
@@ -787,6 +820,77 @@ async def test_a_confirmed_limit_never_goes_out_after_its_session_ends(
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=SID,
     ) is not None
+
+
+async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw(
+    crashed_with_exposure,
+) -> None:
+    """Codex review of #2007: a price is confirmed for the reduction the operator
+    can see. Cancellation fixes the real quantity several steps later, and a fill
+    in between would otherwise send their price for a position they never
+    reviewed. The EXIT fails instead, leaving the entry free to price again."""
+    repo, _clock = crashed_with_exposure
+    trade = _LookupOutageTrade()
+    facade, trade, current_context = await _stopped_facade_at(
+        repo, _PRE_MARKET_MS, trade=trade
+    )
+    (entry,) = [
+        order for order in repo.entry_orders_for_strategy(SID) if order.role == "ENTRY"
+    ]
+
+    result = await _execute(
+        facade,
+        current_context,
+        confirmed_limit=ConfirmedRecoveryLimit(
+            limit_price=Decimal("99.95"), quote_observed_at_ms=_PRE_MARKET_MS
+        ),
+    )
+    assert result.orders == ()
+    active = repo.active_exit_for_strategy(SID)
+    assert active is not None
+    effect_operation_id = active.effect_operation_id
+
+    # Five more shares land before cancellation resolves, so the attributed
+    # reduction is fifteen where ten was confirmed.
+    await _late_entry_slice(repo, entry.order_ref, quantity=5)
+    trade.lookups_fail = False
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade)
+
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert any(
+        transition["summary_code"] == "RECOVERY_LIMIT_QUANTITY_CHANGED"
+        for transition in repo.transitions_for_order(entry.order_ref)
+    )
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=SID,
+    ) is not None
+
+
+async def test_a_plan_leg_the_price_was_not_confirmed_for_is_refused(
+    crashed_with_exposure,
+) -> None:
+    """The plan presents ten shares; a price confirmed for eight is not for it."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    plan = await _reconciled_flatten_plan(repo)
+    trade = _FakeTrade()
+
+    with pytest.raises(SafeFlattenExecutionError, match="priced for"):
+        await execute_safe_flatten_plan(
+            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
+            confirmed_shape=_confirmed_limit_shape(quantity=8.0),
+        )
+
+    assert trade.submit_calls == []
+    assert repo.active_exit_for_strategy(SID) is None
 
 
 async def test_a_pre_market_flatten_without_a_confirmed_limit_sends_nothing(

@@ -542,7 +542,15 @@ const mockService = {
     recorded_at_ms: 1_753_800_000_200,
     command: null,
     reconciliation: null,
-    orders: [],
+    orders: [{
+      order_ref: 'order-ref-flatten-1',
+      client_order_id: 'order-ref-flatten-1',
+      broker_order_id: 'alp-flatten-1',
+      role: 'REDUCING',
+      broker_state: 'accepted',
+      submitted_at_ms: 1_753_800_000_150,
+      updated_at_ms: 1_753_800_000_200,
+    }],
   }),
   prepareHistoricalExecutionRecovery: vi.fn().mockResolvedValue(HISTORICAL_RECOVERY_PLAN),
   confirmHistoricalExecutionRecovery: vi.fn().mockResolvedValue({
@@ -993,6 +1001,22 @@ describe('BotPanelShellComponent', () => {
       return fixture;
     }
 
+    /** The Clerk's pricing, carrying its reading of the suggested price. */
+    const EXTENDED_CHECK_WITH_READING = (observedAtMs: number): SqliteRecoveryActionCheck => ({
+      capability: SAFE_FLATTEN_CAPABILITY,
+      reduction_pricing: {
+        kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+        bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+        quote_observed_at_ms: observedAtMs, quote_max_age_ms: 10_000,
+        exit_allowance_bps: 20, suggested_limit_price: 479.13, band_limit_price: 478.17,
+        spread: 0.1, spread_bps: 2.08, wide_spread: false, spread_warning_bps: 50,
+        proposal: {
+          limit_price: 479.13, through_book_bps: 20.2, worst_case_cost: 2.43,
+          outside_band: false, thin_book: false, resting: false,
+        },
+      },
+    });
+
     it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
@@ -1012,7 +1036,43 @@ describe('BotPanelShellComponent', () => {
           exit_allowance_bps: 20,
           suggested_limit_price: 479.13,
           band_limit_price: 478.17,
+          spread: 0.1,
+          spread_bps: 2.08,
+          wide_spread: false,
           spread_warning_bps: 50,
+          proposal: null,
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      // Review asks the Clerk to read the operator's price; its answer is what
+      // the confirm pane shows and what Send sends.
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit',
+          phase: 'PRE',
+          symbol: 'QQQ',
+          side: 'sell',
+          bid: 480.1,
+          ask: 480.2,
+          bid_size: 300,
+          ask_size: 200,
+          quote_observed_at_ms: observedAtMs,
+          quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20,
+          suggested_limit_price: 479.13,
+          band_limit_price: 478.17,
+          spread: 0.1,
+          spread_bps: 2.08,
+          wide_spread: false,
+          spread_warning_bps: 50,
+          proposal: {
+            limit_price: 479.13,
+            through_book_bps: 20.2,
+            worst_case_cost: 2.43,
+            outside_band: false,
+            thin_book: false,
+            resting: false,
+          },
         },
       } satisfies SqliteRecoveryActionCheck);
       const fixture = await prepareFlatten();
@@ -1022,9 +1082,14 @@ describe('BotPanelShellComponent', () => {
       expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
-      await fixture.whenStable();
-      fixture.detectChanges();
-      expect(within(ticket).getByText(/Sell 2\.5 QQQ at limit \$479\.13/)).toBeTruthy();
+      await settle(fixture);
+      expect(within(ticket).getByText(/at limit \$479\.13/)).toBeTruthy();
+      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ proposed_limit_price: 479.13 }),
+        expect.anything(),
+      );
       fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
       await settle(fixture);
 
@@ -1037,6 +1102,37 @@ describe('BotPanelShellComponent', () => {
       expect(mockService.runBotAction).not.toHaveBeenCalled();
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
         .toBeNull();
+      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+    });
+
+    it('never says an order was sent when none reached the broker', async () => {
+      // A durably accepted EXIT whose reducing order is still pending — a
+      // broker lookup outage, a transiently blocked REDUCE — has sent nothing,
+      // and telling the operator otherwise is the one thing worse than the
+      // outage itself (Codex review 2026-09-19).
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValue(EXTENDED_CHECK_WITH_READING(observedAtMs));
+      mockService.executeExtendedSafeFlatten.mockResolvedValueOnce({
+        action_id: 'execute_safe_flatten',
+        outcome: 'success',
+        applied: true,
+        receipt_id: 'effect-flatten-2',
+        recorded_at_ms: 1_753_800_000_200,
+        command: null,
+        reconciliation: null,
+        orders: [],
+      });
+      const fixture = await prepareFlatten();
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(screen.getByText(/no order has reached the broker yet/)).toBeTruthy();
+      expect(screen.queryByText(/Limit order sent/)).toBeNull();
     });
 
     it('recovers from a rotated Prepare token instead of dead-ending the ticket', async () => {
@@ -1052,7 +1148,8 @@ describe('BotPanelShellComponent', () => {
           bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
           quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
           exit_allowance_bps: 20, suggested_limit_price: 479.13,
-          band_limit_price: 478.17, spread_warning_bps: 50,
+          band_limit_price: 478.17, spread: 0.1, spread_bps: 2.08, wide_spread: false,
+          spread_warning_bps: 50, proposal: null,
         },
       } satisfies SqliteRecoveryActionCheck;
       brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);

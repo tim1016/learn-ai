@@ -13803,6 +13803,8 @@ export interface components {
          *     ``suggested_limit_price`` is the bid less the sealed exit allowance for a
          *     sell (the ask plus it to cover). It is a suggestion: the operator may send
          *     another price, which the Clerk checks against Alpaca's precision rule.
+         *     ``proposal`` is present only when the operator asked what their own price
+         *     would do.
          */
         ExtendedLimitFlattenPricing: {
             /** Ask */
@@ -13827,6 +13829,7 @@ export interface components {
              * @enum {string}
              */
             phase: "PRE" | "POST";
+            proposal?: components["schemas"]["ProposedLimitEvaluationResponse"] | null;
             /** Quote Max Age Ms */
             quote_max_age_ms: number;
             /** Quote Observed At Ms */
@@ -13836,12 +13839,18 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Spread */
+            spread: number;
+            /** Spread Bps */
+            spread_bps: number;
             /** Spread Warning Bps */
             spread_warning_bps: number;
             /** Suggested Limit Price */
             suggested_limit_price: number;
             /** Symbol */
             symbol: string;
+            /** Wide Spread */
+            wide_spread: boolean;
         };
         /**
          * ExternalOrderAcknowledgementRequest
@@ -19803,6 +19812,28 @@ export interface components {
             scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
         };
         /**
+         * ProposedLimitEvaluationResponse
+         * @description What the price the operator proposed does against the Clerk's quote (#2007).
+         *
+         *     Every number an operator reads before confirming is computed by the Clerk
+         *     and rendered as-is; the browser never derives one (AGENTS.md § "Python
+         *     owns all math").
+         */
+        ProposedLimitEvaluationResponse: {
+            /** Limit Price */
+            limit_price: number;
+            /** Outside Band */
+            outside_band: boolean;
+            /** Resting */
+            resting: boolean;
+            /** Thin Book */
+            thin_book: boolean;
+            /** Through Book Bps */
+            through_book_bps: number;
+            /** Worst Case Cost */
+            worst_case_cost: number;
+        };
+        /**
          * QuantLibGreeksResponse
          * @description Single option pricing result.
          */
@@ -20236,6 +20267,8 @@ export interface components {
             authority_account_id?: string | null;
             /** Authority Kind */
             authority_kind?: ("real_paper" | "real_live" | "shadow" | "synthetic") | null;
+            /** Event Key */
+            event_key?: string | null;
             /** Filled At Ms */
             filled_at_ms: number;
             /** Order Ref */
@@ -20253,6 +20286,8 @@ export interface components {
             simulated?: boolean;
             /** Slippage Bps */
             slippage_bps?: number | null;
+            /** Slippage Cost */
+            slippage_cost?: number | null;
             /** Slippage Reference Price */
             slippage_reference_price?: number | null;
             /** Symbol */
@@ -20322,6 +20357,10 @@ export interface components {
         /**
          * RecoveryActionCheckRequest
          * @description Action-specific token checked against a fresh policy evaluation.
+         *
+         *     ``proposed_limit_price`` asks what a specific extended-hours price would
+         *     do against the quote the Clerk holds (#2007) — the operator's review step.
+         *     It confirms nothing and sends nothing; only the execute route does that.
          */
         RecoveryActionCheckRequest: {
             /**
@@ -20331,6 +20370,8 @@ export interface components {
             action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
+            /** Proposed Limit Price */
+            proposed_limit_price?: number | null;
         };
         /** RecoveryActionCheckResponse */
         RecoveryActionCheckResponse: {
@@ -20453,7 +20494,7 @@ export interface components {
          */
         RefusedFlattenPricing: {
             /** Available At Ms */
-            available_at_ms: number | null;
+            available_at_ms?: number | null;
             /** Explanation */
             explanation: string;
             /**

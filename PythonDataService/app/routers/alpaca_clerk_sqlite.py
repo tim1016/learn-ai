@@ -506,14 +506,18 @@ async def _check_recovery_action(
                 ).model_dump(mode="json"),
             },
         ) from exc
-    pricing = (
-        None
-        if capability.reduction_plan is None
-        else facade.price_safe_flatten(capability.reduction_plan)
-    )
+    plan = capability.reduction_plan
+    if plan is None:
+        return RecoveryActionCheckResponse(
+            capability=RecoveryCapabilityResponse.model_validate(capability)
+        )
     return RecoveryActionCheckResponse(
         capability=RecoveryCapabilityResponse.model_validate(capability),
-        reduction_pricing=None if pricing is None else safe_flatten_pricing_response(pricing),
+        reduction_pricing=safe_flatten_pricing_response(
+            facade.price_safe_flatten(plan),
+            proposed_limit_price=body.proposed_limit_price,
+            quantity=plan.legs[0].quantity if len(plan.legs) == 1 else 0.0,
+        ),
     )
 
 

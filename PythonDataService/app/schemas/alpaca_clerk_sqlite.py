@@ -19,6 +19,8 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryLimit,
     ExtendedLimitProposal,
     RecoveryReductionPricing,
+    evaluate_proposed_limit,
+    quote_spread_bps,
 )
 from app.broker.alpaca.clerk.sqlite.models import CommandResource
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
@@ -461,12 +463,18 @@ class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
 
 
 class RecoveryActionCheckRequest(BaseModel):
-    """Action-specific token checked against a fresh policy evaluation."""
+    """Action-specific token checked against a fresh policy evaluation.
+
+    ``proposed_limit_price`` asks what a specific extended-hours price would
+    do against the quote the Clerk holds (#2007) — the operator's review step.
+    It confirms nothing and sends nothing; only the execute route does that.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: RecoveryActionId
     concurrency_token: str = Field(min_length=1, max_length=128)
+    proposed_limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class RegularSessionFlattenPricing(BaseModel):
@@ -477,12 +485,34 @@ class RegularSessionFlattenPricing(BaseModel):
     kind: Literal["regular_session"] = "regular_session"
 
 
+class ProposedLimitEvaluationResponse(BaseModel):
+    """What the price the operator proposed does against the Clerk's quote (#2007).
+
+    Every number an operator reads before confirming is computed by the Clerk
+    and rendered as-is; the browser never derives one (AGENTS.md § "Python
+    owns all math").
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    limit_price: float
+    # Positive reaches through the touch; negative rests behind it.
+    through_book_bps: float
+    # Every share filling at the limit, measured against the touch, in dollars.
+    worst_case_cost: float
+    outside_band: bool
+    thin_book: bool
+    resting: bool
+
+
 class ExtendedLimitFlattenPricing(BaseModel):
     """The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).
 
     ``suggested_limit_price`` is the bid less the sealed exit allowance for a
     sell (the ask plus it to cover). It is a suggestion: the operator may send
     another price, which the Clerk checks against Alpaca's precision rule.
+    ``proposal`` is present only when the operator asked what their own price
+    would do.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -495,15 +525,21 @@ class ExtendedLimitFlattenPricing(BaseModel):
     ask: float
     bid_size: int | None
     ask_size: int | None
-    quote_observed_at_ms: int
+    quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     quote_max_age_ms: int
     exit_allowance_bps: float
     suggested_limit_price: float
     # The furthest-through-the-book price the Clerk accepts: twice the exit
     # allowance past the bid (sell) or ask (cover), owner decision 2026-09-19.
     band_limit_price: float
+    # The live spread in dollars and as bps of the mid, and whether that is
+    # wide enough to flag.
+    spread: float
+    spread_bps: float
+    wide_spread: bool
     # A bid-ask spread wider than this, in bps of the mid, is flagged.
     spread_warning_bps: float
+    proposal: ProposedLimitEvaluationResponse | None = None
 
 
 class RefusedFlattenPricing(BaseModel):
@@ -515,7 +551,7 @@ class RefusedFlattenPricing(BaseModel):
     reason_code: str
     explanation: str
     next_step: str
-    available_at_ms: int | None
+    available_at_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
 
 
 SafeFlattenPricingResponse = Annotated[
@@ -526,8 +562,15 @@ SafeFlattenPricingResponse = Annotated[
 
 def safe_flatten_pricing_response(
     pricing: RecoveryReductionPricing | LegRefusal,
+    *,
+    proposed_limit_price: float | None = None,
+    quantity: float = 0.0,
 ) -> SafeFlattenPricingResponse:
-    """The wire shape of the facade's ``price_safe_flatten`` answer."""
+    """The wire shape of the facade's ``price_safe_flatten`` answer.
+
+    ``proposed_limit_price`` is the operator's own price, evaluated by the
+    Clerk against the same quote so the browser only renders the result.
+    """
     if isinstance(pricing, LegRefusal):
         return RefusedFlattenPricing(
             reason_code=pricing.reason_code,
@@ -537,6 +580,16 @@ def safe_flatten_pricing_response(
         )
     if isinstance(pricing, ExtendedLimitProposal):
         quote = pricing.quote
+        spread_bps = quote_spread_bps(quote)
+        proposal = (
+            None
+            if proposed_limit_price is None
+            else evaluate_proposed_limit(
+                proposal=pricing,
+                limit_price=Decimal(str(proposed_limit_price)),
+                quantity=quantity,
+            )
+        )
         return ExtendedLimitFlattenPricing(
             phase=pricing.phase,
             symbol=quote.symbol,
@@ -550,7 +603,22 @@ def safe_flatten_pricing_response(
             exit_allowance_bps=float(pricing.exit_allowance_bps),
             suggested_limit_price=float(pricing.suggested_limit_price),
             band_limit_price=float(pricing.band_limit_price),
+            spread=quote.ask - quote.bid,
+            spread_bps=spread_bps,
+            wide_spread=spread_bps > RECOVERY_SPREAD_WARNING_BPS,
             spread_warning_bps=float(RECOVERY_SPREAD_WARNING_BPS),
+            proposal=(
+                None
+                if proposal is None
+                else ProposedLimitEvaluationResponse(
+                    limit_price=float(proposal.limit_price),
+                    through_book_bps=proposal.through_book_bps,
+                    worst_case_cost=proposal.worst_case_cost,
+                    outside_band=proposal.outside_band,
+                    thin_book=proposal.thin_book,
+                    resting=proposal.resting,
+                )
+            ),
         )
     return RegularSessionFlattenPricing()
 

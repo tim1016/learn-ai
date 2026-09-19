@@ -208,6 +208,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     **_REDUCING_SHAPE_DEFAULTS,
     "reducing_side": None,
     "reducing_valid_until_ms": None,
+    "reducing_confirmed_quantity": None,
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
@@ -267,6 +268,10 @@ class ExitAcceptedFacts:
     # When an operator-confirmed recovery limit stops being sendable: the end
     # of the session it was priced in (#2007). ``None`` for every other EXIT.
     reducing_valid_until_ms: int | None = None
+    # The reduction the operator actually reviewed before confirming a price
+    # (#2007). Cancellation resolves the real quantity several steps later; if
+    # it no longer matches, their confirmation does not cover it.
+    reducing_confirmed_quantity: float | None = None
     # The live IBKR quote the Clerk priced an operator's confirmed limit
     # against — the reference its realized slippage is measured from (#2007).
     reference_bid: float | None = None
@@ -279,6 +284,7 @@ class ExitAcceptedFacts:
         *,
         valid_until_ms: int | None = None,
         reference_quote: TopOfBookQuote | None = None,
+        confirmed_quantity: float | None = None,
     ) -> ExitAcceptedFacts:
         """Record the reducing shape, unless it is the default.
 
@@ -288,8 +294,9 @@ class ExitAcceptedFacts:
         EXIT acceptance — and every sealed receipt hashed over one. An EXIT
         with no confirmed or decided shape (a watchdog re-drive, a safe
         flatten inside the regular session) records nothing and still yields
-        market DAY. ``valid_until_ms`` bounds an operator's confirmed limit
-        and ``reference_quote`` is the quote it was priced against; both are
+        market DAY. ``valid_until_ms`` bounds an operator's confirmed limit,
+        ``reference_quote`` is the quote it was priced against, and
+        ``confirmed_quantity`` is the reduction they reviewed; all three are
         recorded only with the shape they belong to.
         """
         from app.broker.alpaca.clerk.program_leg import regular_session_shape
@@ -304,6 +311,7 @@ class ExitAcceptedFacts:
             limit_price=shape.limit_price,
             extended_hours=shape.extended_hours,
             reducing_valid_until_ms=valid_until_ms,
+            reducing_confirmed_quantity=confirmed_quantity,
             reference_bid=None if reference_quote is None else reference_quote.bid,
             reference_ask=None if reference_quote is None else reference_quote.ask,
             reference_quote_observed_at_ms=(

@@ -1,7 +1,11 @@
+import { ComponentFixture } from '@angular/core/testing';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { SqliteExtendedLimitPricing } from '../../../../api/alpaca.types';
+import type {
+  SqliteExtendedLimitPricing,
+  SqliteProposedLimitEvaluation,
+} from '../../../../api/alpaca.types';
 import { ExtendedFlattenTicketComponent } from './extended-flatten-ticket.component';
 
 const NOW_MS = 1_753_794_000_000;
@@ -22,18 +26,57 @@ function pricing(overrides: Partial<SqliteExtendedLimitPricing> = {}): SqliteExt
     suggested_limit_price: 511.28,
     // Twice the allowance below the bid: the furthest the Clerk accepts.
     band_limit_price: 510.26,
+    spread: 0.05,
+    spread_bps: 0.98,
+    wide_spread: false,
     spread_warning_bps: 50,
+    proposal: null,
+    ...overrides,
+  };
+}
+
+/** What the Clerk answers when asked to read a price the operator proposed. */
+function reading(
+  limitPrice: number,
+  overrides: Partial<SqliteProposedLimitEvaluation> = {},
+): SqliteProposedLimitEvaluation {
+  return {
+    limit_price: limitPrice,
+    through_book_bps: 20.1,
+    worst_case_cost: 10.3,
+    outside_band: false,
+    thin_book: false,
+    resting: false,
     ...overrides,
   };
 }
 
 async function renderTicket(value: SqliteExtendedLimitPricing = pricing(), quantity = 10) {
   const send = vi.fn();
+  const priceCheck = vi.fn();
   const view = await render(ExtendedFlattenTicketComponent, {
     inputs: { pricing: value, quantity, quoteReceivedAtMs: NOW_MS },
-    on: { send },
+    on: { send, priceCheck },
   });
-  return { ...view, send };
+  return { ...view, send, priceCheck };
+}
+
+/** Press Review and let the Clerk answer, as the panel shell does. */
+async function review(
+  fixture: ComponentFixture<ExtendedFlattenTicketComponent>,
+  limitPrice: number,
+  evaluation: Partial<SqliteProposedLimitEvaluation> = {},
+  quote: Partial<SqliteExtendedLimitPricing> = {},
+): Promise<void> {
+  fireEvent.click(button('Review limit order'));
+  fixture.detectChanges();
+  fixture.componentRef.setInput(
+    'pricing',
+    pricing({ ...quote, proposal: reading(limitPrice, evaluation) }),
+  );
+  fixture.detectChanges();
+  await fixture.whenStable();
+  fixture.detectChanges();
 }
 
 function limitInput(): HTMLInputElement {
@@ -67,7 +110,26 @@ describe('ExtendedFlattenTicketComponent', () => {
     expect(screen.getByText(/bid − 20 bps/)).toBeTruthy();
     expect(screen.getByText(/\$510\.26/)).toBeTruthy();
     expect(limitInput().value).toBe('511.28');
-    expect(screen.getByRole('status').textContent).toContain('bps below the bid');
+  });
+
+  it('asks the Clerk what the price does rather than working it out here', async () => {
+    atNow();
+    const { fixture, priceCheck } = await renderTicket();
+
+    fireEvent.click(button('Review limit order'));
+    fixture.detectChanges();
+
+    expect(priceCheck).toHaveBeenCalledExactlyOnceWith(511.28);
+    // Nothing is claimed about the price until the Clerk has read it.
+    expect(screen.getByRole('status').textContent).toContain('Asking the Clerk');
+
+    fixture.componentRef.setInput(
+      'pricing',
+      pricing({ proposal: reading(511.28, { through_book_bps: 20.1, worst_case_cost: 10.3 }) }),
+    );
+    fixture.detectChanges();
+
+    expect(screen.getByRole('status').textContent).toContain('20.1 bps below the bid');
     expect(screen.getByRole('status').textContent).toContain('$10.30');
   });
 
@@ -75,10 +137,9 @@ describe('ExtendedFlattenTicketComponent', () => {
     atNow();
     const { send, fixture } = await renderTicket();
 
-    fireEvent.click(button('Review limit order'));
-    fixture.detectChanges();
-    expect(screen.getByText(/Sell 10 SPY at limit \$511\.28, extended hours, good for today\./))
-      .toBeTruthy();
+    await review(fixture, 511.28);
+    expect(screen.getByText(/Sell 10/)).toBeTruthy();
+    expect(screen.getByText(/at limit \$511\.28, extended hours, good for today\./)).toBeTruthy();
 
     // A refresh lands underneath the open confirmation.
     fixture.componentRef.setInput(
@@ -103,12 +164,12 @@ describe('ExtendedFlattenTicketComponent', () => {
     fireEvent.input(limitInput(), { target: { value: '512.50' } });
     fixture.componentRef.setInput('pricing', pricing({ suggested_limit_price: 511.37 }));
     fixture.detectChanges();
-
     expect(limitInput().value).toBe('512.50');
+
+    await review(fixture, 512.5, { resting: true, through_book_bps: -3.7, worst_case_cost: 0 });
+
     expect(screen.getByRole('status').textContent)
       .toContain('Above the bid: this sells only if a buyer pays your price.');
-    fireEvent.click(button('Review limit order'));
-    fixture.detectChanges();
     fireEvent.click(button('Send limit order'));
     expect(send).toHaveBeenCalledExactlyOnceWith({
       limit_price: 512.5,
@@ -116,20 +177,30 @@ describe('ExtendedFlattenTicketComponent', () => {
     });
   });
 
-  it('refuses a price past the band the Clerk accepts', async () => {
+  it('never confirms a price the Clerk puts past its band', async () => {
     atNow();
-    const { fixture } = await renderTicket();
+    const { fixture, send } = await renderTicket();
 
     fireEvent.input(limitInput(), { target: { value: '510.25' } });
     fixture.detectChanges();
+    await review(fixture, 510.25, { outside_band: true });
 
     expect(screen.getByRole('status').textContent).toContain("Past the Clerk's band");
-    expect(button('Review limit order').hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Send limit order' })).toBeNull();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('warns when the quantity is deeper than the size shown at the bid', async () => {
     atNow();
-    await renderTicket(pricing({ bid_size: 100 }), 500);
+    const { fixture } = await renderTicket(pricing({ bid_size: 100 }), 500);
+
+    fireEvent.input(limitInput(), { target: { value: '511.28' } });
+    fixture.detectChanges();
+    fixture.componentRef.setInput(
+      'pricing',
+      pricing({ bid_size: 100, proposal: reading(511.28, { thin_book: true }) }),
+    );
+    fixture.detectChanges();
 
     expect(screen.getByText(/Only 100 shown at the bid; your 500 may fill further through the book/))
       .toBeTruthy();
@@ -137,7 +208,7 @@ describe('ExtendedFlattenTicketComponent', () => {
 
   it('warns when the spread is wider than the Clerk says is safe', async () => {
     atNow();
-    await renderTicket(pricing({ ask: 516.0 }));
+    await renderTicket(pricing({ ask: 516.0, spread: 3.69, spread_bps: 71.8, wide_spread: true }));
 
     expect(screen.getByText(/The spread is wider than 50 bps/)).toBeTruthy();
   });
@@ -153,8 +224,7 @@ describe('ExtendedFlattenTicketComponent', () => {
   it('will not send a reviewed order once its quote ages out', async () => {
     atNow();
     const { send, fixture } = await renderTicket();
-    fireEvent.click(button('Review limit order'));
-    fixture.detectChanges();
+    await review(fixture, 511.28);
 
     // Time passes and the next refresh lands, as it does while the ticket is open.
     vi.setSystemTime(NOW_MS + 10_001);
@@ -170,8 +240,7 @@ describe('ExtendedFlattenTicketComponent', () => {
   it('will not send a reviewed order after the position changed', async () => {
     atNow();
     const { send, fixture } = await renderTicket();
-    fireEvent.click(button('Review limit order'));
-    fixture.detectChanges();
+    await review(fixture, 511.28);
 
     fixture.componentRef.setInput('quantity', 4);
     fixture.detectChanges();
@@ -183,22 +252,21 @@ describe('ExtendedFlattenTicketComponent', () => {
 
   it('refuses a price that is not a plain positive decimal', async () => {
     atNow();
-    const { fixture } = await renderTicket();
+    const { fixture, priceCheck } = await renderTicket();
 
     fireEvent.input(limitInput(), { target: { value: '1e2' } });
     fixture.detectChanges();
 
     expect(screen.getByRole('status').textContent).toContain('Enter a positive price');
     expect(button('Review limit order').hasAttribute('disabled')).toBe(true);
+    expect(priceCheck).not.toHaveBeenCalled();
   });
 
   it('moves focus to Send when reviewing and back to Review on cancel', async () => {
     atNow();
     const { fixture } = await renderTicket();
 
-    fireEvent.click(button('Review limit order'));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await review(fixture, 511.28);
     expect(document.activeElement).toBe(button('Send limit order'));
 
     fireEvent.click(button('Cancel'));
@@ -215,8 +283,24 @@ describe('ExtendedFlattenTicketComponent', () => {
 
     expect(screen.getByText('After-hours')).toBeTruthy();
     expect(screen.getByText(/ask \+ 20 bps/)).toBeTruthy();
+
     fireEvent.click(button('Review limit order'));
     fixture.detectChanges();
-    expect(screen.getByText(/Buy to cover 10 SPY at limit \$513\.39/)).toBeTruthy();
+    fixture.componentRef.setInput(
+      'pricing',
+      pricing({
+        side: 'buy',
+        phase: 'POST',
+        suggested_limit_price: 513.39,
+        band_limit_price: 514.41,
+        proposal: reading(513.39),
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText(/Buy to cover 10/)).toBeTruthy();
+    expect(screen.getByText(/at limit \$513\.39/)).toBeTruthy();
   });
 });
