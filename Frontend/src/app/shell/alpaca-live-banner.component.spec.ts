@@ -45,9 +45,13 @@ async function renderWith(
   lane: LaneDescriptor | null,
   state: LaneVerdictState,
   siblingLanes: readonly LaneDescriptor[] = [],
+  // Defaults every sibling to unpolled, same as before — pass an entry here
+  // to give a specific sibling its own verdict (e.g. to test the pill's
+  // mode-word collision check against a sibling that is actually live).
+  siblingStates: ReadonlyMap<string, LaneVerdictState> = new Map(),
 ) {
   const stateFor = (clerkId: string): LaneVerdictState =>
-    clerkId === lane?.clerk_id ? state : UNPOLLED_LANE_STATE;
+    clerkId === lane?.clerk_id ? state : (siblingStates.get(clerkId) ?? UNPOLLED_LANE_STATE);
   return render(AlpacaLiveBannerComponent, {
     inputs: { lane },
     providers: [
@@ -68,7 +72,7 @@ async function renderWith(
 
 /** Render a badge as if the operator were standing on `url` — the badge reads
  * the current URL to decide whether it is switching accounts inside a
- * workspace or opening one from outside. */
+ * workspace or opening one from outside, and whether it is standing "here". */
 async function renderAt(
   url: string,
   lane: LaneDescriptor,
@@ -94,8 +98,9 @@ describe('AlpacaLiveBannerComponent', () => {
 
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-undetermined');
-    expect(status.textContent).toContain('Paper');
+    expect(status.textContent).toContain('Mode not yet read');
     expect(status.textContent).toContain('assume real money');
+    expect(status.getAttribute('aria-label')).toContain('Paper');
   });
 
   it('warns loudly when there is no lane at all, because the roster itself is unknown', async () => {
@@ -107,11 +112,11 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.textContent).toContain('assume real money');
   });
 
-  it('renders paper mode as a compact Paper money chip labeled with its lane', async () => {
+  it('renders paper mode as a compact "Paper" pill, with the lane named only in its accessible name', async () => {
     await renderWith(PAPER_LANE, { verdict: verdict({}), lastError: null });
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Paper');
-    expect(status.textContent).toContain('Paper money');
+    expect(status.textContent?.trim()).toBe('Paper');
+    expect(status.getAttribute('aria-label')).toContain('Paper');
     expect(status.getAttribute('title')).toBe('ALPACA_MODE=paper.');
     expect(status.className).toContain('is-paper');
 
@@ -119,7 +124,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('renders a live-unarmed account loudly with the lane label and armed count, never its account number', async () => {
+  it('renders a live-unarmed account as a compact "Live" pill, with the armed count in its accessible name and tooltip, never its account number', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -135,15 +140,18 @@ describe('AlpacaLiveBannerComponent', () => {
     });
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-live-unarmed');
-    expect(status.textContent).toContain('Live');
-    expect(status.textContent).toContain('0 armed');
+    expect(status.textContent?.trim()).toBe('Live');
+    expect(status.getAttribute('aria-label')).toContain('0 armed');
+    expect(status.getAttribute('title')).toContain('0 armed');
     // The account number names the account but guards nothing here — the lane
     // label already names it, and the number belongs only on Configuration and
-    // in the confirmation of a consequential action (ADR 0064; #2188).
+    // in the confirmation of a consequential action (ADR 0064; #2188). It can
+    // still appear inside the server's own `headline` sentence, which the
+    // accessible name always carried — that is unchanged by this pill.
     expect(status.textContent).not.toContain('9LIVE0001');
   });
 
-  it("says Shadow, not an account number, when the clerk holds the no-submit Shadow authority", async () => {
+  it("says Shadow authority, not an account number, in the accessible name and tooltip when the clerk holds the no-submit Shadow authority", async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -161,13 +169,14 @@ describe('AlpacaLiveBannerComponent', () => {
     });
 
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Live');
-    expect(status.textContent).toContain('Shadow');
-    expect(status.textContent).toContain('2 armed');
+    expect(status.textContent?.trim()).toBe('Live');
+    expect(status.getAttribute('aria-label')).toContain('Shadow authority');
+    expect(status.getAttribute('aria-label')).toContain('2 armed');
+    expect(status.getAttribute('title')).toContain('Shadow authority');
     expect(status.textContent).not.toContain('9LIVE0001');
   });
 
-  it('says nothing about Shadow when the clerk holds ordinary SQLite authority', async () => {
+  it("says nothing about Shadow authority when the clerk holds ordinary SQLite authority", async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -183,10 +192,10 @@ describe('AlpacaLiveBannerComponent', () => {
       lastError: null,
     });
 
-    expect(screen.getByRole('status').textContent).not.toContain('Shadow');
+    expect(screen.getByRole('status').getAttribute('aria-label')).not.toContain('Shadow');
   });
 
-  it('shows the loss hold on a live account when held', async () => {
+  it('carries the loss hold on a live account into the accessible name and tooltip when held', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -201,7 +210,9 @@ describe('AlpacaLiveBannerComponent', () => {
       }),
       lastError: null,
     });
-    expect(screen.getByRole('status').textContent).toContain('loss hold');
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-label')).toContain('loss hold');
+    expect(status.getAttribute('title')).toContain('loss hold');
   });
 
   it('shows nothing extra on a live account when the loss hold is clear', async () => {
@@ -219,7 +230,7 @@ describe('AlpacaLiveBannerComponent', () => {
       }),
       lastError: null,
     });
-    expect(screen.getByRole('status').textContent).not.toContain('loss hold');
+    expect(screen.getByRole('status').getAttribute('aria-label')).not.toContain('loss hold');
   });
 
   it('renders a server-reported unknown verdict as a loud warning that says assume real money', async () => {
@@ -238,8 +249,10 @@ describe('AlpacaLiveBannerComponent', () => {
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-undetermined');
     expect(status.className).not.toContain('is-unknown');
+    expect(status.textContent).toContain('Mode unknown');
     expect(status.textContent).toContain('assume real money');
-    expect(status.textContent).toContain('Live Mode Disagreement');
+    expect(status.getAttribute('aria-label')).toContain('Live Mode Disagreement');
+    expect(status.getAttribute('title')).toContain('Live Mode Disagreement');
 
     // The amber treatment's own markup, never axe-run before this round.
     // `color-contrast` stays off because jsdom computes no layout or cascade,
@@ -249,7 +262,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('says Shadow on an undetermined verdict when the clerk holds the no-submit Shadow authority', async () => {
+  it('says Shadow authority on an undetermined verdict, in its accessible name, when the clerk holds the no-submit Shadow authority', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -265,8 +278,8 @@ describe('AlpacaLiveBannerComponent', () => {
     });
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-undetermined');
-    expect(status.textContent).toContain('Shadow');
     expect(status.textContent).toContain('assume real money');
+    expect(status.getAttribute('aria-label')).toContain('Shadow authority');
   });
 
   it('keeps an explicit loud warning on screen when the last read failed, never a grey unknown', async () => {
@@ -317,7 +330,7 @@ describe('AlpacaLiveBannerComponent', () => {
     },
   );
 
-  it('renders a live-armed account in the loudest treatment with the armed count', async () => {
+  it('renders a live-armed account in the loudest treatment, with the armed count in its accessible name', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
@@ -334,11 +347,12 @@ describe('AlpacaLiveBannerComponent', () => {
     });
     const status = screen.getByRole('status');
     expect(status.className).toContain('is-live-armed');
-    expect(status.textContent).toContain('1 armed');
+    expect(status.textContent?.trim()).toBe('Live');
+    expect(status.getAttribute('aria-label')).toContain('1 armed');
     expect(status.textContent).not.toContain('9LIVE0001');
   });
 
-  it("shows the lane's account nickname instead of its raw label when one is set", async () => {
+  it("carries the lane's account nickname in its accessible name instead of its raw label when one is set", async () => {
     const named = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
@@ -347,11 +361,12 @@ describe('AlpacaLiveBannerComponent', () => {
     await renderWith(named, { verdict: verdict({}), lastError: null });
 
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Strategy lab');
-    expect(status.querySelector('.alpaca-banner__lane')?.textContent).toBe('Strategy lab');
+    expect(status.textContent?.trim()).toBe('Paper');
+    expect(status.getAttribute('aria-label')).toContain('Strategy lab');
+    expect(status.querySelector('.alpaca-banner__lane')).toBeNull();
   });
 
-  it("shows this lane's own label beside its name when another lane shares it (ADR 0064 Decision 5)", async () => {
+  it("keeps the pill to just the mode word when two lanes share a name — the accessible name still disambiguates (ADR 0064 Decision 5)", async () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
@@ -365,16 +380,64 @@ describe('AlpacaLiveBannerComponent', () => {
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
 
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Strategy lab');
-    expect(status.textContent).toContain('(Paper)');
+    // With only two lanes, "Paper" vs "Live" already disambiguates the pills
+    // at a glance — the shared nickname stays out of the compact text.
+    expect(status.textContent?.trim()).toBe('Paper');
+    expect(status.getAttribute('aria-label')).toContain('Strategy lab (Paper)');
   });
 
-  // Two lanes sharing a display name are a deliberately supported state
-  // (ADR 0064 Decision 5), not an edge case: without carrying the
-  // disambiguator into `aria-label` too, both badges would announce
-  // identically to a screen reader (WCAG 4.1.2 / axe landmark-unique
-  // territory), even though their visible pills already read differently.
-  it("carries the disambiguator into the paper lane's accessible name, not only its visible pill", async () => {
+  it("names which lane it is again, in the pill itself, when a sibling of the same broker currently reads the identical mode word", async () => {
+    const paper = testLane({ clerk_id: 'clrk_paper', display_label: 'Paper' });
+    const liveA = testLane({ clerk_id: 'clrk_live_a', display_label: 'Live A' });
+    const liveB = testLane({ clerk_id: 'clrk_live_b', display_label: 'Live B' });
+    const liveAState: LaneVerdictState = {
+      verdict: verdict({
+        configured_mode: 'live',
+        final_verdict: 'live-unarmed',
+        headline: 'LIVE account — real money, no instance armed',
+        detail: 'Every order path refuses.',
+      }),
+      lastError: null,
+    };
+    const liveBState: LaneVerdictState = {
+      verdict: verdict({
+        configured_mode: 'live',
+        final_verdict: 'live-armed',
+        armed_instance_count: 1,
+        headline: 'LIVE account — 1 instance armed',
+        detail: 'No path submits yet.',
+      }),
+      lastError: null,
+    };
+    // A second live clerk on the same broker (ADR 0062 Phase 5) — liveA is
+    // unarmed and liveB is armed, but both still read the same pill word
+    // "Live", which is exactly the collision a raw lane count cannot see.
+    await renderWith(liveA, liveAState, [paper, liveA, liveB], new Map([['clrk_live_b', liveBState]]));
+
+    const status = screen.getByRole('status');
+    expect(status.querySelector('.alpaca-banner__mode')?.textContent).toBe('Live');
+    expect(status.querySelector('.alpaca-banner__lane')?.textContent?.trim()).toBe('· Live A');
+  });
+
+  it('adds no lane hint with three lanes on a broker when none of them currently read the same mode word', async () => {
+    const paper = testLane({ clerk_id: 'clrk_paper', display_label: 'Paper' });
+    const live = testLane({ clerk_id: 'clrk_live', display_label: 'Live' });
+    const booting = testLane({ clerk_id: 'clrk_booting', display_label: 'Booting' });
+    const liveState: LaneVerdictState = {
+      verdict: verdict({ configured_mode: 'live', final_verdict: 'live-unarmed' }),
+      lastError: null,
+    };
+    // `booting` is left at the default UNPOLLED_LANE_STATE ("Mode not yet
+    // read…"), distinct from both "Paper" and "Live" — three lanes, three
+    // different mode words, no collision anywhere.
+    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live, booting], new Map([
+      ['clrk_live', liveState],
+    ]));
+
+    expect(screen.getByRole('status').textContent?.trim()).toBe('Paper');
+  });
+
+  it("carries the disambiguator into the paper lane's accessible name", async () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
@@ -392,7 +455,7 @@ describe('AlpacaLiveBannerComponent', () => {
     );
   });
 
-  it("carries the disambiguator into the live lane's accessible name, not only its visible pill", async () => {
+  it("carries the disambiguator into the live lane's accessible name", async () => {
     const paper = testLane({
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
@@ -440,8 +503,29 @@ describe('AlpacaLiveBannerComponent', () => {
     await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper]);
 
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('Solo');
-    expect(status.textContent).not.toContain('(Paper)');
+    expect(status.textContent?.trim()).toBe('Paper');
+    expect(status.getAttribute('aria-label')).toContain('Solo');
+    expect(status.getAttribute('aria-label')).not.toContain('(Paper)');
+  });
+
+  describe('active/pressed state', () => {
+    it("renders as active when the operator is standing inside this lane's own workspace", async () => {
+      await renderAt(`/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`, PAPER_LANE);
+
+      expect(screen.getByRole('status').className).toContain('is-active');
+    });
+
+    it("does not render as active when the operator is standing inside a different lane's workspace", async () => {
+      await renderAt(LIVE_WORKSPACE, PAPER_LANE);
+
+      expect(screen.getByRole('status').className).not.toContain('is-active');
+    });
+
+    it('does not render as active outside any workspace', async () => {
+      await renderAt('/data-lab', PAPER_LANE);
+
+      expect(screen.getByRole('status').className).not.toContain('is-active');
+    });
   });
 
   describe('as the way to its account (ADR 0064 Decision 3)', () => {
