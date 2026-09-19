@@ -60,6 +60,11 @@ from app.utils.error_handlers import request_validation_exception_handler
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
+# Alpaca's stored spelling, the fleet's canonical route spelling of the same
+# account, and a different account (#2220).
+ACCOUNT_NUMBER = "PA3KWXU1C4C3"
+CANONICAL_ROUTE_ACCOUNT = "pa3kwxu1c4c3"
+FOREIGN_ROUTE_ACCOUNT = "pa9other0000"
 
 
 def _account(account_id: str = ACCOUNT_ID) -> BrokerAccountSnapshot:
@@ -154,8 +159,75 @@ def api(tmp_path: Path):
         repo.close()
 
 
+@pytest.fixture
+def account_number_api(request: pytest.FixtureRequest, tmp_path: Path):
+    """An authority custodying Alpaca's uppercase account number.
+
+    Indirect param ``True`` installs the Shadow authority over that account,
+    whose custody id is ``shadow:<ACCOUNT_NUMBER>``.
+    """
+    shadow = getattr(request, "param", False)
+    custody = f"shadow:{ACCOUNT_NUMBER}" if shadow else ACCOUNT_NUMBER
+    authority_kind = "shadow" if shadow else "sqlite"
+    repo = ClerkSqliteRepository.initialize(account_id=custody, artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    port = FakeAlpacaPort(account_id=ACCOUNT_NUMBER)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=port, trade=port,
+        account_mode="live" if shadow else "paper",
+        authority_kind=authority_kind,
+    )
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind=authority_kind, clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+def _historical_recovery_plan(
+    account_id: str = ACCOUNT_ID, strategy_instance_id: str = SID,
+) -> HistoricalExecutionRecoveryPlan:
+    return HistoricalExecutionRecoveryPlan(
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        uncertainty_id="uncertainty:historical-1",
+        order_ref="learn-ai/spy/v1:historical",
+        broker_order_id="alpaca-order-1",
+        execution_id="execution-1",
+        exact_symbol="SPY",
+        exact_quantity=1.0,
+        exact_price=100.0,
+        exact_side="BUY",
+        source_event_at_ms=1_700_000_000_000,
+        cumulative_fill_id="learn-ai/spy/v1:historical:1.000000000",
+        cumulative_quantity=1.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        authority_generation=1,
+        db_identity_token="db-token",
+        control_revision=10,
+        prepared_at_ms=1_700_000_000_001,
+        expires_at_ms=1_700_000_120_001,
+        confirmation_token="a" * 64,
+    )
+
+
+def _recovery_receipt(plan: HistoricalExecutionRecoveryPlan) -> ExecutionCoverageResolutionReceipt:
+    return ExecutionCoverageResolutionReceipt(
+        uncertainty_id=plan.uncertainty_id,
+        order_ref=plan.order_ref,
+        execution_id=plan.execution_id,
+        receipt_id="coverage-resolution:11",
+        recorded_at_ms=1_700_000_000_002,
+        applied=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -365,6 +437,54 @@ async def test_failed_activated_authority_exposes_typed_account_recovery_state()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custody_account_id",
+    [ACCOUNT_NUMBER, f"shadow:{ACCOUNT_NUMBER}"],
+    ids=["real_paper", "shadow"],
+)
+async def test_failed_authority_snapshot_matches_the_route_account_canonically(
+    custody_account_id: str,
+) -> None:
+    """The failed authority's projection answers the canonical route (#2220).
+
+    A foreign account gets no failed projection; it falls through to the
+    route family's typed 503 for an unavailable authority.
+    """
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id=custody_account_id,
+                scope="ACCOUNT_CLERK",
+                impact="Broker-mutating Alpaca Clerk capability is not installed.",
+                recovery="The activated database failed integrity verification.",
+                observed_at_ms=1_700_000_000_000,
+                activation_detected=True,
+            ),
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with _client(app) as client:
+            own = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/snapshot"
+            )
+            foreign = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{FOREIGN_ROUTE_ACCOUNT}/snapshot"
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert own.status_code == 200, own.text
+    assert own.json()["authority_health"] == "failed"
+    assert own.json()["account_id"] == custody_account_id
+    assert foreign.status_code == 503, foreign.text
+    assert foreign.json()["detail"]["reason"] == "sqlite_clerk_startup_failed"
+
+
+@pytest.mark.asyncio
 async def test_start_then_get_returns_the_command_resource(api: FastAPI) -> None:
     async with _client(api) as client:
         start = await client.post(
@@ -393,40 +513,9 @@ async def test_historical_execution_recovery_routes_preserve_the_signed_plan_bou
     runtime = get_active_clerk_runtime()
     assert runtime is not None
     assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    plan = HistoricalExecutionRecoveryPlan(
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        uncertainty_id="uncertainty:historical-1",
-        order_ref="learn-ai/spy/v1:historical",
-        broker_order_id="alpaca-order-1",
-        execution_id="execution-1",
-        exact_symbol="SPY",
-        exact_quantity=1.0,
-        exact_price=100.0,
-        exact_side="BUY",
-        source_event_at_ms=1_700_000_000_000,
-        cumulative_fill_id="learn-ai/spy/v1:historical:1.000000000",
-        cumulative_quantity=1.0,
-        cumulative_price=100.0,
-        cumulative_side="BUY",
-        authority_generation=1,
-        db_identity_token="db-token",
-        control_revision=10,
-        prepared_at_ms=1_700_000_000_001,
-        expires_at_ms=1_700_000_120_001,
-        confirmation_token="a" * 64,
-    )
+    plan = _historical_recovery_plan()
     prepare = AsyncMock(return_value=plan)
-    confirm = AsyncMock(
-        return_value=ExecutionCoverageResolutionReceipt(
-            uncertainty_id=plan.uncertainty_id,
-            order_ref=plan.order_ref,
-            execution_id=plan.execution_id,
-            receipt_id="coverage-resolution:11",
-            recorded_at_ms=1_700_000_000_002,
-            applied=True,
-        )
-    )
+    confirm = AsyncMock(return_value=_recovery_receipt(plan))
     monkeypatch.setattr(runtime.clerk, "prepare_historical_execution_recovery", prepare)
     monkeypatch.setattr(runtime.clerk, "confirm_historical_execution_recovery", confirm)
 
@@ -448,6 +537,73 @@ async def test_historical_execution_recovery_routes_preserve_the_signed_plan_bou
     assert confirm.await_args.kwargs["plan"] == plan
     assert confirm.await_args.kwargs["confirmation_token"] == plan.confirmation_token
     assert confirmed.json()["receipt_id"] == "coverage-resolution:11"
+
+
+@pytest.mark.asyncio
+async def test_historical_execution_recovery_confirms_a_plan_prepared_on_the_canonical_route(
+    account_number_api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The plan carries Alpaca's spelling; the route carries the fleet's (#2220)."""
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    plan = _historical_recovery_plan(account_id=ACCOUNT_NUMBER)
+    confirm = AsyncMock(return_value=_recovery_receipt(plan))
+    monkeypatch.setattr(
+        runtime.clerk, "prepare_historical_execution_recovery", AsyncMock(return_value=plan)
+    )
+    monkeypatch.setattr(runtime.clerk, "confirm_historical_execution_recovery", confirm)
+    base = f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/bots/{SID}"
+
+    async with _client(account_number_api) as client:
+        prepared = await client.post(
+            f"{base}/historical-execution-recovery/prepare",
+            json={"concurrency_token": "b" * 64},
+        )
+        confirmed = await client.post(
+            f"{base}/historical-execution-recovery/confirm",
+            json={"plan": prepared.json(), "confirmation_token": plan.confirmation_token},
+        )
+
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()["account_id"] == ACCOUNT_NUMBER
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirm.await_args.kwargs["plan"] == plan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("plan_account", "plan_sid"),
+    [(FOREIGN_ROUTE_ACCOUNT.upper(), SID), (ACCOUNT_NUMBER, "other-bot")],
+    ids=["other_account", "other_bot"],
+)
+async def test_historical_execution_recovery_confirm_refuses_a_plan_for_another_scope(
+    account_number_api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    plan_account: str,
+    plan_sid: str,
+) -> None:
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    confirm = AsyncMock()
+    monkeypatch.setattr(runtime.clerk, "confirm_historical_execution_recovery", confirm)
+    plan = _historical_recovery_plan(account_id=plan_account, strategy_instance_id=plan_sid)
+
+    async with _client(account_number_api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/bots/{SID}"
+            "/historical-execution-recovery/confirm",
+            json={
+                "plan": HistoricalExecutionRecoveryPlanResponse.model_validate(plan).model_dump(),
+                "confirmation_token": plan.confirmation_token,
+            },
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["reason"] == "historical_recovery_scope_mismatch"
+    confirm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -976,6 +1132,70 @@ async def test_reconcile_now_rejects_mismatched_broker_account_before_recovery(
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "broker_account_mismatch"
     assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "account_number_api", [False, True], ids=["real_paper", "shadow"], indirect=True
+)
+async def test_reconcile_now_accepts_the_canonical_route_account(
+    account_number_api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The adapter reports Alpaca's spelling; Shadow custody is ``shadow:`` (#2220)."""
+    reconcile = AsyncMock(return_value=AccountReconciliationResult(verdict="clean"))
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    registry = FakeRegistry(FakeAlpacaPort(account_id=ACCOUNT_NUMBER))
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", reconcile)
+
+    async with _client(account_number_api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/reconcile"
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["verdict"] == "clean"
+    reconcile.assert_awaited_once_with(trigger="OPERATOR_RECONCILE_NOW")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "account_number_api", [False, True], ids=["real_paper", "shadow"], indirect=True
+)
+@pytest.mark.parametrize(
+    ("route_account", "adapter_account", "status", "reason"),
+    [
+        (FOREIGN_ROUTE_ACCOUNT, ACCOUNT_NUMBER, 404, "sqlite_account_not_active"),
+        (CANONICAL_ROUTE_ACCOUNT, FOREIGN_ROUTE_ACCOUNT.upper(), 409, "broker_account_mismatch"),
+    ],
+    ids=["foreign_route", "foreign_adapter"],
+)
+async def test_reconcile_now_still_refuses_a_foreign_account(
+    account_number_api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    route_account: str,
+    adapter_account: str,
+    status: int,
+    reason: str,
+) -> None:
+    reconcile = AsyncMock()
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    registry = FakeRegistry(FakeAlpacaPort(account_id=adapter_account))
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", reconcile)
+
+    async with _client(account_number_api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{route_account}/reconcile"
+        )
+
+    assert response.status_code == status, response.text
+    assert response.json()["detail"]["reason"] == reason
+    reconcile.assert_not_awaited()
 
 
 # ── #2007: the check route prices a flatten; execute carries the confirmed limit ──

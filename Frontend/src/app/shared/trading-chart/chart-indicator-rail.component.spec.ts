@@ -111,3 +111,25 @@ describe("ChartIndicatorRailComponent parameter validation", () => {
     expect(added).toEqual([{ name: "ema", params: { length: 50 } }]);
   });
 });
+
+describe("ChartIndicatorRailComponent catalog load failure", () => {
+  it("forwards a failed catalog load to its picker, which says so", async () => {
+    await render(ChartIndicatorRailComponent, {
+      providers: [provideZonelessChangeDetection()],
+      inputs: { categories: [], catalogLoadFailed: true },
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("Indicators could not be loaded.");
+    expect(screen.queryByText("No indicators available")).toBeNull();
+  });
+
+  it("keeps the neutral empty state when the catalog did not fail", async () => {
+    await render(ChartIndicatorRailComponent, {
+      providers: [provideZonelessChangeDetection()],
+      inputs: { categories: [] },
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("No indicators available")).not.toBeNull();
+  });
+});

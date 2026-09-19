@@ -102,6 +102,7 @@ export class TradingChartComponent implements OnDestroy {
   readonly activeIndicators = input<readonly TradingIndicatorChip[]>([]);
   readonly indicatorCategories = input<readonly IndicatorCategory[]>([]);
   readonly indicatorCatalogLoading = input(false);
+  readonly indicatorCatalogLoadFailed = input(false);
 
   readonly expanded = model(false);
   readonly indicatorAdded = output<IndicatorPickerAdd>();

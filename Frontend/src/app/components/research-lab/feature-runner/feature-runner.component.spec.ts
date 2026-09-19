@@ -1,8 +1,13 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule } from '@angular/common/http/testing';
+import {
+  HttpClientTestingModule,
+  HttpTestingController,
+  type TestRequest,
+} from '@angular/common/http/testing';
 import { signal, computed, type Signal } from '@angular/core';
 import { vi } from 'vitest';
 
+import { environment } from '../../../../environments/environment';
 import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
@@ -20,6 +25,20 @@ import { JobsService, type JobState } from '../../../services/jobs.service';
  * suite under `tests/jobs` and via manual smoke tests; recreating it
  * here would just be re-mocking `JobsService` internals.
  */
+
+/** A one-indicator `/api/dataset/available` catalog. */
+const CATALOG = {
+  momentum: [
+    {
+      name: 'mom',
+      category: 'momentum',
+      description: 'Momentum.',
+      configurable_params: [
+        { name: 'length', type: 'int', default: 10, min: 1, max: 200, description: 'Lookback.' },
+      ],
+    },
+  ],
+};
 
 interface JobsServiceMock {
   jobs: Signal<JobState[]>;
@@ -142,5 +161,41 @@ describe('FeatureRunnerComponent', () => {
 
     expect(component.error()).toBe('Network error');
     expect(component.jobId()).toBeNull();
+  });
+
+  describe('indicator catalog load', () => {
+    const catalogUrl = `${environment.pythonServiceUrl}/api/dataset/available`;
+
+    async function settleCatalog(respond: (req: TestRequest) => void): Promise<HTMLElement> {
+      respond(TestBed.inject(HttpTestingController).expectOne(catalogUrl));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    it('says so in the picker when the catalog fails to load', async () => {
+      const el = await settleCatalog((req) =>
+        req.flush('boom', { status: 500, statusText: 'Internal Server Error' }),
+      );
+
+      const picker = el.querySelector('app-indicator-picker');
+      expect(picker?.querySelector('[role="alert"]')?.textContent).toContain(
+        'Indicators could not be loaded.',
+      );
+      expect(picker?.textContent).not.toContain('No indicators available');
+      // Fixed copy: the service's raw HTTP error never reaches the page.
+      expect(picker?.textContent).not.toContain('Http failure response');
+    });
+
+    it('shows no failure when the catalog loads', async () => {
+      const el = await settleCatalog((req) =>
+        req.flush({ success: true, categories: CATALOG, total: 1 }),
+      );
+
+      const picker = el.querySelector('app-indicator-picker');
+      expect(picker?.querySelector('[role="alert"]')).toBeNull();
+      expect(picker?.textContent).not.toContain('Indicators could not be loaded.');
+      expect(picker?.textContent).toContain('1 of 1');
+    });
   });
 });
