@@ -87,7 +87,13 @@
 
   <!-- Categories / rows -->
   <div class="ip-cats" id="ip-rows">
-    @if (totalVisible() === 0) {
+    <!-- An empty catalog is not a filter outcome, so this stays neutral.
+         Explaining a failed catalog load is the host's job. -->
+    @if (totalCatalog() === 0) {
+      <div class="ip-empty">
+        <strong>No indicators available</strong>
+      </div>
+    } @else if (totalVisible() === 0) {
       <div class="ip-empty">
         <strong>No indicators match these filters</strong>
         Try removing a pane or category constraint, or clearing the search.
