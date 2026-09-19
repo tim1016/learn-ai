@@ -177,6 +177,19 @@ def test_prepare_generation_request_accepts_a_planned_selection() -> None:
     assert prepare_generation_request(request).columns == ["close", "rsi_length14"]
 
 
+def test_plan_lists_a_long_window_indicator_the_real_run_produces() -> None:
+    """Regression: the planning frame was a fixed 300 rows, so SMA(400) —
+    configurable up to 500 — produced no column there while a real, warmed-up
+    run did. The picker then could not offer it and an explicit selection
+    silently dropped it from dataset.csv."""
+    long_sma = {**_RECIPE, "indicator_entries": [{"name": "sma", "params": {"length": 500}}]}
+    plan = build_dataset_plan(DatasetPlanRequest(**long_sma))
+    assert "sma_length500" in plan.output_columns
+
+    request = DatasetGenerationRequest(**long_sma, columns=["close", "sma_length500"])
+    assert prepare_generation_request(request).columns == ["close", "sma_length500"]
+
+
 def test_prepare_generation_request_rejects_a_column_the_recipe_cannot_produce() -> None:
     request = DatasetGenerationRequest(**_RECIPE, columns=["close", "ema_20"])
     with pytest.raises(ValueError, match="ema_20"):

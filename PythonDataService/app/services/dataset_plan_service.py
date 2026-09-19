@@ -26,11 +26,13 @@ from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.chart_service import get_allowed_timeframes
 from app.services.dataset_service import (
+    INDICATOR_CONFIGS,
     calculate_dynamic_indicators,
     project_output_columns,
     select_output_columns,
     time_column_name,
 )
+from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
 
 _ET = ZoneInfo("America/New_York")
 
@@ -55,7 +57,11 @@ _SESSIONS_PER_UNIT: dict[str, int] = {
 # timespan — vwap/transactions columns are projected regardless of recipe.
 
 
-_PROJECTION_FRAME_ROWS = 300
+# Long enough for every catalog-valid indicator window: pandas-ta returns
+# no column when a window exceeds the frame, and this list gates which
+# columns an export may select — a fixed 300 rows silently dropped
+# SMA(400) while a real warmed-up run produced it.
+_PROJECTION_FRAME_ROWS = configured_indicator_warmup_bars(INDICATOR_CONFIGS)
 
 
 def _parse_date(s: str) -> date:
