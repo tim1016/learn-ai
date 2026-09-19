@@ -3,8 +3,13 @@
 This module is intentionally fleet-generic: it does not know a provider,
 account, strategy, or any broker credential.  Clerk-agent and combined
 processes install compatibility observation during the pre-cutover window;
-only clerk agents install the two resource pools.  Those independent pools
-keep a long-lived SSE client from consuming ordinary request capacity.
+only clerk agents install the three resource pools.  The stream pool keeps a
+long-lived SSE client from consuming ordinary request capacity; the command
+pool (issue #2204 gate F1) keeps a slow read -- bot chart history's
+coordinator-owned Polygon walk chief among them -- from ever holding the
+slot a mutating command (Stop, cancel, flatten, ...) needs. All three pools
+are independent: a caller draws from exactly one, decided by
+``_requires_command_capacity`` below.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from starlette.datastructures import Headers
 from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import flat_refusal_body
+from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
 from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
@@ -70,6 +76,7 @@ class LaneRuntimeConfig:
 
     max_inflight_requests: int
     max_inflight_streams: int
+    max_inflight_commands: int
     request_queue_limit: int
     request_queue_timeout_ms: int
 
@@ -79,13 +86,19 @@ class LaneRuntimeConfig:
         values = cls(
             max_inflight_requests=int(settings.MAX_INFLIGHT_REQUESTS),
             max_inflight_streams=int(settings.MAX_INFLIGHT_STREAMS),
+            max_inflight_commands=int(settings.MAX_INFLIGHT_COMMANDS),
             request_queue_limit=int(settings.REQUEST_QUEUE_LIMIT),
             request_queue_timeout_ms=int(settings.REQUEST_QUEUE_TIMEOUT_MS),
         )
-        if values.max_inflight_requests < 1 or values.max_inflight_streams < 1:
+        if (
+            values.max_inflight_requests < 1
+            or values.max_inflight_streams < 1
+            or values.max_inflight_commands < 1
+        ):
             raise ValueError(
-                "FLEET_MAX_INFLIGHT_REQUESTS and FLEET_MAX_INFLIGHT_STREAMS "
-                "must both be positive for FLEET_ROLE=clerk_agent."
+                "FLEET_MAX_INFLIGHT_REQUESTS, FLEET_MAX_INFLIGHT_STREAMS and "
+                "FLEET_MAX_INFLIGHT_COMMANDS must all be positive for "
+                "FLEET_ROLE=clerk_agent."
             )
         if values.request_queue_limit < 0 or values.request_queue_timeout_ms < 0:
             raise ValueError(
@@ -148,6 +161,36 @@ class _CapacityPool:
         async with self._condition:
             self._inflight -= 1
             self._condition.notify(1)
+
+
+def _requires_command_capacity(method: str, path: str) -> bool:
+    """Whether one HTTP call must draw from the command pool, not reads.
+
+    Every operation that mutates state uses a non-GET/HEAD method (checked
+    against the production Alpaca catalog: no ``GET`` there ever declares
+    non-read idempotency), so a coarse method-based split can never place a
+    real mutation in the read pool -- which is the one direction this
+    exists to make safe (issue #2204 gate F1): a slow read (bot chart
+    history's coordinator-owned Polygon walk) must never hold the slot a
+    command like Stop needs.
+
+    One documented exception: the fleet's own internal history-batch read
+    (``INTERNAL_HISTORY_BATCH_PATH``) is a ``POST`` that never mutates
+    anything. It is reached through this same middleware whenever a
+    ``combined``-role process mounts both the coordinator's internal surface
+    and the clerk lane runtime, so it must keep drawing from the read pool
+    like the GET it behaves as, not the POST it happens to be spelled as.
+
+    A handful of provider-declared operations are also POST reads (a plan,
+    a preview, a check) that this coarse split conservatively routes to the
+    command pool instead. That costs those specific endpoints command-pool
+    capacity, never the other way around, so it does not weaken the
+    invariant above; the generic lane runtime deliberately has no provider
+    catalog to consult for a finer classification (PRD FR-005).
+    """
+    if method in _SAFE_METHODS:
+        return False
+    return path != INTERNAL_HISTORY_BATCH_PATH
 
 
 def compatibility_route_family(method: str, path: str) -> str | None:
@@ -477,6 +520,16 @@ class FleetLaneRuntimeMiddleware:
             if config is not None
             else None
         )
+        self._commands = (
+            _CapacityPool(
+                name="command",
+                limit=config.max_inflight_commands,
+                queue_limit=config.request_queue_limit,
+                timeout_ms=config.request_queue_timeout_ms,
+            )
+            if config is not None
+            else None
+        )
         self._evidence = evidence
 
     async def __call__(
@@ -629,10 +682,15 @@ class FleetLaneRuntimeMiddleware:
             record_response(503)
             await send({"type": "http.response.body", "body": body, "more_body": False})
 
+        primary_pool = (
+            self._commands
+            if _requires_command_capacity(method, str(scope.get("path", "")))
+            else self._requests
+        )
         try:
             try:
-                if self._requests is not None:
-                    request_lease = await self._requests.acquire()
+                if primary_pool is not None:
+                    request_lease = await primary_pool.acquire()
             except FleetLaneCapacityExhausted as exc:
                 await refuse(exc.pool)
                 return

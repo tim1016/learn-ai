@@ -43,11 +43,14 @@ _SLOW_EXPORT_SECONDS = 1.0
 _RESPONSE_BUDGET_SECONDS = 0.5
 
 
-def _config(*, requests: int = 1, streams: int = 1, queue: int = 0, timeout_ms: int = 0) -> LaneRuntimeConfig:
+def _config(
+    *, requests: int = 1, streams: int = 1, commands: int = 1, queue: int = 0, timeout_ms: int = 0
+) -> LaneRuntimeConfig:
     """Build a small explicit lane sizing for one isolated test."""
     return LaneRuntimeConfig(
         max_inflight_requests=requests,
         max_inflight_streams=streams,
+        max_inflight_commands=commands,
         request_queue_limit=queue,
         request_queue_timeout_ms=timeout_ms,
     )
@@ -127,14 +130,140 @@ async def test_request_capacity_refuses_then_recovers_without_running_refused_ha
     first = asyncio.create_task(_invoke(runtime))
     await entered.wait()
 
-    refused = await _invoke(runtime, method="POST")
+    # A second READ contends for the same (exhausted) request pool -- unlike
+    # a mutating command, which now has its own independent pool (issue
+    # #2204 gate F1; see test_read_capacity_exhaustion_never_blocks_a_command
+    # below for that half of the invariant).
+    refused = await _invoke(runtime, method="GET")
     assert _status(refused) == 503
     assert json.loads(refused[-1]["body"])["reason"] == "fleet_lane_capacity_exhausted"
-    assert handler_calls == 1, "capacity refusal must occur before a mutation handler"
+    assert handler_calls == 1, "capacity refusal must occur before a second read handler"
 
     release.set()
     assert _status(await first) == 200
     assert _status(await _invoke(runtime)) == 200
+
+
+async def test_read_capacity_exhaustion_never_blocks_a_command(tmp_path: Path) -> None:
+    """F1 regression #1: a full read pool must not delay or refuse a command.
+
+    Before the fix, a slow read (a held bot-chart-history request) and a
+    mutating command (Stop) shared one pool: with the read pool's only slot
+    held, a POST command was refused outright (queue=0) or forced to wait
+    out the queue deadline. This pins the new invariant directly: with the
+    read pool's one slot held and its queue disabled (an immediate refusal
+    if commands shared it), a POST command is admitted and completes.
+    """
+    read_entered = asyncio.Event()
+    read_release = asyncio.Event()
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["method"] == "GET":
+            read_entered.set()
+            await read_release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    slow_read = asyncio.create_task(_invoke(runtime, method="GET"))
+    await read_entered.wait()
+
+    command = await asyncio.wait_for(_invoke(runtime, method="POST"), timeout=2.0)
+    assert _status(command) == 200
+
+    read_release.set()
+    assert _status(await slow_read) == 200
+
+
+async def test_every_read_slot_held_a_command_is_admitted_without_the_queue_deadline(
+    tmp_path: Path,
+) -> None:
+    """F1 regression #2: production-like read sizing never gates a command.
+
+    Mirrors the production defaults' shape (many read slots, a positive queue
+    deadline) rather than the qualification single-slot sizing: with every
+    read slot held, a command must be admitted immediately, not after
+    waiting out the read pool's queue deadline (which the old shared-pool
+    behavior forced).
+    """
+    read_entered = [asyncio.Event() for _ in range(4)]
+    read_release = asyncio.Event()
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["method"] == "GET":
+            read_entered[int(scope["path"].rsplit("/", 1)[-1])].set()
+            await read_release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        # Production shape: several read slots, a real queue and a positive
+        # deadline -- long enough that this test would time out waiting for
+        # it if a command still shared the read pool's queue.
+        config=_config(requests=4, commands=1, queue=64, timeout_ms=5_000),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    slow_reads = [
+        asyncio.create_task(_invoke(runtime, method="GET", path=f"/reads/{i}"))
+        for i in range(4)
+    ]
+    await asyncio.gather(*(event.wait() for event in read_entered))
+
+    started = time.monotonic()
+    command = await asyncio.wait_for(_invoke(runtime, method="POST"), timeout=1.0)
+    elapsed = time.monotonic() - started
+    assert _status(command) == 200
+    assert elapsed < 1.0, "a command must not wait out the read pool's queue deadline"
+
+    read_release.set()
+    for status in (await asyncio.gather(*slow_reads)):
+        assert _status(status) == 200
+
+
+async def test_internal_history_batch_read_draws_read_not_command_capacity(
+    tmp_path: Path,
+) -> None:
+    """The coordinator's history-batch POST is a read for capacity purposes.
+
+    Reached through this middleware whenever a ``combined``-role process
+    mounts both the coordinator's internal surface and the clerk lane
+    runtime (issue #2204). It must not compete with real commands for the
+    (typically much smaller) command pool merely because it is spelled POST.
+    """
+    from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        entered.set()
+        await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    held = asyncio.create_task(
+        _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
+    )
+    await entered.wait()
+
+    # The one read slot is held by the internal history-batch call above, so
+    # a second one of the same shape must be refused -- proving it drew from
+    # the read pool, not the untouched command pool.
+    refused = await _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
+    assert _status(refused) == 503
+
+    release.set()
+    assert _status(await held) == 200
 
 
 async def test_bounded_request_queue_waits_then_admits_after_release(tmp_path: Path) -> None:
@@ -707,11 +836,25 @@ def test_lane_runtime_config_rejects_partial_or_negative_sizing() -> None:
     class PartialSettings:
         MAX_INFLIGHT_REQUESTS = 1
         MAX_INFLIGHT_STREAMS = 0
+        MAX_INFLIGHT_COMMANDS = 1
         REQUEST_QUEUE_LIMIT = 0
         REQUEST_QUEUE_TIMEOUT_MS = 0
 
-    with pytest.raises(ValueError, match="must both be positive"):
+    with pytest.raises(ValueError, match="must all be positive"):
         LaneRuntimeConfig.from_settings(PartialSettings())
+
+
+def test_lane_runtime_config_rejects_a_zeroed_command_pool() -> None:
+    """The command pool is validated exactly like the other two (issue #2204)."""
+    class ZeroedCommandSettings:
+        MAX_INFLIGHT_REQUESTS = 1
+        MAX_INFLIGHT_STREAMS = 1
+        MAX_INFLIGHT_COMMANDS = 0
+        REQUEST_QUEUE_LIMIT = 0
+        REQUEST_QUEUE_TIMEOUT_MS = 0
+
+    with pytest.raises(ValueError, match="must all be positive"):
+        LaneRuntimeConfig.from_settings(ZeroedCommandSettings())
 
 
 async def test_a_retired_lane_still_serves_an_authenticated_coordinator_forward(

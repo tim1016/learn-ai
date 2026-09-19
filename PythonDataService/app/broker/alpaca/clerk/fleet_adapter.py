@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
+from app.broker.fleet.history_batch import HISTORY_BATCH_OUTER_TIMEOUT_S
+from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
@@ -37,6 +39,7 @@ def _op(
     account: bool = False,
     stream: OperationStream = OperationStream.NONE,
     agent_path: str | None = None,
+    read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S,
 ) -> ProviderOperation:
     """Declare one operation; agent paths default to the Alpaca prefix.
 
@@ -45,6 +48,10 @@ def _op(
     names its agent path explicitly because its public home
     (``…/custody/…``) is new while the agent still serves
     ``/api/alpaca-clerk-sqlite/…`` and ``/api/accounts/…``.
+
+    ``read_timeout_s`` widens this operation's own outer coordinator -> agent
+    delivery bound (``ProviderOperation.read_timeout_s``); every operation but
+    ``bot_chart_history`` leaves it at the fleet default (issue #2204).
     """
     return ProviderOperation(
         operation_id=operation_id,
@@ -56,6 +63,7 @@ def _op(
         requires_effective_account=account,
         idempotency=idempotency,
         stream=stream,
+        read_timeout_s=read_timeout_s,
     )
 
 
@@ -382,6 +390,15 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "/accounts/{account_id}/bots/{sid}/chart/history",
             capability=Capability.BOT_PANEL_READ,
             account=True,
+            # Issue #2204: the Clerk now makes one internal request to the
+            # fleet-coordinator role that runs the *entire* backward Polygon
+            # walk before answering, which a cold `1D` request can push past
+            # the fleet default. This outer bound must stay strictly larger
+            # than the inner Clerk -> coordinator bound
+            # (`app.broker.fleet.history_batch.HISTORY_BATCH_INNER_TIMEOUT_S`)
+            # or the outer request expires first and discards the
+            # coordinator's completed work.
+            read_timeout_s=HISTORY_BATCH_OUTER_TIMEOUT_S,
         ),
         _op(
             "bot_chart_live",

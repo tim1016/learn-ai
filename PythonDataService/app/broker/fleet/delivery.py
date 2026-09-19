@@ -275,8 +275,19 @@ class HttpLaneDelivery:
         self._token = coordinator_service_token
 
     async def deliver(self, request: DeliveryRequest) -> DeliveryResult:
-        """Forward one complete operation and verify the identity echo."""
-        client = build_internal_client()
+        """Forward one complete operation and verify the identity echo.
+
+        The client's read timeout is ``request.operation.read_timeout_s``
+        (``ProviderOperation.read_timeout_s``, issue #2204) -- read directly
+        off the pinned request rather than a separately-threaded kwarg, so
+        the two can never drift (gate F3). This is the OUTER hop of a routed
+        operation like ``bot_chart_history``: it must stay open at least as
+        long as the agent's own request/response cycle can take, or the
+        outer request expires first and discards work the agent already
+        completed (see ``app.broker.fleet.history_batch`` for the paired
+        inner bound).
+        """
+        client = build_internal_client(read_timeout_s=request.operation.read_timeout_s)
         try:
             response = await client.request(
                 request.operation.method,
@@ -376,7 +387,12 @@ class LocalLaneDelivery:
         self._handler = handler
 
     async def deliver(self, request: DeliveryRequest) -> DeliveryResult:
-        """Dispatch in-process and verify the echo."""
+        """Dispatch in-process and verify the echo.
+
+        An in-process ASGI dispatch has no socket read timeout to widen, so
+        unlike :meth:`HttpLaneDelivery.deliver` this ignores
+        ``request.operation.read_timeout_s`` entirely.
+        """
         result = self._handler(request)
         if hasattr(result, "__await__"):
             result = await result

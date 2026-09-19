@@ -2,17 +2,25 @@
 
 Mounted under ``/internal/fleet`` — deliberately outside every public
 ``/api`` prefix — these routes are the machine surface an agent's presence
-calls: volume expectations, session registration, heartbeats, reservation
-and confirmation. Authentication is two-factor and environment-only: the
-``X-Fleet-Agent-Token`` header must match the clerk's agent service token in
-the coordinator's environment (``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the
-registration body presents the durable ``worker_key`` the registry itself
-compares. The browser installation secret never appears here and is never
-forwarded to an agent (PRD FR-046).
+calls: volume expectations, session registration, heartbeats, reservation,
+confirmation, and (issue #2204) one bounded history-batch read. Authentication
+is two-factor and environment-only: the ``X-Fleet-Agent-Token`` header must
+match the clerk's agent service token in the coordinator's environment
+(``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the registration body presents the
+durable ``worker_key`` the registry itself compares. The browser installation
+secret never appears here and is never forwarded to an agent (PRD FR-046).
 
 No unauthenticated fallback exists: a deployment without the token mapping
 refuses every internal call. ``/internal`` stays outside the exported
 OpenAPI contract's public surface and outside every public mount prefix.
+
+Every route additionally requires the header identity to equal the identity
+it authenticates as: ``X-Fleet-Clerk-Id`` must name the same clerk as the
+body's ``clerk_id`` (or, for the path-scoped volume-expectation read, the
+path's ``clerk_id``), refusing a token that is valid for one clerk but
+presented alongside another clerk's identity. ``RemotePresence`` has sent
+this header on every one of its calls since commit 318c92e2, so the check
+applies uniformly rather than through a per-route opt-in (issue #2204).
 """
 
 from __future__ import annotations
@@ -33,6 +41,9 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
+from app.config import settings
+from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
+from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +105,23 @@ def _service(request: Request) -> FleetControlService:
     return service
 
 
-def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
-    """Refuse any agent whose transport token is not the mapped one."""
+def _authorized_agent(
+    request: Request,
+    clerk_id: str,
+    token: str,
+    *,
+    header_clerk_id: str | None,
+) -> None:
+    """Refuse any agent whose transport token is not the mapped one.
+
+    Also requires the caller's ``X-Fleet-Clerk-Id`` header identity to equal
+    ``clerk_id`` (the body's, or the path's for the volume-expectation read)
+    -- an absent header, or one naming a different clerk, refuses exactly
+    like a wrong or missing token. Applied uniformly across all six routes:
+    ``RemotePresence._headers()`` has sent this header on every one of its
+    calls since commit 318c92e2, so no route needs, or gets, an opt-out
+    (issue #2204).
+    """
     mapping_text = getattr(request.app.state, "fleet_agent_tokens_text", "")
     mapping_unreadable_next_step = (
         "Fix FLEET_AGENT_SERVICE_TOKENS_JSON's syntax; a coordinator cannot "
@@ -119,6 +145,7 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
         not isinstance(expected, str)
         or not expected
         or not matches_service_token(token, expected)
+        or header_clerk_id != clerk_id
     ):
         logger.warning(
             "internal fleet call refused for unknown or mismatched agent token",
@@ -127,7 +154,8 @@ def _authorized_agent(request: Request, clerk_id: str, token: str) -> None:
         raise FleetAgentTokenRefused(
             "agent token refused",
             next_step="Present the X-Fleet-Agent-Token issued for this clerk "
-            "in FLEET_AGENT_SERVICE_TOKENS_JSON.",
+            "in FLEET_AGENT_SERVICE_TOKENS_JSON, with X-Fleet-Clerk-Id naming "
+            "the same clerk this call authenticates as.",
         )
 
 
@@ -165,9 +193,10 @@ async def volume_expectation(
     clerk_id: str,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Serve the clerk's expected volume identity for local agent proof."""
-    _authorized_agent(request, clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(request, clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id)
     try:
         return _service(request).clerk_volume_expectation(clerk_id)
     except FleetControlError as exc:
@@ -179,9 +208,12 @@ async def register_session(
     payload: RegistrationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Install one agent session under a fresh routing epoch."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         session = _service(request).register_agent_session(
             clerk_id=payload.clerk_id,
@@ -204,9 +236,12 @@ async def observe_session(
     payload: ObservationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Record one heartbeat; observations never confirm anything."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         touched = _service(request).observe_session(
             clerk_id=payload.clerk_id,
@@ -226,9 +261,12 @@ async def reserve_assignment(
     payload: ReserveRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Reserve the broker-qualified account for the authenticated clerk."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         assignment = _service(request).reserve_assignment(
             broker=payload.broker,
@@ -245,9 +283,12 @@ async def confirm_assignment(
     payload: ConfirmRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
     """Record the confirmed binding observation fenced by its session."""
-    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "")
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
     try:
         assignment = _service(request).confirm_assignment(
             broker=payload.broker,
@@ -262,6 +303,34 @@ async def confirm_assignment(
     except FleetControlError as exc:
         return _refuse(exc)
     return _assignment_body(assignment)
+
+
+@router.post("/history/batch", response_model=HistoryBatchResponse)
+async def history_batch(
+    payload: HistoryBatchRequest,
+    request: Request,
+    x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
+) -> HistoryBatchResponse:
+    """Serve one complete backward-walked Polygon history batch (issue #2204).
+
+    This process's own ``POLYGON_API_KEY`` is the usable one -- only a
+    ``FLEET_ROLE=fleet_coordinator``/``combined`` process ever mounts this
+    router (``_FLEET_COORDINATOR_SURFACE``, ``app.main``). A Polygon fetch
+    failure degrades into a canonical ``polygon_*`` notice with no bars
+    (issue #2203) rather than a non-200 status: the Clerk always gets a
+    completed batch back on success, whether healthy or vendor-degraded.
+    """
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
+    return await build_coordinator_history_batch(
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        required_bar_count=payload.required_bar_count,
+        as_of_ms=payload.as_of_ms,
+        polygon_api_key=settings.POLYGON_API_KEY,
+    )
 
 
 __all__ = ["router"]

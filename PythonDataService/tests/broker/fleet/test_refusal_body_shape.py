@@ -278,7 +278,10 @@ async def test_internal_fleet_refuses_with_no_coordinator_installed(control_dir:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 f"/internal/fleet/clerks/{_CLERK_ID}/volume-expectation",
-                headers={"X-Fleet-Agent-Token": _TOKEN},
+                headers={
+                    "X-Fleet-Agent-Token": _TOKEN,
+                    "X-Fleet-Clerk-Id": _CLERK_ID,
+                },
             )
         assert response.status_code == 503
         _assert_flat_refusal(response.json(), expected_reason=FleetControlPlaneNotInstalled.reason)
@@ -370,10 +373,53 @@ async def test_internal_fleet_accepts_a_correctly_mapped_agent_token(
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 f"/internal/fleet/clerks/{lane.clerk_id}/volume-expectation",
-                headers={"X-Fleet-Agent-Token": _TOKEN},
+                headers={
+                    "X-Fleet-Agent-Token": _TOKEN,
+                    "X-Fleet-Clerk-Id": lane.clerk_id,
+                },
             )
         assert response.status_code == 200
         assert response.json()["clerk_id"] == lane.clerk_id
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_internal_fleet_refuses_a_correct_token_with_a_mismatched_clerk_header(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """Issue #2204 gate F6: the header==identity check now applies uniformly.
+
+    Before, only ``/internal/fleet/history/batch`` required
+    ``X-Fleet-Clerk-Id`` to agree with the identity it authenticates as; the
+    other five routes -- ``volume-expectation`` here -- accepted a correct
+    token alongside no header, or a header naming a different clerk. There
+    is no longer a per-route opt-out: ``RemotePresence`` sends this header on
+    every call, so a token valid for one clerk presented with another
+    clerk's (or no) header refuses exactly like a wrong token.
+    """
+    from tests.broker.fleet.conftest import provision_lane
+
+    app, service = _build_internal_fleet_app(control_dir, {})
+    try:
+        lane = provision_lane(service, broker="alpaca", label="probe", tmp_path=tmp_path)
+        app.state.fleet_agent_tokens_text = json.dumps({lane.clerk_id: _TOKEN})
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            no_header = await client.get(
+                f"/internal/fleet/clerks/{lane.clerk_id}/volume-expectation",
+                headers={"X-Fleet-Agent-Token": _TOKEN},
+            )
+            mismatched_header = await client.get(
+                f"/internal/fleet/clerks/{lane.clerk_id}/volume-expectation",
+                headers={
+                    "X-Fleet-Agent-Token": _TOKEN,
+                    "X-Fleet-Clerk-Id": "clrk_someoneelse0000000000000aa",
+                },
+            )
+        for response in (no_header, mismatched_header):
+            assert response.status_code == 403
+            _assert_flat_refusal(response.json(), expected_reason=FleetAgentTokenRefused.reason)
     finally:
         service.close()
 
@@ -450,7 +496,11 @@ async def test_exhausted_lane_capacity_refuses_in_the_contract_shape(tmp_path: P
     )
 
     config = LaneRuntimeConfig(
-        max_inflight_requests=1, max_inflight_streams=1, request_queue_limit=0, request_queue_timeout_ms=0
+        max_inflight_requests=1,
+        max_inflight_streams=1,
+        max_inflight_commands=1,
+        request_queue_limit=0,
+        request_queue_timeout_ms=0,
     )
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
 

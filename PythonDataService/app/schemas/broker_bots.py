@@ -44,7 +44,11 @@ def _validated_catalog_strategy_key(value: str) -> str:
     return value
 
 
-_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
+#: Canonical equity/ETF symbol shape, shared by every schema that accepts a
+#: raw ticker at a wire boundary (CLAUDE.md guiding philosophy #5 — do not
+#: write a second regex). ``app.schemas.fleet_history_batch`` reuses this
+#: exact pattern rather than defining its own.
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
 
 
 class BotProcessFact(BaseModel):
@@ -73,9 +77,15 @@ class BotControlAuthorityFacts(BaseModel):
     clerk: ClerkCustodySnapshot
 
 
-def _normalized_symbol(value: str) -> str:
+def normalized_symbol(value: str) -> str:
+    """Canonicalize a raw ticker under the shared symbol shape.
+
+    Canonical implementation: this module. Reused by
+    ``app.schemas.fleet_history_batch`` so the two boundaries cannot drift
+    onto different acceptance rules for the same wire concept.
+    """
     normalized = value.strip().upper()
-    if _SYMBOL_RE.fullmatch(normalized) is None:
+    if SYMBOL_RE.fullmatch(normalized) is None:
         raise ValueError("symbol must start with a letter and contain only letters, numbers, periods, or hyphens")
     return normalized
 
@@ -158,7 +168,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     @field_validator("symbol")
     @classmethod
     def _normalize_symbol(cls, value: str) -> str:
-        return _normalized_symbol(value)
+        return normalized_symbol(value)
 
     @model_validator(mode="after")
     def _dry_run_cannot_carry_broker_exposure(self) -> AlpacaPaperDeployRequest:
