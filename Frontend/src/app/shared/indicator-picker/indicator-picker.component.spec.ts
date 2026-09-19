@@ -4,7 +4,7 @@ import { vi } from 'vitest';
 
 import { IndicatorCategory } from '../indicator-catalog/indicator-catalog.service';
 import { IndicatorPickerAdd, IndicatorPickerComponent } from './indicator-picker.component';
-import { IndicatorPreset } from './indicator-picker.presets';
+import { INDICATOR_PRESETS, IndicatorPreset } from './indicator-picker.presets';
 
 const STUB_CATEGORIES: IndicatorCategory[] = [
   {
@@ -203,11 +203,19 @@ describe('IndicatorPickerComponent', () => {
     expect(el.textContent).not.toContain('No indicators available');
   });
 
-  it('the load-failure state passes axe', async () => {
-    const { fixture } = setup([]);
-    fixture.componentRef.setInput('presets', []);
+  it('the load-failure state passes axe with the default presets', async () => {
+    // Built without setup(), so the picker keeps its default presets: what the
+    // research runners and Data Lab explore render.
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ imports: [IndicatorPickerComponent] });
+    const fixture = TestBed.createComponent(IndicatorPickerComponent);
+    fixture.componentRef.setInput('categories', []);
     fixture.componentRef.setInput('loadFailed', true);
     fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('.ip-preset')).toHaveLength(INDICATOR_PRESETS.length);
+    expect(INDICATOR_PRESETS.length).toBeGreaterThan(0);
+    expect(el.querySelector('[role="alert"]')).not.toBeNull();
     // jsdom has no layout, so contrast is not measurable here.
     const results = await axe.run(fixture.nativeElement as HTMLElement, {
       rules: { 'color-contrast': { enabled: false } },

@@ -120,6 +120,7 @@ describe('DualPaneChartComponent', () => {
               }],
             }]),
             loading: signal(false),
+            failed: signal(false),
           },
         },
         {

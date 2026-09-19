@@ -37,7 +37,7 @@
 } @else {
   <!-- Presets -->
   @if (presets().length) {
-    <div class="ip-presets" role="list" aria-label="Indicator presets">
+    <div class="ip-presets" role="group" aria-label="Indicator presets">
       @for (p of presets(); track p.name) {
         <button class="ip-preset" type="button"
                 [title]="p.name + ' — ' + p.subtitle"

@@ -150,7 +150,7 @@ describe("StrategyLabChartComponent", () => {
         provideHttpClientTesting(),
         {
           provide: IndicatorCatalogService,
-          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(null) },
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), failed: signal(false) },
         },
         { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
       ],
@@ -234,7 +234,7 @@ describe("StrategyLabChartComponent", () => {
         provideHttpClientTesting(),
         {
           provide: IndicatorCatalogService,
-          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(null) },
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), failed: signal(false) },
         },
         { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
       ],
@@ -270,7 +270,7 @@ describe("StrategyLabChartComponent indicator catalog failure", () => {
     remove: vi.fn(),
   }));
 
-  async function renderExpandedRail(catalogError: string | null): Promise<HTMLElement> {
+  async function renderExpandedRail(catalogFailed: boolean): Promise<HTMLElement> {
     await TestBed.configureTestingModule({
       imports: [StrategyLabChartComponent],
       providers: [
@@ -279,7 +279,7 @@ describe("StrategyLabChartComponent indicator catalog failure", () => {
         provideHttpClientTesting(),
         {
           provide: IndicatorCatalogService,
-          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), error: signal(catalogError) },
+          useValue: { load: vi.fn(), categories: signal([]), loading: signal(false), failed: signal(catalogFailed) },
         },
         { provide: MarketDataService, useValue: { getStockSnapshot: vi.fn(() => of(null)) } },
         { provide: TRADING_CHART_FACTORY, useValue: createChart },
@@ -297,19 +297,18 @@ describe("StrategyLabChartComponent indicator catalog failure", () => {
   }
 
   it("tells the operator the indicator catalog failed to load", async () => {
-    const rail = await renderExpandedRail("Http failure response: 500 Internal Server Error");
+    const rail = await renderExpandedRail(true);
 
     const alert = rail.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Indicators could not be loaded.");
     expect(rail.textContent).not.toContain("No indicators available");
-    // Fixed copy: the raw fetch error never reaches the page.
-    expect(rail.textContent).not.toContain("Http failure response");
   });
 
   it("raises no failure when the catalog loaded", async () => {
-    const rail = await renderExpandedRail(null);
+    const rail = await renderExpandedRail(false);
 
     expect(rail.querySelector('[role="alert"]')).toBeNull();
     expect(rail.textContent).not.toContain("Indicators could not be loaded.");
+    expect(rail.textContent).toContain("No indicators available");
   });
 });

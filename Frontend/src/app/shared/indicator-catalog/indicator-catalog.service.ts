@@ -51,6 +51,8 @@ export class IndicatorCatalogService {
   readonly error = this._error.asReadonly();
 
   readonly loaded = computed<boolean>(() => this._categories().length > 0);
+  /** The last load failed. Hosts pass this to the picker as `loadFailed`. */
+  readonly failed = computed(() => this._error() !== null);
 
   private inflight: Promise<void> | null = null;
 

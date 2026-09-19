@@ -267,6 +267,7 @@ const indicatorCatalogMock = {
   load: vi.fn().mockResolvedValue(undefined),
   categories: () => [],
   loading: () => false,
+  failed: () => false,
 };
 const chartIndicatorServiceMock = {
   calculate: vi.fn().mockReturnValue(of({ symbol: 'QQQ', indicators: [] })),

@@ -183,6 +183,8 @@ describe('FeatureRunnerComponent', () => {
         'Indicators could not be loaded.',
       );
       expect(picker?.textContent).not.toContain('No indicators available');
+      // Fixed copy: the service's raw HTTP error never reaches the page.
+      expect(picker?.textContent).not.toContain('Http failure response');
     });
 
     it('shows no failure when the catalog loads', async () => {
