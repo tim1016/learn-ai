@@ -2,11 +2,30 @@
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.ticker_request import Session, TickerRequest
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+_TIME_ZONE_DESCRIPTION = (
+    "IANA timezone (e.g. 'America/Chicago') for the optional readable time column in "
+    "dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's "
+    "instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone — display only; unix_ts "
+    "stays the canonical time. Null omits the column."
+)
+
+
+def _validate_time_zone(value: str | None) -> str | None:
+    """Boundary check: the readable time column needs a zone the tz database knows."""
+    if value is None:
+        return None
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"time_zone {value!r} is not a known IANA timezone") from exc
+    return value
 
 
 class AggregateRequest(BaseModel):
@@ -411,6 +430,21 @@ class DatasetGenerationRequest(BaseModel):
         "use a short date window. Capped server-side at 500k rows.",
     )
 
+    # ── dataset.csv shape (owner decision 2026-09-19) ─────────
+    columns: list[str] | None = Field(
+        None,
+        description="Data columns to write to dataset.csv, drawn from the plan's output_columns. "
+        "Written in the canonical projection order regardless of list order; unix_ts is always "
+        "first and is not listed here. Null writes every projected column. A name this recipe "
+        "cannot produce is rejected.",
+    )
+    time_zone: str | None = Field(None, description=_TIME_ZONE_DESCRIPTION)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_dataset_time_zone(cls, v: str | None) -> str | None:
+        return _validate_time_zone(v)
+
     @field_validator("timespan")
     @classmethod
     def validate_dataset_timespan(cls, v: str) -> str:
@@ -505,6 +539,12 @@ class DatasetPlanRequest(BaseModel):
         le=MAX_TIMESTAMP_MS,
         description="Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date.",
     )
+    time_zone: str | None = Field(None, description=_TIME_ZONE_DESCRIPTION)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_plan_time_zone(cls, v: str | None) -> str | None:
+        return _validate_time_zone(v)
 
     @field_validator("timespan")
     @classmethod

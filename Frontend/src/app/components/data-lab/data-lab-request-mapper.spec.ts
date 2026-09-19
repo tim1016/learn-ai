@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildChartRequestBody,
+  buildDatasetPlanPayload,
   buildGenerateZipPayload,
   utcDayEndMs,
   utcMsToIsoDate,
@@ -138,6 +139,8 @@ describe('buildGenerateZipPayload', () => {
       multiplier: 1,
       sort: 'timestamp',
       limit: 50000,
+      timeZone: 'America/Chicago',
+      columns: ['close', 'rsi_length14'],
     });
 
     expect(payload).toEqual({
@@ -170,7 +173,48 @@ describe('buildGenerateZipPayload', () => {
       include_financials: false,
       include_trades: false,
       include_quotes: false,
+      time_zone: 'America/Chicago',
+      columns: ['close', 'rsi_length14'],
     });
+  });
+
+  it('builds the plan body as the same recipe without the column selection', () => {
+    const input = {
+      ticker: 'AAPL',
+      window: WINDOW,
+      indicators: INDICATORS,
+      session: 'regular',
+      forwardFill: false,
+      adjusted: true,
+      companions: {
+        optionsCompanionEnabled: false,
+        includeQualityReport: false,
+        includePreviousClose: true,
+        includeSplits: false,
+        includeDividends: false,
+        includeTickerOverview: false,
+        includeNews: false,
+        includeFinancials: false,
+        includeStockTrades: false,
+        includeStockQuotes: false,
+      },
+      options: OPTIONS,
+      warmup: true,
+      adjustForDividends: false,
+      timespan: 'minute',
+      multiplier: 5,
+      sort: 'asc',
+      limit: 50000,
+      timeZone: null,
+      columns: ['close'],
+    };
+    const plan = buildDatasetPlanPayload(input);
+    const { columns, ...recipe } = buildGenerateZipPayload(input);
+
+    expect(columns).toEqual(['close']);
+    expect(plan).toEqual(recipe);
+    expect('columns' in plan).toBe(false);
+    expect(plan['time_zone']).toBeNull();
   });
 
   it('nulls options_companion and derives fail_on_gaps when forward-fill is off', () => {
@@ -200,7 +244,10 @@ describe('buildGenerateZipPayload', () => {
       multiplier: 1,
       sort: 'timestamp',
       limit: 50000,
+      timeZone: null,
+      columns: null,
     });
+    expect(payload['columns']).toBeNull();
     expect(payload['options_companion']).toBeNull();
     expect(payload['adjust_for_dividends']).toBe(false);
     expect(payload['fail_on_gaps']).toBe(true);

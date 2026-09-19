@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.metadata
 from datetime import date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -24,7 +25,12 @@ from app.lean_sidecar.trading_calendar import (
 from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.schemas.dataset_plan import DatasetPlanResponse
 from app.services.chart_service import get_allowed_timeframes
-from app.services.dataset_service import calculate_dynamic_indicators, project_output_columns
+from app.services.dataset_service import (
+    calculate_dynamic_indicators,
+    project_output_columns,
+    select_output_columns,
+    time_column_name,
+)
 
 _ET = ZoneInfo("America/New_York")
 
@@ -145,7 +151,7 @@ def _estimate_bars(
     return estimated, assumptions
 
 
-def _projection_frame(request: DatasetPlanRequest) -> pd.DataFrame:
+def _projection_frame(include_previous_close: bool) -> pd.DataFrame:
     """Synthetic frame carrying exactly the columns a real processed frame would.
 
     Column PRESENCE is deterministic from the recipe (OHLCV always;
@@ -170,9 +176,19 @@ def _projection_frame(request: DatasetPlanRequest) -> pd.DataFrame:
         }
     )
     df["session"] = "rth"
-    if request.include_previous_close:
+    if include_previous_close:
         df["PC"] = close.shift(1).bfill()
     return df
+
+
+def planned_output_columns(
+    include_previous_close: bool,
+    indicator_entries: list[dict[str, Any]],
+) -> list[str]:
+    """The data columns a recipe projects — the plan's ``output_columns``, fetch-free."""
+    frame = _projection_frame(include_previous_close)
+    _, column_meta = calculate_dynamic_indicators(frame, indicator_entries)
+    return project_output_columns(frame, column_meta)
 
 
 def _companion_dependencies(request: DatasetPlanRequest) -> tuple[list[str], list[str]]:
@@ -235,9 +251,7 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
         request, enum_start, enum_end, window_start, window_end
     )
 
-    frame = _projection_frame(request)
-    _, column_meta = calculate_dynamic_indicators(frame, request.indicator_entries)
-    output_columns = project_output_columns(frame, column_meta)
+    output_columns = planned_output_columns(request.include_previous_close, request.indicator_entries)
 
     assumptions.append(
         "vwap/transactions columns assumed present in Polygon aggregates for all timespans"
@@ -272,6 +286,7 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
         session_count=len(session_dates),
         output_columns=output_columns,
         output_column_count=len(output_columns),
+        time_column=time_column_name(request.time_zone) if request.time_zone is not None else None,
         estimated_bars=estimated_bars,
         estimate_assumptions=assumptions,
         estimate_provenance=provenance,
@@ -322,3 +337,21 @@ def resolve_generation_window(request: DatasetGenerationRequest) -> DatasetGener
     return request.model_copy(
         update={"from_date": from_date.isoformat(), "to_date": to_date.isoformat()}
     )
+
+
+def prepare_generation_request(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
+    """Boundary preparation shared by every generation entry point.
+
+    Resolves the numeric window (:func:`resolve_generation_window`) and
+    rejects a column selection naming anything this recipe cannot
+    project — before a single bar is fetched, so a stale selection fails
+    in milliseconds instead of after a long Polygon download. Raises
+    :class:`ValueError`; callers map it to a client error.
+    """
+    resolved = resolve_generation_window(request)
+    if resolved.columns is not None:
+        select_output_columns(
+            planned_output_columns(resolved.include_previous_close, resolved.indicator_entries),
+            resolved.columns,
+        )
+    return resolved

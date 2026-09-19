@@ -27,6 +27,8 @@ export interface DataLabPlanReceipt {
   session_count?: number;
   output_columns?: readonly string[];
   output_column_count?: number;
+  /** Header of dataset.csv's readable time column for the requested zone. */
+  time_column?: string | null;
   estimated_bars?: number;
   estimate_assumptions?: readonly string[];
   estimate_provenance?: string;

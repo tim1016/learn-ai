@@ -1,0 +1,54 @@
+<fieldset class="picker__group">
+  <legend>Time columns</legend>
+  <label class="picker__check">
+    <input type="checkbox" name="export-col-unix-ts" checked disabled />
+    <code>unix_ts</code>
+    <span class="picker__muted">always included — milliseconds since 1970, UTC</span>
+  </label>
+  <label class="picker__zone">
+    Readable time column
+    <select name="export-time-zone" (change)="onTimeZoneChange($event)">
+      <option value="" [selected]="timeZone() === null">None</option>
+      @for (zone of zoneOptions(); track zone) {
+        <option [value]="zone" [selected]="zone === timeZone()">{{ zone }}</option>
+      }
+    </select>
+  </label>
+  @if (timeZone()) {
+    <p class="picker__muted">
+      Adds <code>{{ timeColumn() ?? 'a time column' }}</code> right after unix_ts, written like
+      2026-09-18 09:30:00.
+    </p>
+  }
+</fieldset>
+
+<fieldset class="picker__group">
+  <legend>Data columns</legend>
+  <div class="picker__actions">
+    <button type="button" class="picker__button" (click)="selectAll()">Select all</button>
+    <button type="button" class="picker__button" (click)="selectNone()">Select none</button>
+    <span class="picker__muted" role="status">
+      {{ includedCount() }} of {{ columns().length }} included
+    </span>
+  </div>
+  <div class="picker__grid">
+    @for (column of columns(); track column) {
+      <label class="picker__check">
+        <input
+          type="checkbox"
+          [name]="'export-col-' + column"
+          [checked]="isIncluded(column)"
+          (change)="onToggle(column, $event)"
+        />
+        <code>{{ column }}</code>
+      </label>
+    }
+  </div>
+  <p class="picker__muted">
+    @if (selection() === null) {
+      Every column is included, including ones from indicators you add later.
+    } @else {
+      Only ticked columns are exported. Columns from indicators you add later start unticked.
+    }
+  </p>
+</fieldset>

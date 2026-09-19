@@ -29,7 +29,7 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.schemas.dataset_plan import DatasetPlanResponse
-from app.services.dataset_plan_service import build_dataset_plan, resolve_generation_window
+from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
 from app.services.dataset_service import (
     add_previous_close_column,
     build_csv_bytes,
@@ -44,6 +44,7 @@ from app.services.dataset_service import (
     list_available_indicators,
     preprocess_and_calculate,
     project_output_columns,
+    select_output_columns,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -66,10 +67,30 @@ def _projection_without_indicators(
     return cols[: len(cols) - len(column_meta)]
 
 
-def _resolve_window_or_422(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
-    """Apply numeric window bounds; an unresolvable span is a client error."""
+def _export_columns(
+    request: DatasetGenerationRequest,
+    df: pd.DataFrame,
+    column_meta: list[dict[str, Any]],
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
+    """The request's column selection applied to this run's processed frame.
+
+    Returns ``(data_cols, price_side_cols, indicator_meta)`` — the
+    dataset.csv data columns plus the two halves the metadata writers
+    describe, all narrowed to the same selection. A selected column this
+    run did not produce (an indicator that failed to compute, bars without
+    vwap) raises rather than shipping a file without it.
+    """
+    data_cols = select_output_columns(project_output_columns(df, column_meta), request.columns)
+    selected = set(data_cols)
+    price_side_cols = [c for c in _projection_without_indicators(df, column_meta) if c in selected]
+    indicator_meta = [m for m in column_meta if m["column"] in selected]
+    return data_cols, price_side_cols, indicator_meta
+
+
+def _prepare_or_422(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
+    """Resolve the window and check the column selection; either failing is a client error."""
     try:
-        return resolve_generation_window(request)
+        return prepare_generation_request(request)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
@@ -245,7 +266,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data in chunks, calculate selected indicators,
     and return a streaming CSV file."""
     try:
-        request = _resolve_window_or_422(request)
+        request = _prepare_or_422(request)
         logger.info(
             f"[DATASET] Generating CSV for {request.ticker}: "
             f"{request.from_date} to {request.to_date}, "
@@ -254,9 +275,9 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
 
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        all_data_cols = project_output_columns(df, column_meta)
+        all_data_cols, _, _ = _export_columns(request, df, column_meta)
 
-        csv_bytes = build_csv_bytes(df, all_data_cols)
+        csv_bytes = build_csv_bytes(df, all_data_cols, time_zone=request.time_zone)
 
         session_label = "rth" if request.session == "rth" else "ext"
         ts_label = f"{request.multiplier}{request.timespan}" if request.multiplier > 1 else request.timespan
@@ -283,22 +304,23 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
 async def generate_dataset_metadata(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data, calculate indicators, and return metadata JSON."""
     try:
-        request = _resolve_window_or_422(request)
+        request = _prepare_or_422(request)
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        ohlcv_cols = _projection_without_indicators(df, column_meta)
+        _, ohlcv_cols, indicator_meta = _export_columns(request, df, column_meta)
 
         metadata_bytes = build_metadata_json(
             ticker=request.ticker,
             from_date=request.from_date,
             to_date=request.to_date,
             bar_count=raw_count,
-            column_meta=column_meta,
+            column_meta=indicator_meta,
             ohlcv_cols=ohlcv_cols,
             session=request.session,
             forward_fill=request.forward_fill,
             raw_bar_count=raw_count,
             filled_bar_count=len(df),
+            time_zone=request.time_zone,
         )
 
         session_label = "rth" if request.session == "rth" else "ext"
@@ -320,10 +342,11 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
 async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
     """Fetch minute OHLCV data, calculate indicators, and return column descriptions CSV."""
     try:
-        request = _resolve_window_or_422(request)
+        request = _prepare_or_422(request)
         df, column_meta, _ = _fetch_and_process(request)
 
-        csv_bytes = build_metadata_csv(column_meta, _projection_without_indicators(df, column_meta))
+        _, ohlcv_cols, indicator_meta = _export_columns(request, df, column_meta)
+        csv_bytes = build_metadata_csv(indicator_meta, ohlcv_cols, time_zone=request.time_zone)
 
         session_label = "rth" if request.session == "rth" else "ext"
         filename = f"{request.ticker}_minute_{session_label}_{request.from_date}_to_{request.to_date}_columns.csv"
@@ -358,8 +381,9 @@ def _build_zip_with_events(
     between contracts, the bundler raises ``RunCancelledError``.
     Returns ``(zip_bytes, filename)``.
     """
-    ohlcv_cols = _projection_without_indicators(df, column_meta)
-    all_data_cols = project_output_columns(df, column_meta)
+    # Applied before any companion fetch: a selected column this run could
+    # not produce fails the bundle here, not after minutes of reference calls.
+    all_data_cols, ohlcv_cols, indicator_meta = _export_columns(request, df, column_meta)
 
     components: list[str] = ["dataset.csv", "metadata.csv", "columns.csv"]
     if request.include_quality_report:
@@ -499,7 +523,7 @@ def _build_zip_with_events(
     zip_bytes = build_zip_bytes(
         df=df,
         columns=all_data_cols,
-        column_meta=column_meta,
+        column_meta=indicator_meta,
         ohlcv_cols=ohlcv_cols,
         ticker=request.ticker,
         from_date=request.from_date,
@@ -520,6 +544,8 @@ def _build_zip_with_events(
         financials_csv_bytes=financials_bytes,
         stock_trades_csv_bytes=stock_trades_bytes,
         stock_quotes_csv_bytes=stock_quotes_bytes,
+        time_zone=request.time_zone,
+        custom_column_selection=request.columns is not None,
     )
     # The "core" components (dataset/metadata/columns) are produced by
     # build_zip_bytes itself; emit their done events post-hoc so the UI
@@ -548,7 +574,7 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
     chunk-level UI progress; use that one for unified-flow Fetch.
     """
     try:
-        request = _resolve_window_or_422(request)
+        request = _prepare_or_422(request)
         logger.info(
             f"[DATASET] Generating ZIP for {request.ticker}: "
             f"{request.from_date} to {request.to_date}, "
