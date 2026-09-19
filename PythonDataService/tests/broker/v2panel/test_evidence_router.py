@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -35,17 +36,24 @@ from app.services.broker_v2_panel.evidence_service import (
 from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID
 
 _T0 = 1_700_000_000_000
+# Alpaca's stored spelling and the fleet's canonical route spelling (#2221).
+_ACCOUNT_NUMBER = "PA3KWXU1C4C3"
+_CANONICAL_ROUTE_ACCOUNT = "pa3kwxu1c4c3"
 
 
 class _FakeAccount:
-    account_id = ACCT
+    def __init__(self, account_id: str) -> None:
+        self.account_id = account_id
 
 
 class _FakeReadPort:
     broker_id = "alpaca"
 
+    def __init__(self, account_id: str = ACCT) -> None:
+        self._account_id = account_id
+
     async def get_account(self) -> _FakeAccount:
-        return _FakeAccount()
+        return _FakeAccount(self._account_id)
 
     def capabilities(self) -> None:  # pragma: no cover
         raise NotImplementedError
@@ -102,8 +110,8 @@ def app_and_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         reset_alpaca_settings_for_testing()
 
 
-def _activate_sqlite(tmp_path: Path) -> ClerkSqliteRepository:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
+def _activate_sqlite(tmp_path: Path, account_id: str = ACCT) -> ClerkSqliteRepository:
+    repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
     repo.register_strategy_instance(
         strategy_instance_id=SID,
         symbol="SPY",
@@ -111,15 +119,15 @@ def _activate_sqlite(tmp_path: Path) -> ClerkSqliteRepository:
     )
     submit_start_run(
         repo,
-        account_id=ACCT,
+        account_id=account_id,
         strategy_instance_id=SID,
         lifecycle_run_id="run-1",
     )
     facade = SqliteAlpacaClerkFacade(
         account_mode="paper",
         repo=repo,
-        read=_FakeReadPort(),  # type: ignore[arg-type]
-        trade=_FakeReadPort(),  # type: ignore[arg-type]
+        read=_FakeReadPort(account_id),  # type: ignore[arg-type]
+        trade=_FakeReadPort(account_id),  # type: ignore[arg-type]
     )
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
     return repo
@@ -202,3 +210,53 @@ async def test_sqlite_evidence_filters_selected_effect_operation(app_and_tmp) ->
         }
     finally:
         repo.close()
+
+
+async def _read_account_number_evidence(
+    app: FastAPI, tmp_path: Path, route_account: str
+) -> httpx.Response:
+    """Read evidence from an authority custodying Alpaca's uppercase account number."""
+    reset_broker_registry_for_testing()
+    get_broker_registry().register(_FakeReadPort(_ACCOUNT_NUMBER))  # type: ignore[arg-type]
+    repo = _activate_sqlite(tmp_path, _ACCOUNT_NUMBER)
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get(
+                f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/evidence"
+            )
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_evidence_reads_the_account_number_authority_on_the_canonical_route(
+    app_and_tmp,
+) -> None:
+    """The route's case never decides custody (#2221).
+
+    The page and its audit entry both record the route's own spelling.
+    """
+    app, tmp_path = app_and_tmp
+
+    response = await _read_account_number_evidence(app, tmp_path, _CANONICAL_ROUTE_ACCOUNT)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["account_id"] == _CANONICAL_ROUTE_ACCOUNT
+    assert response.json()["entries"]
+    audit_log = tmp_path / "accounts" / _CANONICAL_ROUTE_ACCOUNT / "evidence_audit.jsonl"
+    (audit_line,) = audit_log.read_text(encoding="utf-8").splitlines()
+    assert json.loads(audit_line)["account_id"] == _CANONICAL_ROUTE_ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_evidence_refuses_a_foreign_route_account_with_a_typed_404(app_and_tmp) -> None:
+    app, tmp_path = app_and_tmp
+
+    response = await _read_account_number_evidence(app, tmp_path, "pa9other0000")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["message"] == (
+        "Account 'pa9other0000' is not the account for broker 'alpaca'."
+    )

@@ -337,13 +337,17 @@ async def test_shadow_authority_facts_preserve_public_route_account_scope(
         assert response.status_code == 404, response.text
 
 
+@pytest.mark.parametrize(
+    "route_account", [LIVE_ACCT, LIVE_ACCT.lower()], ids=["account_number", "canonical"]
+)
 async def test_shadow_evidence_route_reads_the_custody_namespace(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     shadow_registry: BotTaskRegistry,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    route_account: str,
 ) -> None:
-    """The public live-account route reads Shadow's SQLite timeline."""
+    """The public live-account route, in either spelling, reads Shadow's SQLite timeline (#2221)."""
     app, _runtime = shadow_app
     await shadow_registry.deploy(
         broker="alpaca",
@@ -357,12 +361,12 @@ async def test_shadow_evidence_route_reads_the_custody_namespace(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get(
-            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/evidence"
+            f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/evidence"
         )
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["account_id"] == LIVE_ACCT
+    assert body["account_id"] == route_account
     assert "STRATEGY_INSTANCE_REGISTERED" in {
         entry["kind"] for entry in body["entries"]
     }

@@ -167,10 +167,6 @@ class SqliteChartEvidence:
     fills: FillWindowProjection
 
 
-def sqlite_authority_active(broker: str) -> bool:
-    return active_sqlite_facade(broker) is not None
-
-
 def read_sqlite_roster_statuses(broker: str) -> list[BotStatusView] | None:
     """Read the activated bot roster without consulting runner artifacts.
 
@@ -333,23 +329,6 @@ async def read_sqlite_clerk_status(
         projection,
         channel_healths=facade.channel_health_snapshot(symbol),
     )
-
-
-async def read_sqlite_bot_projection(
-    broker: str,
-    account_id: str,
-    strategy_instance_id: str,
-) -> ClerkProjection | None:
-    if not sqlite_authority_active(broker):
-        return None
-    try:
-        return await asyncio.to_thread(
-            sqlite_projection,
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-        )
-    except ValueError as exc:
-        raise SqlitePanelBotNotFound(str(exc)) from exc
 
 
 async def read_sqlite_panel_evidence(
@@ -1033,7 +1012,6 @@ __all__ = [
     "SqlitePanelDecisionUnavailable",
     "SqlitePanelEconomicUnavailable",
     "execute_sqlite_panel_action",
-    "read_sqlite_bot_projection",
     "read_sqlite_bot_status",
     "read_sqlite_catalog",
     "read_sqlite_catalog_economic_rollups",
@@ -1045,5 +1023,4 @@ __all__ = [
     "read_sqlite_decision_receipts",
     "read_sqlite_panel_evidence",
     "read_sqlite_roster_statuses",
-    "sqlite_authority_active",
 ]

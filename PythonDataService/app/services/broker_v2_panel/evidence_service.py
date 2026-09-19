@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 from typing import Final
 
+from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
@@ -28,7 +29,6 @@ from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionRead
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker_configuration.runtime import resolve_clerk_dir
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
-from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,9 @@ def _read_active_sqlite_evidence(
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
         raise RuntimeError("Active SQLite Clerk does not expose its verified read authority")
-    if clerk.account_id != account_id:
+    if not account_route_matches_custody(
+        account_id, clerk.account_id, shadow=runtime.authority_kind == "shadow",
+    ):
         raise RuntimeError("Active SQLite Clerk account does not match the requested account")
     if cursor is not None and not isinstance(cursor, str):
         raise ValueError("SQLite evidence requires its opaque cursor")
@@ -315,7 +317,6 @@ def _read_active_sqlite_evidence(
 
 def read_evidence_page(
     *,
-    broker: str,
     account_id: str,
     sid: str,
     transaction_ref: str | None,
@@ -327,8 +328,7 @@ def read_evidence_page(
     """Return one bounded, redacted, audit-logged evidence page.
 
     Args:
-        broker: Public broker route whose custody account owns the evidence.
-        account_id: The account whose journal to read.
+        account_id: The public route account whose journal to read.
         sid: Filter to this bot's namespace only.
         transaction_ref: If given, filter to the selected SQLite effect operation.
         cursor: Opaque SQLite timeline cursor; ``None`` starts at the newest page.
@@ -346,7 +346,7 @@ def read_evidence_page(
     read_at = now_ms_utc()
 
     sqlite_page = _read_active_sqlite_evidence(
-        account_id=custody_account_id_for_route(broker, account_id),
+        account_id=account_id,
         sid=sid,
         transaction_ref=transaction_ref,
         cursor=cursor,

@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    is_shadow_account_id,
+)
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
@@ -56,7 +60,14 @@ def _active_sqlite_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
         return None
     if runtime.authority_kind == "unavailable":
         failure = runtime.startup_failure
-        if failure is not None and failure.activation_detected and failure.account_id == account_id:
+        if (
+            failure is not None
+            and failure.activation_detected
+            and failure.account_id is not None
+            and account_route_matches_custody(
+                account_id, failure.account_id, shadow=is_shadow_account_id(failure.account_id),
+            )
+        ):
             raise ClerkTransactionProjectionUnavailable(
                 "The selected SQLite Clerk authority is unavailable after startup failure."
             )
@@ -66,7 +77,9 @@ def _active_sqlite_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
         raise RuntimeError("Active SQLite Clerk does not expose its read authority")
-    if clerk.account_id != account_id:
+    if not account_route_matches_custody(
+        account_id, clerk.account_id, shadow=is_shadow_account_id(clerk.account_id),
+    ):
         raise ValueError("Requested account is not the active SQLite authority")
     return clerk
 
