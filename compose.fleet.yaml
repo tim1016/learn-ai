@@ -42,8 +42,9 @@ x-fleet-agent: &fleet-agent
     # The command pool (issue #2204 gate F1): mutating requests (Stop,
     # cancel, flatten, ...) never share the read pool above, so a slow read
     # (bot chart history's coordinator-owned Polygon walk) can never hold
-    # the slot a command needs.
-    FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-4}
+    # the slot a command needs. Sized like the request pool commands used to
+    # share, so command concurrency is unchanged by the split.
+    FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-16}
     FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-64}
     FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
     TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator
@@ -87,7 +88,7 @@ services:
       FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
       FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-32}
       FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-8}
-      FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-8}
+      FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-32}
       FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-128}
       FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
       TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend

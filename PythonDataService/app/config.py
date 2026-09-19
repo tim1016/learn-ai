@@ -99,10 +99,11 @@ class FleetSettings(BaseSettings):
     # never hold the slot a command needs. Unlike the two pools above, this
     # defaults to a usable positive value rather than zero: every
     # already-deployed clerk-agent config that has not been updated with
-    # FLEET_MAX_INFLIGHT_COMMANDS must keep booting unmodified. A deployment
-    # that wants a different command-pool size overrides it explicitly, same
-    # as the other two.
-    MAX_INFLIGHT_COMMANDS: int = 4
+    # FLEET_MAX_INFLIGHT_COMMANDS must keep booting unmodified. It matches the
+    # Clerk request pool that commands shared before the split, so command
+    # concurrency is unchanged. A deployment that wants a different
+    # command-pool size overrides it explicitly, same as the other two.
+    MAX_INFLIGHT_COMMANDS: int = 16
     # Requests may wait for a request, stream or command slot only within
     # this bounded queue and deadline. A zero queue limit refuses immediately.
     REQUEST_QUEUE_LIMIT: int = 0
