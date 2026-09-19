@@ -174,6 +174,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 
 | Doc | Domain | Notes |
 |---|---|---|
+| `docs/architecture-manual.md` | Plain-language architecture map for the owner (lanes, seams, sources of truth, design weak spots) | A map, not an authority: it links to the ADRs and canonical docs it summarises and yields to them. Served in-app at `/docs/architecture-manual` from a byte copy the documentation contract checks |
 | `docs/architecture/alpaca-configuration-ownership-inventory.md` | Per-setting class, callers and migration disposition for every `ALPACA_*` variable | Evidence for ADR 0060 Decision 1; records the type-fidelity constraint on the envelope sha and that `ALPACA_PAPER_CARRYOVER_ENABLED` has no runtime consumer |
 | `docs/architecture/broker-configuration-profile-contract.md` | Record shapes, credential-slot scheme, route surface and error taxonomy for broker configuration profiles | The shared contract packages B-E implement under ADR 0060; not authority over the ADR |
 | `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |

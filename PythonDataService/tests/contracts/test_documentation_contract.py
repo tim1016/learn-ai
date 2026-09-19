@@ -115,6 +115,41 @@ def test_the_ibkr_authority_states_that_alpaca_execution_depends_on_this_feed() 
     assert "IBKR_BROKER_ENABLED" in authority
 
 
+def _write_served_pair(root: Path, canonical_text: str, served_text: str) -> tuple[str, str]:
+    checker = _checker_module()
+    canonical, served = next(iter(checker.SERVED_DOCUMENT_COPIES.items()))
+    (root / canonical).parent.mkdir(parents=True, exist_ok=True)
+    (root / served).parent.mkdir(parents=True, exist_ok=True)
+    (root / canonical).write_text(canonical_text, encoding="utf-8")
+    (root / served).write_text(served_text, encoding="utf-8")
+    return canonical, served
+
+
+def test_served_documents_fail_when_the_served_copy_drifts(tmp_path: Path) -> None:
+    checker = _checker_module()
+    _, served = _write_served_pair(tmp_path, "# Manual\n", "# Manual, edited in the app copy only\n")
+
+    errors = checker._validate_served_documents(tmp_path)
+
+    assert f"{served}: served copy differs from its canonical source" in " ".join(errors)
+
+
+def test_served_documents_fail_when_a_github_link_names_a_missing_path(tmp_path: Path) -> None:
+    checker = _checker_module()
+    text = (
+        "[ADR](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/9999-gone.md)\n"
+        "[Present](https://github.com/tim1016/learn-ai/blob/master/docs/present.md#section)\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/present.md").write_text("# Present\n", encoding="utf-8")
+    _write_served_pair(tmp_path, text, text)
+
+    errors = checker._validate_served_documents(tmp_path)
+
+    assert any("docs/architecture/adrs/9999-gone.md" in error for error in errors)
+    assert not any("docs/present.md" in error for error in errors)
+
+
 def test_the_served_ibkr_guide_carries_no_retired_order_capable_guidance() -> None:
     checker = _checker_module()
     served = (REPOSITORY_ROOT / "Frontend/src/assets/docs/ibkr-setup-guide.md").read_text(encoding="utf-8")

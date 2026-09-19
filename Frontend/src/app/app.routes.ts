@@ -8,6 +8,13 @@ const loadBrokerLaneUnavailable = () =>
     (module) => module.BrokerLaneUnavailableComponent,
   );
 
+// A served document copies a canonical repo document; the copies listed in
+// `scripts/check_documentation_contract.py` fail CI when the two differ.
+const loadMarkdownDocPage = () =>
+  import('./components/docs/markdown-doc-page.component').then(
+    (module) => module.MarkdownDocPageComponent,
+  );
+
 // Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
 // older engine/runs/:id bookmark). Both must redirect straight to this same
 // final destination rather than to each other: Angular's router does not
@@ -251,25 +258,41 @@ export const routes: Routes = [
       ),
   },
   {
+    // Served copy of docs/architecture-manual.md.
+    path: "docs/architecture-manual",
+    loadComponent: loadMarkdownDocPage,
+    data: {
+      heading: "Architecture Manual",
+      src: "/assets/docs/architecture-manual.md",
+    },
+  },
+  {
+    // Served copy of docs/indicator-reliability-methodology.md.
     path: "docs/indicator-reliability-methodology",
-    loadComponent: () =>
-      import("./components/docs/methodology-page.component").then(
-        (m) => m.MethodologyPageComponent
-      ),
+    loadComponent: loadMarkdownDocPage,
+    data: {
+      heading: "Indicator Reliability — Methodology",
+      src: "/assets/docs/indicator-reliability-methodology.md",
+    },
   },
   {
+    // Served copy of docs/signal-engine-authority.md.
     path: "docs/signal-engine-methodology",
-    loadComponent: () =>
-      import("./components/docs/signal-engine-methodology-page.component").then(
-        (m) => m.SignalEngineMethodologyPageComponent
-      ),
+    loadComponent: loadMarkdownDocPage,
+    data: {
+      heading: "Signal Engine — Methodology",
+      src: "/assets/docs/signal-engine-methodology.md",
+    },
   },
   {
+    // Operator-facing copy of docs/runbooks/ibkr-setup-guide.md. The two have
+    // drifted apart, so this pair is not yet in the parity list.
     path: "docs/ibkr-setup-guide",
-    loadComponent: () =>
-      import("./components/docs/ibkr-setup-guide-page.component").then(
-        (m) => m.IbkrSetupGuidePageComponent
-      ),
+    loadComponent: loadMarkdownDocPage,
+    data: {
+      heading: "IBKR Setup Guide",
+      src: "/assets/docs/ibkr-setup-guide.md",
+    },
   },
   {
     path: "legal/notices",
