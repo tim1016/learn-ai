@@ -1,10 +1,13 @@
-"""Marketable-limit anchor for program legs outside the regular session (ADR 0059 D5.3).
+"""Marketable-limit anchor for legs outside the regular session (ADR 0059 D5.3; #2007).
 
 Formula:
-    buy:  ceil_tick( close × (1 + allowance_bps / 10⁴) )
-    sell: floor_tick( close × (1 − allowance_bps / 10⁴) )
-    where the tick is 0.01 for a price ≥ 1 and 0.0001 below 1 (Alpaca's
-    limit-price precision rule, mirrored by ``BrokerOrderLeg``'s validator).
+    buy:  ceil_tick( anchor × (1 + allowance_bps / 10⁴) )
+    sell: floor_tick( anchor × (1 − allowance_bps / 10⁴) )
+    where the anchor is the decision bar's close for a program leg, and IBKR's
+    live bid (sell) or ask (buy) for an operator's recovery reduction
+    (``clerk/recovery_reduction.py``); the tick is 0.01 for a price ≥ 1 and
+    0.0001 below 1 (Alpaca's limit-price precision rule, mirrored by
+    ``BrokerOrderLeg``'s validator).
     Rounding is always in the marketable direction, so the anchor never
     understates the allowance the operator set.
 Reference:
@@ -45,32 +48,32 @@ _DOLLAR_TICK = Decimal("0.01")
 _SUB_DOLLAR_TICK = Decimal("0.0001")
 
 
-def marketable_limit_price(*, side: OrderSide, close: Decimal, allowance_bps: Decimal) -> Decimal:
-    """The limit price a program leg carries outside the regular session.
+def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: Decimal) -> Decimal:
+    """The limit price a leg carries outside the regular session.
 
     Raises ``ValueError`` when the quantised result is not positive — a sell
-    allowance at or past 10 000 bps, or a sub-penny close floored to zero.
+    allowance at or past 10 000 bps, or a sub-penny anchor floored to zero.
     ``BrokerOrderLeg`` would reject such a price too, but as a pydantic
     ``ValidationError`` raised from inside ``LegShape.apply``, outside every
     ``except ProgramLegRefused`` its callers hold; ``shape_program_leg`` maps
     this to a typed ``EXTENDED_ANCHOR_UNPRICEABLE`` refusal instead.
     """
-    if close <= 0:
-        raise ValueError(f"close must be positive; got {close}")
+    if anchor <= 0:
+        raise ValueError(f"anchor must be positive; got {anchor}")
     if allowance_bps < 0:
         raise ValueError(f"allowance_bps must be non-negative; got {allowance_bps}")
     fraction = allowance_bps / _BPS_PER_UNIT
     if side is OrderSide.BUY:
-        raw = close * (1 + fraction)
+        raw = anchor * (1 + fraction)
         rounding = ROUND_CEILING
     else:
-        raw = close * (1 - fraction)
+        raw = anchor * (1 - fraction)
         rounding = ROUND_FLOOR
     tick = _DOLLAR_TICK if raw >= 1 else _SUB_DOLLAR_TICK
     price = raw.quantize(tick, rounding=rounding)
     if price <= 0:
         raise ValueError(
-            f"a {side.value} anchored at close {close} with {allowance_bps} bps quantises "
+            f"a {side.value} anchored at {anchor} with {allowance_bps} bps quantises "
             f"to {price}, which is not a submittable limit price"
         )
     return price

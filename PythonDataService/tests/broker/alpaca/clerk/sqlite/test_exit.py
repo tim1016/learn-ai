@@ -49,7 +49,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -1748,6 +1748,7 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref, recovered = await _filled_entry_with_position(repo)
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1785,6 +1786,57 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
     assert submitted_ref == resolved.reducing_order_ref
     assert submitted_leg.side == "sell"
     assert submitted_leg.quantity == 10
+
+
+async def test_an_unshaped_recovery_reduction_waits_for_the_regular_session(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2007, owner decision 2026-09-19: after-hours, a recovery EXIT with no
+    recorded shape would be a market order the vendor queues to the next open.
+    It stays accepted with no order at the broker, and reduces market DAY on
+    the first pass inside the regular session."""
+    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-afterhours01-1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(
+        # Each pass proves the entry terminal and refreshes it: two lookups.
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+
+    waiting = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+
+    assert waiting.reducing_order_ref is None
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state not in ("succeeded", "failed", "rejected")
+
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    resolved = await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade
+    )
+
+    assert resolved.reducing_order_ref is not None
+    ((leg, _client_order_id),) = trade.submit_calls
+    assert (leg.side, leg.quantity, leg.order_type, leg.extended_hours) == (
+        "sell",
+        10,
+        "market",
+        False,
+    )
 
 
 async def test_accept_recovery_exit_is_idempotent_per_decision_id(

@@ -9,6 +9,7 @@ import pytest
 from app.broker.contract.models import BrokerClockEvidence
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.services.market_liveness import MarketLivenessStore
+from app.utils.timestamps import now_ms_utc
 
 NOW = 1_789_569_273_347
 
@@ -167,3 +168,62 @@ async def test_data_farm_recovery_between_polls_requires_new_status_subscription
     assert (await status()).symbol_statuses[0].state == "UNKNOWN"
     client.ib.cancelMktData.assert_called_once_with(ticker.contract)
     assert client.ib.reqMktData.call_count == 2
+
+
+async def test_live_top_of_book_rides_the_status_snapshot(source):
+    # #2007: an extended-hours safe flatten is priced from IBKR's live bid/ask,
+    # read from the same demand-driven subscription that proves halts.
+    status, _, ticker = source
+    ticker.bid, ticker.ask, ticker.bidSize, ticker.askSize = 512.31, 512.36, 300.0, float("nan")
+
+    snapshot = await status()
+
+    (quote,) = snapshot.quotes
+    assert (quote.symbol, quote.bid, quote.ask) == ("SPY", 512.31, 512.36)
+    assert (quote.bid_size, quote.ask_size) == (300, None)
+    assert quote.observed_at_ms == NOW
+    assert quote.source == "ibkr.market_data.status"
+
+
+@pytest.mark.parametrize("kind", ["delayed", "no_bid", "sentinel_ask", "zero_bid", "absent"])
+async def test_an_unusable_book_publishes_no_quote(source, kind):
+    status, _, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    if kind == "delayed":
+        ticker.marketDataType = 3
+    elif kind == "no_bid":
+        ticker.bid = float("nan")
+    elif kind == "sentinel_ask":
+        ticker.ask = -1.0
+    elif kind == "zero_bid":
+        ticker.bid = 0.0
+    else:
+        del ticker.bid, ticker.ask
+
+    assert (await status()).quotes == ()
+
+
+async def test_a_disconnected_source_publishes_no_quote(source):
+    status, client, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    client.connection_state = "degraded_data_farm"
+
+    assert (await status()).quotes == ()
+
+
+async def test_store_answers_a_fresh_quote_and_registers_demand_for_an_unwatched_symbol(source):
+    status, _, ticker = source
+    ticker.bid, ticker.ask = 512.31, 512.36
+    store = MarketLivenessStore()
+    store.apply_status_snapshot(await status(), now_ms=NOW)
+
+    quote = store.top_of_book("spy", now_ms=NOW + 1_000)
+
+    assert quote is not None and (quote.bid, quote.ask) == (512.31, 512.36)
+    # A quote the source has not refreshed within the status freshness bound is
+    # not a price anyone may confirm a limit against.
+    assert store.top_of_book("SPY", now_ms=NOW + 5_001) is None
+    # Asking is demand: the IBKR source subscribes the symbol on its next poll.
+    # ``requested_symbols`` prunes against the wall clock, so ask at it.
+    assert store.top_of_book("QQQ", now_ms=now_ms_utc()) is None
+    assert "QQQ" in store.requested_symbols()

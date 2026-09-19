@@ -36,7 +36,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
 
 ACCOUNT_ID = "PA-FLATTEN"
 SID = "crashed-bot"
@@ -189,8 +189,11 @@ async def _held_position(repo: ClerkSqliteRepository) -> str:
 
 @pytest.fixture
 def crashed_with_exposure(tmp_path: Path):
-    """F18 shape: filled entry, attributed +10, run stopped (crash analog)."""
-    clock = _clock_at(1_700_000_000_000)
+    """F18 shape: filled entry, attributed +10, run stopped (crash analog).
+
+    Inside the regular session, where an unshaped flatten reduces market DAY.
+    """
+    clock = _clock_at(FIXTURE_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )

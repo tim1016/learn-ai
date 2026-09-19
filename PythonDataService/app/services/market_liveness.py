@@ -28,6 +28,7 @@ from app.schemas.market_liveness import (
     MarketLivenessFact,
     MarketStatusSnapshot,
     SymbolTradingStatusEvidence,
+    TopOfBookQuote,
 )
 
 # The broker clock is polled on a fixed interval (unlike the transition-only
@@ -321,6 +322,7 @@ class MarketLivenessStore:
         self._upstream_observed_at_ms: int | None = None
         self._status_source = "alpaca.stock_data.status"
         self._requested_symbols: dict[str, int] = {}
+        self._quotes: dict[str, TopOfBookQuote] = {}
 
     def requested_symbols(self) -> tuple[str, ...]:
         """Symbols consulted within the last minute; bounds idle subscriptions."""
@@ -390,6 +392,7 @@ class MarketLivenessStore:
             ),
             connection_changed_at_ms=self._connection_changed_at_ms,
             symbol_statuses=tuple(self._symbol_statuses[key] for key in sorted(self._symbol_statuses)),
+            quotes=tuple(self._quotes[key] for key in sorted(self._quotes)),
         )
 
     def apply_status_snapshot(self, snapshot: MarketStatusSnapshot, *, now_ms: int) -> None:
@@ -404,12 +407,37 @@ class MarketLivenessStore:
         self._connection_changed_at_ms = snapshot.connection_changed_at_ms
         for evidence in snapshot.symbol_statuses:
             self.observe_symbol_status(evidence)
+        for quote in snapshot.quotes:
+            symbol = quote.symbol.upper()
+            current = self._quotes.get(symbol)
+            if current is None or quote.observed_at_ms >= current.observed_at_ms:
+                self._quotes[symbol] = quote.model_copy(update={"symbol": symbol})
 
     def _status_connected(self, now_ms: int) -> bool:
         return self._connected and (
             self._upstream_observed_at_ms is None
             or 0 <= now_ms - self._upstream_observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS
         )
+
+    def top_of_book(self, symbol: str, *, now_ms: int) -> TopOfBookQuote | None:
+        """The live best bid and ask an operator may price a limit from, if fresh.
+
+        Asking is demand, exactly as :meth:`fact` is: the IBKR status source
+        subscribes a requested symbol on its next poll, so a stopped bot's
+        symbol gets a quote within a poll of an operator opening its flatten.
+        A quote the connected source has not re-read within the status
+        freshness bound answers ``None`` -- never a remembered price (#2007).
+        """
+        normalized_symbol = symbol.upper()
+        self._requested_symbols[normalized_symbol] = now_ms
+        quote = self._quotes.get(normalized_symbol)
+        if (
+            quote is None
+            or not self._status_connected(now_ms)
+            or not 0 <= now_ms - quote.observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS
+        ):
+            return None
+        return quote
 
     def fact(self, symbol: str, *, now_ms: int) -> MarketLivenessFact:
         """Return the one current live fact for Start, panel, and Clerk gates."""

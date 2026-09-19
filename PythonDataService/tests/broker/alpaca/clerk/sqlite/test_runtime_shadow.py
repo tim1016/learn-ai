@@ -202,7 +202,12 @@ async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
     )
     evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
     decision = _retain(evidence, minute=600, close="100.25")
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    # Inside the regular session, where an unshaped flatten reduces market DAY
+    # (#2007) -- pinned, not the wall clock, so the test cannot depend on when
+    # it runs.
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_Clock(decision.end_ms + 60_000)
+    )
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
         read=ports.read,

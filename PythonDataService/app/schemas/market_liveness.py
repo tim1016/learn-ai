@@ -70,6 +70,26 @@ class MarketLivenessFact(BaseModel):
     reason: str
 
 
+class TopOfBookQuote(BaseModel):
+    """One symbol's live IBKR best bid and ask, as the status source last read them.
+
+    ``observed_at_ms`` is the poll that read the live subscription on a
+    connected source -- IBKR sends quote ticks only on change, so a quiet book
+    is still current while its subscription is. It is the instant an operator's
+    confirmed extended-hours limit is judged stale against (#2007).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str
+    bid: float = Field(gt=0)
+    ask: float = Field(gt=0)
+    bid_size: int | None = Field(default=None, ge=0)
+    ask_size: int | None = Field(default=None, ge=0)
+    source: str
+    observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class MarketStatusSnapshot(BaseModel):
     """Authenticated status-source observation shared with a Paper worker.
 
@@ -84,3 +104,4 @@ class MarketStatusSnapshot(BaseModel):
     observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     symbol_statuses: tuple[SymbolTradingStatusEvidence, ...]
+    quotes: tuple[TopOfBookQuote, ...] = ()

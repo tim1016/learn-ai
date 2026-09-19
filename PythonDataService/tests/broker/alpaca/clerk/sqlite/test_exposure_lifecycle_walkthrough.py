@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capabi
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrderEvent
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
     _AssertingNoReconciler,
     _broker_order_fixture,
     _broker_position_fixture,
@@ -45,7 +46,8 @@ RUN_ID = "run-1"
 
 
 async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path) -> None:
-    clock = _clock_at(1_700_000_000_000)
+    # Inside the regular session, where an unshaped flatten reduces market DAY.
+    clock = _clock_at(FIXTURE_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )

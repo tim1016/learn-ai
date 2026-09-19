@@ -48,6 +48,7 @@ from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+from app.services.session_authority import session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,9 @@ async def _resolve_claimed(
         if not position_quantity_is_nonzero(remaining_qty):
             _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
             return _snapshot(repo, effect_operation_id)
+        shape = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
+        if shape is None and _recovery_reduction_waits_for_the_open(repo, effect_operation_id):
+            return _snapshot(repo, effect_operation_id)
         require_capability(
             repo,
             capability=Capability.REDUCE,
@@ -195,7 +199,7 @@ async def _resolve_claimed(
             effect_operation_id=effect_operation_id,
             symbol=symbol,
             quantity=remaining_qty,
-            shape=_accepted_reducing_shape(repo, effect_operation_id=effect_operation_id),
+            shape=shape,
         )
         await _submit_reducing_order(
             repo,
@@ -670,6 +674,35 @@ async def _submit_reducing_order(
         order=observed,
         trade=broker.trade,
     )
+
+
+def _recovery_reduction_waits_for_the_open(
+    repo: ClerkSqliteRepository, effect_operation_id: str
+) -> bool:
+    """Must this unshaped recovery EXIT hold its reduction until the regular session?
+
+    A recovery EXIT with no recorded shape -- the watchdog's re-drive, or a
+    safe flatten confirmed inside the regular session whose entry proof slid
+    past 16:00 -- reduces market DAY, which the vendor queues to the next open
+    outside 09:30-16:00. It waits instead (#2007, owner decision 2026-09-19):
+    no order the operator did not see priced ever sits at the broker. The
+    effect stays accepted and the reconciliation sweep creates the reduction
+    on its first pass inside the regular session. A decision-driven EXIT keeps
+    ruling R5 -- whatever shape its acceptance recorded is rebuilt as is.
+    """
+    if not _is_recovery_exit(repo, effect_operation_id):
+        return False
+    if session_state_at_ms(now_ms=repo.clock()).phase == "RTH":
+        return False
+    logger.info(
+        "an unshaped recovery reduction waits for the regular session",
+        extra={
+            "action": "recovery_reduction_waits_for_regular_session",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+        },
+    )
+    return True
 
 
 def _is_recovery_exit(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:

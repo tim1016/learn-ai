@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Literal
@@ -52,6 +51,7 @@ from app.broker.ibkr.models import (
     _coerce_iv,
     _coerce_optional_float,
     _coerce_quote,
+    _coerce_size,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -60,23 +60,6 @@ logger = logging.getLogger(__name__)
 
 GENERIC_TICK_LIST = "100,101,106"  # bid/ask sizes + historical IV
 DEFAULT_DEBOUNCE_S = 0.25
-
-
-def _coerce_size(value) -> int | None:
-    """Coerce an IBKR bid/ask size to ``int`` or ``None``.
-
-    IBKR uses NaN and a negative sentinel (``-1``) for "no size available" on
-    the L1 top-of-book line, the same way it uses ``-1.0`` for "no quote" on
-    the price fields (see ``models._coerce_quote``). Sizes were previously only
-    NaN-checked, so a ``-1`` leaked through to the wire as a negative depth.
-    """
-    if value is None:
-        return None
-    if isinstance(value, float) and math.isnan(value):
-        return None
-    if value < 0:
-        return None
-    return int(value)
 
 
 def _greeks_block(ticker, attr: Literal["modelGreeks", "bidGreeks", "askGreeks", "lastGreeks"]):

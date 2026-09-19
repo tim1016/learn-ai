@@ -274,6 +274,9 @@ class LegRefusal:
     reason_code: str
     explanation: str
     next_step: str
+    # When the refused leg becomes possible, for a refusal that is only about
+    # the clock: an ``int64 ms UTC`` value the UI renders, never prose (#2007).
+    available_at_ms: int | None = None
 
 
 EXTENDED_HOURS_UNSUPPORTED = LegRefusal(
@@ -374,7 +377,7 @@ def shape_program_leg(
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
     try:
-        price = marketable_limit_price(side=side, close=decision_bar.close, allowance_bps=allowance)
+        price = marketable_limit_price(side=side, anchor=decision_bar.close, allowance_bps=allowance)
     except ValueError as exc:
         # A non-positive quantised anchor. `BrokerOrderLeg` would reject it too,
         # but as a pydantic ValidationError raised from `apply()` — outside the
